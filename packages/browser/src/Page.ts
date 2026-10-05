@@ -58,6 +58,7 @@ import * as Human from "./internal/human.ts";
 import * as Input from "./internal/input.ts";
 import * as Keys from "./internal/keys.ts";
 import * as Script from "./internal/pageScript.ts";
+import * as Motion from "./Motion.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
 export interface Point {
@@ -299,6 +300,7 @@ export interface MakeOptions {
   readonly playwright: PlaywrightPage;
   readonly cdp: CDPSession;
   readonly settings: Settings;
+  readonly motion: Motion.Service;
   readonly clock: Clock.Clock;
   readonly pointer: Ref.Ref<Option.Option<Point>>;
   readonly inputLock: Semaphore.Semaphore;
@@ -317,9 +319,10 @@ type MouseEvent = {
 };
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
+const isReadonlyArray = (value: unknown): value is ReadonlyArray<unknown> => Array.isArray(value);
 
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
-  const { id, playwright, cdp, settings, clock, pointer, inputLock, publish } = options;
+  const { id, playwright, cdp, settings, motion, clock, pointer, inputLock, publish } = options;
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
@@ -940,9 +943,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
       const point = { x: plan.x, y: plan.y };
 
-      yield* marks.sent;
       yield* marks.at(point);
-      yield* moveTo(operation, marks.input, point);
+      yield* moveTo(operation, marks, point);
       yield* wheel(
         operation,
         marks.input,
@@ -967,7 +969,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const moveTo = (
     operation: string,
-    run: Input.Run,
+    marks: InputMarks,
     to: Point,
     cursor?: string,
     dragging = false,
@@ -985,23 +987,55 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         y: Math.max(0, Math.min(viewport.height - 1, previous.y)),
       };
 
-      yield* Ref.set(pointer, Option.some(from));
-
-      const steps = settings.humanize
-        ? yield* Human.path(from, to)
+      const planned = settings.humanize
+        ? yield* motion.plan(from, to)
         : dragging
-          ? (yield* Human.path(from, to)).map((step) => ({ ...step, delay: 8 }))
-          : [{ ...to, delay: 0 }];
+          ? Array.from({ length: 8 }, (_, index) => ({
+              x: index === 7 ? to.x : from.x + ((to.x - from.x) * (index + 1)) / 8,
+              y: index === 7 ? to.y : from.y + ((to.y - from.y) * (index + 1)) / 8,
+              afterMillis: (index + 1) * 8,
+            }))
+          : [{ ...to, afterMillis: 0 }];
 
-      let offset = 0;
+      // A custom planner is a boundary: validate the entire bounded schedule before publishing
+      // it or reserving input. Copy it so later mutation cannot change the consumer's future.
+      const invalid = failWith(
+        operation,
+        new InvalidRequest({
+          detail: "motion must be a bounded, ordered schedule ending at the target",
+        }),
+      );
 
-      const samples = steps.map((step, index) => {
-        offset += step.delay;
-        const point = index === steps.length - 1 ? to : step;
+      if (!isReadonlyArray(planned) || planned.length < 1 || planned.length > Motion.maximumSamples)
+        return yield* invalid;
+      // Array.from exposes sparse holes to validation instead of skipping them as .every would.
+      const dense = Array.from(planned);
 
-        return { afterMillis: offset, x: point.x, y: point.y };
-      });
+      if (
+        !dense.every(Schema.is(Motion.Sample)) ||
+        dense.some((sample, index) => sample.afterMillis < (dense[index - 1]?.afterMillis ?? 0)) ||
+        dense.at(-1)?.x !== to.x ||
+        dense.at(-1)?.y !== to.y
+      )
+        return yield* invalid;
 
+      const samples = Object.freeze(
+        dense.map((sample) =>
+          Object.freeze({
+            x: sample.x,
+            y: sample.y,
+            afterMillis: sample.afterMillis,
+          }),
+        ),
+      );
+
+      const run = marks.input;
+
+      // Admit the whole motion before starting its clock. Dense original samples must not be
+      // stretched by per-sample reply backpressure; unsent reservations belong to this run.
+      yield* inputCall(operation, run.reserveMotion(samples.length));
+      yield* Ref.set(pointer, Option.some(from));
+      const estimate = inputClocks.get(run) ?? calibration.current;
       const at = now();
       let dispatched = 0;
       let last = from;
@@ -1013,23 +1047,30 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         () =>
           Effect.gen(function* () {
             for (const sample of samples) {
-              yield* Effect.sleep(Duration.millis(Math.max(0, at + sample.afterMillis - now())));
-              yield* sendMouse(
+              const remaining = at + sample.afterMillis - now();
+
+              if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
+              yield* marks.sent;
+              yield* inputCall(
                 operation,
-                run,
-                {
-                  type: "mouseMoved",
-                  x: sample.x,
-                  y: sample.y,
-                  button: dragging ? "left" : "none",
-                  ...(dragging ? { buttons: 1 } : {}),
-                },
-                () => {
-                  dispatched++;
-                  last = { x: sample.x, y: sample.y };
-                  if (dispatched === samples.length && cursor !== undefined)
-                    publish(new CursorChanged({ at: now(), page: id, cursor }));
-                },
+                run.send(() =>
+                  dispatchMouse(
+                    {
+                      type: "mouseMoved",
+                      x: sample.x,
+                      y: sample.y,
+                      button: dragging ? "left" : "none",
+                      ...(dragging ? { buttons: 1 } : {}),
+                    },
+                    estimate,
+                    () => {
+                      dispatched++;
+                      last = { x: sample.x, y: sample.y };
+                      if (dispatched === samples.length && cursor !== undefined)
+                        publish(new CursorChanged({ at: now(), page: id, cursor }));
+                    },
+                  ),
+                ),
               );
             }
           }),
@@ -1112,8 +1153,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const count = Math.max(1, Math.min(3, clickOptions.clickCount ?? 1));
 
           yield* marks.at(point);
-          yield* marks.sent;
-          yield* moveTo("click", marks.input, point, resolved.cursor);
+          yield* moveTo("click", marks, point, resolved.cursor);
           if (approval !== undefined) yield* approval.check();
           for (let index = 1; index <= count; index++) {
             yield* sendMouse("click", marks.input, {
@@ -1155,8 +1195,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const { point } = resolved;
 
           yield* marks.at(point);
-          yield* marks.sent;
-          yield* moveTo("hover", marks.input, point, resolved.cursor);
+          yield* moveTo("hover", marks, point, resolved.cursor);
           yield* flush("hover", marks.input);
         }),
     );
@@ -1177,8 +1216,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const end = yield* resolve("drag", to, approval, false);
 
           yield* marks.at(end.point);
-          yield* marks.sent;
-          yield* moveTo("drag", marks.input, start.point, start.cursor);
+          yield* moveTo("drag", marks, start.point, start.cursor);
           if (approval !== undefined) yield* approval.check();
           yield* sendMouse("drag", marks.input, {
             type: "mousePressed",
@@ -1187,7 +1225,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             buttons: 1,
             clickCount: 1,
           });
-          yield* moveTo("drag", marks.input, end.point, end.cursor, true);
+          yield* moveTo("drag", marks, end.point, end.cursor, true);
           yield* sendMouse("drag", marks.input, {
             type: "mouseReleased",
             ...end.point,
@@ -1321,8 +1359,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
             yield* marks.at(target.point);
             if (settings.humanize) {
-              yield* marks.sent;
-              yield* moveTo("type", marks.input, target.point, target.cursor);
+              yield* moveTo("type", marks, target.point, target.cursor);
               yield* sendMouse("type", marks.input, {
                 type: "mousePressed",
                 ...target.point,
@@ -1510,8 +1547,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             const point = resolved?.point ?? middle;
 
             yield* marks.at(point);
-            yield* marks.sent;
-            yield* moveTo("scroll", marks.input, point, resolved?.cursor);
+            yield* moveTo("scroll", marks, point, resolved?.cursor);
 
             yield* wheel("scroll", marks.input, point, dx, dy);
             yield* flush("scroll", marks.input);

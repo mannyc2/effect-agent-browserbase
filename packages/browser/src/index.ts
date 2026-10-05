@@ -9,6 +9,7 @@ export * as Cdp from "./Cdp.ts";
 export * as Chromium from "./Chromium.ts";
 export * as Frame from "./Frame.ts";
 export * as Moment from "./Moment.ts";
+export * as Motion from "./Motion.ts";
 export * as Page from "./Page.ts";
 export * as Snapshot from "./Snapshot.ts";
 export * as Tools from "./Tools.ts";

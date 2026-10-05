@@ -5,6 +5,8 @@
  */
 import { Data, Effect } from "effect";
 
+import { maximumSamples } from "../Motion.ts";
+
 export const capacity = 64;
 
 export class InputFailure extends Data.TaggedError("InputFailure")<{
@@ -14,6 +16,8 @@ export class InputFailure extends Data.TaggedError("InputFailure")<{
 export interface Run {
   /** Reserve a complete stroke, including its releases, before sending its first event. */
   readonly reserve: (commands: number) => Effect.Effect<void, InputFailure>;
+  /** Admit every sample before a motion starts its published clock; ordinary input stays bounded separately. */
+  readonly reserveMotion: (commands: number) => Effect.Effect<void, InputFailure>;
   readonly send: (command: () => Promise<unknown>) => Effect.Effect<void, InputFailure>;
   readonly down: (
     key: string,
@@ -79,20 +83,25 @@ export const make = () => {
       outstanding.add(reply);
     };
 
-    const run: Run = {
-      reserve: (commands) =>
-        Effect.gen(function* () {
+    const reserve = (commands: number, maximum: number, limit: number) =>
+      Effect.gen(function* () {
+        yield* requireOpen;
+        yield* requireSuccess;
+        if (!Number.isInteger(commands) || commands < 1 || commands > maximum)
+          return yield* Effect.die(new Error("invalid input reservation"));
+        while (outstanding.size + reserved + commands > limit) {
+          yield* Effect.promise(() => Promise.race(outstanding));
           yield* requireOpen;
           yield* requireSuccess;
-          if (!Number.isInteger(commands) || commands < 1 || commands > capacity)
-            return yield* Effect.die(new Error("invalid input reservation"));
-          while (outstanding.size + reserved + commands > capacity) {
-            yield* Effect.promise(() => Promise.race(outstanding));
-            yield* requireOpen;
-            yield* requireSuccess;
-          }
-          reserved += commands;
-        }),
+        }
+        reserved += commands;
+      });
+
+    const run: Run = {
+      reserve: (commands) => reserve(commands, capacity, capacity),
+      // A dense stroke cannot wait for replies midway without changing its published timing.
+      // Its finite reservation also leaves room for the ordinary pool's already-owned releases.
+      reserveMotion: (commands) => reserve(commands, maximumSamples, capacity + maximumSamples),
       send: (command) =>
         Effect.gen(function* () {
           yield* requireOpen;

@@ -18,6 +18,7 @@ npx playwright-core install chromium
 | `Snapshot`     | The model-readable outline of a page, with refs for its controls                     |
 | `Frame`        | A screencast frame                                                                   |
 | `BrowserEvent` | Actions, navigations, tabs, dialogs and pointer motion, as they happen               |
+| `Motion`       | The replaceable, bounded pointer planner, with a tuned sigma-lognormal default       |
 | `BrowserError` | Typed failures, saying whether input reached the page before the failure             |
 | `Tools`        | The `effect/ai` browser toolkit                                                      |
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
@@ -80,6 +81,31 @@ moves to them. Scroll attempts are bounded and may use one instant fallback. A d
 does not scroll. After scrolling, the library checks the original target again; a page handler that
 changes its meaning can therefore stop an action after its wheel input but before a click. Drag
 endpoints are resolved together in the final viewport before the button is pressed.
+
+Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. `Motion.Motion` is a
+service reference with that default; the browser captures it once when constructed. A custom
+`plan(from, to)` returns a complete schedule with finite coordinates and nondecreasing absolute
+`afterMillis` offsets, at most 2,048 samples and 5,000 milliseconds, ending at the exact destination.
+Invalid plans fail with `InvalidRequest` before their track or input is sent. Equal-time samples
+are retained. Plain pointer movement does not use the service.
+
+For recorded human strokes, install the optional `effect-browser-human-strokes` package and
+provide its ready-made layer:
+
+```ts
+import { Layer } from "effect";
+import * as Chromium from "effect-browser/Chromium";
+import * as HumanStrokes from "effect-browser-human-strokes";
+
+const browser = Chromium.layer({ humanize: true }).pipe(Layer.provide(HumanStrokes.layer));
+```
+
+That package bundles 32,130 attributed CC BY 4.0 strokes, preserving their original sample times.
+The core package includes no stroke data. Every glide reserves its full bounded schedule before
+its published clock starts, so delayed replies cannot stretch a dense stroke through backpressure.
+At most 2,112 input commands and reservations are owned at once; ordinary input retains its
+64-command admission limit. Actions still await their replies before succeeding, and interruption
+stops the unsent suffix and releases held input.
 
 Typing sends key pairs for printable US characters in both plain and humanized modes; other text
 uses Unicode insertion. Humanized typing aims for about 75 WPM including slower word starts, with
