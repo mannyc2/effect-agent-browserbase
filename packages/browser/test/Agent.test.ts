@@ -1,7 +1,7 @@
 // The agent, its tools and moment descriptions, driven by scripted models: no model is called.
-import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect";
-import { LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
+import { assert, expectTypeOf, layer } from "@effect/vitest";
+import { Context, Duration, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect";
+import { type AiError, LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
 import type { BrowserContext } from "playwright-core";
 
 import * as Agent from "../src/Agent.ts";
@@ -16,6 +16,11 @@ import { Site, SiteLayer } from "./fixtures.ts";
 type Turn = (prompt: Prompt.Prompt) => ReadonlyArray<Response.PartEncoded>;
 
 class Spent extends Schema.TaggedError<Spent>()("Spent", {}) {}
+
+class Ledger extends Context.Service<
+  Ledger,
+  { readonly record: (step: number) => Effect.Effect<void> }
+>()("test/Ledger") {}
 
 /** A model that answers each call with the next turn, and keeps the prompts it was given. */
 const scripted = (turns: ReadonlyArray<Turn>) => {
@@ -835,6 +840,39 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         limited._tag === "AgentError" ? limited.reason._tag : limited._tag,
         "StepLimit",
       );
+    }),
+  );
+
+  it.effect("requires the services onStep uses", () =>
+    Effect.gen(function* () {
+      yield* start("/next");
+      const recorded: Array<number> = [];
+      const model = scripted([() => [call("done", { answer: "seen" }), finish]]);
+
+      const program = Agent.run("Answer.", {
+        onStep: (step) =>
+          Effect.gen(function* () {
+            yield* (yield* Ledger).record(step.step);
+          }),
+      });
+
+      expectTypeOf<Effect.Services<typeof program>>().toEqualTypeOf<
+        Browser | LanguageModel.LanguageModel | Ledger
+      >();
+      expectTypeOf<Effect.Error<typeof program>>().toEqualTypeOf<
+        Agent.AgentError | AiError.AiError | BrowserError
+      >();
+
+      const result = yield* program.pipe(
+        Effect.provide(model.layer),
+        Effect.provideService(
+          Ledger,
+          Ledger.of({ record: (step) => Effect.sync(() => recorded.push(step)) }),
+        ),
+      );
+
+      assert.strictEqual(result.answer, "seen");
+      assert.deepStrictEqual(recorded, [1]);
     }),
   );
 

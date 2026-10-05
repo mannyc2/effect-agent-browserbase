@@ -76,7 +76,7 @@ export interface Result<A> {
 /** Tools a caller adds. `done` and `give_up` end the run, so they remain the agent's own. */
 type ExtraTools = Record<string, Tool.Any> & { readonly done?: never; readonly give_up?: never };
 
-export interface Options<E = never, Extra extends ExtraTools = {}> {
+export interface Options<E = never, R = never, Extra extends ExtraTools = {}> {
   /** Model calls before stopping with `StepLimit`. Defaults to 30. */
   readonly maxSteps?: number | undefined;
   /** More guidance for the system prompt, such as a site's rules or what matters in the task. */
@@ -91,8 +91,11 @@ export interface Options<E = never, Extra extends ExtraTools = {}> {
    */
   readonly additionalTools?: Toolkit.Toolkit<Extra> | undefined;
   readonly tools?: Tools.Options | undefined;
-  /** Runs after every model call. Failing stops the run with that error, such as a spent budget. */
-  readonly onStep?: ((step: Step) => Effect.Effect<void, E>) | undefined;
+  /**
+   * Runs after every model call. Failing stops the run with that error, such as a spent budget.
+   * The services it needs become the run's requirements.
+   */
+  readonly onStep?: ((step: Step) => Effect.Effect<void, E, R>) | undefined;
 }
 
 const system = (instructions: string | undefined) =>
@@ -198,10 +201,10 @@ const observationMessage = (observed: Observation | string, zooms: ReadonlyArray
   return Prompt.makeMessage("user", { content });
 };
 
-const loop = <E, Extra extends ExtraTools>(
+const loop = <E, R, Extra extends ExtraTools>(
   answerSchema: Schema.Codec<unknown, unknown>,
   task: string,
-  options: Options<E, Extra>,
+  options: Options<E, R, Extra>,
 ) =>
   Effect.gen(function* () {
     const tools = yield* Tools.make(options.tools);
@@ -376,28 +379,28 @@ const loop = <E, Extra extends ExtraTools>(
   });
 
 /** Run a task to its end. The answer is a string. */
-export function run<E = never, Extra extends ExtraTools = {}>(
+export function run<E = never, R = never, Extra extends ExtraTools = {}>(
   task: string,
-  options?: Options<E, Extra>,
+  options?: Options<E, R, Extra>,
 ): Effect.Effect<
   Result<string>,
-  Effect.Error<ReturnType<typeof loop<E, Extra>>>,
-  Effect.Services<ReturnType<typeof loop<E, Extra>>>
+  Effect.Error<ReturnType<typeof loop<E, R, Extra>>>,
+  Effect.Services<ReturnType<typeof loop<E, R, Extra>>>
 >;
 
 /** Run a task to its end, with an answer of the given shape. */
-export function run<A, I, E = never, Extra extends ExtraTools = {}>(
+export function run<A, I, E = never, R = never, Extra extends ExtraTools = {}>(
   task: string,
-  options: Options<E, Extra> & { readonly answer: Schema.Codec<A, I> },
+  options: Options<E, R, Extra> & { readonly answer: Schema.Codec<A, I> },
 ): Effect.Effect<
   Result<A>,
-  Effect.Error<ReturnType<typeof loop<E, Extra>>>,
-  Effect.Services<ReturnType<typeof loop<E, Extra>>>
+  Effect.Error<ReturnType<typeof loop<E, R, Extra>>>,
+  Effect.Services<ReturnType<typeof loop<E, R, Extra>>>
 >;
 
-export function run<E, Extra extends ExtraTools>(
+export function run<E, R, Extra extends ExtraTools>(
   task: string,
-  options: Options<E, Extra> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
+  options: Options<E, R, Extra> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
 ) {
   return loop(options.answer ?? Schema.String, task, options).pipe(Effect.withSpan("Agent.run"));
 }
