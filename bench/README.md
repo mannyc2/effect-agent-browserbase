@@ -73,7 +73,9 @@ to `medium` for operate tasks and `none` for understand tasks. `--reasoning` ove
 Before each model call, the runner reserves a conservative upper bound against the shared
 `--max-usd` budget (default $2). It pins a compatible provider endpoint and uses its prompt-token limit, the highest
 listed tier/cache-write rates and `--max-output-tokens` (default 4,096). `--rates in,out` supplies
-provider price ceilings in USD per million tokens. Trials wait while active calls can release capacity. An actual billed receipt releases the unused reservation. A missing receipt or
+provider price ceilings in USD per million tokens. Trials wait while active calls can release capacity. An actual billed receipt releases the unused reservation. With the caller's own provider key
+(BYOK), OpenRouter's `cost` is only its fee, so a BYOK receipt is charged that fee plus its
+`upstream_inference_cost`, and one without the upstream cost is uncertain. A missing receipt or
 unknown charge keeps its reservation, so another trial cannot spend it again. This can stop a run
 before the nominal budget is used; it never treats an unknown charge as zero. Billable plugins are disabled in each request; the account
 must allow those overrides, since protected account defaults can add fees outside this token budget.

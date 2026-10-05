@@ -216,6 +216,98 @@ describe("ledger", () => {
   );
 });
 
+const byokResponse = (usage: Record<string, unknown>) =>
+  HttpClient.make((request) =>
+    Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(
+          JSON.stringify({
+            id: "free-test",
+            object: "chat.completion",
+            created: 0,
+            model: "openai/test",
+            system_fingerprint: null,
+            choices: [
+              {
+                index: 0,
+                finish_reason: "stop",
+                message: { role: "assistant", content: '{"result":1}' },
+              },
+            ],
+            usage: { prompt_tokens: 1000, completion_tokens: 50, total_tokens: 1050, ...usage },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    ),
+  );
+
+/** One generateObject call through the real adapter and the budgeted client. */
+const callWith = (
+  budget: Effect.Success<ReturnType<typeof ledger>>,
+  usage: Record<string, unknown>,
+) =>
+  Effect.gen(function* () {
+    const account = yield* budget.account;
+
+    const native = yield* OpenRouterClient.make({}).pipe(
+      Effect.provideService(HttpClient.HttpClient, byokResponse(usage)),
+    );
+
+    const model = yield* OpenRouterLanguageModel.make({ model: "openai/test" }).pipe(
+      Effect.provideService(
+        OpenRouterClient.OpenRouterClient,
+        budgetedClient(native, account, {
+          rates: { input: 1e-6, output: 2e-6 },
+          maxOutputTokens: 64,
+        }),
+      ),
+    );
+
+    return yield* LanguageModel.generateObject({
+      prompt: "x",
+      schema: Schema.Struct({ result: Schema.Finite }),
+    }).pipe(Effect.provideService(LanguageModel.LanguageModel, model), Effect.exit);
+  });
+
+describe("BYOK receipts", () => {
+  it.effect("charge OpenRouter's fee plus the provider's upstream inference", () =>
+    Effect.gen(function* () {
+      // $0.0015 fee + $0.03 billed by the provider: a $0.10 budget admits two such calls.
+      const budget = yield* ledger(0.1, 0.04);
+
+      const byok = {
+        cost: 0.0015,
+        is_byok: true,
+        cost_details: {
+          upstream_inference_cost: 0.03,
+          upstream_inference_prompt_cost: 0.025,
+          upstream_inference_completions_cost: 0.005,
+        },
+      };
+
+      const exits = [];
+
+      for (let call = 0; call < 4; call++) exits.push((yield* callWith(budget, byok))._tag);
+
+      assert.deepStrictEqual(exits, ["Success", "Success", "Failure", "Failure"]);
+      assert.closeTo((yield* budget.snapshot).knownUsd, 0.063, 1e-9);
+      assert.isTrue(yield* budget.exhausted);
+    }),
+  );
+
+  it.effect("keep a BYOK receipt without its upstream cost reserved as uncertain", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+      const exit = yield* callWith(budget, { cost: 0, is_byok: true });
+
+      assert.strictEqual(exit._tag, "Success");
+      assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0, reservedUsd: 0.04 });
+    }),
+  );
+});
+
 describe("trial ownership", () => {
   it.live(
     "keeps concurrent Chromium trials separate and alive through another trial's cleanup",

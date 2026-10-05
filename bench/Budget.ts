@@ -1,7 +1,7 @@
 // Paid model calls for both runners: one admission ledger, the budgeted OpenRouter client and the
 // pinned endpoint whose bounds every reservation uses.
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
-import { Config, Deferred, Effect, Exit, Layer, Ref, Schema } from "effect";
+import { Config, Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
 import type * as Agent from "effect-browser/Agent";
 import { AiError, type LanguageModel } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
@@ -81,7 +81,32 @@ interface RawUsage {
   readonly completion_tokens: number;
   readonly prompt_tokens_details?: { readonly cached_tokens?: number | null } | null;
   readonly cost?: number | null;
+  readonly is_byok?: boolean;
+  readonly cost_details?: { readonly upstream_inference_cost?: number | null } | null;
 }
+
+const Charge = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+
+// With the caller's own provider key (BYOK), `cost` is only OpenRouter's fee: the provider bills
+// the upstream inference separately, and only `upstream_inference_cost` reports it.
+const Billed = Schema.Union([
+  Schema.Struct({
+    is_byok: Schema.Literal(true),
+    cost: Charge,
+    cost_details: Schema.Struct({ upstream_inference_cost: Charge }),
+  }),
+  Schema.Struct({ is_byok: Schema.optional(Schema.Literal(false)), cost: Charge }),
+]);
+
+/** USD a receipt establishes, or undefined when it does not show the whole charge. */
+export const chargeOf = (usage: RawUsage): number | undefined =>
+  Option.getOrUndefined(
+    Option.map(Schema.decodeUnknownOption(Billed)(usage), (billed) =>
+      "cost_details" in billed
+        ? billed.cost + billed.cost_details.upstream_inference_cost
+        : billed.cost,
+    ),
+  );
 
 /** Known charges remain distinct from upper bounds for requests whose bill is unknown. */
 export interface Accounting {
@@ -271,19 +296,16 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                   },
                 }));
 
-                if (
-                  usage.cost === undefined ||
-                  usage.cost === null ||
-                  !Number.isFinite(usage.cost) ||
-                  usage.cost < 0
-                ) {
+                const billed = chargeOf(usage);
+
+                if (billed === undefined) {
                   yield* settle(undefined);
                   yield* remember();
 
                   return response;
                 }
 
-                const charged = Math.ceil(usage.cost * units);
+                const charged = Math.ceil(billed * units);
 
                 yield* settle(charged);
                 yield* Ref.update(account, (value) => ({
