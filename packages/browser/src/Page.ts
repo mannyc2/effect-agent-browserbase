@@ -1807,6 +1807,18 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const history = native("back", () => cdp.send("Page.getNavigationHistory"));
 
+  // While a traversal swaps documents, Chromium can briefly route this session to the outgoing
+  // document, which has become inactive (for instance after it entered the back-forward cache),
+  // so a read during the traversal is retried until the session reaches the active document.
+  const traversingHistory = history.pipe(
+    Effect.retry({
+      schedule: Schedule.spaced(Duration.millis(50)),
+      while: (error) =>
+        error.reason._tag === "Failed" &&
+        /not attached to an active page/i.test(error.reason.detail),
+    }),
+  );
+
   const noPrevious = failWith("back", new NotFound({ target: "a previous page in this tab" }));
 
   const prepareBack = Effect.gen(function* () {
@@ -1866,7 +1878,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             yield* native("back", () =>
               cdp.send("Page.navigateToHistoryEntry", { entryId: previous.id }),
             );
-            yield* history.pipe(
+            yield* traversingHistory.pipe(
               Effect.repeat({
                 schedule: Schedule.spaced(Duration.millis(50)),
                 until: (latest) => latest.entries[latest.currentIndex]?.id !== current.id,
