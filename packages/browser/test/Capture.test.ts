@@ -512,6 +512,38 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
+    it.effect("rejects invalid action and navigation timeouts before taking over a context", () =>
+      Effect.gen(function* () {
+        const native = (yield* Browser).context.browser();
+
+        if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+        const context = yield* Effect.acquireRelease(
+          Effect.promise(() => native.newContext()),
+          (context) => Effect.promise(() => context.close()),
+        );
+
+        for (const name of ["actionTimeout", "navigationTimeout"] as const)
+          for (const timeout of [
+            Duration.zero,
+            Duration.millis(-1),
+            Duration.millis(Number.NaN),
+            Duration.infinity,
+          ]) {
+            const error = yield* makeBrowser(
+              context,
+              { id: "invalid-timeout", provider: "test" },
+              { [name]: timeout },
+            ).pipe(Effect.flip);
+
+            assert.strictEqual(error.reason._tag, "InvalidRequest", `${name} ${String(timeout)}`);
+            assert.match(error.message, new RegExp(name));
+            assert.isFalse(error.dispatched);
+          }
+        assert.isEmpty(context.pages());
+      }),
+    );
+
     it.effect("maps real native paint into the owner clock and keeps viewport-sized JPEGs", () =>
       Effect.gen(function* () {
         const { browser, page, calls } = yield* setup();

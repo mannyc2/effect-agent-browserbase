@@ -47,11 +47,11 @@ export interface Options {
   /** Move the pointer along curved paths and type with human pacing. Defaults to false. */
   readonly humanize?: boolean | undefined;
   /**
-   * Bound on each action. Defaults to 10 seconds. Humanized pointer glides, up to 5 seconds each
-   * and two per drag, count against it.
+   * Bound on each action; finite and positive. Defaults to 10 seconds. Humanized pointer glides,
+   * up to 5 seconds each and two per drag, count against it.
    */
   readonly actionTimeout?: Duration.Input | undefined;
-  /** Bound on each navigation. Defaults to 30 seconds. */
+  /** Bound on each navigation; finite and positive. Defaults to 30 seconds. */
   readonly navigationTimeout?: Duration.Input | undefined;
   /** Screencast frames each page keeps for `recentFrames`. Defaults to 60. */
   readonly frameHistory?: number | undefined;
@@ -118,26 +118,35 @@ export const make = Effect.fn("Browser.make")(function* (
   const motion = yield* Motion.Motion;
   const ownerScope = yield* Scope.Scope;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
-  const policyTimeout = Duration.fromInput(options.policyTimeout ?? Duration.minutes(5));
 
-  if (
-    Option.isNone(policyTimeout) ||
-    !Number.isFinite(Duration.toMillis(policyTimeout.value)) ||
-    !Duration.isPositive(policyTimeout.value)
-  )
-    return yield* new BrowserError({
-      operation: "make",
-      reason: new InvalidRequest({ detail: "policyTimeout must be finite and greater than zero" }),
-      dispatched: false,
-    });
+  // Every bound guards a lock or a held key, so each must be a real, finite deadline.
+  const bound = (name: string, input: Duration.Input | undefined, fallback: Duration.Duration) => {
+    const decoded = Duration.fromInput(input ?? fallback);
+
+    return Option.isSome(decoded) &&
+      Number.isFinite(Duration.toMillis(decoded.value)) &&
+      Duration.isPositive(decoded.value)
+      ? Effect.succeed(decoded.value)
+      : Effect.fail(
+          new BrowserError({
+            operation: "make",
+            reason: new InvalidRequest({ detail: `${name} must be finite and greater than zero` }),
+            dispatched: false,
+          }),
+        );
+  };
 
   const settings: Page.Settings = {
     humanize: options.humanize ?? false,
-    actionTimeout: Duration.fromInputUnsafe(options.actionTimeout ?? Duration.seconds(10)),
-    navigationTimeout: Duration.fromInputUnsafe(options.navigationTimeout ?? Duration.seconds(30)),
+    actionTimeout: yield* bound("actionTimeout", options.actionTimeout, Duration.seconds(10)),
+    navigationTimeout: yield* bound(
+      "navigationTimeout",
+      options.navigationTimeout,
+      Duration.seconds(30),
+    ),
     frameHistory: options.frameHistory ?? 60,
     guard: options.guard,
-    policyTimeout: policyTimeout.value,
+    policyTimeout: yield* bound("policyTimeout", options.policyTimeout, Duration.minutes(5)),
   };
 
   if (!Number.isSafeInteger(settings.frameHistory) || settings.frameHistory < 1)
