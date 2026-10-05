@@ -4,14 +4,14 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { Cause, Effect, Exit, type Layer, Option, Schema } from "effect";
+import { Cause, Effect, Exit, type Layer, Option, Ref, Schema } from "effect";
 import * as Agent from "effect-browser/Agent";
 import type { Browser } from "effect-browser/Browser";
 import { BrowserError } from "effect-browser/BrowserError";
 import { BrowserbaseError } from "effect-browserbase/BrowserbaseError";
 import { AiError } from "effect/ai";
 
-import type { Calls, Endpoint } from "./Budget.ts";
+import { type Account, type Calls, type Endpoint, noCalls, noTiming } from "./Budget.ts";
 
 /** The captured evidence cannot support a graded answer, so no model is asked about it. */
 export class EvidenceIncomplete extends Schema.TaggedError<EvidenceIncomplete>()(
@@ -193,3 +193,64 @@ export const tally = (
     unrun: records.filter((record) => record.status === "unrun").length,
   };
 };
+
+/**
+ * The units of a run that have no saved record yet, with the account each one's calls use. Each
+ * unit is claimed exactly once: by its own record, or by `drain` when the run is interrupted,
+ * which keeps what its calls already spent or reserved.
+ */
+export const journal = <Key>(keys: ReadonlyArray<Key>) =>
+  Effect.gen(function* () {
+    const pending = yield* Ref.make<ReadonlyMap<Key, Account | undefined>>(
+      new Map(keys.map((key) => [key, undefined])),
+    );
+
+    const claim = (key: Key) =>
+      Ref.modify(pending, (units) => {
+        const next = new Map(units);
+
+        return [next.delete(key), next];
+      });
+
+    return {
+      begin: (key: Key, account: Account) =>
+        Ref.update(pending, (units) => (units.has(key) ? new Map(units).set(key, account) : units)),
+      /** Save a unit's record unless an interruption already recorded it. */
+      settle: <E, R>(key: Key, save: Effect.Effect<void, E, R>) =>
+        Effect.uninterruptible(
+          claim(key).pipe(Effect.flatMap((claimed) => (claimed ? save : Effect.void))),
+        ),
+      /** Claim every unit still pending, with its calls and timing so far. */
+      drain: Ref.getAndSet(pending, new Map()).pipe(
+        Effect.flatMap((units) =>
+          Effect.forEach([...units], ([key, account]) =>
+            account === undefined
+              ? Effect.succeed({ key, calls: noCalls, timing: noTiming })
+              : Effect.all({ calls: account.calls, timing: account.timing }).pipe(
+                  Effect.map(({ calls, timing }) => ({ key, calls, timing })),
+                ),
+          ),
+        ),
+      ),
+    };
+  });
+
+/**
+ * Run `record` synchronously when the process receives SIGINT, while the scope is open. It runs
+ * before listeners registered earlier, such as Playwright's, which exits the process once its
+ * browsers close and would otherwise race the run's own interruption.
+ */
+export const onSigint = (record: Effect.Effect<void>) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const listener = () => Effect.runSync(record);
+
+      process.prependListener("SIGINT", listener);
+
+      return listener;
+    }),
+    (listener) =>
+      Effect.sync(() => {
+        process.off("SIGINT", listener);
+      }),
+  );

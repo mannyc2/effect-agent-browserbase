@@ -116,6 +116,13 @@ status:
 - `denied`: the budget refused admission, before the browser started or at a later call.
 - `unrun`: the unit never reached an outcome, because the run stopped or was interrupted.
 
+An interrupted run (SIGINT, or an interrupted fiber) still records every unit it scheduled: those
+without an outcome are `unrun` with reason `interrupted` and keep what their dispatched calls
+spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside the trials,
+and the comparison writes `summary.json` marked `interrupted`. Playwright exits the process on
+SIGINT once its browsers close, so these records are written synchronously when the signal
+arrives.
+
 `pass` is null except for graded units. Summaries report passes over graded units separately from
 infrastructure failures, denials and unrun units. A run exits successfully only when every unit was
 graded with settled charges; a free run also needs every answer to pass.

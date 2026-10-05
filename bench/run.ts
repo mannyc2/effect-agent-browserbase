@@ -1,6 +1,6 @@
 // Runs the free scripted bench by default. Paid model/provider runs need the explicit opt-ins below.
 // Each trial owns its browser, random seed and accounting; only the admission budget is shared.
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -38,6 +38,8 @@ import {
   type Classification,
   classify,
   isolatedTrial,
+  journal,
+  onSigint,
   type Reason,
   revision,
   type RunInfo,
@@ -236,9 +238,67 @@ const main = Effect.gen(function* () {
 
   yield* write(() => mkdirSync(directory, { recursive: true }));
 
+  const units = yield* journal(jobs.map((_, index) => index));
+
+  const save = (record: TrialRecord) =>
+    write(() => appendFileSync(file, `${JSON.stringify(record)}\n`));
+
+  const ledgerSnapshot = (interrupted: boolean) =>
+    Effect.gen(function* () {
+      const accounting =
+        runner === undefined ? { knownUsd: 0, reservedUsd: 0 } : yield* runner.snapshot;
+
+      yield* write(() =>
+        writeFileSync(
+          join(directory, `${stamp}-${label}.ledger.json`),
+          `${JSON.stringify({ ...accounting, maxUsd, interrupted }, null, 2)}\n`,
+        ),
+      );
+
+      return accounting;
+    });
+
+  // An interrupted run still records every trial it scheduled, with what its calls already
+  // spent or reserved, and the ledger as it stands.
+  const interrupted = Effect.gen(function* () {
+    const at = DateTime.formatIso(yield* DateTime.now);
+
+    for (const { key, calls, timing } of yield* units.drain) {
+      const job = jobs[key];
+
+      if (job === undefined) continue;
+      yield* save({
+        task: job.task.name,
+        kind: job.task.kind,
+        trial: job.trial,
+        baseSeed,
+        seed: trialSeed(baseSeed, job.task.name, job.trial),
+        startedAt: at,
+        run,
+        reasoning: null,
+        status: "unrun",
+        reason: "interrupted",
+        pass: null,
+        detail: "Interrupted before an outcome.",
+        error: null,
+        diagnostic: null,
+        lastResponse: calls.lastResponse,
+        answer: null,
+        accounting: calls.accounting,
+        timing,
+        seconds: 0,
+      });
+    }
+    yield* ledgerSnapshot(true);
+  }).pipe(Effect.ignore({ log: "Error", message: "could not record the interrupted run" }));
+
+  yield* onSigint(interrupted);
+
+  yield* Console.log(`Running ${jobs.length} trials, ${concurrency} at a time; results in ${file}`);
+
   const records = yield* Effect.forEach(
     jobs,
-    ({ task, trial }) =>
+    ({ task, trial }, index) =>
       Effect.gen(function* () {
         // A denied or unstarted trial is a durable result too, but must not provision a browser.
         const halted = hosted && (yield* Ref.get(hostedHalt));
@@ -250,6 +310,8 @@ const main = Effect.gen(function* () {
 
         const account =
           halted || denied || runner === undefined ? undefined : yield* runner.account;
+
+        if (account !== undefined) yield* units.begin(index, account);
 
         const work =
           runner !== undefined && account !== undefined
@@ -308,7 +370,7 @@ const main = Effect.gen(function* () {
           seconds,
         };
 
-        yield* write(() => appendFileSync(file, `${JSON.stringify(record)}\n`));
+        yield* units.settle(index, save(record));
         yield* Console.log(
           `${task.name.padEnd(14)} #${trial}  ${record.status === "graded" ? (record.pass === true ? "pass" : "FAIL") : record.status}  ${record.reason}  ${seconds.toFixed(1)}s  ${record.accounting.calls} calls  $${record.accounting.knownUsd.toFixed(4)} known + $${record.accounting.reservedUsd.toFixed(4)} unresolved  ${record.error ?? record.detail}`,
         );
@@ -316,10 +378,9 @@ const main = Effect.gen(function* () {
         return record;
       }),
     { concurrency },
-  );
+  ).pipe(Effect.onInterrupt(() => interrupted));
 
-  const accounting =
-    runner === undefined ? { knownUsd: 0, reservedUsd: 0 } : yield* runner.snapshot;
+  const accounting = yield* ledgerSnapshot(false);
 
   for (const name of names) {
     const counts = tally(records.filter((record) => record.task === name));
@@ -343,7 +404,7 @@ const main = Effect.gen(function* () {
       record.accounting.uncertainCalls === 0 &&
       (model !== undefined || record.pass === true),
   );
-});
+}).pipe(Effect.scoped);
 
 // Run only from the command line, so free tests can import this module without running it.
 if (import.meta.main) {

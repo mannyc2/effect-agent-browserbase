@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref } from "effect";
+import { Deferred, Effect, Fiber, Ref, Schedule } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import { AiError, LanguageModel } from "effect/ai";
@@ -375,6 +375,58 @@ describe("understanding comparison", () => {
 
       for (const arm of summarize(plan, records).arms)
         assert.isBelow(arm.requestSeconds.p95 ?? Number.POSITIVE_INFINITY, total);
+    }),
+  );
+
+  it.live("records every scheduled arm and keeps dispatched charges when interrupted", () =>
+    Effect.gen(function* () {
+      const settings = yield* configuration([
+        "--hard-trials",
+        "2",
+        "--control-trials",
+        "0",
+        "--concurrency",
+        "2",
+      ]);
+
+      const plan = manifest(settings, "fixed");
+      const first = plan.pairs[0];
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+      const prepared = yield* isolatedTrial(Quote.prepare(first), Chromium.layer());
+      const budget = yield* ledger(1, 0.1);
+      const saved: Array<TrialRecord> = [];
+      const dispatched = yield* Ref.make(0);
+
+      const fiber = yield* compare(plan, budget, {
+        prepare: (pair) =>
+          Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
+        describe: (_sample, _arm, account) =>
+          account.run(
+            Ref.update(dispatched, (count) => count + 1).pipe(Effect.andThen(Effect.never)),
+            () => undefined,
+          ),
+        record: (record) =>
+          Effect.sync(() => {
+            saved.push(record);
+          }),
+      }).pipe(Effect.forkChild);
+
+      yield* Ref.get(dispatched).pipe(
+        Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: (count) => count === 2 }),
+      );
+      yield* Fiber.interrupt(fiber);
+
+      assert.lengthOf(saved, 6);
+      assert.isTrue(
+        saved.every((record) => record.status === "unrun" && record.reason === "interrupted"),
+      );
+      assert.strictEqual(
+        saved.reduce((sum, record) => sum + record.accounting.reservedUsd, 0),
+        0.2,
+      );
+      assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0, reservedUsd: 0.2 });
     }),
   );
 

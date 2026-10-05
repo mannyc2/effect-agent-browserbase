@@ -27,6 +27,8 @@ import * as Quote from "./QuoteComparison.ts";
 import {
   classify,
   isolatedTrial,
+  journal,
+  onSigint,
   type Reason,
   revision,
   type Status,
@@ -249,6 +251,9 @@ export interface Operations<E, R, E2, R2> {
   readonly record: (record: Record) => Effect.Effect<void, RunError>;
 }
 
+// One journal key per scheduled arm: its pair's index and the arm's place in `arms`.
+const unitKey = (index: number, arm: Quote.Arm) => index * arms.length + arms.indexOf(arm);
+
 /**
  * Cases run concurrently; their three arms run serially, preserving the global call bound. An
  * infrastructure failure or an unresolved charge stops new admissions; a graded answer, including
@@ -275,9 +280,47 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
       Effect.as(record),
     );
 
+  const units = yield* journal(
+    plan.pairs.flatMap((_, index) => arms.map((arm) => unitKey(index, arm))),
+  );
+
+  const settle = (index: number, record: Record) =>
+    units.settle(unitKey(index, record.arm), save(record)).pipe(Effect.as(record));
+
+  // Interruption still leaves one record per scheduled arm, keeping what dispatched calls spent.
+  const interrupted = Effect.gen(function* () {
+    for (const { key, calls, timing } of yield* units.drain) {
+      const pair = plan.pairs[Math.floor(key / arms.length)];
+      const arm = arms[key % arms.length];
+
+      if (pair === undefined || arm === undefined) continue;
+      yield* save({
+        task: pair.task,
+        trial: pair.trial,
+        seed: pair.seed,
+        arm,
+        mode: plan.mode,
+        evidence: null,
+        status: "unrun",
+        reason: "interrupted",
+        pass: null,
+        matches: null,
+        periodSwap: null,
+        answer: null,
+        diagnostic: null,
+        lastResponse: calls.lastResponse,
+        accounting: calls.accounting,
+        timing,
+        seconds: 0,
+      });
+    }
+  });
+
+  yield* onSigint(interrupted);
+
   const groups = yield* Effect.forEach(
     plan.pairs,
-    (pair) =>
+    (pair, index) =>
       Effect.gen(function* () {
         const halted = yield* Ref.get(stopped);
         const skipped = halted !== null || (yield* budget.exhausted);
@@ -321,7 +364,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
             };
 
             if (prepared !== undefined && Exit.isFailure(prepared))
-              return yield* save({
+              return yield* settle(index, {
                 ...base,
                 ...unanswered,
                 status: "infrastructure-failed",
@@ -332,7 +375,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
             const halt = yield* Ref.get(stopped);
 
             if (sample === undefined || halt !== null || (yield* budget.exhausted))
-              return yield* save({
+              return yield* settle(index, {
                 ...base,
                 ...unanswered,
                 ...(halt === null
@@ -342,6 +385,8 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
               });
 
             const account = yield* budget.account;
+
+            yield* units.begin(unitKey(index, arm), account);
             const started = yield* Clock.monotonicTimeNanos;
 
             const exit = yield* operations
@@ -364,7 +409,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
 
             const answer = Exit.isSuccess(exit) ? exit.value.answer : null;
 
-            return yield* save({
+            return yield* settle(index, {
               ...base,
               ...settled,
               matches: answer === null ? null : matches(answer, sample.expected),
@@ -384,7 +429,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
         );
       }),
     { concurrency: plan.configuration.concurrency },
-  );
+  ).pipe(Effect.onInterrupt(() => interrupted));
 
   // A broken result sink stops admission but cannot interrupt requests that already cost money.
   const failure = yield* Ref.get(outputFailure);
@@ -392,7 +437,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
   if (failure !== null) return yield* Effect.failCause(failure);
 
   return groups.flat();
-});
+}, Effect.scoped);
 
 const percentile = (values: ReadonlyArray<number>, fraction: number): number | null => {
   const ordered = [...values].sort((left, right) => left - right);
@@ -720,6 +765,36 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
   const budget = liveRunner ?? (yield* ledger(configuration.maxUsd, 0));
   const browser = Chromium.layer({ frameHistory: 1200 });
 
+  const saved = yield* Ref.make<ReadonlyArray<Record>>([]);
+
+  const summarized = yield* Ref.make(false);
+
+  // Written once: a SIGINT records it before the run's own interruption tries again.
+  const writeSummary = (records: ReadonlyArray<Record>, interrupted: boolean) =>
+    Effect.gen(function* () {
+      const summary = {
+        ...summarize(plan, records),
+        interrupted,
+        accounting: yield* budget.snapshot,
+      };
+
+      if (yield* Ref.getAndSet(summarized, true)) return summary;
+      yield* write(() =>
+        writeFileSync(join(directory, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
+          flag: "wx",
+        }),
+      );
+
+      return summary;
+    });
+
+  const interruptedSummary = Ref.get(saved).pipe(
+    Effect.flatMap((records) => writeSummary(records, true)),
+    Effect.ignore({ log: "Error", message: "could not summarize the interrupted comparison" }),
+  );
+
+  yield* onSigint(interruptedSummary);
+
   const records = yield* compare(plan, budget, {
     prepare: (pair) =>
       isolatedTrial(Quote.prepare(pair), browser).pipe(
@@ -737,16 +812,13 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
           })
         : liveRunner.withModel(Quote.describe(sample, arm), "none", account),
     record: (record) =>
-      write(() => appendFileSync(join(directory, "results.jsonl"), JSON.stringify(record) + "\n")),
-  });
+      write(() =>
+        appendFileSync(join(directory, "results.jsonl"), JSON.stringify(record) + "\n"),
+      ).pipe(Effect.andThen(Ref.update(saved, (records) => [...records, record]))),
+  }).pipe(Effect.onInterrupt(() => interruptedSummary));
 
-  const summary = { ...summarize(plan, records), accounting: yield* budget.snapshot };
+  const summary = yield* writeSummary(records, false);
 
-  yield* write(() =>
-    writeFileSync(join(directory, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
-      flag: "wx",
-    }),
-  );
   yield* Console.log(plan.interpretation);
   yield* Console.log(records.length + " arm records saved in " + directory);
   yield* Console.log(
@@ -764,7 +836,7 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
       record.accounting.uncertainCalls === 0 &&
       (plan.mode === "paid" || record.pass === true),
   );
-});
+}, Effect.scoped);
 
 if (import.meta.main) {
   const interrupt = new AbortController();
