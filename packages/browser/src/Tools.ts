@@ -27,6 +27,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
+import * as Url from "./internal/url.ts";
 import * as Page from "./Page.ts";
 
 const ref = Schema.optional(Schema.String).annotate({
@@ -329,6 +330,21 @@ const target = (op: {
       ? Effect.succeed<Page.Target>({ x: op.x, y: op.y })
       : Effect.fail("give a ref from the snapshot, or x and y from a screenshot");
 
+/** Where a model may go: web addresses, inline data and a blank page, never local files. */
+const destination = (input: string) => {
+  const url = Url.parse(input);
+
+  return url !== null &&
+    (url.protocol === "http:" ||
+      url.protocol === "https:" ||
+      url.protocol === "data:" ||
+      url.href === "about:blank")
+    ? Effect.succeed(url.href)
+    : Effect.fail(
+        `${JSON.stringify(input)} was not opened: the browser tools open http and https addresses, data: URLs and about:blank.`,
+      );
+};
+
 const named = (op: {
   readonly ref?: string | undefined;
   readonly x?: number | undefined;
@@ -440,11 +456,10 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   });
 
   const handlers = BrowserToolkit.of({
-    browser_navigate: ({ url }) => {
-      const address = /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
-
-      return act(`Opened ${address}.`, (tab) => tab.goto(address));
-    },
+    browser_navigate: ({ url }) =>
+      Effect.flatMap(destination(url), (address) =>
+        act(`Opened ${address}.`, (tab) => tab.goto(address)),
+      ),
     browser_back: () => act("Went back.", (tab) => tab.back),
     browser_snapshot: ({ full, query }) =>
       Effect.gen(function* () {
@@ -547,7 +562,9 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
         const chosen = index === undefined ? undefined : open[index - 1];
 
         if (action === "new") {
-          const tab = yield* browser.newPage(url);
+          const tab = yield* url === undefined
+            ? browser.newPage()
+            : Effect.flatMap(destination(url), (address) => browser.newPage(address));
 
           seen.add(tab.id);
           current = Option.some(tab);

@@ -58,6 +58,7 @@ import * as Human from "./internal/human.ts";
 import * as Input from "./internal/input.ts";
 import * as Keys from "./internal/keys.ts";
 import * as Script from "./internal/pageScript.ts";
+import * as Url from "./internal/url.ts";
 import * as Motion from "./Motion.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
@@ -1663,7 +1664,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   });
 
   const goto = (url: string) => {
-    const parsed = URL.parse(url) ?? URL.parse(`https://${url}`);
+    const parsed = Url.parse(url);
 
     if (
       parsed === null ||

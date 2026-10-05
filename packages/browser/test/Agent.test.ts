@@ -1,4 +1,9 @@
 // The agent, its tools and moment descriptions, driven by scripted models: no model is called.
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
 import { assert, expectTypeOf, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect";
 import { type AiError, LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
@@ -1270,6 +1275,52 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.include(yield* observed.url, "/next");
       assert.include(yield* tools.handlers.browser_click({ ref: proceed }), "Clicked");
       yield* observed.close;
+    }),
+  );
+
+  it.effect("opens typed addresses, but never a local file, from the navigation tools", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/form");
+      const browser = yield* Browser;
+      const tools = yield* Tools.make();
+      const { host } = new URL((yield* Site).url("/next"));
+
+      // A host and port is an address, not a `localhost:` scheme; loopback is plain HTTP.
+      assert.strictEqual(
+        yield* tools.handlers.browser_navigate({ url: `localhost:${host.split(":")[1]}/next` }),
+        `Opened http://localhost:${host.split(":")[1]}/next.`,
+      );
+      assert.include(yield* page.url, "/next");
+
+      const directory = yield* Effect.acquireRelease(
+        Effect.promise(() => mkdtemp(join(tmpdir(), "effect-browser-"))),
+        (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
+      );
+
+      const file = pathToFileURL(join(directory, "secret.html")).href;
+
+      yield* Effect.promise(() => writeFile(new URL(file), "<title>Secret</title>secret"));
+
+      for (const url of [file, "javascript:alert(1)", "chrome://settings"]) {
+        const refused = yield* tools.handlers.browser_navigate({ url }).pipe(Effect.flip);
+
+        assert.include(refused, "was not opened");
+        assert.notInclude(refused, "may have taken effect");
+      }
+      const tabs = (yield* browser.pages).length;
+
+      assert.include(
+        yield* tools.handlers.browser_tabs({ action: "new", url: file }).pipe(Effect.flip),
+        "was not opened",
+      );
+      assert.strictEqual((yield* browser.pages).length, tabs);
+      assert.include(yield* page.url, "/next");
+
+      // The consumer's own navigation is not the model's, and still opens what it is given.
+      yield* page.goto(file);
+      assert.strictEqual(yield* page.title, "Secret");
+      yield* page.goto(host + "/form");
+      assert.strictEqual(yield* page.url, `http://${host}/form`);
     }),
   );
 

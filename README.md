@@ -110,6 +110,10 @@ const watch = Effect.gen(function* () {
   model again. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
   is `"both"`. A malformed `done` answer goes back to the model to correct, and so does a response
   that calls a tool that does not exist: none of its calls run.
+- `browser_navigate` and `browser_tabs` open only http and https addresses, `data:` URLs and
+  `about:blank`; a model cannot open a local file. An address without a scheme, such as
+  `example.com` or `localhost:3000`, opens over HTTPS, or HTTP on loopback; `Page.goto` reads
+  addresses the same way and also opens the `file:` URLs its caller passes.
 - `browser_zoom` takes a viewport region (`x`, `y`, `width`, `height`) and returns its crop beside
   the next observation, including in outline mode. Captions give the source page and viewport
   origin; clicks still use viewport coordinates. A batch can request at most eight crops.
