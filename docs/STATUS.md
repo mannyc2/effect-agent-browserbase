@@ -19,8 +19,8 @@
   displays whose device pixel ratio differs from one.
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
   holds and validation before held actions resume: the press point is hit-tested after the
-  pointer arrives, typing never activates a control, and a multi-key action stops at a new
-  document.
+  pointer arrives, typing refuses to start on a control a key could activate, and a multi-key
+  action stops at a new document.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
@@ -39,8 +39,8 @@
   and a shared model admission budget. Every trial is graded, an infrastructure failure, denied
   or unrun, and summaries keep those denominators apart. Paid runs remain opt-in. A separate
   quote comparison reuses captured evidence across shipping Moment, the historical on-air
-  representation and conclusions computed from every visible quote table, with paired,
-  counterbalanced grading and safe provider diagnostics. Facts remain a bench experiment until
+  representation and conclusions computed from every visible quote table, with paired grading,
+  arm orders balanced within complete blocks and safe provider diagnostics. Facts remain a bench experiment until
   measured evidence supports a public input.
 
 `effect-agent-browser` and the Effect Agent dependency are gone: the agent loop is `effect/ai`'s
