@@ -6,6 +6,7 @@ import {
   BrowserbaseError,
   Decode,
   RateLimited,
+  Status,
   Transport,
 } from "effect-browserbase/BrowserbaseError";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -82,11 +83,23 @@ describe("hosted trials", () => {
     const failed = (operation: string, reason: BrowserbaseError["reason"]) =>
       Cause.fail(new BrowserbaseError({ operation, reason }));
 
-    assert.isTrue(uncertainAllocation(failed("createSession", new Transport({ detail: "reset" }))));
-    assert.isTrue(uncertainAllocation(failed("createSession", new Decode({ detail: "shape" }))));
-    assert.isFalse(
-      uncertainAllocation(failed("createSession", new RateLimited({ detail: "busy" }))),
-    );
+    for (const reason of [
+      new Transport({ detail: "reset" }),
+      new Status({ status: 502, detail: "bad gateway" }),
+      new Status({ status: 408, detail: "request timeout" }),
+      new Decode({ detail: "missing region" }),
+      new Decode({
+        detail: "missing region; session s9 could not be released and ends at its timeout",
+      }),
+    ])
+      assert.isTrue(uncertainAllocation(failed("createSession", reason)), reason.message);
+
+    for (const reason of [
+      new RateLimited({ detail: "busy" }),
+      new Status({ status: 400, detail: "bad request" }),
+      new Decode({ detail: "missing region; session s9 was released" }),
+    ])
+      assert.isFalse(uncertainAllocation(failed("createSession", reason)), reason.message);
     assert.isFalse(
       uncertainAllocation(failed("releaseSession", new Transport({ detail: "reset" }))),
     );

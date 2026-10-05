@@ -196,16 +196,37 @@ export const classify = (
 };
 
 /**
- * A session create that may have allocated a hosted browser nobody can release: it was sent but
- * no usable answer came back. Retrying it, or creating more, could replay that allocation.
+ * Whether a failed session create may have left a hosted browser that nobody can release: no
+ * answer arrived (Transport), the server failed or timed out after accepting it (5xx, 408), or
+ * its success answer did not decode and the session was not released. A refusal (429 or another
+ * 4xx) allocated nothing, and a session the client released after a bad answer is gone.
  */
+const uncertainCreate = (error: BrowserbaseError): boolean => {
+  if (error.operation !== "createSession") return false;
+  const reason = error.reason;
+
+  switch (reason._tag) {
+    case "Transport":
+      return true;
+    case "Status":
+      return reason.status >= 500 || reason.status === 408;
+    case "Decode":
+      // The client reports a release it completed only in the detail; it has no field for it.
+      return !/; session [\w-]+ was released$/.test(reason.detail);
+    case "RateLimited":
+    case "Unauthorized":
+    case "NotFound":
+    case "InvalidRequest":
+      return false;
+  }
+};
+
 export const uncertainAllocation = (cause: Cause.Cause<unknown>): boolean =>
   cause.reasons.some(
     (reason) =>
       Cause.isFailReason(reason) &&
       isBrowserbaseError(reason.error) &&
-      reason.error.operation === "createSession" &&
-      (reason.error.reason._tag === "Transport" || reason.error.reason._tag === "Decode"),
+      uncertainCreate(reason.error),
   );
 
 /**

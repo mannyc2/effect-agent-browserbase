@@ -70,9 +70,11 @@ EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... \
 Model calls and Browserbase sessions cost money, so each needs its environment variable. Trials run
 with bounded concurrency (`--concurrency`, default 4) and separate browsers. Every Browserbase trial gets a
 new 1280×720 session, released when the trial ends; its own 30-minute timeout ends a session the
-bench could not release. A session create that was
-sent without a usable answer may have allocated a session, so after one the run requests no
-further hosted session and records the remaining trials as unrun. Browserbase time is not part of
+bench could not release. A session create that may have
+allocated a session nobody can release (no answer, a 5xx or 408 status, or a success answer that
+did not decode and whose session the client did not release) stops hosted admission: the run
+requests no further session and records the remaining trials as unrun. A refused create (429 or
+another 4xx) allocated nothing and stops nothing. Browserbase time is not part of
 the model budget.
 The model remains a caller choice. For the research runs, use `openai/gpt-6-luna`; reasoning defaults
 to `medium` for operate tasks and `none` for understand tasks. `--reasoning` overrides both.
