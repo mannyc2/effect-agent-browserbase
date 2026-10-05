@@ -11,7 +11,18 @@
  *
  * @since 0.3.0
  */
-import { Duration, Effect, Option, Ref, Schema, Semaphore, Stream } from "effect";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Option,
+  Ref,
+  Result,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
@@ -237,35 +248,11 @@ export function batch<T extends Record<string, Tool.Any>>(
         Effect.map(
           Ref.get(halted),
           Option.match({
-            onSome: (reason) => {
-              const result: typeof Tool.ExecutionFailure.Type = {
-                type: "execution-interrupted",
-                reason: "Not executed: " + reason,
-              };
-
-              return Stream.succeed({
-                result,
-                encodedResult: result,
-                isFailure: true,
-                preliminary: false,
-              });
-            },
+            onSome: (reason) => Stream.succeed(failedResult("Not executed: " + reason)),
             onNone: () =>
               toolkit.handle(name, params, id).pipe(
                 Stream.unwrap,
-                Stream.catch((error) => {
-                  const result: typeof Tool.ExecutionFailure.Type = {
-                    type: "execution-interrupted",
-                    reason: "The call failed and may have taken effect: " + String(error),
-                  };
-
-                  return Stream.succeed({
-                    result,
-                    encodedResult: result,
-                    isFailure: true,
-                    preliminary: false,
-                  });
-                }),
+                Stream.catchCause((cause) => failedCall(toolkit.tools[name], cause)),
                 Stream.tap((result) =>
                   result.preliminary
                     ? Effect.void
@@ -281,6 +268,42 @@ export function batch<T extends Record<string, Tool.Any>>(
     },
   }));
 }
+
+const failedResult = (reason: string) => {
+  const result: typeof Tool.ExecutionFailure.Type = { type: "execution-interrupted", reason };
+
+  return { result, encodedResult: result, isFailure: true, preliminary: false };
+};
+
+/**
+ * A tool with failure mode "error" fails its stream instead of returning a result. Answer it
+ * with its failure encoded by the tool's own schema, saying whether the handler could have run:
+ * rejected parameters never reach it. Defects and interruptions stay what they are.
+ */
+const failedCall = <Called extends Tool.Any, E>(tool: Called, cause: Cause.Cause<E>) => {
+  const failure = Cause.findFail(cause);
+
+  if (Result.isFailure(failure)) return Stream.failCause(failure.failure);
+  const { error } = failure.success;
+
+  const rejected =
+    Context.get(Cause.reasonAnnotations(failure.success), Toolkit.FailureOrigin) === "parameters";
+
+  return Stream.fromEffect(
+    Schema.encodeUnknownEffect(Tool.failureResultSchema(tool))(error).pipe(
+      Effect.map((encoded) => JSON.stringify(encoded)),
+      // A failure outside the declared schema still reaches the model, unencoded.
+      Effect.orElseSucceed(() => String(error)),
+      Effect.map((detail) =>
+        failedResult(
+          (rejected
+            ? "Not executed: its parameters are invalid: "
+            : "The call failed and may have taken effect: ") + detail,
+        ),
+      ),
+    ),
+  );
+};
 
 export interface Tools {
   readonly handlers: Toolkit.HandlersFrom<BrowserTools>;

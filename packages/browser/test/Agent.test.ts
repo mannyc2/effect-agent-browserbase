@@ -866,6 +866,63 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("reports failure-mode error calls honestly, with their failures encoded", () =>
+    Effect.gen(function* () {
+      let charged = 0;
+
+      const Payments = Toolkit.make(
+        Tool.make("charge", {
+          parameters: Schema.Struct({ cents: Schema.Finite }),
+          success: Schema.String,
+          failure: Schema.Struct({ code: Schema.Finite, detail: Schema.String }),
+          failureMode: "error",
+        }),
+      );
+
+      const toolkit = yield* Payments.pipe(
+        Effect.provide(
+          Payments.toLayer({
+            charge: () =>
+              Effect.suspend(() => {
+                charged += 1;
+
+                return Effect.fail({ code: 402, detail: "card declined" });
+              }),
+          }),
+        ),
+      );
+
+      const model = scripted([
+        () => [call("charge", { cents: "a lot" }), call("charge", { cents: 500 }), finish],
+        () => [call("charge", { cents: 500 }), finish],
+      ]);
+
+      const turn = () =>
+        Effect.flatMap(Tools.batch(toolkit), (batch) =>
+          LanguageModel.generateText({ prompt: "Charge the card.", ...batch }),
+        ).pipe(
+          Effect.map((response) =>
+            response.toolResults.map((result) => JSON.stringify(result.result)),
+          ),
+          Effect.provide(model.layer),
+        );
+
+      const [rejected, skipped] = yield* turn();
+
+      assert.strictEqual(charged, 0);
+      assert.match(rejected ?? "", /Not executed: its parameters are invalid/);
+      assert.notInclude(rejected ?? "", "may have taken effect");
+      assert.match(skipped ?? "", /Not executed: charge failed/);
+
+      const [declined] = yield* turn();
+
+      assert.strictEqual(charged, 1);
+      assert.include(declined ?? "", "may have taken effect");
+      assert.include(declined ?? "", String.raw`\"code\":402`);
+      assert.include(declined ?? "", "card declined");
+    }),
+  );
+
   it.effect("bounds concurrent pending zooms before capture and drains them once", () =>
     Effect.gen(function* () {
       const page = yield* start("/chart");

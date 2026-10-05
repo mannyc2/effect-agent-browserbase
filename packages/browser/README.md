@@ -48,6 +48,9 @@ keeps the original point; the receipt names the control even when a nested child
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged last, so the caller's tool wins a name clash, and its calls share the batch's halt behavior.
+A failure of a tool with failure mode `"error"` reaches the model encoded by that tool's failure
+schema and marked as possibly effective; a call whose parameters fail validation never reaches its
+handler and answers as not executed.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action,
 resolved element and inferred `classifications`: `form-submit`, `purchase`, `delete`, `confirm`,
