@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Clock as EffectClock, Duration, Effect, Option } from "effect";
 import { chromium, type CDPSession } from "playwright-core";
 
+import { make as makeBrowser } from "../src/Browser.ts";
 import * as Calibration from "../src/internal/calibration.ts";
 import * as Clock from "../src/internal/clock.ts";
 
@@ -131,7 +132,7 @@ describe("Owned paint calibration", () => {
 
           return cdp;
         });
-      const result = yield* Calibration.owned(context, yield* EffectClock.Clock);
+      const result = Option.getOrThrow(yield* Calibration.owned(context, yield* EffectClock.Clock));
 
       assert.strictEqual(result.paintSamples.length, 3);
       assert.isTrue(result.paintSamples.every((sample) => Number.isFinite(sample.sentAt)));
@@ -143,14 +144,14 @@ describe("Owned paint calibration", () => {
     }),
   );
 
-  it.live("closes the unpublished page when creating its CDP session fails", () =>
+  it.live("closes the unpublished page and measures nothing when its CDP session fails", () =>
     Effect.gen(function* () {
       const context = yield* fresh;
 
       context.newCDPSession = () => Promise.reject(new Error("injected session failure"));
-      const error = yield* Calibration.owned(context, yield* EffectClock.Clock).pipe(Effect.flip);
+      const result = yield* Calibration.owned(context, yield* EffectClock.Clock);
 
-      assert.strictEqual(error._tag, "ClockCalibrationFailure");
+      assert.isTrue(Option.isNone(result));
       assert.isEmpty(context.pages());
     }),
   );
@@ -160,43 +161,45 @@ describe("Owned paint calibration", () => {
     "Page.screencastFrameAck",
     "Page.stopScreencast",
   ] as const)
-    it.live("closes without replay when " + rejectedMethod + " loses its reply", () =>
-      Effect.gen(function* () {
-        const context = yield* fresh;
-        const createSession = context.newCDPSession.bind(context);
-        const calls: Array<string> = [];
-        let rejected = false;
+    it.live(
+      "measures nothing and closes without replay when " + rejectedMethod + " loses its reply",
+      () =>
+        Effect.gen(function* () {
+          const context = yield* fresh;
+          const createSession = context.newCDPSession.bind(context);
+          const calls: Array<string> = [];
+          let rejected = false;
 
-        context.newCDPSession = (target) =>
-          createSession(target).then((cdp) => {
-            const send = cdp.send.bind(cdp);
+          context.newCDPSession = (target) =>
+            createSession(target).then((cdp) => {
+              const send = cdp.send.bind(cdp);
 
-            const observed: CDPSession["send"] = (method, params) => {
-              calls.push(method);
-              const response = send(method, params);
+              const observed: CDPSession["send"] = (method, params) => {
+                calls.push(method);
+                const response = send(method, params);
 
-              if (method !== rejectedMethod || rejected) return response;
-              rejected = true;
+                if (method !== rejectedMethod || rejected) return response;
+                rejected = true;
 
-              // Chromium receives the real command. The lost reply must not justify sending
-              // another start or stop, nor leave an unobserved ACK rejection behind.
-              return response.then(() => {
-                throw new Error("injected lost calibration reply");
-              });
-            };
+                // Chromium receives the real command. The lost reply must not justify sending
+                // another start or stop, nor leave an unobserved ACK rejection behind.
+                return response.then(() => {
+                  throw new Error("injected lost calibration reply");
+                });
+              };
 
-            cdp.send = observed;
+              cdp.send = observed;
 
-            return cdp;
-          });
-        const error = yield* Calibration.owned(context, yield* EffectClock.Clock).pipe(Effect.flip);
+              return cdp;
+            });
+          const result = yield* Calibration.owned(context, yield* EffectClock.Clock);
 
-        assert.strictEqual(error._tag, "ClockCalibrationFailure");
-        assert.isTrue(rejected);
-        assert.strictEqual(calls.filter((method) => method === "Page.startScreencast").length, 1);
-        assert.strictEqual(calls.filter((method) => method === "Page.stopScreencast").length, 1);
-        assert.isEmpty(context.pages());
-      }),
+          assert.isTrue(Option.isNone(result));
+          assert.isTrue(rejected);
+          assert.strictEqual(calls.filter((method) => method === "Page.startScreencast").length, 1);
+          assert.strictEqual(calls.filter((method) => method === "Page.stopScreencast").length, 1);
+          assert.isEmpty(context.pages());
+        }),
     );
 
   it.live(
@@ -259,10 +262,10 @@ describe("Owned paint calibration", () => {
 
             return cdp;
           });
-        const error = yield* Calibration.owned(context, yield* EffectClock.Clock).pipe(Effect.flip);
+        const result = yield* Calibration.owned(context, yield* EffectClock.Clock);
 
-        assert.strictEqual(error._tag, "ClockCalibrationFailure");
-        assert.match(String(error.cause), /budget/);
+        // The frame budget stops capture before anything is decoded or measured.
+        assert.isTrue(Option.isNone(result));
         assert.isTrue(replayed);
         assert.isAbove(maximumPending, 0);
         assert.isAtMost(maximumPending, 32);
@@ -288,7 +291,12 @@ describe("Calibration deadlines", () => {
           currentTimeNanos: live.currentTimeNanos,
           monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
           monotonicTimeNanos: live.monotonicTimeNanos,
-          sleep: (duration) => live.sleep(Duration.millis(Duration.toMillis(duration) / 100)),
+          // Only the measurement deadline is shortened; closing keeps its real bound.
+          sleep: (duration) => {
+            const millis = Duration.toMillis(duration);
+
+            return live.sleep(Duration.millis(millis >= 8000 ? millis / 100 : millis));
+          },
         };
 
         const gate = Promise.withResolvers<void>();
@@ -342,13 +350,12 @@ describe("Calibration deadlines", () => {
             return gate.promise.then(() => cdp);
           });
 
-        const error = yield* Calibration.owned(context, ownerClock).pipe(
-          Effect.flip,
+        // A missed measurement deadline yields no measurement; it does not fail the browser.
+        const result = yield* Calibration.owned(context, ownerClock).pipe(
           Effect.timeout("2 seconds"),
         );
 
-        assert.strictEqual(error._tag, "ClockCalibrationFailure");
-        assert.match(String(error.cause), /deadline/);
+        assert.isTrue(Option.isNone(result));
         yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("2 seconds"));
         gate.resolve();
         yield* Effect.promise(() => pageClosed.promise).pipe(Effect.timeout("2 seconds"));
@@ -379,9 +386,9 @@ describe("Calibration deadlines", () => {
           sleep: (duration) => {
             const millis = Duration.toMillis(duration);
 
-            // Let real capture finish before accelerating the work deadline; the one-second
-            // cleanup wait is shortened independently so a masked finalizer cannot hide here.
-            return millis >= 8000
+            // Let real capture finish before accelerating the work and close deadlines; the
+            // one-second cleanup wait is shortened independently so a masked finalizer cannot hide.
+            return millis >= 8000 || millis === 5000
               ? Effect.promise(() => entered.promise).pipe(
                   Effect.andThen(live.sleep(Duration.millis(40))),
                 )
@@ -461,4 +468,70 @@ describe("Calibration deadlines", () => {
         assert.strictEqual(detaches, 1);
       }),
     );
+});
+
+describe("Fresh browser startup", () => {
+  it.live("opens without a capture calibration when the measurement fails", () =>
+    Effect.gen(function* () {
+      const context = yield* fresh;
+      const createSession = context.newCDPSession.bind(context);
+      let injected = false;
+
+      // The first session belongs to the private startup page; its capture never starts.
+      context.newCDPSession = (target) =>
+        createSession(target).then((cdp) => {
+          const send = cdp.send.bind(cdp);
+
+          const observed: CDPSession["send"] = (method, params) => {
+            if (method !== "Page.startScreencast" || injected) return send(method, params);
+            injected = true;
+
+            return Promise.reject(new Error("injected capture failure"));
+          };
+
+          cdp.send = observed;
+
+          return cdp;
+        });
+
+      const browser = yield* makeBrowser(context, {
+        id: "fresh",
+        provider: "test",
+        contextOrigin: "fresh",
+      });
+
+      assert.isTrue(injected);
+      assert.isTrue(Option.isNone(browser.captureCalibration));
+      assert.isEmpty(context.pages());
+      assert.isEmpty(yield* browser.pages);
+
+      const page = yield* browser.newPage("data:text/html,<title>Usable</title>");
+
+      yield* page.click({ x: 10, y: 10 });
+      assert.strictEqual(yield* page.title, "Usable");
+    }),
+  );
+
+  it.live("fails when its private page cannot be closed", () =>
+    Effect.gen(function* () {
+      const context = yield* fresh;
+      const createPage = context.newPage.bind(context);
+
+      context.newPage = () =>
+        createPage().then((page) => {
+          page.close = () => Promise.reject(new Error("injected close failure"));
+
+          return page;
+        });
+
+      const error = yield* makeBrowser(context, {
+        id: "fresh",
+        provider: "test",
+        contextOrigin: "fresh",
+      }).pipe(Effect.flip);
+
+      assert.strictEqual(error.operation, "calibrate");
+      assert.isFalse(error.dispatched);
+    }),
+  );
 });

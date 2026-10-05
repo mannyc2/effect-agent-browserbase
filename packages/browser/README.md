@@ -152,6 +152,8 @@ Local launches and new Browserbase sessions measure clock offset and send-to-cap
 on a private blank page before user scripts or public pages run. `Browser.captureCalibration`
 holds those samples; `delayFor(frame)` maps their median delay onto that frame's clock estimate for
 the consumer's compositor. This measures the first observed captured marker, not pure rendering lag.
+The measurement is evidence, not a prerequisite: if it fails, `captureCalibration` is empty and the
+browser opens anyway. Only a private page that cannot be closed fails `Browser.make`.
 Supplied contexts and attached sessions receive read-only clock probes and expose no active startup
 measurement. Transport asymmetry remains in the reported uncertainty.
 

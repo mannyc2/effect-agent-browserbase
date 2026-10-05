@@ -75,7 +75,10 @@ export interface Service {
   readonly now: Effect.Effect<number>;
   /** The Playwright context, for anything this API does not cover. Never give it to a model. */
   readonly context: BrowserContext;
-  /** Measured on a private startup page only when the provider attested a fresh context. */
+  /**
+   * Measured on a private startup page only when the provider attested a fresh context. A failed
+   * measurement leaves it empty rather than failing the browser.
+   */
   readonly captureCalibration: Option.Option<CaptureCalibration>;
   /** Open pages in the order they opened. */
   readonly pages: Effect.Effect<ReadonlyArray<Page.Page>>;
@@ -147,18 +150,17 @@ export const make = Effect.fn("Browser.make")(function* (
 
   // A caller's scripts or existing tabs can react to probe input. Providers opt fresh allocations
   // into this private phase before scripts, page registration or the public service exist.
+  // A failed measurement leaves `captureCalibration` empty; the browser still opens.
   const startup =
     info.contextOrigin === "fresh"
-      ? Option.some(
-          yield* Startup.owned(context, clock).pipe(
-            Effect.mapError(
-              (error) =>
-                new BrowserError({
-                  operation: "calibrate",
-                  reason: Page.reasonOf(error.cause),
-                  dispatched: false,
-                }),
-            ),
+      ? yield* Startup.owned(context, clock).pipe(
+          Effect.mapError(
+            (error) =>
+              new BrowserError({
+                operation: "calibrate",
+                reason: Page.reasonOf(error.cause),
+                dispatched: false,
+              }),
           ),
         )
       : Option.none<Startup.StartupCalibration>();

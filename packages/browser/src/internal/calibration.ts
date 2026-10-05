@@ -1,5 +1,5 @@
 import { Clock, Duration, Effect, Option, Schema } from "effect";
-import type { BrowserContext } from "playwright-core";
+import type { BrowserContext, Page } from "playwright-core";
 
 import * as BrowserClock from "./clock.ts";
 
@@ -86,6 +86,9 @@ const decodeSource = String.raw`
 
 const failed = (cause: unknown) => new BrowserClock.ClockCalibrationFailure({ cause });
 
+// Separate from the measurement's own deadline: an unconfirmed close may leave a public tab.
+const closeDeadline = Duration.seconds(5);
+
 const command = <A>(
   run: () => Promise<A>,
 ): Effect.Effect<A, BrowserClock.ClockCalibrationFailure> =>
@@ -136,216 +139,244 @@ const acquire = <A>(open: () => Promise<A>, dispose: (value: A) => Promise<unkno
     { interruptible: true },
   );
 
+const measure = (context: BrowserContext, privatePage: Page, ownerClock: Clock.Clock) =>
+  Effect.gen(function* () {
+    const session = yield* acquire(
+      () => context.newCDPSession(privatePage),
+      (cdp) => cdp.detach(),
+    );
+
+    const cdp = session.value;
+    const tree = yield* command(() => cdp.send("Page.getFrameTree"));
+
+    const world = yield* command(() =>
+      cdp.send("Page.createIsolatedWorld", {
+        frameId: tree.frameTree.frame.id,
+        worldName: "effect-browser-startup-calibration",
+      }),
+    );
+
+    const evaluate = (expression: string) =>
+      command(() =>
+        cdp.send("Runtime.evaluate", {
+          contextId: world.executionContextId,
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+        }),
+      ).pipe(
+        Effect.flatMap((response) =>
+          response.exceptionDetails === undefined
+            ? Effect.succeed<unknown>(response.result.value)
+            : Effect.fail(failed(new Error("the private paint calibration script failed"))),
+        ),
+      );
+
+    const clock = yield* BrowserClock.calibrate(cdp, ownerClock, world.executionContextId);
+
+    const viewport = yield* evaluate(installSource).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(viewportSchema)),
+      Effect.mapError(failed),
+    );
+
+    const frames: Array<EncodedFrame> = [];
+    const acknowledgements = new Set<Promise<void>>();
+    let failure: Option.Option<unknown> = Option.none();
+    let received = 0;
+    let encodedBytes = 0;
+    let started = false;
+    let accepting = false;
+    let stopping: Promise<void> | undefined;
+
+    const rememberFailure = (cause: unknown) => {
+      if (Option.isNone(failure)) failure = Option.some(cause);
+    };
+
+    const stop = (): Promise<void> => {
+      if (!started) return Promise.resolve();
+      if (stopping === undefined) {
+        accepting = false;
+        cdp.off("Page.screencastFrame", onFrame);
+        try {
+          stopping = cdp.send("Page.stopScreencast").then(
+            () => undefined,
+            (cause: unknown) => rememberFailure(cause),
+          );
+        } catch (cause) {
+          rememberFailure(cause);
+          stopping = Promise.resolve();
+        }
+      }
+
+      return stopping;
+    };
+
+    const reject = (detail: string) => {
+      rememberFailure(new Error(detail));
+      void stop();
+    };
+
+    const check = Effect.suspend(() =>
+      Option.isSome(failure) ? Effect.fail(failed(failure.value)) : Effect.void,
+    );
+
+    const onFrame = (frame: NativeFrame) => {
+      if (!accepting) return;
+      // A lost reply keeps its slot until it settles; reaching the bound stops capture rather
+      // than accumulating detached ACK promises or holding the browser's frame callback open.
+      if (acknowledgements.size >= 32) {
+        reject("private paint calibration exceeded its acknowledgement budget");
+
+        return;
+      }
+      try {
+        const acknowledgement = cdp
+          .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+          .then(
+            () => {
+              acknowledgements.delete(acknowledgement);
+            },
+            (cause: unknown) => {
+              acknowledgements.delete(acknowledgement);
+              rememberFailure(cause);
+              void stop();
+            },
+          );
+
+        acknowledgements.add(acknowledgement);
+      } catch (cause) {
+        rememberFailure(cause);
+        void stop();
+
+        return;
+      }
+
+      received++;
+      encodedBytes += frame.data.length;
+      if (received > 24 || frame.data.length > 16_384 || encodedBytes > 131_072) {
+        reject("private paint calibration exceeded its frame budget");
+
+        return;
+      }
+
+      const timestamp = frame.metadata.timestamp;
+
+      if (timestamp === undefined || !Number.isFinite(timestamp)) return;
+      frames.push({ data: frame.data, timestamp: timestamp * 1000 });
+    };
+
+    cdp.on("Page.screencastFrame", onFrame);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => cdp.off("Page.screencastFrame", onFrame)).pipe(Effect.asVoid),
+    );
+    yield* Effect.addFinalizer(() => release(stop));
+    started = true;
+    accepting = true;
+    yield* command(() =>
+      cdp.send("Page.startScreencast", {
+        format: "jpeg",
+        quality: 60,
+        maxWidth: 320,
+        maxHeight: 200,
+      }),
+    );
+
+    const sent: Array<number> = [];
+
+    for (let marker = 0; marker < 3; marker++) {
+      yield* check;
+      sent.push(Number(ownerClock.monotonicTimeNanosUnsafe()) / 1e6);
+      yield* command(() =>
+        cdp.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: (viewport.width * (marker + 0.5)) / 3,
+          y: viewport.height / 2,
+          button: "none",
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(180));
+    }
+
+    yield* command(stop);
+    while (acknowledgements.size > 0) yield* Effect.promise(() => Promise.all(acknowledgements));
+    yield* check;
+
+    const encoded = yield* Schema.encodeEffect(framesCodec)(frames).pipe(Effect.mapError(failed));
+
+    const decoded = yield* evaluate(`${decodeSource}(${encoded})`).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(decodedSchema)),
+      Effect.mapError(failed),
+    );
+
+    const paintSamples: Array<PaintSample> = [];
+
+    for (let marker = 0; marker < 3; marker++) {
+      const sentAt = sent[marker];
+      let timestamp: number | undefined;
+
+      for (const candidate of decoded) {
+        const frame = frames[candidate.index];
+
+        if (candidate.marker === marker && frame !== undefined)
+          timestamp =
+            timestamp === undefined ? frame.timestamp : Math.min(timestamp, frame.timestamp);
+      }
+      if (sentAt === undefined || timestamp === undefined)
+        return yield* failed(new Error("private paint calibration did not capture every marker"));
+      paintSamples.push({ sentAt, timestamp });
+    }
+
+    return { clock, paintSamples } satisfies StartupCalibration;
+  });
+
 /**
  * Only a constructor that owns a fresh context may call this, before caller init scripts or page
  * registration. An arbitrary supplied context, even one containing only about:blank, is not proof.
+ *
+ * The measurement is evidence, not a prerequisite: any failure to measure yields none. Only a
+ * private page that cannot be closed fails, since it would otherwise surface as a public tab.
  */
 export const owned = (
   context: BrowserContext,
   ownerClock: Clock.Clock,
-): Effect.Effect<StartupCalibration, BrowserClock.ClockCalibrationFailure> =>
+): Effect.Effect<Option.Option<StartupCalibration>, BrowserClock.ClockCalibrationFailure> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const privatePage = yield* acquire(
-        () => context.newPage(),
-        (page) => page.close(),
-      );
+      let opened: (() => Promise<void>) | undefined;
 
-      const session = yield* acquire(
-        () => context.newCDPSession(privatePage.value),
-        (cdp) => cdp.detach(),
-      );
+      const measured = yield* Effect.gen(function* () {
+        const privatePage = yield* acquire(
+          () => context.newPage(),
+          (page) => page.close(),
+        );
 
-      const cdp = session.value;
-      const tree = yield* command(() => cdp.send("Page.getFrameTree"));
+        opened = privatePage.close;
 
-      const world = yield* command(() =>
-        cdp.send("Page.createIsolatedWorld", {
-          frameId: tree.frameTree.frame.id,
-          worldName: "effect-browser-startup-calibration",
+        return yield* measure(context, privatePage.value, ownerClock);
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: Duration.seconds(8),
+          orElse: () =>
+            Effect.fail(failed(new Error("private paint calibration exceeded its deadline"))),
         }),
-      );
-
-      const evaluate = (expression: string) =>
-        command(() =>
-          cdp.send("Runtime.evaluate", {
-            contextId: world.executionContextId,
-            expression,
-            awaitPromise: true,
-            returnByValue: true,
-          }),
-        ).pipe(
-          Effect.flatMap((response) =>
-            response.exceptionDetails === undefined
-              ? Effect.succeed<unknown>(response.result.value)
-              : Effect.fail(failed(new Error("the private paint calibration script failed"))),
+        Effect.asSome,
+        Effect.catch((failure) =>
+          Effect.logDebug("startup capture calibration failed", failure.cause).pipe(
+            Effect.as(Option.none<StartupCalibration>()),
           ),
-        );
-
-      const clock = yield* BrowserClock.calibrate(cdp, ownerClock, world.executionContextId);
-
-      const viewport = yield* evaluate(installSource).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(viewportSchema)),
-        Effect.mapError(failed),
+        ),
       );
 
-      const frames: Array<EncodedFrame> = [];
-      const acknowledgements = new Set<Promise<void>>();
-      let failure: Option.Option<unknown> = Option.none();
-      let received = 0;
-      let encodedBytes = 0;
-      let started = false;
-      let accepting = false;
-      let stopping: Promise<void> | undefined;
-
-      const rememberFailure = (cause: unknown) => {
-        if (Option.isNone(failure)) failure = Option.some(cause);
-      };
-
-      const stop = (): Promise<void> => {
-        if (!started) return Promise.resolve();
-        if (stopping === undefined) {
-          accepting = false;
-          cdp.off("Page.screencastFrame", onFrame);
-          try {
-            stopping = cdp.send("Page.stopScreencast").then(
-              () => undefined,
-              (cause: unknown) => rememberFailure(cause),
-            );
-          } catch (cause) {
-            rememberFailure(cause);
-            stopping = Promise.resolve();
-          }
-        }
-
-        return stopping;
-      };
-
-      const reject = (detail: string) => {
-        rememberFailure(new Error(detail));
-        void stop();
-      };
-
-      const check = Effect.suspend(() =>
-        Option.isSome(failure) ? Effect.fail(failed(failure.value)) : Effect.void,
-      );
-
-      const onFrame = (frame: NativeFrame) => {
-        if (!accepting) return;
-        // A lost reply keeps its slot until it settles; reaching the bound stops capture rather
-        // than accumulating detached ACK promises or holding the browser's frame callback open.
-        if (acknowledgements.size >= 32) {
-          reject("private paint calibration exceeded its acknowledgement budget");
-
-          return;
-        }
-        try {
-          const acknowledgement = cdp
-            .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
-            .then(
-              () => {
-                acknowledgements.delete(acknowledgement);
-              },
-              (cause: unknown) => {
-                acknowledgements.delete(acknowledgement);
-                rememberFailure(cause);
-                void stop();
-              },
-            );
-
-          acknowledgements.add(acknowledgement);
-        } catch (cause) {
-          rememberFailure(cause);
-          void stop();
-
-          return;
-        }
-
-        received++;
-        encodedBytes += frame.data.length;
-        if (received > 24 || frame.data.length > 16_384 || encodedBytes > 131_072) {
-          reject("private paint calibration exceeded its frame budget");
-
-          return;
-        }
-
-        const timestamp = frame.metadata.timestamp;
-
-        if (timestamp === undefined || !Number.isFinite(timestamp)) return;
-        frames.push({ data: frame.data, timestamp: timestamp * 1000 });
-      };
-
-      cdp.on("Page.screencastFrame", onFrame);
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => cdp.off("Page.screencastFrame", onFrame)).pipe(Effect.asVoid),
-      );
-      yield* Effect.addFinalizer(() => release(stop));
-      started = true;
-      accepting = true;
-      yield* command(() =>
-        cdp.send("Page.startScreencast", {
-          format: "jpeg",
-          quality: 60,
-          maxWidth: 320,
-          maxHeight: 200,
-        }),
-      );
-
-      const sent: Array<number> = [];
-
-      for (let marker = 0; marker < 3; marker++) {
-        yield* check;
-        sent.push(Number(ownerClock.monotonicTimeNanosUnsafe()) / 1e6);
-        yield* command(() =>
-          cdp.send("Input.dispatchMouseEvent", {
-            type: "mouseMoved",
-            x: (viewport.width * (marker + 0.5)) / 3,
-            y: viewport.height / 2,
-            button: "none",
+      // Confirm the close before exposing either outcome. The memoized close is never retried.
+      if (opened !== undefined)
+        yield* command(opened).pipe(
+          Effect.timeoutOrElse({
+            duration: closeDeadline,
+            orElse: () =>
+              Effect.fail(failed(new Error("the private calibration page did not close"))),
           }),
         );
-        yield* Effect.sleep(Duration.millis(180));
-      }
 
-      yield* command(stop);
-      while (acknowledgements.size > 0) yield* Effect.promise(() => Promise.all(acknowledgements));
-      yield* check;
-
-      const encoded = yield* Schema.encodeEffect(framesCodec)(frames).pipe(Effect.mapError(failed));
-
-      const decoded = yield* evaluate(`${decodeSource}(${encoded})`).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(decodedSchema)),
-        Effect.mapError(failed),
-      );
-
-      const paintSamples: Array<PaintSample> = [];
-
-      for (let marker = 0; marker < 3; marker++) {
-        const sentAt = sent[marker];
-        let timestamp: number | undefined;
-
-        for (const candidate of decoded) {
-          const frame = frames[candidate.index];
-
-          if (candidate.marker === marker && frame !== undefined)
-            timestamp =
-              timestamp === undefined ? frame.timestamp : Math.min(timestamp, frame.timestamp);
-        }
-        if (sentAt === undefined || timestamp === undefined)
-          return yield* failed(new Error("private paint calibration did not capture every marker"));
-        paintSamples.push({ sentAt, timestamp });
-      }
-
-      // Success is not exposed until close is acknowledged. The memoized release never retries an
-      // uncertain close; any failure propagates so the provider can tear down its owned context.
-      yield* command(privatePage.close);
-
-      return { clock, paintSamples };
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: Duration.seconds(8),
-        orElse: () =>
-          Effect.fail(failed(new Error("private paint calibration exceeded its deadline"))),
-      }),
-    ),
+      return measured;
+    }),
   ).pipe(Effect.provideService(Clock.Clock, ownerClock));
