@@ -215,6 +215,64 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
+    it.effect("publishes and performs exactly the copy it checked", () =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const second = { x: 500, y: 300, afterMillis: 40 };
+
+        const fixture = yield* setup({
+          plan: (_from, to) =>
+            Effect.gen(function* () {
+              // An accessor may answer differently on each read, and the planner keeps a
+              // reference it changes while the glide is still in progress.
+              const first = {
+                get x() {
+                  reads++;
+
+                  return reads === 1 ? 450 : Number.NaN;
+                },
+                y: 300,
+                afterMillis: 0,
+              };
+
+              yield* Effect.sleep(Duration.millis(10)).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    second.x = Number.NaN;
+                  }),
+                ),
+                Effect.forkDetach,
+              );
+
+              return [first, second, { ...to, afterMillis: 80 }];
+            }),
+        });
+
+        const page = yield* fixture.open;
+
+        yield* page.hover({ x: 550, y: 300 });
+
+        const plan = (yield* fixture.browser.recentEvents).find(
+          (event) => event._tag === "TrackPlanned",
+        );
+
+        const expected = [
+          { x: 450, y: 300, afterMillis: 0 },
+          { x: 500, y: 300, afterMillis: 40 },
+          { x: 550, y: 300, afterMillis: 80 },
+        ];
+
+        assert.strictEqual(reads, 1);
+        assert.isNaN(second.x);
+        assert.ok(plan?._tag === "TrackPlanned");
+        assert.deepStrictEqual(plan.samples, expected);
+        assert.deepStrictEqual(
+          fixture.dispatches.map(({ input }) => ({ x: input.x, y: input.y })),
+          expected.map(({ x, y }) => ({ x, y })),
+        );
+      }),
+    );
+
     for (const replyDelayMillis of [70, 320]) {
       it.effect(
         `submits every dense original sample on schedule with ${replyDelayMillis}ms replies`,

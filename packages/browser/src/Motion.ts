@@ -23,8 +23,25 @@ export const Sample = Schema.Struct({
 
 export type Sample = typeof Sample.Type;
 
+/** A complete glide: 1 to 2,048 samples whose offsets never decrease. */
+export const Plan = Schema.Array(Sample).check(
+  Schema.isBetweenLength(1, maximumSamples),
+  Schema.makeFilter(
+    (samples) =>
+      samples.every(
+        (sample, index) => sample.afterMillis >= (samples[index - 1]?.afterMillis ?? 0),
+      ),
+    { expected: "nondecreasing sample offsets" },
+  ),
+);
+
+export type Plan = typeof Plan.Type;
+
 export interface Service {
-  /** Offsets start when the performer publishes the plan, before its first input. */
+  /**
+   * Offsets start when the performer publishes the plan, before its first input. The browser
+   * decodes the result as a `Plan` whose last sample must be exactly `to`.
+   */
   readonly plan: (from: Point, to: Point) => Effect.Effect<ReadonlyArray<Sample>>;
 }
 

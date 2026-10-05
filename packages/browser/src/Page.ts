@@ -325,7 +325,6 @@ type MouseEvent = {
 };
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
-const isReadonlyArray = (value: unknown): value is ReadonlyArray<unknown> => Array.isArray(value);
 
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const { id, playwright, cdp, settings, motion, clock, mapping, pointer, inputLock, publish } =
@@ -1010,8 +1009,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             }))
           : [{ ...to, afterMillis: 0 }];
 
-      // A custom planner is a boundary: validate the entire bounded schedule before publishing
-      // it or reserving input. Copy it so later mutation cannot change the consumer's future.
+      // A custom planner is a boundary. Decoding reads each sample once into a fresh copy and
+      // checks that copy, so neither accessors nor later mutation can change what is admitted.
       const invalid = failWith(
         operation,
         new InvalidRequest({
@@ -1019,29 +1018,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         }),
       );
 
-      if (!isReadonlyArray(planned) || planned.length < 1 || planned.length > Motion.maximumSamples)
-        return yield* invalid;
-      // Array.from exposes sparse holes to validation instead of skipping them as .every would.
-      const dense = Array.from(planned);
-
-      if (
-        !dense.every(Schema.is(Motion.Sample)) ||
-        dense.some((sample, index) => sample.afterMillis < (dense[index - 1]?.afterMillis ?? 0)) ||
-        dense.at(-1)?.x !== to.x ||
-        dense.at(-1)?.y !== to.y
-      )
-        return yield* invalid;
-
-      const samples = Object.freeze(
-        dense.map((sample) =>
-          Object.freeze({
-            x: sample.x,
-            y: sample.y,
-            afterMillis: sample.afterMillis,
-          }),
-        ),
+      const samples = yield* Schema.decodeEffect(Motion.Plan)(planned).pipe(
+        Effect.catch(() => invalid),
       );
 
+      if (samples.at(-1)?.x !== to.x || samples.at(-1)?.y !== to.y) return yield* invalid;
       const run = marks.input;
 
       // Admit the whole motion before starting its clock. Dense original samples must not be
