@@ -168,7 +168,8 @@ describe("understanding comparison", () => {
 
         assert.isTrue(hard?.arms.every((arm) => arm.graded === 2 && arm.passed === 2));
         assert.strictEqual(control?.arms.find((arm) => arm.arm === "A")?.gradingFailures, 1);
-        assert.strictEqual(control?.arms.find((arm) => arm.arm === "A")?.bindingErrors, 1);
+        assert.strictEqual(control?.arms.find((arm) => arm.arm === "A")?.labelErrors, 1);
+        assert.strictEqual(control?.arms.find((arm) => arm.arm === "A")?.bindingErrors, 0);
         assert.strictEqual(
           control?.paired.find((pair) => pair.comparison === "facts vs A")?.wins,
           1,
@@ -427,6 +428,87 @@ describe("understanding comparison", () => {
         0.2,
       );
       assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0, reservedUsd: 0.2 });
+    }),
+  );
+
+  it.live("classifies wrong-table, wrong-row and wrong-period answers as binding errors", () =>
+    Effect.gen(function* () {
+      const plan = manifest(
+        yield* configuration(["--hard-trials", "1", "--control-trials", "0", "--concurrency", "1"]),
+        "fixed",
+      );
+
+      const records = yield* compare(plan, yield* ledger(1, 0), {
+        prepare: (pair) => isolatedTrial(Quote.prepare(pair), Chromium.layer()),
+        describe: (sample, arm, account) => {
+          const { expected, rows } = sample;
+          const requested = rows.filter((row) => row.table === expected.table);
+          const index = requested.findIndex((row) => row.ticker === expected.ticker);
+          const neighbour = requested[(index + 1) % requested.length];
+
+          const futures = rows.find(
+            (row) => row.table !== expected.table && row.ticker === expected.ticker,
+          );
+
+          const focused = requested[index];
+
+          if (neighbour === undefined || futures === undefined || focused === undefined)
+            return Effect.die("the dense fixture lacks its distractors");
+
+          // Each answer copies the requested ticker, table and header, as a binding mistake does.
+          const answer = {
+            A: {
+              ...expected,
+              price: futures.price,
+              change1h: futures.c1h,
+              change24h: futures.c24h,
+            },
+            B: {
+              ...expected,
+              price: neighbour.price,
+              change1h: neighbour.c1h,
+              change24h: neighbour.c24h,
+            },
+            facts: { ...expected, change24h: focused.c7d },
+          }[arm];
+
+          return dryDescribe(sample, arm, account, JSON.stringify(answer));
+        },
+        record: () => Effect.void,
+      });
+
+      const arms = summarize(plan, records).arms;
+
+      const counts = (name: Quote.Arm) => {
+        const arm = arms.find((candidate) => candidate.arm === name);
+
+        return arm === undefined
+          ? undefined
+          : {
+              passed: arm.passed,
+              bindingErrors: arm.bindingErrors,
+              wrongTable: arm.wrongTable,
+              wrongRow: arm.wrongRow,
+              wrongPeriod: arm.wrongPeriod,
+              labelErrors: arm.labelErrors,
+            };
+      };
+
+      const none = { passed: 0, bindingErrors: 1, labelErrors: 0 };
+
+      assert.deepStrictEqual(counts("A"), { ...none, wrongTable: 1, wrongRow: 0, wrongPeriod: 0 });
+      assert.deepStrictEqual(counts("B"), { ...none, wrongTable: 0, wrongRow: 1, wrongPeriod: 0 });
+      assert.deepStrictEqual(counts("facts"), {
+        ...none,
+        wrongTable: 0,
+        wrongRow: 0,
+        wrongPeriod: 1,
+      });
+
+      const rules = summarize(plan, records).prerequisitesForConsideringFacts;
+
+      assert.deepStrictEqual(rules.baselineReproducesBindingMistakes, { observed: 1, met: true });
+      assert.deepStrictEqual(rules.wrongTickerOrPeriod, { target: 0, observed: 1, met: false });
     }),
   );
 

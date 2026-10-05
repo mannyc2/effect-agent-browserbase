@@ -214,7 +214,8 @@ export interface Record {
   /** Null unless the arm was graded. */
   readonly pass: boolean | null;
   readonly matches: Matches | null;
-  readonly periodSwap: boolean | null;
+  /** Which table, row and period a graded answer's values came from. */
+  readonly binding: Quote.Binding | null;
   readonly answer: Quote.Answer | null;
   readonly diagnostic: Diagnostics.Failure | null;
   readonly lastResponse: Diagnostics.LastResponse | null;
@@ -305,7 +306,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
         reason: "interrupted",
         pass: null,
         matches: null,
-        periodSwap: null,
+        binding: null,
         answer: null,
         diagnostic: null,
         lastResponse: calls.lastResponse,
@@ -355,7 +356,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
             const unanswered = {
               pass: null,
               matches: null,
-              periodSwap: null,
+              binding: null,
               answer: null,
               lastResponse: null,
               accounting: emptyAccounting,
@@ -413,11 +414,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
               ...base,
               ...settled,
               matches: answer === null ? null : matches(answer, sample.expected),
-              periodSwap:
-                answer === null
-                  ? null
-                  : answer.change24h !== sample.expected.change24h &&
-                    answer.change24h === sample.expected.change1h,
+              binding: answer === null ? null : Quote.binding(answer, sample.expected, sample.rows),
               answer,
               diagnostic: Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,
               lastResponse: calls.lastResponse,
@@ -456,6 +453,9 @@ const summarizeArms = (records: ReadonlyArray<Record>, scheduled: number) =>
 
     const counts = tally(rows);
 
+    const errorsIn = (field: (typeof fields)[number]) =>
+      graded.filter((record) => record.matches?.[field] === false).length;
+
     // Each record has exactly one status, so these counts add up to `scheduled`.
     return {
       arm,
@@ -467,20 +467,32 @@ const summarizeArms = (records: ReadonlyArray<Record>, scheduled: number) =>
       denied: counts.denied,
       unrun: counts.unrun,
       invalidOutputs: graded.filter((record) => record.reason === "invalid-output").length,
-      fieldErrors: Object.fromEntries(
-        fields.map((field) => [
-          field,
-          graded.filter((record) => record.matches?.[field] === false).length,
-        ]),
-      ),
+      fieldErrors: {
+        ticker: errorsIn("ticker"),
+        price: errorsIn("price"),
+        change1h: errorsIn("change1h"),
+        change24h: errorsIn("change24h"),
+        column: errorsIn("column"),
+        table: errorsIn("table"),
+      },
+      // Values read from the wrong table, row or period, classified from the displayed cells.
       bindingErrors: graded.filter(
+        (record) =>
+          record.binding?.wrongTable === true ||
+          record.binding?.wrongRow === true ||
+          record.binding?.wrongPeriod === true,
+      ).length,
+      wrongTable: graded.filter((record) => record.binding?.wrongTable === true).length,
+      wrongRow: graded.filter((record) => record.binding?.wrongRow === true).length,
+      wrongPeriod: graded.filter((record) => record.binding?.wrongPeriod === true).length,
+      unsourced: graded.filter((record) => record.binding?.unsourced === true).length,
+      // The requested ticker, table and header are text the answer must copy, not values it binds.
+      labelErrors: graded.filter(
         (record) =>
           record.matches?.ticker === false ||
           record.matches?.table === false ||
-          record.matches?.column === false ||
-          record.periodSwap === true,
+          record.matches?.column === false,
       ).length,
-      periodSwaps: graded.filter((record) => record.periodSwap === true).length,
       // Provider latency excludes time spent waiting for budget admission.
       requestSeconds: { p50: percentile(times, 0.5), p95: percentile(times, 0.95) },
       queueSeconds: { p50: percentile(queued, 0.5), p95: percentile(queued, 0.95) },
@@ -535,15 +547,8 @@ const summarizePairs = (pairs: ReadonlyArray<Pair>, records: ReadonlyArray<Recor
     };
   });
 
-/** Hard fixtures and controls retain their own denominators; incomplete pairs are explicit. */
-export const summarize = (plan: Manifest, records: ReadonlyArray<Record>) => ({
-  mode: plan.mode,
-  interpretation: plan.interpretation,
-  scheduled: plan.pairs.length * 3,
-  recorded: records.length,
-  arms: summarizeArms(records, plan.pairs.length),
-  paired: summarizePairs(plan.pairs, records),
-  byTask: (["quote-dense", "quote-table"] as const).map((task) => {
+const byTask = (plan: Manifest, records: ReadonlyArray<Record>) =>
+  (["quote-dense", "quote-table"] as const).map((task) => {
     const pairs = plan.pairs.filter((pair) => pair.task === task);
     const rows = records.filter((record) => record.task === task);
 
@@ -553,9 +558,89 @@ export const summarize = (plan: Manifest, records: ReadonlyArray<Record>) => ({
       arms: summarizeArms(rows, pairs.length),
       paired: summarizePairs(pairs, rows),
     };
-  }),
-  prerequisitesForConsideringFacts: plan.prerequisitesForConsideringFacts,
-});
+  });
+
+/**
+ * The pre-registered rules read on the dense fixtures. `met` is null without graded evidence;
+ * nothing here decides on an API.
+ */
+const prerequisites = (plan: Manifest, dense: ReturnType<typeof byTask>[number] | undefined) => {
+  const targets = plan.prerequisitesForConsideringFacts;
+  const arm = (name: Quote.Arm) => dense?.arms.find((candidate) => candidate.arm === name);
+  const a = arm("A");
+  const b = arm("B");
+  const facts = arm("facts");
+  const versusA = dense?.paired.find((pair) => pair.comparison === "facts vs A");
+  const exact = facts === undefined || facts.graded === 0 ? null : facts.passed / facts.graded;
+
+  const wrongTickerOrPeriod =
+    facts === undefined || facts.graded === 0
+      ? null
+      : facts.fieldErrors.ticker + facts.wrongRow + facts.wrongPeriod;
+
+  return {
+    baselineReproducesBindingMistakes: {
+      observed: b?.bindingErrors ?? null,
+      met: b === undefined || b.graded === 0 ? null : b.bindingErrors > 0,
+    },
+    factsImprovesOverA: {
+      observed: versusA === undefined ? null : { wins: versusA.wins, losses: versusA.losses },
+      met:
+        versusA === undefined || versusA.completePairs === 0 ? null : versusA.wins > versusA.losses,
+    },
+    hardQuoteExact: {
+      target: targets.hardQuoteExactTarget,
+      observed: exact,
+      met: exact === null ? null : exact >= targets.hardQuoteExactTarget,
+    },
+    wrongTickerOrPeriod: {
+      target: targets.wrongTickerOrPeriodTarget,
+      observed: wrongTickerOrPeriod,
+      met:
+        wrongTickerOrPeriod === null
+          ? null
+          : wrongTickerOrPeriod <= targets.wrongTickerOrPeriodTarget,
+    },
+    meanCostNoGreaterThanA: {
+      observed: { facts: facts?.meanGradedUsd ?? null, A: a?.meanGradedUsd ?? null },
+      met:
+        facts?.meanGradedUsd === null ||
+        facts?.meanGradedUsd === undefined ||
+        a?.meanGradedUsd === null ||
+        a?.meanGradedUsd === undefined
+          ? null
+          : facts.meanGradedUsd <= a.meanGradedUsd,
+    },
+    p95RequestSeconds: {
+      target: targets.p95SecondsTarget,
+      observed: facts?.requestSeconds.p95 ?? null,
+      met:
+        facts?.requestSeconds.p95 === null || facts?.requestSeconds.p95 === undefined
+          ? null
+          : facts.requestSeconds.p95 <= targets.p95SecondsTarget,
+    },
+    interpretation: targets.interpretation,
+  };
+};
+
+/** Hard fixtures and controls retain their own denominators; incomplete pairs are explicit. */
+export const summarize = (plan: Manifest, records: ReadonlyArray<Record>) => {
+  const tasks = byTask(plan, records);
+
+  return {
+    mode: plan.mode,
+    interpretation: plan.interpretation,
+    scheduled: plan.pairs.length * 3,
+    recorded: records.length,
+    arms: summarizeArms(records, plan.pairs.length),
+    paired: summarizePairs(plan.pairs, records),
+    byTask: tasks,
+    prerequisitesForConsideringFacts: prerequisites(
+      plan,
+      tasks.find((group) => group.task === "quote-dense"),
+    ),
+  };
+};
 
 /** The free adapter sees a scripted response from visible facts, never fixture grading truth. */
 export const scriptedModel = Effect.fnUntraced(function* (account: Account, content: string) {
@@ -724,7 +809,7 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
         reason: "model-setup-failed",
         pass: null,
         matches: null,
-        periodSwap: null,
+        binding: null,
         answer: null,
         diagnostic: Diagnostics.failure(setup.cause),
         lastResponse: null,

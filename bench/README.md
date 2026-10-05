@@ -168,7 +168,13 @@ EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
 The results distinguish graded mistakes from infrastructure failures and retain paired outcomes,
 provider request latency (reported apart from time queued for budget admission), token usage and confirmed or unresolved charges, reported separately for dense fixtures
 and easy controls. Each case also saves its shared image, resized baseline and visible evidence
-for inspecting a result without another model call. First establish that B makes binding
+for inspecting a result without another model call. Every displayed table, row and period has a
+distinct value, so each graded answer's numbers are traced to the cells they were read from:
+`bindingErrors` counts answers with a value from another table, another row of the requested
+table, or another period (1h, 24h or 7d) of the requested row, reported separately, while a
+number that matches no cell is a misread (`unsourced`) and a wrong ticker, table or header text is
+a label error. The summary evaluates the pre-registered rules on the dense fixtures from these
+counts, with `met: null` where there is no graded evidence. First establish that B makes binding
 mistakes on the dense fixture, then compare A with `facts`. Beating B alone cannot establish that
 facts improve the shipping implementation; an already-perfect A supplies no evidence to add an
 API. Keep the original quality, cost and latency targets in view and report the limits of this

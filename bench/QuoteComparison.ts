@@ -92,7 +92,70 @@ export interface QuoteCase {
   readonly facts: Facts;
   /** Used only after a model answers. Never passed to a prompt or the facts builder. */
   readonly expected: Answer;
+  /** Every displayed quote, for classifying a wrong answer's source after the model answers. */
+  readonly rows: ReadonlyArray<QuoteRow>;
 }
+
+export type QuoteRow = (typeof QuoteTruth.Type)["rows"][number];
+
+/**
+ * Where a graded answer's values came from. The fixture gives every table, row and period a
+ * distinct value, so each reported number identifies the cell it was read from.
+ */
+export interface Binding {
+  /** A reported value belongs to another table, such as the same asset's futures quote. */
+  readonly wrongTable: boolean;
+  /** A reported value belongs to another row of the requested table. */
+  readonly wrongRow: boolean;
+  /** A reported change belongs to another period (1h, 24h or 7d) of the requested row. */
+  readonly wrongPeriod: boolean;
+  /** A reported value matches no displayed cell of its kind: a misread, not a binding. */
+  readonly unsourced: boolean;
+}
+
+type Period = "c1h" | "c24h" | "c7d";
+
+/** A displayed cell a reported value matches, and the period its field asked for. */
+interface Source {
+  readonly row: QuoteRow;
+  readonly period: Period | undefined;
+  readonly wanted: Period | undefined;
+}
+
+export const binding = (
+  answer: Answer,
+  expected: Answer,
+  rows: ReadonlyArray<QuoteRow>,
+): Binding => {
+  const changes = [
+    ["change1h", "c1h"],
+    ["change24h", "c24h"],
+  ] as const;
+
+  const sources: ReadonlyArray<ReadonlyArray<Source>> = [
+    rows.flatMap((row) =>
+      row.price === answer.price ? [{ row, period: undefined, wanted: undefined }] : [],
+    ),
+    ...changes.map(([field, wanted]) =>
+      rows.flatMap((row) =>
+        (["c1h", "c24h", "c7d"] as const).flatMap((period) =>
+          row[period] === answer[field] ? [{ row, period, wanted }] : [],
+        ),
+      ),
+    ),
+  ];
+
+  const found = sources.flatMap((cells) => cells.slice(0, 1));
+  const inTable = found.filter((cell) => cell.row.table === expected.table);
+  const inRow = inTable.filter((cell) => cell.row.ticker === expected.ticker);
+
+  return {
+    wrongTable: found.some((cell) => cell.row.table !== expected.table),
+    wrongRow: inTable.some((cell) => cell.row.ticker !== expected.ticker),
+    wrongPeriod: inRow.some((cell) => cell.period !== cell.wanted),
+    unsourced: sources.some((cells) => cells.length === 0),
+  };
+};
 
 export interface Outcome {
   readonly pass: boolean;
@@ -448,6 +511,7 @@ export const prepare = (options: {
       seed: options.seed,
       dense: options.dense,
       task: options.dense ? "quote-dense" : "quote-table",
+      rows: state.rows,
       moment,
       question,
       baseline: {
