@@ -126,8 +126,11 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         const moment = yield* capture;
 
         assert.strictEqual(moment.at, 5500);
-        assert.strictEqual(moment.frames.length, 1);
+        // That capture has stopped, so its frame leads up to a new screenshot of the moment.
+        assert.strictEqual(moment.frames.length, 2);
         assert.strictEqual(moment.frames[0], frame);
+        assert.strictEqual(moment.frames[1]?.timing._tag, "Screenshot");
+        assert.strictEqual(moment.frames[1]?.hostTime, 5500);
         assert.isAbove(moment.events.length, 0);
         assert.isTrue(moment.events.every((event) => event.at === 5000));
         assert.include(moment.timeline, "-0.5s navigated");

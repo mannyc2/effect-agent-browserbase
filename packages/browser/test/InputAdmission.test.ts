@@ -1,3 +1,6 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Deferred, Duration, Effect, Exit, Fiber, Option, Schedule } from "effect";
 import type { CDPSession } from "playwright-core";
@@ -361,6 +364,34 @@ const elapsed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 const blank = "data:text/html,<title>Blank</title><input aria-label=Text>";
 
+// A site whose `/slow` document answers after three seconds, as a slow server does.
+const slowSite = Effect.acquireRelease(
+  Effect.callback<ReturnType<typeof createServer>>((resume) => {
+    const server = createServer((request, response) => {
+      const reply = () => {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end("<title>Done</title><body style='margin:0'>done</body>");
+      };
+
+      if (request.url === "/slow") setTimeout(reply, 3000);
+      else reply();
+    });
+
+    server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
+  }),
+  (server) =>
+    Effect.callback<void>((resume) => {
+      server.closeAllConnections();
+      server.close(() => resume(Effect.void));
+    }),
+).pipe(
+  Effect.map((server) => (path: string) => {
+    const { port } = server.address() as AddressInfo;
+
+    return `http://127.0.0.1:${port}${path}`;
+  }),
+);
+
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Input admission across pages",
   (it) => {
@@ -382,6 +413,33 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.isBelow(millis, 1000);
         assert.strictEqual(error.reason._tag, "Timeout");
         assert.isFalse(error.dispatched);
+      }),
+    );
+
+    it.effect("queues input behind its own page's navigation without holding other pages", () =>
+      Effect.gen(function* () {
+        const url = yield* slowSite;
+        const { browser } = yield* browserWith({ actionTimeout: Duration.seconds(2) });
+        const navigating = yield* browser.newPage(url("/fast"));
+        const other = yield* browser.newPage(url("/fast"));
+
+        yield* navigating.click({ x: 5, y: 5 });
+        yield* other.click({ x: 5, y: 5 });
+        const navigation = yield* navigating.goto(url("/slow")).pipe(Effect.forkChild);
+
+        yield* Effect.sleep("200 millis");
+        // This click waits for its own page's navigation, and only for its own deadline.
+        const queued = yield* navigating.click({ x: 5, y: 5 }).pipe(Effect.flip, Effect.forkChild);
+
+        yield* Effect.sleep("200 millis");
+        const { exit, millis } = yield* elapsed(other.click({ x: 5, y: 5 }));
+        const error = yield* Fiber.join(queued);
+
+        assert.isTrue(Exit.isSuccess(exit));
+        assert.isBelow(millis, 1000);
+        assert.strictEqual(error.reason._tag, "Timeout");
+        assert.isFalse(error.dispatched);
+        yield* Fiber.join(navigation);
       }),
     );
 

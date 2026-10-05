@@ -20,7 +20,8 @@ interface Options {
   readonly clock: Clock.Clock;
   readonly calibrate: Effect.Effect<Estimate, BrowserError>;
   readonly frameHistory: number;
-  readonly viewport: () => Size | null;
+  /** The viewport in CSS pixels; a capture is scaled to fit it, as screenshots are. */
+  readonly viewport: Effect.Effect<Size, BrowserError>;
   readonly imageSize: (data: Uint8Array) => Size | undefined;
   readonly error: (cause: unknown) => BrowserError;
   readonly onClose: (callback: () => void) => () => void;
@@ -190,13 +191,23 @@ export const make = (options: Options) =>
             yield* awaitPreviousStop;
             const calibration = yield* options.calibrate.pipe(Effect.interruptible);
 
+            // A page too busy to report its viewport is still captured, at device size.
+            const size =
+              screencast.size ??
+              (yield* options.viewport.pipe(
+                Effect.interruptible,
+                Effect.timeoutOrElse({ duration: deadline, orElse: () => Effect.succeed(null) }),
+                Effect.orElseSucceed(() => null),
+                Effect.provideService(Clock.Clock, options.clock),
+              ));
+
             if (closed) return yield* options.error(new Error("Target page has been closed"));
 
             const created: Generation = {
               subscribers: new Set(),
               calibration,
               quality: screencast.quality ?? 80,
-              size: screencast.size ?? options.viewport(),
+              size,
               accepting: true,
               predecessor: undefined,
               failure: undefined,
@@ -252,7 +263,7 @@ export const make = (options: Options) =>
                 const data = Buffer.from(native.data, "base64");
 
                 const size = options.imageSize(data) ??
-                  options.viewport() ?? {
+                  created.size ?? {
                     width: native.metadata.deviceWidth,
                     height: native.metadata.deviceHeight,
                   };

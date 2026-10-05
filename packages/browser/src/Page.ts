@@ -2,13 +2,13 @@
  * One browser tab: navigation, snapshots, pictures and input.
  *
  * Input dispatch is serialized across the browser's pages; navigation is serialized only with
- * its own page. A page waits for its own unresolved input replies before joining that queue, and
- * an action's timeout bounds its wait for the locks before a full timeout bounds the action
- * itself. A policy holds outside the input locks while other actions continue; its target is
- * revalidated before dispatch. Element targets are refs from a snapshot; point targets are
- * viewport coordinates in CSS pixels, the same coordinates as a screenshot's pixels. Mouse and
- * keyboard input share a bounded pipeline, so pacing does not wait for each protocol reply.
- * Target lookup happens before the input is sent.
+ * its own page. An action waits for its own page (other operations, unresolved input replies)
+ * before joining the browser-wide queue, and its timeout bounds those waits before a full timeout
+ * bounds the action itself. A policy holds outside the input locks while other actions continue;
+ * its target is revalidated before dispatch. Element targets are refs from a snapshot; point
+ * targets are viewport coordinates in CSS pixels, the same coordinates as a screenshot's pixels.
+ * Mouse and keyboard input share a bounded pipeline, so pacing does not wait for each protocol
+ * reply. Target lookup happens before the input is sent.
  *
  * @since 0.3.0
  */
@@ -54,7 +54,7 @@ import {
   TrackPlanned,
   WheelScrolled,
 } from "./BrowserEvent.ts";
-import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
+import { type CaptureStats, Frame, Image, type ScreencastOptions, Screenshot } from "./Frame.ts";
 import * as Capture from "./internal/capture.ts";
 import * as BrowserClock from "./internal/clock.ts";
 import * as Human from "./internal/human.ts";
@@ -205,13 +205,22 @@ export interface Page {
 
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
   /**
-   * A picture of the viewport: the latest screencast frame when it was painted after the latest
-   * input and within the last 250 ms, else a new screenshot.
+   * A picture of the viewport: the latest screencast frame when no action is changing the page and
+   * it was painted after the latest input and delivered within the last 250 ms, else a new
+   * screenshot.
    */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
+  /**
+   * The viewport now, with its timing: the newest screencast frame under the same rule as
+   * `screenshot`, else a new screenshot timed by the host interval in which it was taken.
+   */
+  readonly currentFrame: Effect.Effect<Frame, BrowserError>;
   /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
   readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
-  /** The viewport's size in CSS pixels, the space of points, crops and page scrolls. */
+  /**
+   * The viewport's size in CSS pixels, the space of points, crops and page scrolls. Over CDP the
+   * page reports it, within the action timeout.
+   */
   readonly viewport: Effect.Effect<
     { readonly width: number; readonly height: number },
     BrowserError
@@ -346,9 +355,10 @@ type MouseEvent = {
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
 
-// Several 60 Hz frame intervals plus local delivery: an animating page keeps reusing its stream,
-// while a page that stopped changing gets a real capture. A lost final paint can be served for
-// at most this long after the last frame that did arrive.
+// Several 60 Hz frame intervals: while a page changes, its stream keeps delivering and its newest
+// frame is reused; once the stream goes quiet, a real capture is taken. A lost final paint can be
+// served for at most this long after the last frame that did arrive. Delivery time, not paint
+// time, measures this, so a remote browser's transport delay does not disqualify every frame.
 const currentPaintMillis = 250;
 
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
@@ -358,17 +368,21 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
-  // The latest input submission, or the moment an operation was about to change the page. Paint
-  // from before it can never be reused as the current viewport, even while an action is running.
-  let lastInputAt = 0;
+  // Actions that have started changing the page and not yet ended, and the latest submitted input
+  // or page change. While an action runs no cached paint is current; afterwards only paint from
+  // after its latest input is. An action ends after its input was handled, so if that input changed
+  // the page, newer paint follows; a lost final paint is bounded by recency instead.
+  let changing = 0;
+  let inputAt = 0;
+
+  const noteInput = () => {
+    inputAt = Math.max(inputAt, now());
+  };
+
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   // Deadlines and pacing guard the browser-wide input lock, so page operations run on the
   // owner's clock; a caller's clock, such as a TestClock, cannot stall or stretch them.
   const owned = Effect.provideService(Clock.Clock, clock);
-
-  const markInput = () => {
-    lastInputAt = Math.max(lastInputAt, now());
-  };
 
   const input = Input.make();
   const inputClocks = new WeakMap<Input.Run, BrowserClock.Estimate>();
@@ -433,7 +447,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
     const response = cdp.send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 
-    markInput();
+    noteInput();
     if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
     if (track !== undefined) publish(track);
     submitted?.();
@@ -488,7 +502,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     const event = new KeyChanged({ at, page: id, key, phase });
     const response = command(at, inputClocks.get(run));
 
-    markInput();
+    noteInput();
     publish(event);
 
     return response;
@@ -498,7 +512,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     const track = new TextInserted({ at: now(), page: id, text });
     const response = cdp.send("Input.insertText", { text });
 
-    markInput();
+    noteInput();
     publish(track);
 
     return response;
@@ -653,7 +667,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     clock,
     calibrate: mapping.refresh(calibrateClock),
     frameHistory: settings.frameHistory,
-    viewport: () => playwright.viewportSize(),
+    viewport: Effect.suspend(() => viewportFor("screencast")),
     onClose: (listener) => {
       playwright.on("close", listener);
       if (playwright.isClosed()) listener();
@@ -682,7 +696,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       );
 
   // Playwright knows the viewport only of a context it created; over CDP it reports none, so the
-  // page answers. Pointer bounds, page scrolls and crops all read this one source.
+  // page answers. Pointer bounds, page scrolls, crops, capture size and frame reuse all read this
+  // one source; the latest answer serves checks that cannot wait for the page.
+  let measuredViewport: { readonly width: number; readonly height: number } | null = null;
+
+  const knownViewport = () => playwright.viewportSize() ?? measuredViewport;
+
   const viewportFor = (operation: string) =>
     Effect.suspend(() => {
       const known = playwright.viewportSize();
@@ -690,6 +709,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       return known === null
         ? evaluate(operation, scriptCall("viewport")).pipe(
             Effect.flatMap(decodeWith(operation, Script.ViewportResultSchema)),
+            Effect.tap((measured) =>
+              Effect.sync(() => {
+                measuredViewport = measured;
+              }),
+            ),
           )
         : Effect.succeed(known);
     });
@@ -731,14 +755,22 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const startedAt = now();
       const sendsInput = info.input ?? true;
       const sent = yield* Ref.make(false);
-      const touched = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
 
-      // The page may react to preparatory input, so pictures after it must be fresh, but only
-      // the action's own input can have given it effect.
+      // The page may react to preparatory input, so no cached paint is current while the action
+      // runs, but only the action's own input can have given it effect. `touched` covers both and
+      // changes in one step with `changing`, so an interruption cannot unbalance the count.
+      let touched = false;
+
+      const touch = Effect.sync(() => {
+        if (!touched) changing += 1;
+        touched = true;
+        noteInput();
+      });
+
       const marks = {
-        sent: Ref.set(sent, true).pipe(Effect.andThen(Effect.sync(markInput))),
-        touched: Ref.set(touched, true).pipe(Effect.andThen(Effect.sync(markInput))),
+        sent: Ref.set(sent, true).pipe(Effect.andThen(touch)),
+        touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
       };
 
@@ -757,8 +789,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       ) => effect.pipe(Effect.timeoutOrElse({ duration, orElse: () => timedOut(duration) }));
 
       // Admission waits only on this page: its own unresolved replies and, before the browser's
-      // first input, its clock mapping. Neither holds the browser-wide input lock, so a stalled
-      // page cannot delay input on other pages. The run re-checks the replies under the locks.
+      // first input, its clock mapping. It runs under the page lock but before the browser-wide
+      // input lock, so a stalled page cannot delay input on other pages. The run re-checks the
+      // replies under both locks.
       let estimate: BrowserClock.Estimate | undefined;
 
       const admit = input.idle.pipe(
@@ -808,13 +841,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       // Admission and lock waits end at the action's deadline, undispatched. Holding the locks
       // starts a full deadline of its own, so contention never truncates input under way.
+      // Locks are always taken page first, then browser-wide, and the browser-wide one is never
+      // held while waiting for anything on one page: its navigation, zoom, replies or clock.
       const dispatch = <Value>(action: Effect.Effect<Value, BrowserError>) =>
         Effect.gen(function* () {
           const held = yield* Deferred.make<void>();
 
-          const locked = Deferred.succeed(held, undefined).pipe(
+          const acquired = Deferred.succeed(held, undefined).pipe(
             Effect.andThen(bounded(action, timeout)),
-            lock.withPermits(1),
           );
 
           const deadline = Effect.sleep(timeout).pipe(
@@ -823,7 +857,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           );
 
           return yield* Effect.raceFirst(
-            admit.pipe(Effect.andThen(sendsInput ? inputLock.withPermits(1)(locked) : locked)),
+            admit.pipe(
+              Effect.andThen(sendsInput ? inputLock.withPermits(1)(acquired) : acquired),
+              lock.withPermits(1),
+            ),
             deadline,
           );
         });
@@ -872,7 +909,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const dispatched = yield* Ref.get(sent);
           const point = yield* Ref.get(at);
 
-          if (dispatched || (yield* Ref.get(touched))) markInput();
+          if (touched) changing -= 1;
           const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
 
           publish(
@@ -1718,75 +1755,74 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         }),
     );
 
-  const scroll = (scrollOptions: ScrollOptions = {}) =>
-    Effect.gen(function* () {
-      const viewport = yield* viewportFor("scroll");
+  const scroll = (scrollOptions: ScrollOptions = {}) => {
+    const target = scrollOptions.at;
 
-      const middle = {
-        x: Math.round(viewport.width / 2),
-        y: Math.round(viewport.height / 2),
-      };
+    const valid =
+      Number.isFinite(scrollOptions.dx ?? 0) && Number.isFinite(scrollOptions.dy ?? 0)
+        ? Effect.void
+        : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
 
-      const target = scrollOptions.at;
-
-      const dx = scrollOptions.dx ?? 0;
-
-      const dy =
-        scrollOptions.dy ??
-        (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
-
-      const valid =
-        Number.isFinite(dx) && Number.isFinite(dy)
-          ? Effect.void
-          : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
-
-      return yield* perform(
-        "scroll",
-        {
-          target:
-            scrollOptions.at === undefined
-              ? undefined
-              : typeof scrollOptions.at === "string"
-                ? scrollOptions.at
-                : `${scrollOptions.at.x},${scrollOptions.at.y}`,
-        },
-        settings.actionTimeout,
-        valid.pipe(
-          Effect.andThen(
-            // Scrolling the page has no target: whatever sits mid-viewport is not what is scrolled.
-            preparePolicy(
-              "scroll",
-              { target: typeof target === "string" ? target : undefined },
-              target === undefined ? [] : [target],
-            ),
+    return perform(
+      "scroll",
+      {
+        target:
+          scrollOptions.at === undefined
+            ? undefined
+            : typeof scrollOptions.at === "string"
+              ? scrollOptions.at
+              : `${scrollOptions.at.x},${scrollOptions.at.y}`,
+      },
+      settings.actionTimeout,
+      valid.pipe(
+        Effect.andThen(
+          // Scrolling the page has no target: whatever sits mid-viewport is not what is scrolled.
+          preparePolicy(
+            "scroll",
+            { target: typeof target === "string" ? target : undefined },
+            target === undefined ? [] : [target],
           ),
         ),
-        (marks, approval) =>
-          Effect.gen(function* () {
-            yield* valid;
+      ),
+      (marks, approval) =>
+        Effect.gen(function* () {
+          yield* valid;
+          // Over CDP the page reports its own viewport, so the read shares the action's deadline.
+          const viewport = yield* viewportFor("scroll");
 
-            // A page scroll has no target, but a visible pointer still shows the cursor it lands on.
-            const resolved =
-              target !== undefined
-                ? yield* targetFor("scroll", target, approval, marks)
-                : settings.humanize
-                  ? yield* resolve("scroll", middle, approval).pipe(
-                      Effect.orElseSucceed(() => undefined),
-                    )
-                  : undefined;
+          const middle = {
+            x: Math.round(viewport.width / 2),
+            y: Math.round(viewport.height / 2),
+          };
 
-            const point = resolved?.point ?? middle;
+          const dx = scrollOptions.dx ?? 0;
 
-            yield* marks.at(point);
-            yield* moveTo("scroll", marks, point, resolved?.cursor);
-            yield* marks.sent;
-            yield* wheel("scroll", marks.input, point, dx, dy);
-            yield* flush("scroll", marks.input);
-            yield* Effect.sleep(Duration.millis(150));
-            yield* presentationPause("action");
-          }),
-      );
-    });
+          const dy =
+            scrollOptions.dy ??
+            (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
+
+          // A page scroll has no target, but a visible pointer still shows the cursor it lands on.
+          const resolved =
+            target !== undefined
+              ? yield* targetFor("scroll", target, approval, marks)
+              : settings.humanize
+                ? yield* resolve("scroll", middle, approval).pipe(
+                    Effect.orElseSucceed(() => undefined),
+                  )
+                : undefined;
+
+          const point = resolved?.point ?? middle;
+
+          yield* marks.at(point);
+          yield* moveTo("scroll", marks, point, resolved?.cursor);
+          yield* marks.sent;
+          yield* wheel("scroll", marks.input, point, dx, dy);
+          yield* flush("scroll", marks.input);
+          yield* Effect.sleep(Duration.millis(150));
+          yield* presentationPause("action");
+        }),
+    );
+  };
 
   const select = (ref: string, values: ReadonlyArray<string>) =>
     perform(
@@ -1980,28 +2016,30 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       owned,
     );
 
-  const screenshot = (screenshotOptions: ScreenshotOptions = {}) =>
-    Effect.gen(function* () {
-      const frame = yield* capture.latest;
-      const active = yield* capture.active;
-      const since = lastInputAt;
+  // The newest screencast frame, only while it demonstrably shows the viewport now. Delivery can
+  // be delayed, so its whole paint interval must follow the latest input, and no action may be
+  // changing the page. A screencast sends only changes and can miss a page's final paint, so a
+  // quiet stream is no evidence that its newest frame is still current: it must also have been
+  // delivered recently, at the viewport's size.
+  const currentPaint = Effect.gen(function* () {
+    const frame = yield* capture.latest;
+    const active = yield* capture.active;
+    const viewport = knownViewport();
 
-      // Delivery can be delayed. Only paint whose entire clock interval follows input is reusable.
-      // A screencast sends only changes and can miss a page's final paint, so a quiet stream is no
-      // evidence that its newest frame is still current: reuse needs recent paint as well.
-      const viewport = playwright.viewportSize();
-
-      if (
-        screenshotOptions.fresh !== true &&
-        screenshotOptions.clip === undefined &&
+    return Option.filter(
+      frame,
+      (latest) =>
         active &&
-        Option.isSome(frame) &&
-        frame.value.hostTime - frame.value.timing.uncertaintyMillis > since + 100 &&
-        frame.value.hostTime - frame.value.timing.uncertaintyMillis > now() - currentPaintMillis &&
-        frame.value.width === viewport?.width &&
-        frame.value.height === viewport.height
-      )
-        return frame.value.image;
+        changing === 0 &&
+        latest.hostTime - latest.timing.uncertaintyMillis > inputAt &&
+        latest.receivedAt > now() - currentPaintMillis &&
+        latest.width === viewport?.width &&
+        latest.height === viewport.height,
+    );
+  });
+
+  const takeScreenshot = (screenshotOptions: ScreenshotOptions) =>
+    Effect.gen(function* () {
       const quality = screenshotOptions.quality ?? 80;
       const timeout = Duration.toMillis(settings.actionTimeout);
 
@@ -2018,10 +2056,44 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         timeout,
       );
 
-      const size = jpegSize(data) ?? playwright.viewportSize() ?? { width: 0, height: 0 };
+      const size = jpegSize(data) ?? knownViewport() ?? { width: 0, height: 0 };
 
       return new Image({ data, mediaType: "image/jpeg", width: size.width, height: size.height });
     });
+
+  const screenshot = (screenshotOptions: ScreenshotOptions = {}) =>
+    Effect.gen(function* () {
+      const reusable =
+        screenshotOptions.fresh === true || screenshotOptions.clip !== undefined
+          ? Option.none<Frame>()
+          : yield* currentPaint;
+
+      return Option.isSome(reusable)
+        ? reusable.value.image
+        : yield* takeScreenshot(screenshotOptions);
+    });
+
+  // A new screenshot has no paint time, only the host interval in which it was taken.
+  const currentFrame = Effect.gen(function* () {
+    const reusable = yield* currentPaint;
+
+    if (Option.isSome(reusable)) return reusable.value;
+    const startedAt = now();
+    const image = yield* takeScreenshot({});
+    const finishedAt = now();
+
+    return new Frame({
+      page: id,
+      data: image.data,
+      timing: new Screenshot({
+        hostTime: startedAt + (finishedAt - startedAt) / 2,
+        uncertaintyMillis: (finishedAt - startedAt) / 2,
+      }),
+      receivedAt: finishedAt,
+      width: image.width,
+      height: image.height,
+    });
+  }).pipe(owned);
 
   const zoom = (requested: Region) =>
     lock
@@ -2154,8 +2226,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     close: Effect.tryPromise(() => playwright.close()).pipe(Effect.ignore),
     snapshot,
     screenshot,
+    currentFrame,
     zoom,
-    viewport: viewportFor("viewport"),
+    viewport: viewportFor("viewport").pipe(
+      Effect.timeoutOrElse({
+        duration: settings.actionTimeout,
+        orElse: () =>
+          failWith("viewport", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
+      }),
+      owned,
+    ),
     observe,
     hasText,
     click,

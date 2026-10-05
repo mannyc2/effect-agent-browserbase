@@ -242,20 +242,38 @@ const delayedCapture = Effect.fnUntraced(function* () {
     Effect.map((at) => at ?? Infinity),
   );
 
-  // A reused frame is one of the retained screencast frames, returned by reference.
-  const reusedBefore = (image: Image, input: number) =>
+  // A reused frame is one of the retained screencast frames, returned by reference; it is stale if
+  // its paint could precede the given time.
+  const reusedBefore = (image: Image, time: number) =>
     page.recentFrames.pipe(
       Effect.map((frames) =>
         frames.some(
           (frame) =>
-            frame.data === image.data &&
-            frame.hostTime - frame.timing.uncertaintyMillis <= input + 100,
+            frame.data === image.data && frame.hostTime - frame.timing.uncertaintyMillis <= time,
         ),
       ),
     );
 
   return { browser, page, pressed, reusedBefore };
 });
+
+// The centre pixel of an image, decoded by the page itself.
+const centreOf = (page: Page, image: Image) =>
+  Effect.promise(() =>
+    page.playwright.evaluate(async (bytes) => {
+      const bitmap = await createImageBitmap(
+        new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
+      );
+
+      const canvas = new OffscreenCanvas(1, 1).getContext("2d");
+
+      if (canvas === null) throw new Error("no 2d canvas");
+      canvas.drawImage(bitmap, bitmap.width / 2, bitmap.height / 2, 1, 1, 0, 0, 1, 1);
+      const [red = 0, green = 0, blue = 0] = canvas.getImageData(0, 0, 1, 1).data;
+
+      return { red, green, blue };
+    }, Array.from(image.data)),
+  );
 
 // Chromium's screencast can miss a page's final paint. The relay withholds native frames on
 // request, so the newest delivered frame shows an animation the page has already finished.
@@ -302,23 +320,7 @@ const withheldFinalPaint = Effect.fnUntraced(function* () {
   yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
   yield* Effect.sleep("400 millis");
 
-  // The centre pixel of an image, decoded by the page itself.
-  const centre = (image: Image) =>
-    Effect.promise(() =>
-      page.playwright.evaluate(async (bytes) => {
-        const bitmap = await createImageBitmap(
-          new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
-        );
-
-        const canvas = new OffscreenCanvas(1, 1).getContext("2d");
-
-        if (canvas === null) throw new Error("no 2d canvas");
-        canvas.drawImage(bitmap, bitmap.width / 2, bitmap.height / 2, 1, 1, 0, 0, 1, 1);
-        const [red = 0, green = 0, blue = 0] = canvas.getImageData(0, 0, 1, 1).data;
-
-        return { red, green, blue };
-      }, Array.from(image.data)),
-    );
+  const centre = (image: Image) => centreOf(page, image);
 
   const retained = (image: Image) =>
     page.recentFrames.pipe(
@@ -390,6 +392,52 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
+    it.effect("keeps every tab's input stamps when a busy tab's capture measures the clock", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext("fresh");
+
+        const quiet = yield* browser.newPage(
+          "data:text/html," +
+            encodeURIComponent(`<body style="margin:0;height:100vh"><script>
+  window.deltas = [];
+  addEventListener("mousedown", (event) => deltas.push(performance.now() - event.timeStamp));
+</script></body>`),
+        );
+
+        const deltas = Effect.promise(() =>
+          quiet.playwright.evaluate(() => (window as unknown as { deltas: number[] }).deltas),
+        );
+
+        for (let index = 0; index < 3; index++) yield* quiet.click({ x: 50, y: 50 });
+        const before = (yield* deltas).length;
+
+        // Back-to-back 150 ms tasks with no timer gaps delay every clock probe in that tab.
+        const busy = yield* browser.newPage(
+          "data:text/html," +
+            encodeURIComponent(`<body>busy<script>
+  const channel = new MessageChannel();
+  let turns = 0;
+  channel.port1.onmessage = () => {
+    const end = performance.now() + 150;
+    while (performance.now() < end) {}
+    if (++turns < 200) channel.port2.postMessage(0);
+  };
+  channel.port2.postMessage(0);
+</script></body>`),
+        );
+
+        yield* busy
+          .screencast()
+          .pipe(Stream.take(1), Stream.runDrain, Effect.timeout("15 seconds"));
+        for (let index = 0; index < 3; index++) yield* quiet.click({ x: 50, y: 50 });
+        const after = (yield* deltas).slice(before);
+
+        // Handler time minus the stamped event time: a future stamp would make it negative.
+        assert.strictEqual(after.length, 3);
+        assert.isBelow(Math.max(...after.map(Math.abs)), 50, JSON.stringify(after));
+      }),
+    );
+
     it.effect("fails a busy page's first capture, undispatched, only while no mapping exists", () =>
       Effect.gen(function* () {
         const browser = yield* busyContext("borrowed");
@@ -414,10 +462,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           .click({ x: 400, y: 300 }, { holdMillis: 1500 })
           .pipe(Effect.forkChild);
 
-        const input = yield* pressed;
+        yield* pressed;
+        // While the action may still change the page, no cached paint is current.
         const image = yield* page.screenshot();
 
-        assert.isFalse(yield* reusedBefore(image, input));
+        assert.isFalse(yield* reusedBefore(image, Infinity));
         yield* Fiber.join(clicking);
       }),
     );
@@ -479,6 +528,54 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.isAbove(pixel.red, 200);
           assert.isBelow(pixel.green, 60);
         }),
+    );
+
+    it.effect("makes a moment's last frame the page now, after a stopped capture and input", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext("fresh");
+        const page = yield* browser.newPage();
+
+        // The page repaints a few times before it settles, so several frames are retained.
+        yield* page.goto(
+          "data:text/html," +
+            encodeURIComponent(`<body style="margin:0;background:rgb(255,0,0)">
+<button style="position:absolute;left:10px;top:10px;width:100px;height:40px"
+  onclick="document.body.style.background = 'rgb(0,0,255)'">go</button>
+<script>
+  let shade = 0;
+  const repaint = setInterval(() => {
+    document.body.style.background = shade++ % 2 === 0 ? "rgb(200,0,0)" : "rgb(255,0,0)";
+    if (shade === 8) clearInterval(repaint);
+  }, 40);
+</script></body>`),
+        );
+        // Waiting for the screen to settle runs and stops a capture; its frames stay retained.
+        yield* page.waitForStill({ quietMillis: 300 });
+        const retained = yield* page.recentFrames;
+
+        assert.isAbove(retained.length, 1);
+        yield* page.click({ x: 50, y: 30 });
+
+        const moment = yield* Moment.capture(page, { frames: 2 }).pipe(
+          Effect.provideService(Browser, browser),
+        );
+
+        const last = moment.frames.at(-1);
+
+        const click = moment.events.find(
+          (event) => event._tag === "Action" && event.name === "click",
+        );
+
+        assert.isDefined(last);
+        assert.isDefined(click);
+        if (last === undefined || click === undefined) return;
+        assert.strictEqual(last.timing._tag, "Screenshot");
+        assert.isAbove(last.hostTime, click.at);
+        assert.isAbove((yield* centreOf(page, last.image)).blue, 200);
+        // The moment still begins where its window does, not just before its last frame.
+        assert.strictEqual(moment.frames.length, 2);
+        assert.strictEqual(moment.frames[0]?.hostTime, retained[0]?.hostTime);
+      }),
     );
 
     it.effect("rejects invalid history bounds before taking over a borrowed context", () =>

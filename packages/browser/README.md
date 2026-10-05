@@ -172,10 +172,13 @@ Compare these stamps only within that clock: they are not epoch dates or compara
 milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
 Screenshot fallbacks have only a host capture interval; their `timestamp` getter is undefined.
 Moment windows and frame captions use `hostTime`, so delayed delivery cannot make old paint current.
-`Page.screenshot({ fresh: true })` bypasses the frame cache. A cached frame is reused only if it
-was painted after the page's latest submitted input, including input of a running or interrupted
-action, and within the last 250 ms: a screencast sends only changes and can miss a final paint, so
-a page that stopped changing gets a new capture. Every operation is recorded as an `Action`, also when its caller interrupts it.
+`Page.screenshot({ fresh: true })` bypasses the frame cache. A cached frame is reused only while no
+action is changing the page, if it was painted after the page's latest submitted input (including
+input of an interrupted action) and delivered within the last 250 ms: a screencast sends only
+changes and can miss a final paint, so a page that stopped changing gets a new capture. `Page.currentFrame` applies the same rule and
+returns the new capture as a `Screenshot`-timed frame. A `Moment`'s last frame comes from it, so a
+stopped capture, a lost final paint or later input never presents older paint as the moment.
+Every operation is recorded as an `Action`, also when its caller interrupts it.
 
 Local launches and new Browserbase sessions measure clock offset and send-to-captured-image delay
 on a private blank page before user scripts or public pages run. `Browser.captureCalibration`
@@ -189,7 +192,9 @@ measurement. Transport asymmetry remains in the reported uncertainty.
 Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its
 pages. The startup measurement seeds it; otherwise the first page that needs it probes it. Each new
 capture refreshes the mapping and keeps the previous estimate if the page cannot answer in time, so a
-busy page only fails while its browser has no estimate at all; that failure is undispatched.
+busy page only fails while its browser has no estimate at all; that failure is undispatched. A new
+measurement replaces the estimate only if it is no less certain, or if its interval cannot contain
+the current offset (the clocks moved); a probe slowed by one busy tab cannot skew every tab's stamps.
 
 Mouse input and raw text-key events carry the calibrated epoch timestamp. Shortcut chords retain
 Playwright's platform behavior, and Unicode insertion has no timestamp field. Startup probes are
@@ -230,8 +235,10 @@ narrative timeline. Compositing remains the consumer’s job.
 
 The pointer starts at the first active viewport’s center and belongs to the browser across tabs.
 Input actions share ownership of it, one at a time across tabs; navigation and a policy hold leave
-that ownership free. A page with unresolved input replies waits for them before queueing, and an
-action's timeout bounds its wait for that queue before a full timeout bounds the action. Every sent
+that ownership free. An action first waits for its own page (another operation there, its unresolved
+input replies, its first clock probe) and only then queues for the browser-wide turn, so one slow tab
+never holds the others up. The action's timeout bounds those waits before a full timeout bounds the
+action itself. Every sent
 move updates the position, including a partially cancelled glide. A later viewport clamps the
 starting point to its bounds if necessary.
 

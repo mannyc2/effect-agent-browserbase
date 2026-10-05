@@ -63,6 +63,42 @@ describe("Clock calibration", () => {
     );
   });
 
+  it.effect("keeps the browser's narrower estimate unless a measurement contradicts it", () =>
+    Effect.gen(function* () {
+      const precise = {
+        offsetMillis: 1000,
+        uncertaintyMillis: 1,
+        roundTripMillis: 2,
+        sampledAt: 0,
+      };
+
+      const mapping = Clock.mapping(Option.some(precise));
+
+      const refresh = (offsetMillis: number, uncertaintyMillis: number) =>
+        mapping.refresh(
+          Effect.succeed({
+            offsetMillis,
+            uncertaintyMillis,
+            roundTripMillis: uncertaintyMillis * 2,
+            sampledAt: 1,
+          }),
+        );
+
+      // A probe delayed behind a busy page agrees with the current estimate but says less.
+      assert.deepStrictEqual(yield* refresh(1060, 75), precise);
+      // A failed probe keeps the estimate the browser already holds.
+      assert.deepStrictEqual(yield* mapping.refresh(Effect.fail("busy")), precise);
+      // A no-worse probe is fresher evidence of the same offset.
+      assert.strictEqual((yield* refresh(1000.5, 1)).offsetMillis, 1000.5);
+      // A measurement that cannot contain the current offset means the clocks moved.
+      assert.strictEqual((yield* refresh(1500, 30)).offsetMillis, 1500);
+      assert.strictEqual(
+        (yield* mapping.current(Effect.die("an estimate exists"))).offsetMillis,
+        1500,
+      );
+    }),
+  );
+
   it("ignores invalid probes and cannot calibrate from backward or nonfinite host intervals", () => {
     const invalid = [
       { hostStart: 20, hostEnd: 10, browserTime: 1000 },
@@ -283,6 +319,7 @@ describe("Calibration deadlines", () => {
       Effect.gen(function* () {
         const context = yield* fresh;
         const live = yield* EffectClock.Clock;
+        const entered = Promise.withResolvers<void>();
 
         const ownerClock: EffectClock.Clock = {
           currentTimeMillisUnsafe: () => live.currentTimeMillisUnsafe(),
@@ -291,16 +328,21 @@ describe("Calibration deadlines", () => {
           currentTimeNanos: live.currentTimeNanos,
           monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
           monotonicTimeNanos: live.monotonicTimeNanos,
-          // Only the measurement deadline is shortened; closing keeps its real bound.
+          // Only the measurement deadline is shortened, and only once the allocation under test
+          // has begun: a slow page allocation must not end the measurement before the session
+          // wait this case is about. Closing keeps its real bound.
           sleep: (duration) => {
             const millis = Duration.toMillis(duration);
 
-            return live.sleep(Duration.millis(millis >= 8000 ? millis / 100 : millis));
+            return millis >= 8000
+              ? Effect.promise(() => entered.promise).pipe(
+                  Effect.andThen(live.sleep(Duration.millis(millis / 100))),
+                )
+              : live.sleep(duration);
           },
         };
 
         const gate = Promise.withResolvers<void>();
-        const entered = Promise.withResolvers<void>();
         const pageClosed = Promise.withResolvers<void>();
         const sessionDetached = Promise.withResolvers<void>();
         const createPage = context.newPage.bind(context);
