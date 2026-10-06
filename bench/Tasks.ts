@@ -229,7 +229,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly expected: (page: Page) => Effect.Effect<A, BrowserError | FixtureUnreadable>;
   readonly grade: (answer: A, expected: A) => Grade;
 }): Task => {
-  const prepare = (options: TrialOptions) =>
+  const prepare = (options: TrialOptions & { readonly arm?: Arm | undefined }) =>
     Effect.gen(function* () {
       const page = yield* open(spec.start, options.seed);
 
@@ -276,6 +276,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       const captured = yield* Moment.capture(page, {
         frames: spec.capture.frames,
         since: Duration.millis((spec.capture.windowMillis ?? 5000) + waited),
+        snapshot: Arms.outline(options.arm ?? 5),
       });
 
       // A moment ends with its own fresh screenshot when its newest frame is not demonstrably
@@ -337,10 +338,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
         const { moment, detail, expected } = yield* prepare(options);
 
         const { value, usage: used } = yield* LanguageModel.generateObject({
-          prompt: Prompt.setSystem(
-            Moment.toPrompt(Arms.moment(options.arm ?? 5, moment)),
-            spec.instructions,
-          ),
+          prompt: Prompt.setSystem(Moment.toPrompt(moment), spec.instructions),
           schema: spec.answer,
           objectName: "moment",
         });

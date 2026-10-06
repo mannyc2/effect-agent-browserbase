@@ -281,7 +281,6 @@ describe("understanding evidence", () => {
         if (prompt === undefined) throw new Error("the description prompt is missing");
         assert.strictEqual(pictures(prompt).length, 1);
         assert.include(textOf(prompt), "Spot markets");
-        assert.include(textOf(prompt), "24h");
         assert.notInclude(textOf(prompt), "__bench");
       }),
     );
@@ -469,6 +468,9 @@ describe("understanding evidence", () => {
         assert.isAtLeast(last.receivedAt - first.receivedAt, 500);
         if (name === "navigated") {
           assert.include(textOf(prompt), "navigated to");
+          // The control is named as it was clicked, not by a ref the new page reuses.
+          assert.include(textOf(prompt), 'click button "Play"');
+          assert.notMatch(textOf(prompt), /\be\d+\b/);
 
           const priorClick = events
             .filter((event) => event._tag === "Action" && event.name === "click")

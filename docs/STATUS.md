@@ -30,11 +30,15 @@
   fails closed on input with facts when its judge fails; `Agent.run` provides the task and ends
   after three refusals in a row. The judges are tested with scripted models; `bun run judges` in
   the bench grades them against the corpus, with paid arms only on opt-in.
-- Moments: `Moment.capture` gathers a page's frames, outline and events over a window that can
-  start where the previous moment ended, so consecutive moments neither repeat nor miss an event,
-  and needs only the page. `Moment.toPrompt` lays a moment out as one message for any `effect/ai`
-  call; describing it is the caller's own `generateObject`, `generateText` or `Chat` turn. Pages
-  keep the screencast frames of the last 5 seconds (`frameHistory`), a moment's default window.
+- Moments: `Moment.capture` gathers a page's frames and events over a window that can start where
+  the previous moment ended, so consecutive moments neither repeat nor miss an event, and needs
+  only the page. Its timeline names what each action acted on by role and name, from the
+  `Action`'s `subject`, never by ref. The outline is opt-in (`snapshot: true`): in the first
+  paired run, moments with and without it scored 61/80 each on every task but `navigated`, where
+  the outline's reused refs misled the model, and it doubled the tokens on `quote-dense`.
+  `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call; describing it is
+  the caller's own `generateObject`, `generateText` or `Chat` turn. Pages keep the screencast
+  frames of the last 5 seconds (`frameHistory`), a moment's default window.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor

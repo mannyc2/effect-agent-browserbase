@@ -237,7 +237,10 @@ input of an interrupted action) and delivered within the last 250 ms: a screenca
 changes and can miss a final paint, so a page that stopped changing gets a new capture. `Page.currentFrame` applies the same rule and
 returns the new capture as a `Screenshot`-timed frame. A `Moment`'s last frame comes from it, so a
 stopped capture, a lost final paint or later input never presents older paint as the moment.
-Every operation is recorded as an `Action`, also when its caller interrupts it.
+Every operation is recorded as an `Action`, also when its caller interrupts it. An element or point
+action records its `subject`, and a drag where it ended (`to`): the role, accessible name and tag
+of what it found, read as the input was sent. A ref is reused by later outlines, so read `subject`
+rather than resolving `target` against a later snapshot.
 
 Local launches and new Browserbase sessions measure clock offset and send-to-captured-image delay
 on a private blank page before user scripts or public pages run. `Browser.captureCalibration`

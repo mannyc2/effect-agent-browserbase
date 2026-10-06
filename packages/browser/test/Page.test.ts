@@ -116,6 +116,43 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* page.click(refOf(snapshot, "checkbox", "I agree"));
       yield* page.click(refOf(snapshot, "button", "Submit"));
       assert.strictEqual(yield* text(page, "#outcome"), "Ordered 25 eth (agreed)");
+
+      // Each action records what it acted on by role and name, which outlive the refs.
+      assert.deepStrictEqual(
+        (yield* page.recentEvents).flatMap((event) =>
+          event._tag === "Action" && event.name !== "navigate"
+            ? [[event.name, event.subject?.role, event.subject?.name, event.subject?.tag]]
+            : [],
+        ),
+        [
+          ["type", "textbox", "Amount", "input"],
+          ["select", "combobox", "Coin", "select"],
+          ["click", "checkbox", "I agree", "input"],
+          ["click", "button", "Submit", "button"],
+        ],
+      );
+    }),
+  );
+
+  it.effect("names an editable secret field without the text typed into it", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<div contenteditable="true" role="textbox" autocomplete="one-time-code" title="Code">482913</div>',
+        ),
+      );
+      const snapshot = yield* page.snapshot();
+
+      assert.notInclude(snapshot.text, "482913");
+      yield* page.click(refOf(snapshot, "textbox", "Code"));
+
+      const clicked = (yield* page.recentEvents).findLast(
+        (event) => event._tag === "Action" && event.name === "click",
+      );
+
+      assert.strictEqual(clicked?._tag === "Action" ? clicked.subject?.name : undefined, "Code");
     }),
   );
 
@@ -209,6 +246,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.isAbove(level, 35);
       assert.isBelow(level, 65);
+
+      const drag = (yield* page.recentEvents).find(
+        (event) => event._tag === "Action" && event.name === "drag",
+      );
+
+      assert.deepStrictEqual(
+        drag?._tag === "Action" ? [drag.subject?.name, drag.to?.role] : undefined,
+        ["Level", "slider"],
+      );
     }),
   );
 

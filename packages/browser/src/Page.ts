@@ -48,6 +48,8 @@ export class Zoom extends Schema.Class<Zoom>("effect-browser/Zoom")({
 export class ResolvedTarget extends Schema.Class<ResolvedTarget>("effect-browser/ResolvedTarget")({
   point: Schema.Struct({ x: Schema.Finite, y: Schema.Finite }),
   element: Schema.String,
+  /** The element's lowercase tag name. */
+  tag: Schema.String,
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   cursor: Schema.String,
