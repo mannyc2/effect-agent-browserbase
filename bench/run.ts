@@ -15,7 +15,9 @@ import {
   Effect,
   Exit,
   Layer,
+  Option,
   Ref,
+  Schedule,
   Schema,
   Tracer,
 } from "effect";
@@ -90,14 +92,18 @@ export const trialTimeout = Duration.minutes(10);
 // one that outlives even this fails its trial as infrastructure.
 export const hostedSessionSeconds = 30 * 60;
 
-/** Each hosted trial's browser: a new 1280×720 session that ends at least by its own timeout. */
-export const hostedBrowser = (humanize: boolean) =>
+/**
+ * Each hosted trial's browser: a new 1280×720 session that ends at least by its own timeout, with
+ * `userMetadata` for Browserbase to show with it.
+ */
+export const hostedBrowser = (humanize: boolean, userMetadata?: Readonly<Record<string, string>>) =>
   Browserbase.layer({
     humanize,
     frameHistory,
     session: {
       timeout: hostedSessionSeconds,
       browserSettings: { viewport: { width: 1280, height: 720 } },
+      userMetadata,
     },
   });
 
@@ -158,8 +164,12 @@ interface TrialRecord {
   readonly timing: Timing;
   /** Opening the browser, the model's tool calls and looks at the page, within `seconds`. */
   readonly phases: Trace.Phases;
-  /** A latency run's DevTools commands and round trips, by span; null otherwise. */
+  /** A latency or hosted run's DevTools commands and round trips, by span; null otherwise. */
   readonly protocol: Trace.Protocol | null;
+  /** The fastest round trip to the browser that its clock calibrations measured; null if none ran. */
+  readonly roundTripMillis: number | null;
+  /** A hosted trial's Browserbase region; null otherwise. */
+  readonly region: string | null;
   /** The trial's trace, to find it where spans are exported; null for a trial that never ran. */
   readonly traceId: string | null;
   readonly seconds: number;
@@ -292,16 +302,49 @@ const main = Effect.gen(function* () {
 
   const hosted = options.browser === "browserbase";
 
-  // A trial's browser; a latency run's also records the DevTools commands the trial sends.
-  const browser = (record: (command: Latency.Command) => void) =>
+  const browserbaseClient = BrowserbaseClient.layerConfig().pipe(
+    Layer.provide(FetchHttpClient.layer),
+  );
+
+  // A trial's browser. A latency run's records the DevTools commands the trial sends, and a hosted
+  // run's session carries the trial's `metadata`.
+  const browser = (trial: {
+    readonly record: (command: Latency.Command) => void;
+    readonly metadata: Readonly<Record<string, string>>;
+  }) =>
     hosted
-      ? hostedBrowser(options.humanize).pipe(
-          Layer.provide(BrowserbaseClient.layerConfig()),
-          Layer.provide(FetchHttpClient.layer),
-        )
+      ? hostedBrowser(options.humanize, trial.metadata).pipe(Layer.provide(browserbaseClient))
       : latency !== undefined
-        ? Latency.layer(latency, { humanize: options.humanize, frameHistory }, record)
+        ? Latency.layer(latency, { humanize: options.humanize, frameHistory }, trial.record)
         : Chromium.layer({ humanize: options.humanize, frameHistory });
+
+  // A hosted trial's commands come from Browserbase's log of its session, read once the session
+  // has ended, a few times while it is still empty. Reading it is no part of the trial or its trace.
+  const sessionProtocol = (traced: Trace.Collected, label: string) => {
+    const session = Trace.sessionOf(traced.spans);
+
+    return session === undefined
+      ? Effect.succeed(null)
+      : Effect.gen(function* () {
+          const client = yield* BrowserbaseClient.BrowserbaseClient;
+
+          return yield* client.sessionLogs(session.id);
+        }).pipe(
+          Effect.repeat({
+            until: (logs) => logs.length > 0,
+            times: 3,
+            schedule: Schedule.spaced("2 seconds"),
+          }),
+          Effect.map((logs) => Trace.hosted(traced, logs)),
+          Effect.provide(browserbaseClient),
+          Effect.withTracerEnabled(false),
+          Effect.catch((error) =>
+            Console.error(`${label}: the session's log was not read: ${error.message}`).pipe(
+              Effect.as(null),
+            ),
+          ),
+        );
+  };
 
   // After a create whose outcome is unknown, no further hosted session is requested.
   const hostedHalt = yield* Ref.make(false);
@@ -409,6 +452,8 @@ const main = Effect.gen(function* () {
         timing,
         phases: Trace.noPhases,
         protocol: null,
+        roundTripMillis: null,
+        region: null,
         traceId: null,
         seconds: 0,
       });
@@ -473,10 +518,23 @@ const main = Effect.gen(function* () {
         const exit =
           halted || denied
             ? undefined
-            : yield* isolatedTrial(
-                work,
-                browser((command) => commands.push(command)),
-              ).pipe(
+            : yield* Effect.option(Effect.currentSpan).pipe(
+                Effect.flatMap((span) =>
+                  isolatedTrial(
+                    work,
+                    browser({
+                      record: (command) => commands.push(command),
+                      // Browserbase shows these with the session, to find its trial and trace.
+                      metadata: {
+                        run: stamp,
+                        task: task.name,
+                        trial: String(trial),
+                        ...(arm === null ? {} : { arm: String(arm) }),
+                        ...(Option.isSome(span) ? { traceId: span.value.traceId } : {}),
+                      },
+                    }),
+                  ),
+                ),
                 Effect.raceFirst(workDeadline(trialTimeout, account?.queued ?? Effect.succeed(0))),
                 // A span's status cannot tell a wrong answer from a broken run; its outcome can.
                 Effect.onExit((ended) =>
@@ -523,7 +581,13 @@ const main = Effect.gen(function* () {
 
         // Before the spans are read, so the commands' own spans are among them.
         const protocol =
-          latency === undefined || exit === undefined ? null : Trace.protocol(traced, commands);
+          exit === undefined
+            ? null
+            : latency !== undefined
+              ? Trace.protocol(traced, commands)
+              : hosted
+                ? yield* sessionProtocol(traced, `${task.name} #${trial}`)
+                : null;
 
         const calls = account === undefined ? noCalls : yield* account.calls;
 
@@ -566,6 +630,8 @@ const main = Effect.gen(function* () {
           timing: account === undefined ? noTiming : yield* account.timing,
           phases: exit === undefined ? Trace.noPhases : Trace.phases(traced.spans),
           protocol,
+          roundTripMillis: Trace.roundTripOf(traced.spans),
+          region: Trace.sessionOf(traced.spans)?.region ?? null,
           traceId: exit === undefined ? null : Trace.traceOf(traced.spans),
           seconds,
         };
@@ -639,9 +705,12 @@ const main = Effect.gen(function* () {
 
     if (graded.length > 0)
       yield* Console.log(`${arm === null ? "Time" : `Arm ${arm} time`}: ${breakdown(graded)}`);
-    if (graded.length > 0 && latency !== undefined)
+    const read = graded.filter((record) => record.protocol !== null);
+    const measured = read.flatMap((record) => record.roundTripMillis ?? []);
+
+    if (read.length > 0)
       yield* Console.log(
-        `${arm === null ? "Round trips" : `Arm ${arm} round trips`} at ${latency}ms: ${roundTrips(graded)}`,
+        `${arm === null ? "Round trips" : `Arm ${arm} round trips`}${measured.length === 0 ? "" : `, about ${median(measured).toFixed(0)}ms each`}: ${roundTrips(read)}`,
       );
   }
 

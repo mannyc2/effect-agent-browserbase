@@ -79,7 +79,9 @@ allocated a session nobody can release (no answer, a 5xx or 408 status, or a suc
 did not decode and whose session the client did not release) stops hosted admission: the run
 requests no further session and records the remaining trials as unrun. A refused create (429 or
 another 4xx) allocated nothing and stops nothing. Browserbase time is not part of
-the model budget.
+the model budget. Each session carries the trial's run, task, trial, arm and trace id as user
+metadata, which Browserbase's dashboard shows, and its trace records the session's id and region
+on `Browserbase.open`, so either finds the other.
 The model remains a caller choice. For the research runs, use `openai/gpt-6-luna`; reasoning defaults
 to `medium` for operate tasks and `none` for understand tasks. `--reasoning` overrides both.
 
@@ -111,9 +113,10 @@ error with its closed diagnostic, the call `accounting` (calls, tokens, known do
 reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
 provider requests), `phases` (seconds opening the browser, in the model's tool calls, and looking
 at the page outside them: the agent's observations, an arm's own pictures and outlines, a moment's
-capture), a latency run's `protocol` (see below), the trial's `traceId` and elapsed seconds
-including browser setup and cleanup. The ISO start time is a calendar date; elapsed time uses a
-monotonic clock.
+capture), a latency or hosted run's `protocol` (see below), the fastest round trip to the browser
+its clock calibrations measured (`roundTripMillis`), a hosted trial's Browserbase `region`, the
+trial's `traceId` and elapsed seconds including browser setup and cleanup. The ISO start time is a
+calendar date; elapsed time uses a monotonic clock.
 
 The run ends by saying where graded trials' time went, as means that add up to the mean total:
 model requests, the budget queue, those phases and the rest (the fixture, grading, closing the
@@ -151,7 +154,9 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_TRACES_EXPORTER=otlp bun 
 Each trial is a trace of its own, rooted at a `bench.trial` span with its task, arm, seed, browser
 and model and, once it ends, its status, reason and grade; its `traceId` finds it. Each judged case
 is a `bench.judge` trace. `effect-browser`'s README lists the spans inside. `--record` also keeps
-the trial's spans in `recording.json`, on the recording's host clock.
+the trial's spans in `recording.json`, on the recording's host clock. A hosted trial's spans hold
+its Browserbase session id, on `Browserbase.open` and in the API requests' URLs, so keep recordings
+and exported traces out of commits; a packed replay leaves the spans out.
 
 ### Latency
 
@@ -161,21 +166,38 @@ new hosted session's is. It costs nothing, so hosted round trips can be measured
 sessions; it reproduces neither a hosted browser's network nor its machine.
 
 The proxy also reads the protocol. Each command a trial sends becomes a `CDP <method>` client span
-under the innermost span open when it was sent, lasting until its answer reaches the bench, so a
-trace shows which commands each operation waited on and whether they went one after another. The
-trial's `protocol` counts its commands and round trips, in all and by the name of that span with
-its methods; commands in flight together share a round trip. The run ends with the span names that
-took the most round trips. Attribution is by time alone, so a background command, such as a
-screencast frame's acknowledgement, lands on whatever span was open. Only method names are kept,
-since parameters can carry typed text. The proxy declines the WebSocket compression the bench
-offers, to read the messages; a round trip costs the same, as the proxy adds delay but no bandwidth
-limit.
+from its sending to its answer reaching the bench, under the innermost span open in the middle of
+it, so a trace shows which commands each operation waited on and whether they went one after
+another. The trial's `protocol` counts its commands and round trips, in all and by the name of that
+span with its methods; commands in flight together share a round trip. The run ends with the span
+names that took the most round trips, and about how long one took. Attribution is by time alone: a
+command sent in the background, such as a screencast frame's acknowledgement, or by an operation
+running alongside another, such as a clock calibration during a page's first outline, lands on the
+innermost span open at the time. Only method names are kept, since parameters can carry typed
+text. The proxy declines the WebSocket compression the bench offers, to read the messages; a round
+trip costs the same, as the proxy adds delay but no bandwidth limit.
 
 At 80 ms, a scripted trial took 43 to 91 round trips. Opening the browser took about 3.4 seconds
 and 25 round trips, 20 of them calibrating the fresh context, and a new page about 9 more. A click
 took two (finding its point, then the mouse events together) and a 120 ms settle. A fresh capture
 took six in a row, five of them Playwright's screenshot, so an observation with an outline and a
 capture took about 0.7 seconds.
+
+### Hosted commands
+
+A hosted trial's commands come from Browserbase's log of its session, read once the session has
+ended and again, two seconds apart, up to three more times while it is still empty. Each logged
+command becomes the same `CDP <method>` span and counts in `protocol` the same way, with two
+differences. Browserbase timed it on its own clock, so the bench estimates the offset from page
+script round trips: each `Page.evaluate` span holds one `Runtime.evaluate`, which Browserbase
+handled in its middle, and the offset is where the most such pairs agree (`clockOffsetMillis` in
+`protocol`; null, with no command spans or `bySpan`, when fewer than three do). And a command's span
+covers its time at Browserbase, without the trip there and back, so a command that reached
+Browserbase within half a round trip of the previous answer leaving shares its round trip. The
+client decodes methods and times only; parameters and results stay with Browserbase. A log that
+cannot be read leaves `protocol` null and says so. This has run only against a stand-in for
+Browserbase's API: the first paid run should confirm what the log's times measure and that the log
+holds every command the bench sent.
 
 ## Arms
 
