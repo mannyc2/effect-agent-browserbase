@@ -220,12 +220,13 @@ const setup = Effect.fnUntraced(function* (
 
       return ++sequence;
     },
+    recentEvents: Effect.sync(() => [...track]),
     settings: {
       humanize: options.humanize ?? true,
       actionTimeout: Duration.seconds(30),
       policyTimeout: Duration.seconds(30),
       navigationTimeout: Duration.seconds(30),
-      frameHistory: 1,
+      frameHistory: Duration.seconds(5),
       guard: options.guard,
     },
   });

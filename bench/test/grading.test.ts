@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit, Layer, Stream } from "effect";
+import { Duration, Effect, Exit, Layer, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
@@ -20,7 +20,7 @@ import {
   TumbleTruth,
   truth,
 } from "../Sites.ts";
-import { tasks } from "../Tasks.ts";
+import { frameHistory, tasks } from "../Tasks.ts";
 import { classify } from "../Trial.ts";
 
 /** A model that answers every call with the same parts. */
@@ -60,7 +60,7 @@ const taskNamed = (name: string) => {
 const run = (name: string, model: Layer.Layer<LanguageModel.LanguageModel>) =>
   taskNamed(name)
     .withModel({ seed: 23, onUsage: () => Effect.void })
-    .pipe(Effect.provide(Layer.merge(Chromium.layer({ frameHistory: 1200 }), model)));
+    .pipe(Effect.provide(Layer.merge(Chromium.layer({ frameHistory }), model)));
 
 /** Inspect the actual description request and retained frames without replacing capture. */
 const describeWith = (
@@ -69,7 +69,7 @@ const describeWith = (
   options: {
     readonly seed?: number;
     readonly frameDelayMillis?: number;
-    readonly frameHistory?: number;
+    readonly frameHistory?: Duration.Input;
     /** Lose every screencast frame once this many clicks begin, as a stalled screencast does. */
     readonly dropFramesAfterClicks?: number;
   } = {},
@@ -178,7 +178,7 @@ const describeWith = (
     };
   }).pipe(
     Effect.scoped,
-    Effect.provide(Chromium.layer({ frameHistory: options.frameHistory ?? 1200 })),
+    Effect.provide(Chromium.layer({ frameHistory: options.frameHistory ?? frameHistory })),
   );
 
 const paintTime = (frame: Frame): number => {
@@ -363,7 +363,7 @@ describe("understanding evidence", () => {
           Effect.sync(() => {
             called = true;
           }).pipe(Effect.andThen(order(page))),
-        { frameHistory: 1 },
+        { frameHistory: Duration.millis(1) },
       ).pipe(Effect.flip);
 
       assert.isFalse(called);

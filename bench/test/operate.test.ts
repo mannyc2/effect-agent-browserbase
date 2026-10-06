@@ -8,7 +8,7 @@ import { LanguageModel } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { budgetedClient, ledger } from "../Budget.ts";
-import { tasks } from "../Tasks.ts";
+import { frameHistory, tasks } from "../Tasks.ts";
 import { classify, isolatedTrial } from "../Trial.ts";
 
 const completion = (message: unknown) => ({
@@ -66,7 +66,7 @@ const trade = Effect.fnUntraced(function* (model: string, answers: (request: num
 
   const exit = yield* isolatedTrial(
     task.withModel({ seed: 23, onUsage: () => Effect.void }),
-    Chromium.layer({ frameHistory: 1200 }),
+    Chromium.layer({ frameHistory }),
   ).pipe(Effect.provideService(LanguageModel.LanguageModel, language), Effect.exit);
 
   const calls = yield* account.calls;

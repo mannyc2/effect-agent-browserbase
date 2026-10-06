@@ -25,8 +25,9 @@ so changing concurrency does not change its page data.
 | `navigated`     | understand | Identify the destination URL, title and control that triggered navigation                 |
 
 An operate task gives a model the browser tools (`Agent.run`). An understand task brings the page to
-a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call
-(`Moment.describe`). Capture starts before the scripted setup, and multi-frame tasks check the
+a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call:
+`LanguageModel.generateObject` over `Moment.toPrompt`, with the task's question as the system
+message. Capture starts before the scripted setup, and multi-frame tasks check the
 retained time span as well as the frame count. The final frame must follow the fixture's last visual
 change on the browser clock. A screencast can lose the final paint of a page that then stays
 still, so each fixture paints its settled state once more, and if no frame reaches the barrier the
@@ -34,8 +35,8 @@ final frame is a fresh screenshot with its own capture timing, never a claimed p
 `Moment.capture` also ends with a fresh screenshot whenever its newest frame is not demonstrably
 current (for example on a page that has been still for a while); one taken after the fixture's
 last change was read counts as following it. An
-incomplete capture is an infrastructure failure, before any model call. Bench browsers retain up to 1,200 frames for the
-longest fixture; this does not change the library default. The tumble task selects twelve frames
+incomplete capture is an infrastructure failure, before any model call. Bench browsers keep 30 seconds of frames, for the
+longest fixture's 20-second window and the wait for its final paint; the library keeps 5 seconds. The tumble task selects twelve frames
 to cover its paying cascades, rather than asking the model to count transitions absent from the
 pictures, and its capture is incomplete if two consecutive frames are 1,800 ms (one cascade) or
 more apart. The jump task's first frame must precede the jump, and its control's frames must all
@@ -124,21 +125,19 @@ status:
   Such output is a graded failure (`reason: "invalid-output"`) and stops nothing else.
 - `infrastructure-failed`: something other than the answer failed: incomplete or stale capture
   evidence, the browser, the hosted session, the provider, a charge above its bound, a deadline or
-  a defect. A trial has 10 minutes, and a comparison arm 10 minutes, of work: time queued for
+  a defect. A trial has 10 minutes of work: time queued for
   budget admission depends on the budget and on other units, so it does not count. These are never counted as wrong answers. A request that ends without a decoded
   response (a transport failure, or a provider answer that does not decode) may still have run
-  and been billed, so its trial or arm makes no further model call: an agent loop cannot replay
+  and been billed, so its trial makes no further model call: an agent loop cannot replay
   it.
 - `denied`: the budget refused admission, before the browser started or at a later call.
 - `unrun`: the unit never reached an outcome, because the run stopped or was interrupted. Once
-  the ledger stops admitting calls (a charge above its bound, or the comparison's stop after an
-  infrastructure failure, an unresolved charge or a broken result sink), it keeps the first
-  reason, and every later unit in both runners is `unrun` with that reason, never `denied`.
+  the ledger stops admitting calls, after a charge above its bound, it keeps the first reason,
+  and every later unit is `unrun` with that reason, never `denied`.
 
 An interrupted run (SIGINT, or an interrupted fiber) still records every unit it scheduled: those
 without an outcome are `unrun` with reason `interrupted` and keep what their dispatched calls
-spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside the trials,
-and the comparison writes `summary.json` marked `interrupted`. Playwright exits the process on
+spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside the trials. Playwright exits the process on
 SIGINT once its browsers close, so these records are written synchronously when the signal
 arrives.
 
@@ -146,68 +145,7 @@ arrives.
 infrastructure failures, denials and unrun units. A run exits successfully only when every unit was
 graded with settled charges; a free run also needs every answer to pass.
 
-## Paired quote comparison
-
-`bun run understand` runs a free rehearsal through the pinned OpenRouter adapter using an
-in-memory response that reads the requested row from the visible facts. Its results are marked `dry-run`; they test
-the harness and make no model-accuracy claim.
-
-The comparison prepares one captured moment for each seeded quote fixture and reuses it across
-three arms. A uses the shipping `Moment.describe` prompt, frames, outline and timeline. B uses
-the historical on-air representation: the latest image resized to 640×360 plus the first 4,000
-UTF-8 bytes of visible body text, with no outline or timeline. The `facts` arm uses the identical
-A moment and question, adding conclusions computed from every visible quote table through the
-existing instructions option: each row's values as numbers keyed by its table caption, row asset
-and exact column header. The facts do not pick the requested table, row or period; binding them
-remains the model's task, as it would be for a caller who computes page facts without knowing the
-question. The library's prompt and API stay unchanged.
-
-A native paint barrier and stable visible evidence bracket the shared capture. All arms identify
-the focused asset from the visible page heading. The question names the desired
-table, without supplying the expected ticker or numeric answers. Fact provenance binds the page,
-URL, observation time, table caption, row ticker and exact column headers to the displayed cells.
-The hidden fixture state is used only for grading. Ambiguous or changed evidence fails before a
-model call; there is no automatic validator retry. Image resizing uses Chromium's high-quality
-canvas filter, so B reproduces the old payload dimensions and text limit rather than claiming
-bit-for-bit equivalence with the research prototype's Lanczos filter.
-
-The manifest records the source revision and the pinned endpoint before any call. The default
-manifest has 20 dense fixtures and 10 easy controls, with all three arms per case:
-90 calls in a paid run. Arm order is counterbalanced: every complete block of six consecutive pairs
-of a task uses each of the six orders once, so within those blocks each arm runs first, second and
-third equally often. The default 20 dense pairs and 10 controls are not multiples of six, so their
-last partial block is not balanced; the manifest and summary report the realized count of each arm
-at each position per task, and each record notes its arm's position. Cases run concurrently, with
-one browser per case and the same captured evidence for its arms. A shared admission ledger bounds
-all model calls. An infrastructure failure or an unresolved charge stops new admissions; already
-dispatched requests still settle, and every unrun arm receives a record. A graded answer, including
-malformed model output, remains a comparison result and stops nothing.
-
-A paid run requires an explicit model and the existing live opt-in, separately from this free
-rehearsal:
-
-```sh
-EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
-  bun run understand -- --model <openrouter-model-id> --max-usd 1 --concurrency 4 --seed 1
-```
-
-The results distinguish graded mistakes from infrastructure failures and retain paired outcomes,
-provider request latency (reported apart from time queued for budget admission), token usage and confirmed or unresolved charges, reported separately for dense fixtures
-and easy controls. Each case also saves its shared image, resized baseline and visible evidence
-for inspecting a result without another model call. Every displayed table, row and period has a
-distinct value, so each graded answer's numbers are traced to the cells they were read from:
-`bindingErrors` counts answers with a value from another table, another row of the requested
-table, or another period (1h, 24h or 7d) of the requested row, reported separately, while a
-number that matches no cell is a misread (`unsourced`) and a wrong ticker, table or header text is
-a label error. The summary evaluates the pre-registered rules on the dense fixtures from these
-counts, with `met: null` where there is no graded evidence. The improvement over A has no
-registered threshold, so it reports its paired wins and losses with `met: null`. First establish that B makes binding
-mistakes on the dense fixture, then compare A with `facts`. Beating B alone cannot establish that
-facts improve the shipping implementation; an already-perfect A supplies no evidence to add an
-API. Keep the original quality, cost and latency targets in view and report the limits of this
-small sample. No public facts input is added without a measured benefit.
-
-Both runners retain only closed failure categories and safe response-shape counts for provider
+The runner retains only closed failure categories and safe response-shape counts for provider
 errors. They omit response text, arbitrary descriptions and provider identifiers. These categories
 separate response conversion from missing text, invalid JSON and a mismatched answer schema while
 preserving charges that arrived before a failure.

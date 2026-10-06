@@ -22,7 +22,8 @@ npx playwright-core install chromium
 | `BrowserError` | Typed failures, saying whether input reached the page before the failure             |
 | `Tools`        | The `effect/ai` browser toolkit                                                      |
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
-| `Moment`       | Capture what a page showed around a point in time, and describe it in one model call |
+| `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
+| `Moment`       | What a page showed and what happened on it over a window, laid out as a model prompt |
 
 `Agent.run` batches each turn's tool calls in order, halting on the first failure or a completed
 `done` / `give_up`. Skipped calls receive a not-executed result. A malformed `done` answer can
@@ -259,7 +260,8 @@ joins whatever is running, and one whose explicit options differ fails with `Inv
 than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
 observed sequence gaps add to `subscriberMissed`. Late subscribers do not count earlier history.
 ACKs are independent of reader speed and bounded to 32 unresolved replies; exhaustion ends capture
-with a typed error. Frame history remains bounded by `frameHistory`. Capture stops when its last
+with a typed error. `recentFrames` keeps the frames painted within `frameHistory` of the newest,
+5 seconds by default, a moment's default window. Capture stops when its last
 reader leaves; a stop whose reply is late is never resent, and the next capture waits for it (up
 to 2 s per attempt) rather than disabling capture for the page.
 

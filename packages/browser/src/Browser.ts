@@ -54,8 +54,11 @@ export interface Options {
   readonly actionTimeout?: Duration.Input | undefined;
   /** Bound on each navigation; finite and positive. Defaults to 30 seconds. */
   readonly navigationTimeout?: Duration.Input | undefined;
-  /** Screencast frames each page keeps for `recentFrames`. Defaults to 60. */
-  readonly frameHistory?: number | undefined;
+  /**
+   * How long each page keeps screencast frames for `recentFrames`, measured back from the newest;
+   * finite and positive. Defaults to 5 seconds, a moment's default window.
+   */
+  readonly frameHistory?: Duration.Input | undefined;
   /** Events retained for replay and `recentEvents`. A positive safe integer, defaulting to 4,096. */
   readonly eventHistory?: number | undefined;
   /** Allow, deny or hold each input or navigation before it reaches the page. Defaults to allow. */
@@ -145,17 +148,10 @@ export const make = Effect.fn("Browser.make")(function* (
       options.navigationTimeout,
       Duration.seconds(30),
     ),
-    frameHistory: options.frameHistory ?? 60,
+    frameHistory: yield* bound("frameHistory", options.frameHistory, Duration.seconds(5)),
     guard: options.guard,
     policyTimeout: yield* bound("policyTimeout", options.policyTimeout, Duration.minutes(5)),
   };
-
-  if (!Number.isSafeInteger(settings.frameHistory) || settings.frameHistory < 1)
-    return yield* new BrowserError({
-      operation: "make",
-      reason: new InvalidRequest({ detail: "frameHistory must be a positive safe integer" }),
-      dispatched: false,
-    });
 
   const eventHistory = options.eventHistory ?? 4096;
 
@@ -191,6 +187,14 @@ export const make = Effect.fn("Browser.make")(function* (
 
   yield* Effect.addFinalizer(() => timeline.close);
   const publish = timeline.publish;
+
+  const recentEvents = (page: string) =>
+    timeline.recent.pipe(
+      Effect.map((records) =>
+        records.flatMap((record) => (record.event.page === page ? [record.event] : [])),
+      ),
+    );
+
   // One visible pointer belongs to the browser, including when input changes tabs.
   const pointer = yield* Ref.make(Option.none<Page.Point>());
   const inputLock = yield* Semaphore.make(1);
@@ -254,6 +258,7 @@ export const make = Effect.fn("Browser.make")(function* (
             clock,
             mapping,
             publish,
+            recentEvents: recentEvents(id),
             pointer,
             inputLock,
           });

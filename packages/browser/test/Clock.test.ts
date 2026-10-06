@@ -97,7 +97,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       Effect.gen(function* () {
         const live = yield* Clock.Clock;
         const time = { wall: 1_900_000_000_000, monotonic: 5000 };
-        const { browser, page } = yield* setup(controlledClock(live, time));
+        const { page } = yield* setup(controlledClock(live, time));
 
         yield* page.goto((yield* Site).url("/form"));
 
@@ -118,8 +118,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         time.monotonic = 5500;
         const callerTime = { wall: 1_800_000_000_000, monotonic: 900_000 };
 
-        const capture = Moment.capture(page, { windowMillis: 1000 }).pipe(
-          Effect.provideService(Browser, browser),
+        const capture = Moment.capture(page, { since: Duration.seconds(1) }).pipe(
           Effect.provideService(Clock.Clock, controlledClock(live, callerTime)),
         );
 
@@ -133,7 +132,16 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(moment.frames[1]?.hostTime, 5500);
         assert.isAbove(moment.events.length, 0);
         assert.isTrue(moment.events.every((event) => event.at === 5000));
-        assert.include(moment.timeline, "-0.5s navigated");
+        assert.include(
+          Moment.toPrompt(moment)
+            .content.flatMap((message) =>
+              message.role === "user"
+                ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+                : [],
+            )
+            .join("\n"),
+          "-0.5s navigated",
+        );
 
         time.monotonic = 7000;
         const later = yield* capture;

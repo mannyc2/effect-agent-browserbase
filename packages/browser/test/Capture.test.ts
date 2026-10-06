@@ -118,7 +118,7 @@ const setup = Effect.fnUntraced(function* (controlled = false) {
   const browser = yield* makeBrowser(
     context,
     { id: "capture-test", provider: "test" },
-    { frameHistory: 3 },
+    { frameHistory: Duration.millis(300) },
   );
 
   const page = yield* browser.page;
@@ -556,9 +556,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.isAbove(retained.length, 1);
         yield* page.click({ x: 50, y: 30 });
 
-        const moment = yield* Moment.capture(page, { frames: 2 }).pipe(
-          Effect.provideService(Browser, browser),
-        );
+        const moment = yield* Moment.capture(page, { frames: 2 });
 
         const last = moment.frames.at(-1);
 
@@ -669,6 +667,29 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(count(calls, "Page.startScreencast"), 1);
         assert.strictEqual(count(calls, "Page.stopScreencast"), 1);
         assert.strictEqual(count(calls, "Page.screencastFrameAck"), stats.received);
+      }),
+    );
+
+    it.effect("keeps the frames painted within frameHistory of the newest", () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup(true);
+
+        const collect = yield* fixture.page
+          .screencast()
+          .pipe(Stream.take(4), Stream.runCollect, Effect.forkChild);
+
+        const template = yield* fixture.template;
+        const base = (template.metadata.timestamp ?? 0) * 1000 - 2000;
+
+        for (const offset of [0, 150, 250, 400])
+          yield* Effect.sync(() => fixture.inject(base + offset));
+        yield* Fiber.join(collect);
+
+        // The fixture keeps 300 ms, so only the first paint is too old once the last arrives.
+        assert.deepStrictEqual(
+          (yield* fixture.page.recentFrames).map((frame) => frame.timestamp),
+          [base + 150, base + 250, base + 400],
+        );
       }),
     );
 
@@ -1030,9 +1051,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           }),
         );
 
-        const moment = yield* Moment.capture(fixture.page, { windowMillis: 100 }).pipe(
-          Effect.provideService(Browser, fixture.browser),
-        );
+        const moment = yield* Moment.capture(fixture.page, { since: Duration.millis(100) });
 
         const image = moment.frames[0];
 

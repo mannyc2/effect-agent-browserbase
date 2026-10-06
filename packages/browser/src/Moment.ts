@@ -1,90 +1,54 @@
 /**
- * What a page showed, and what happened on it, around one point in time.
+ * What a page showed, and what happened on it, over a window of time.
  *
- * `capture` gathers screencast frames from the last few seconds, a viewport snapshot and the
- * browser's events over the same window. `describe` gives all of it to a vision model in one call
- * and returns a structured account: by default a `Description`, or any schema the caller passes,
- * such as one with a field for a video prompt.
+ * `capture` gathers a page's screencast frames over a window, its snapshot at the end and its
+ * events in between. `toPrompt` turns a moment into one user message for any `effect/ai` call: a
+ * structured answer from `LanguageModel.generateObject`, a caption from `generateText`, or one
+ * turn of a `Chat` that follows moment after moment.
  *
- * Frames come from a running screencast. The last frame is the page now: the newest retained frame
- * only while `Page.currentFrame` holds it current, else a new screenshot timed by its capture.
+ * Frames come from a running screencast, as far back as the browser's `frameHistory` keeps them.
+ * The last frame is the page now: the newest frame while `Page.currentFrame` holds it current,
+ * else a new screenshot timed by its capture.
  *
  * @since 0.3.0
  */
-import { Effect, Schema } from "effect";
-import { type AiError, LanguageModel, Prompt } from "effect/ai";
+import { Duration, Effect, Option, Schema } from "effect";
+import { Prompt } from "effect/ai";
 
-import { Browser } from "./Browser.ts";
+import { BrowserError, InvalidRequest } from "./BrowserError.ts";
 import { BrowserEvent, TrackEvent } from "./BrowserEvent.ts";
 import { Frame } from "./Frame.ts";
-import * as Usage from "./internal/usage.ts";
 import type * as Page from "./Page.ts";
-import { Snapshot } from "./Snapshot.ts";
+import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
 const isTrackEvent = Schema.is(TrackEvent);
 
 export class Moment extends Schema.Class<Moment>("effect-browser/Moment")({
-  /** Host monotonic milliseconds on the owning browser’s clock. */
-  at: Schema.Finite,
   page: Schema.String,
-  /** Oldest first; the last frame is the page as it was at `at`. */
+  /** Where the window starts, in host monotonic milliseconds on the owning browser’s clock. */
+  from: Schema.Finite,
+  /** Where it ends: the time of the last frame. */
+  at: Schema.Finite,
+  /** Oldest first; the last frame is the page at `at`. */
   frames: Schema.Array(Frame),
-  snapshot: Snapshot,
-  /** The page’s events in the window, oldest first, without the input presentation track. */
+  /** The page at the end of the window, unless the capture left it out. */
+  snapshot: Schema.optional(Snapshot),
+  /** The page’s events after `from`, up to `at`, oldest first, without the input presentation track. */
   events: Schema.Array(BrowserEvent),
-}) {
-  /** The events as lines of text, timed relative to `at`. */
-  get timeline(): string {
-    // A navigation that worked also appears as `Navigated`, which covers redirects and in-page moves.
-    const shown = this.events
-      .filter((event) => !isTrackEvent(event))
-      .filter(
-        (event) =>
-          !(
-            event._tag === "Action" &&
-            event.ok &&
-            ["navigate", "back", "reload"].includes(event.name)
-          ),
-      );
+}) {}
 
-    const lines = shown.map((event) => {
-      const when = `${((event.at - this.at) / 1000).toFixed(1)}s`;
-
-      switch (event._tag) {
-        case "Action": {
-          const target =
-            event.target ??
-            (event.x === undefined
-              ? ""
-              : `(${Math.round(event.x)}, ${event.y === undefined ? "?" : Math.round(event.y)})`);
-
-          const text = event.text === undefined ? "" : ` ${JSON.stringify(event.text)}`;
-          const outcome = event.ok ? "" : ` (failed: ${event.error ?? "unknown"})`;
-
-          return `${when} ${event.name} ${target}${text}${outcome}`.replace(/\s+/g, " ").trim();
-        }
-        case "Navigated":
-          return `${when} navigated to ${event.url}`;
-        case "PageOpened":
-          return `${when} a tab opened at ${event.url}`;
-        case "PageClosed":
-          return `${when} the tab closed`;
-        case "DialogShown":
-          return `${when} a ${event.kind} dialog said ${JSON.stringify(event.message)}`;
-      }
-    });
-
-    return lines.length === 0 ? "(nothing happened in the window)" : lines.join("\n");
-  }
-}
+const isMoment = Schema.is(Moment);
 
 export interface CaptureOptions {
-  /** How far back to look. Defaults to 5 seconds. */
-  readonly windowMillis?: number | undefined;
-  /** Frames to keep, spread evenly over the window and ending with the newest. Defaults to 2. */
+  /**
+   * Where the window starts: a previous moment, so that consecutive moments neither repeat nor
+   * miss an event, or how far back from the last frame. Defaults to 5 seconds.
+   */
+  readonly since?: Moment | Duration.Input | undefined;
+  /** Frames to keep, at least 1, spread over the window and ending with the page now. Defaults to 2. */
   readonly frames?: number | undefined;
-  /** Bound on the snapshot. Defaults to 4,000 characters. */
-  readonly snapshotChars?: number | undefined;
+  /** The snapshot's options, or `false` to leave it out. Defaults to 4,000 characters. */
+  readonly snapshot?: SnapshotOptions | false | undefined;
 }
 
 /** Pick `count` frames spread evenly over `frames`, always including the last. */
@@ -98,91 +62,139 @@ const spread = (frames: ReadonlyArray<Frame>, count: number): ReadonlyArray<Fram
   );
 };
 
+/** Where a window that ends at `at` starts; undefined for a negative or unbounded duration. */
+const startOf = (since: Moment | Duration.Input): ((at: number) => number) | undefined => {
+  if (isMoment(since)) return () => since.at;
+
+  const millis = Number.isNaN(since)
+    ? Number.NaN
+    : Option.match(Duration.fromInput(since), {
+        onNone: () => Number.NaN,
+        onSome: Duration.toMillis,
+      });
+
+  return Number.isFinite(millis) && millis >= 0 ? (at) => at - millis : undefined;
+};
+
+const invalid = (detail: string) =>
+  new BrowserError({
+    operation: "moment",
+    reason: new InvalidRequest({ detail }),
+    dispatched: false,
+  });
+
 export const capture = Effect.fn("Moment.capture")(function* (
   page: Page.Page,
   options: CaptureOptions = {},
 ) {
-  const browser = yield* Browser;
-  const at = yield* browser.now;
-  const since = at - (options.windowMillis ?? 5000);
+  const count = options.frames ?? 2;
 
+  if (!Number.isSafeInteger(count) || count < 1)
+    return yield* invalid("frames must be a positive safe integer");
+  const start = startOf(options.since ?? Duration.seconds(5));
+
+  if (start === undefined)
+    return yield* invalid("since must be a moment or a finite duration that is not negative");
+
+  // The picture and the outline each take a round trip to the page, so they are taken together.
+  const { current, snapshot } = yield* Effect.all(
+    {
+      current: page.currentFrame,
+      snapshot:
+        options.snapshot === false
+          ? Effect.void
+          : page.snapshot({ maxChars: 4000, ...options.snapshot }),
+    },
+    { concurrency: 2 },
+  );
+
+  const at = current.hostTime;
+  const from = start(at);
+
+  // The selection spans the whole window, so a two-frame moment still begins where the window does.
   const recent = (yield* page.recentFrames).filter(
-    (frame) => frame.hostTime >= since && frame.hostTime <= at,
+    (frame) => frame !== current && frame.hostTime >= from && frame.hostTime <= at,
   );
 
-  // The moment itself must show the page now. A retained frame qualifies only while it is current:
-  // its capture may have stopped, missed a final paint, or been followed by input. Otherwise a new
-  // screenshot, timed by its own capture interval, is the moment. Either way the selection spans
-  // the whole window, so a two-frame moment still begins where the window does.
-  const current = yield* page.currentFrame;
-
-  const frames = spread(
-    recent.at(-1) === current ? recent : [...recent.filter((frame) => frame !== current), current],
-    options.frames ?? 2,
+  const events = (yield* page.recentEvents).filter(
+    (event) => event.at > from && event.at <= at && !isTrackEvent(event),
   );
 
-  const snapshot = yield* page.snapshot({ maxChars: options.snapshotChars ?? 4000 });
-
-  const events = (yield* browser.recentEvents).filter(
-    (event) =>
-      event.at >= since && !isTrackEvent(event) && "page" in event && event.page === page.id,
-  );
-
-  return new Moment({ at, page: page.id, frames, snapshot, events });
+  return new Moment({
+    page: page.id,
+    from,
+    at,
+    frames: spread([...recent, current], count),
+    snapshot: snapshot ?? undefined,
+    events,
+  });
 });
 
-export class Description extends Schema.Class<Description>("effect-browser/Description")({
-  summary: Schema.String.annotate({
-    description: "One or two sentences: what the screen shows and what is happening on it",
-  }),
-  activity: Schema.String.annotate({
-    description: "What the person or agent at the browser is doing right now",
-  }),
-  change: Schema.String.annotate({
-    description: "What changed over the frames and events, or 'nothing'",
-  }),
-  subjects: Schema.Array(Schema.String).annotate({
-    description: "The most important things on screen, most prominent first",
-  }),
-  mood: Schema.String.annotate({
-    description: "The feel of the moment, such as tense, celebratory or calm",
-  }),
-}) {}
+const seconds = (moment: Moment, at: number) => `${((at - moment.at) / 1000).toFixed(1)}s`;
 
-export interface DescribeOptions {
-  /** What the description is for, and anything to pay special attention to. */
-  readonly instructions?: string | undefined;
-}
+/** The events as lines of text, timed in seconds before the moment. */
+const timeline = (moment: Moment): ReadonlyArray<string> =>
+  moment.events.flatMap((event) => {
+    // The input presentation track shows how input looked, not what it did.
+    if (isTrackEvent(event)) return [];
+    const when = seconds(moment, event.at);
 
-const prompt = (moment: Moment, instructions: string | undefined): Prompt.Prompt => {
-  const last = moment.frames.length - 1;
+    switch (event._tag) {
+      case "Action": {
+        // A navigation that worked also appears as `Navigated`, which covers redirects and in-page moves.
+        if (event.ok && ["navigate", "back", "reload"].includes(event.name)) return [];
+
+        const target =
+          event.target ??
+          (event.x === undefined
+            ? ""
+            : `(${Math.round(event.x)}, ${event.y === undefined ? "?" : Math.round(event.y)})`);
+
+        const text = event.text === undefined ? "" : ` ${JSON.stringify(event.text)}`;
+        const outcome = event.ok ? "" : ` (failed: ${event.error ?? "unknown"})`;
+
+        return [`${when} ${event.name} ${target}${text}${outcome}`.replace(/\s+/g, " ").trim()];
+      }
+      case "Navigated":
+        return [`${when} navigated to ${event.url}`];
+      case "PageOpened":
+        return [`${when} a tab opened at ${event.url}`];
+      case "PageClosed":
+        return [`${when} the tab closed`];
+      case "DialogShown":
+        return [`${when} a dialog (${event.kind}) said ${JSON.stringify(event.message)}`];
+    }
+  });
+
+/**
+ * The moment as one user message: the page's outline, a timeline of its events, and its frames
+ * captioned with their times, the last one "the moment". Give a model its task with
+ * `Prompt.setSystem`, and add what the caller knows about the page as more text.
+ */
+export const toPrompt = (moment: Moment): Prompt.Prompt => {
+  const events = timeline(moment);
+  const count = moment.frames.length;
+  const last = count - 1;
 
   return Prompt.fromMessages([
-    Prompt.makeMessage("system", {
-      content: [
-        "You describe one moment of a browser session from screenshots, the page's text and a timeline of what was done.",
-        "Describe only what the material shows. Prefer concrete details: numbers, names, colours, positions and motion.",
-        ...(instructions === undefined ? [] : [instructions]),
-      ].join("\n"),
-    }),
     Prompt.makeMessage("user", {
       content: [
         Prompt.makePart("text", {
           text: [
-            moment.snapshot.rendered,
+            "One moment of a browser session. Rely only on what this material shows, and prefer concrete details: numbers, names, colours, positions and motion.",
             "",
-            "Timeline (seconds before the moment):",
-            moment.timeline,
+            ...(moment.snapshot === undefined ? [] : [moment.snapshot.rendered, ""]),
+            `Timeline (seconds before the moment, over ${((moment.at - moment.from) / 1000).toFixed(1)}s):`,
+            events.length === 0 ? "(nothing happened in the window)" : events.join("\n"),
             "",
-            `${moment.frames.length} screenshot${moment.frames.length === 1 ? "" : "s"} follow, oldest first; the last one is the moment itself.`,
+            count === 1
+              ? "One screenshot follows: the moment itself."
+              : `${count} screenshots follow, oldest first; the last one is the moment itself.`,
           ].join("\n"),
         }),
         ...moment.frames.flatMap((frame, index) => [
           Prompt.makePart("text", {
-            text:
-              index === last
-                ? "The moment:"
-                : `${((frame.hostTime - moment.at) / 1000).toFixed(1)}s:`,
+            text: index === last ? "The moment:" : `${seconds(moment, frame.hostTime)}:`,
           }),
           Prompt.makePart("file", { mediaType: "image/jpeg", data: frame.data }),
         ]),
@@ -190,40 +202,3 @@ const prompt = (moment: Moment, instructions: string | undefined): Prompt.Prompt
     }),
   ]);
 };
-
-/** A model's account of a moment, and what the call cost. */
-export interface Described<A> {
-  readonly value: A;
-  readonly usage: Usage.Usage;
-}
-
-/** Describe a moment as a `Description`. */
-export function describe(
-  moment: Moment,
-  options?: DescribeOptions,
-): Effect.Effect<Described<Description>, AiError.AiError, LanguageModel.LanguageModel>;
-
-/** Describe a moment in the shape of `schema`. */
-export function describe<A, I extends Record<string, unknown>>(
-  moment: Moment,
-  options: DescribeOptions & { readonly schema: Schema.Codec<A, I> },
-): Effect.Effect<Described<A>, AiError.AiError, LanguageModel.LanguageModel>;
-
-export function describe(
-  moment: Moment,
-  options: DescribeOptions & {
-    readonly schema?: Schema.Codec<unknown, Record<string, unknown>>;
-  } = {},
-) {
-  return LanguageModel.generateObject({
-    prompt: prompt(moment, options.instructions),
-    schema: options.schema ?? Description,
-    objectName: "moment",
-  }).pipe(
-    Effect.map((response) => ({
-      value: response.value,
-      usage: Usage.add(Usage.empty, response.usage),
-    })),
-    Effect.withSpan("Moment.describe"),
-  );
-}

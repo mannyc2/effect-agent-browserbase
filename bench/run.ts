@@ -33,7 +33,7 @@ import {
   type Timing,
 } from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
-import { type Task, tasks } from "./Tasks.ts";
+import { frameHistory, type Task, tasks } from "./Tasks.ts";
 import {
   type Classification,
   classify,
@@ -79,7 +79,7 @@ export const hostedSessionSeconds = 30 * 60;
 export const hostedBrowser = (humanize: boolean) =>
   Browserbase.layer({
     humanize,
-    frameHistory: 1200,
+    frameHistory,
     session: {
       timeout: hostedSessionSeconds,
       browserSettings: { viewport: { width: 1280, height: 720 } },
@@ -199,7 +199,7 @@ const main = Effect.gen(function* () {
         Layer.provide(BrowserbaseClient.layerConfig()),
         Layer.provide(FetchHttpClient.layer),
       )
-    : Chromium.layer({ humanize: options.humanize, frameHistory: 1200 });
+    : Chromium.layer({ humanize: options.humanize, frameHistory });
 
   // After a create whose outcome is unknown, no further hosted session is requested.
   const hostedHalt = yield* Ref.make(false);

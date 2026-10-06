@@ -19,7 +19,8 @@ interface Options {
   readonly cdp: CDPSession;
   readonly clock: Clock.Clock;
   readonly calibrate: Effect.Effect<Estimate, BrowserError>;
-  readonly frameHistory: number;
+  /** How long frames are kept, measured back from the newest. */
+  readonly frameHistory: Duration.Duration;
   /** The viewport in CSS pixels; a capture is scaled to fit it, as screenshots are. */
   readonly viewport: Effect.Effect<Size, BrowserError>;
   readonly imageSize: (data: Uint8Array) => Size | undefined;
@@ -77,6 +78,7 @@ export const make = (options: Options) =>
     let unsettledStop: Promise<void> | undefined;
     let latest = Option.none<Frame>();
     let history: ReadonlyArray<Frame> = [];
+    const keepMillis = Duration.toMillis(options.frameHistory);
     let received = 0;
     let accepted = 0;
     let outOfOrder = 0;
@@ -293,8 +295,10 @@ export const make = (options: Options) =>
                 created.predecessor = timestamp;
                 accepted++;
                 latest = Option.some(frame);
-                history =
-                  options.frameHistory <= 0 ? [] : [...history, frame].slice(-options.frameHistory);
+                history = [
+                  ...history.filter((kept) => kept.hostTime >= frame.hostTime - keepMillis),
+                  frame,
+                ];
                 for (const subscriber of created.subscribers)
                   Queue.offerUnsafe(subscriber, { _tag: "Frame", sequence: accepted, frame });
               },

@@ -6,13 +6,13 @@ import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 
 import { MarketTruth, origin, QuoteTruth, routes, serve, truth } from "../Sites.ts";
-import { tasks } from "../Tasks.ts";
+import { frameHistory, tasks } from "../Tasks.ts";
 
 describe("scripted solutions", () => {
   for (const task of tasks) {
     it.live(task.name, () =>
       task.scripted({ seed: 23 }).pipe(
-        Effect.provide(Chromium.layer({ frameHistory: 1200 })),
+        Effect.provide(Chromium.layer({ frameHistory })),
         Effect.map((outcome) => assert.isTrue(outcome.pass, outcome.detail)),
       ),
     );

@@ -138,6 +138,8 @@ export interface MakeOptions {
   readonly pointer: Ref.Ref<Option.Option<Point>>;
   readonly inputLock: Semaphore.Semaphore;
   readonly publish: (event: BrowserEvent) => number;
+  /** This page's retained events, oldest first. */
+  readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
 }
 
 type MouseEvent = {
@@ -2115,6 +2117,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     captureStats: capture.stats,
     latestFrame: capture.latest,
     recentFrames: capture.recent,
+    recentEvents: options.recentEvents,
   };
 
   return page;
