@@ -71,6 +71,24 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("Invali
   }
 }
 
+/** The input policy refused the action before any input was sent. */
+export class PolicyDenied extends Schema.TaggedError<PolicyDenied>()("PolicyDenied", {
+  detail: Schema.String,
+}) {
+  override get message() {
+    return `the input policy denied this action: ${this.detail}`;
+  }
+}
+
+/** The input policy did not release its hold within its own bound. */
+export class PolicyTimeout extends Schema.TaggedError<PolicyTimeout>()("PolicyTimeout", {
+  millis: Schema.Finite,
+}) {
+  override get message() {
+    return `the input policy did not allow this action within ${this.millis} ms`;
+  }
+}
+
 /** The browser, the connection or the provider failed in a way the other reasons do not cover. */
 export class Failed extends Schema.TaggedError<Failed>()("Failed", {
   detail: Schema.String,
@@ -88,6 +106,8 @@ export const Reason = Schema.Union([
   NavigationFailed,
   Closed,
   InvalidRequest,
+  PolicyDenied,
+  PolicyTimeout,
   Failed,
 ]);
 

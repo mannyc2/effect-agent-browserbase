@@ -105,9 +105,13 @@ const watch = Effect.gen(function* () {
   origin; clicks still use viewport coordinates. A batch can request at most eight crops.
 - Pictures go to the model in a user message after the tool results. Only the latest few stay in
   the conversation, and older ones are replaced several at a time, so the prompt cache keeps working.
-- `Browser.Options.guard` sees every input before it reaches the page and can refuse it, for
-  example to keep an agent from placing a bet. `humanize` moves the pointer along curves and types
-  at a human pace for watched sessions.
+- `Browser.Options.guard` checks input and navigation, including hover, scroll and a new tab's URL.
+  It receives inferred classifications for form submissions, purchases, deletion, confirmation,
+  external-origin destinations, downloads and uploads. Its effect succeeds to allow, fails with
+  `PolicyDenied` to deny, or waits for an external signal to hold. Holds have a separate
+  `policyTimeout` (five minutes by default) and leave the page unlocked. Changed targets fail before
+  input when a hold resumes. With no guard, every action is allowed.
+- `humanize` moves the pointer along curves and types at a human pace for watched sessions.
 - `additionalTools` accepts an `effect/ai` toolkit, merged after the browser and completion tools.
   Supply its handlers through their usual layer; on a name clash the added toolkit wins. The same
   batch halting applies to those tools.

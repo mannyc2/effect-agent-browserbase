@@ -2,7 +2,7 @@ import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Fiber, Layer, Stream } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
-import { BrowserError, Failed } from "../src/BrowserError.ts";
+import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Image as BrowserImage } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
@@ -454,13 +454,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const guarded = Chromium.layer({
         guard: (request) =>
           request.element?.includes("Submit") === true
-            ? Effect.fail(
-                new BrowserError({
-                  operation: request.action,
-                  reason: new Failed({ detail: "not allowed" }),
-                  dispatched: false,
-                }),
-              )
+            ? Effect.fail(new PolicyDenied({ detail: "not allowed" }))
             : Effect.void,
       });
 
@@ -469,7 +463,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         const snapshot = yield* page.snapshot();
 
         assert.deepStrictEqual(yield* reason(page.click(refOf(snapshot, "button", "Submit"))), {
-          tag: "Failed",
+          tag: "PolicyDenied",
           dispatched: false,
         });
         assert.strictEqual(yield* text(page, "#outcome"), "Not ordered");

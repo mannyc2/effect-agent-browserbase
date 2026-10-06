@@ -45,6 +45,51 @@ export type PointResult =
       readonly detail: string;
     };
 
+export const Classification = Schema.Literals([
+  "form-submit",
+  "purchase",
+  "delete",
+  "confirm",
+  "cross-origin",
+  "download",
+  "upload",
+]);
+
+export type Classification = typeof Classification.Type;
+
+export interface InputPlan {
+  readonly action: string;
+  readonly targets: ReadonlyArray<string | { readonly x: number; readonly y: number } | null>;
+  readonly submit: boolean;
+  readonly keys: string | null;
+  readonly destination: string | null;
+}
+
+export interface InspectedTarget {
+  readonly ref: string;
+  readonly element: string;
+  readonly role: string | null;
+  readonly name: string;
+  readonly cursor: string;
+  readonly href?: string | undefined;
+  readonly fingerprint: string;
+}
+
+export interface PreparedInput {
+  readonly url: string;
+  readonly targets: ReadonlyArray<InspectedTarget | null>;
+  readonly classifications: ReadonlyArray<Classification>;
+  readonly destination?: string | undefined;
+}
+
+export type PreparedInputResult =
+  | PreparedInput
+  | { readonly error: string; readonly detail: string };
+
+export type ValidatedInputResult =
+  | { readonly targets: ReadonlyArray<ResolvedPoint | null> }
+  | { readonly error: string; readonly detail: string };
+
 export type EditResult =
   | { readonly ok: true; readonly detail: string }
   | { readonly error: string };
@@ -54,6 +99,8 @@ export interface PageApi {
   snapshot(request: SnapshotRequest): SnapshotResult;
   point(target: string | { readonly x: number; readonly y: number }): PointResult;
   viewport(): { readonly width: number; readonly height: number };
+  prepareInput(plan: InputPlan): PreparedInputResult;
+  validateInput(plan: InputPlan, prepared: PreparedInput): ValidatedInputResult;
   focus(ref: string, replace: boolean): EditResult;
   select(ref: string, values: ReadonlyArray<string>): EditResult;
   hasText(text: string): boolean;
@@ -67,7 +114,7 @@ declare global {
 export const install = (): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 2) return installed;
+  if (installed !== undefined && installed.version === 3) return installed;
 
   const byElement = new WeakMap<Element, string>();
   const byRef = new Map<string, WeakRef<Element>>();
@@ -736,6 +783,283 @@ export const install = (): PageApi => {
     );
   };
 
+  const isButton = (element: Element): element is HTMLButtonElement => element.tagName === "BUTTON";
+
+  const isSubmitter = (element: Element): element is HTMLButtonElement | HTMLInputElement =>
+    (isButton(element) && element.type === "submit") ||
+    (isInput(element) && (element.type === "submit" || element.type === "image"));
+
+  const activeElement = (): Element | null => {
+    let active = document.activeElement;
+
+    while (active !== null) {
+      const inner =
+        active.shadowRoot?.activeElement ??
+        (isFrame(active) ? active.contentDocument?.activeElement : null);
+
+      if (inner === null || inner === undefined || inner === active) return active;
+      active = inner;
+    }
+
+    return null;
+  };
+
+  const inCurrentDocument = (element: Element): boolean => {
+    let owner = element.ownerDocument;
+
+    // Nodes in a navigated iframe can remain connected to their old Document. Approval
+    // requires the current frame chain as well as the ref's weakly held node identity.
+    while (owner !== document) {
+      const frame = owner.defaultView?.frameElement;
+
+      if (
+        frame === null ||
+        frame === undefined ||
+        !frame.isConnected ||
+        (isFrame(frame) && frame.contentDocument !== owner)
+      )
+        return false;
+      owner = frame.ownerDocument;
+    }
+
+    return true;
+  };
+
+  const inspectInput = (element: Element, plan: InputPlan) => {
+    const metadata = details(element, element, 0, 0);
+    const forwarded = element.closest("label")?.control;
+    const control = forwarded ?? element;
+
+    const form =
+      isInput(control) || isButton(control) || isTextArea(control) || isSelect(control)
+        ? control.form
+        : null;
+
+    const enter = plan.keys?.split("+").at(-1) === "Enter";
+
+    const activation =
+      plan.action === "click" ||
+      (plan.action === "press" && (enter || plan.keys?.split("+").at(-1) === "Space"));
+
+    const fieldEnter =
+      isInput(control) &&
+      ![
+        "button",
+        "reset",
+        "submit",
+        "image",
+        "checkbox",
+        "radio",
+        "file",
+        "range",
+        "color",
+        "hidden",
+      ].includes(control.type) &&
+      ((plan.action === "press" && enter) || (plan.action === "type" && plan.submit));
+
+    const submits = form !== null && ((activation && isSubmitter(control)) || fieldEnter);
+
+    const formRoot = form?.getRootNode();
+
+    // form.elements omits image submitters. Walk the whole root in tree order so an Enter
+    // submission uses the real default button, including controls associated from outside the form.
+    const submitter = isSubmitter(control)
+      ? control
+      : formRoot === undefined || !isRoot(formRoot)
+        ? undefined
+        : Array.from(formRoot.querySelectorAll("button,input")).find(
+            (candidate): candidate is HTMLButtonElement | HTMLInputElement =>
+              isSubmitter(candidate) && candidate.form === form,
+          );
+
+    const formDestination =
+      form === null
+        ? undefined
+        : submitter?.hasAttribute("formaction") === true
+          ? submitter.formAction
+          : form.action;
+
+    const formMethod =
+      form === null
+        ? undefined
+        : submitter?.hasAttribute("formmethod") === true
+          ? submitter.formMethod
+          : form.method;
+
+    const formTarget =
+      form === null
+        ? undefined
+        : submitter?.hasAttribute("formtarget") === true
+          ? submitter.formTarget
+          : form.target;
+
+    let link: Element | null = element;
+
+    while (link !== null && (link.tagName !== "A" || !link.hasAttribute("href")))
+      link = parentOf(link);
+    const destination = submits ? formDestination : metadata.href;
+    const classifications: Array<Classification> = [];
+
+    if (submits) classifications.push("form-submit");
+    if (/\b(?:buy|pay|order|purchase)\b/i.test(metadata.name)) classifications.push("purchase");
+    if (/\bdelete\b/i.test(metadata.name)) classifications.push("delete");
+    if (/\bconfirm\b/i.test(metadata.name)) classifications.push("confirm");
+    if (link?.hasAttribute("download") === true) classifications.push("download");
+    if (isInput(control) && control.type === "file") classifications.push("upload");
+
+    // The policy sees control semantics, never a password, field value, or form payload.
+    const fingerprint = JSON.stringify([
+      metadata.element,
+      metadata.role,
+      metadata.name,
+      metadata.href,
+      forwarded === null || forwarded === undefined ? null : refFor(forwarded),
+      isInput(control) || isButton(control) ? control.type : control.tagName,
+      control.matches(":disabled") || isDisabled(control),
+      control.getAttribute("readonly"),
+      control.getAttribute("aria-readonly"),
+      isHtml(control) && control.isContentEditable,
+      control.getAttribute("name"),
+      control.getAttribute("accept"),
+      control.hasAttribute("multiple"),
+      link?.getAttribute("download"),
+      form === null ? null : refFor(form),
+      form?.action,
+      form?.method,
+      form?.target,
+      submitter === undefined ? null : refFor(submitter),
+      formDestination,
+      formMethod,
+      formTarget,
+      submitter?.formNoValidate,
+      form?.noValidate,
+    ]);
+
+    const inspected: InspectedTarget = {
+      ref: refFor(element),
+      element: metadata.element,
+      role: metadata.role,
+      name: metadata.name,
+      cursor: metadata.cursor,
+      ...(metadata.href === undefined ? {} : { href: metadata.href }),
+      fingerprint,
+    };
+
+    return { inspected, classifications, destination };
+  };
+
+  // Approval preparation only reads the DOM. In particular, an offscreen ref must not scroll
+  // before the policy has had a chance to deny it.
+  const prepareInput = (plan: InputPlan): PreparedInputResult => {
+    const targets: Array<InspectedTarget | null> = [];
+    const classifications = new Set<Classification>();
+    let destination = plan.destination ?? undefined;
+
+    for (const target of plan.targets) {
+      let element: Element | null | undefined;
+
+      if (target === null) {
+        element = activeElement();
+      } else if (typeof target === "string") {
+        element = lookup(target);
+        if (element === undefined)
+          return { error: "stale", detail: target + " is not on the page any more" };
+      } else {
+        if (
+          !Number.isFinite(target.x) ||
+          !Number.isFinite(target.y) ||
+          target.x < 0 ||
+          target.y < 0 ||
+          target.x >= window.innerWidth ||
+          target.y >= window.innerHeight
+        )
+          return { error: "outside", detail: "the point is outside the viewport" };
+        const hit = hitAt(document, target.x, target.y);
+
+        element = hit === null ? null : controlOf(hit);
+        if (element === null)
+          return { error: "offscreen", detail: "nothing is painted at the point" };
+      }
+
+      if (element === null) {
+        targets.push(null);
+        continue;
+      }
+      if (!inCurrentDocument(element))
+        return { error: "stale", detail: "the input target belongs to a replaced document" };
+      const inspected = inspectInput(element, plan);
+
+      targets.push(inspected.inspected);
+      for (const classification of inspected.classifications) classifications.add(classification);
+      destination ??= inspected.destination;
+      if (inspected.destination !== undefined) {
+        try {
+          if (new URL(inspected.destination, location.href).origin !== location.origin)
+            classifications.add("cross-origin");
+        } catch {
+          return { error: "outside", detail: "the input destination is not a valid URL" };
+        }
+      }
+    }
+
+    if (destination !== undefined) {
+      try {
+        destination = new URL(destination, location.href).href;
+        if (new URL(destination).origin !== location.origin) classifications.add("cross-origin");
+      } catch {
+        return { error: "outside", detail: "the input destination is not a valid URL" };
+      }
+    }
+
+    return {
+      url: location.href,
+      targets,
+      classifications: [...classifications],
+      ...(destination === undefined ? {} : { destination }),
+    };
+  };
+
+  const validateInput = (plan: InputPlan, prepared: PreparedInput): ValidatedInputResult => {
+    const current = prepareInput(plan);
+
+    if ("error" in current) return { error: "changed", detail: current.detail };
+    if (
+      current.url !== prepared.url ||
+      current.destination !== prepared.destination ||
+      JSON.stringify(current.classifications) !== JSON.stringify(prepared.classifications) ||
+      current.targets.length !== prepared.targets.length ||
+      current.targets.some((target, index) => {
+        const previous = prepared.targets[index];
+
+        return target === null
+          ? previous !== null
+          : previous === null ||
+              previous === undefined ||
+              target.ref !== previous.ref ||
+              target.fingerprint !== previous.fingerprint;
+      })
+    )
+      return {
+        error: "changed",
+        detail: "the page or input target changed while the policy was deciding",
+      };
+
+    const targets: Array<ResolvedPoint | null> = [];
+
+    for (const target of plan.targets) {
+      if (target === null) {
+        targets.push(null);
+        continue;
+      }
+      const resolved = point(target);
+
+      if ("error" in resolved) return resolved;
+      targets.push(resolved);
+    }
+
+    return { targets };
+  };
+
   const focus = (ref: string, replace: boolean): EditResult => {
     const element = lookup(ref);
 
@@ -788,10 +1112,12 @@ export const install = (): PageApi => {
     (document.body?.innerText ?? "").toLowerCase().includes(text.toLowerCase());
 
   const api: PageApi = {
-    version: 2,
+    version: 3,
     snapshot,
     point,
     viewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
+    prepareInput,
+    validateInput,
     focus,
     select,
     hasText,
@@ -819,20 +1145,51 @@ export const SnapshotResultSchema = Schema.Struct({
   scrollHeight: Schema.Finite,
 });
 
+const ResolvedPointSchema = Schema.Struct({
+  x: Schema.Finite,
+  y: Schema.Finite,
+  element: Schema.String,
+  role: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  cursor: Schema.String,
+  href: Schema.optional(Schema.String),
+});
+
 export const PointResultSchema = Schema.Union([
-  Schema.Struct({
-    x: Schema.Finite,
-    y: Schema.Finite,
-    element: Schema.String,
-    role: Schema.NullOr(Schema.String),
-    name: Schema.String,
-    cursor: Schema.String,
-    href: Schema.optional(Schema.String),
-  }),
+  ResolvedPointSchema,
   Schema.Struct({
     error: Schema.Literals(["stale", "hidden", "offscreen", "disabled", "covered", "outside"]),
     detail: Schema.String,
   }),
+]);
+
+const InputPreparationError = Schema.Struct({ error: Schema.String, detail: Schema.String });
+
+export const PreparedInputResultSchema = Schema.Union([
+  Schema.Struct({
+    url: Schema.String,
+    targets: Schema.Array(
+      Schema.NullOr(
+        Schema.Struct({
+          ref: Schema.String,
+          element: Schema.String,
+          role: Schema.NullOr(Schema.String),
+          name: Schema.String,
+          cursor: Schema.String,
+          href: Schema.optional(Schema.String),
+          fingerprint: Schema.String,
+        }),
+      ),
+    ),
+    classifications: Schema.Array(Classification),
+    destination: Schema.optional(Schema.String),
+  }),
+  InputPreparationError,
+]);
+
+export const ValidatedInputResultSchema = Schema.Union([
+  Schema.Struct({ targets: Schema.Array(Schema.NullOr(ResolvedPointSchema)) }),
+  InputPreparationError,
 ]);
 
 export const ViewportResultSchema = Schema.Struct({
