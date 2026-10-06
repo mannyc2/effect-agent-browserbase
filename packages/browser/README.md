@@ -5,7 +5,7 @@ compact page outline for models, screencast frames, `effect/ai` browser tools, a
 moments, a picture-and-timeline account of what a page showed at one point in time.
 
 ```sh
-npm install effect-browser effect playwright-core
+npm install effect-browser@beta effect playwright-core
 npx playwright-core install chromium
 ```
 
