@@ -97,7 +97,9 @@ the page, as scroll-spy and feed pages rewrite while scrolling (a `#/` or `#!` h
 bound). Changed targets fail undispatched; the library never retries the action or the policy
 automatically. A pointer press is checked again once the pointer has arrived and the page has had a
 frame to react: the approved control must still receive the press point, so a control that appears
-under the pointer, such as a hover menu, stops the action before the button goes down. Each
+under the pointer, such as a hover menu, stops the action before the button goes down. A link,
+button or other control nested inside the target between it and the press point stops it too, since
+the approval classified the target, not that control. Each
 further press of a double or triple click is checked the same way after the earlier clicks' handlers
 have run. Typing checks before each further key that the approved control still has focus, so a key
 handler that moves focus stops the typing before any key reaches another control; this waits for

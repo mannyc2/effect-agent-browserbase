@@ -799,6 +799,34 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     );
   }
 
+  it.effect("presses a target whose press lands on its containing option", () =>
+    Effect.gen(function* () {
+      const requests: Array<InputRequest> = [];
+
+      const { page } = yield* setup({
+        guard: (request) => Effect.sync(() => requests.push(request)),
+      });
+
+      // The hit is the option around the button, a container the button's own approval covers;
+      // only controls nested inside the target are refused.
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<body style="margin:0"><div role="option" aria-label="Report" onclick="document.body.dataset.opened=\'yes\'"' +
+            ' style="position:absolute;left:100px;top:100px;width:300px;height:60px">' +
+            '<button style="pointer-events:none;width:100%;height:100%">Open</button></div></body>',
+        ),
+      );
+
+      yield* page.click(refOf(yield* page.snapshot(), "button", "Open"));
+
+      assert.lengthOf(requests, 1);
+      assert.strictEqual(
+        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.opened)),
+        "yes",
+      );
+    }),
+  );
+
   for (const change of ["label", "href", "pixel target"] as const) {
     it.effect("refuses a held click after its " + change + " changes", () =>
       Effect.gen(function* () {
