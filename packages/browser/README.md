@@ -32,6 +32,12 @@ that does not exist or with arguments that are not JSON, runs none of its calls:
 so, and the turn counts as a step. `onStep` reports it with `rejected` set. A reply that the
 provider's client cannot decode is not the model's to correct and ends the run with its `AiError`.
 
+`Agent.run` fails with `AgentError | AiError | BrowserError | E`: how the agent ended (`StepLimit`,
+`GaveUp` or `Refused`), the model's provider, the browser, or `E`, what `onStep` fails with. An
+added tool's failure goes back to the model rather than ending the run. The run needs the
+`Browser`, a `LanguageModel`, the added tools' handlers and whatever `onStep` uses. A caller that
+spells out the options writes `Agent.Options<E, Extra, R>`, with `R`, `onStep`'s services, last.
+
 The model gets one outline and screenshot at the start and after each turn. `observation` selects
 `"outline"`, `"screenshot"`, or `"both"` (the default). When the current page cannot be observed,
 the model is told why and the run goes on; when no page can be had at all, as after the browser
