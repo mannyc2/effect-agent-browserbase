@@ -79,8 +79,8 @@ const narration = [
 /**
  * Captions what each window since the previous caption showed, until `stop` completes. A caption
  * call already sent finishes, so its charge settles; interrupting it would leave the charge
- * unknown. A failed caption call is skipped, so narration never ends the agent's run; a failing
- * `onUsage` does.
+ * unknown. A failed capture or caption call is skipped, so narration never ends the agent's run;
+ * a failing `onUsage` does.
  */
 const narrate = <E>(
   page: Page,
@@ -99,11 +99,15 @@ const narrate = <E>(
       );
       if (yield* Deferred.isDone(stop)) return;
 
-      const moment = yield* Moment.capture(page, {
+      // The page can be mid-navigation; that window is left to the next caption.
+      const captured = yield* Moment.capture(page, {
         frames: 3,
         since: previous ?? every,
         snapshot: false,
-      });
+      }).pipe(Effect.option);
+
+      if (Option.isNone(captured)) continue;
+      const moment = captured.value;
 
       const call = LanguageModel.generateObject({
         prompt: Prompt.setSystem(Moment.toPrompt(moment), narration),

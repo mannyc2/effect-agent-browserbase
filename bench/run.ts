@@ -246,7 +246,9 @@ const main = Effect.gen(function* () {
           maxOutputTokens,
           needs: {
             tools: selected.some((task) => task.kind === "operate"),
-            structuredOutput: selected.some((task) => task.kind === "understand"),
+            // Captions are structured too.
+            structuredOutput:
+              narrateSeconds !== undefined || selected.some((task) => task.kind === "understand"),
           },
         });
 
@@ -445,34 +447,41 @@ const main = Effect.gen(function* () {
 
         yield* units.settle(index, save(record));
         if (recorder !== undefined)
-          yield* recorder.finish({
-            task: {
-              name: task.name,
-              kind: task.kind,
-              summary: task.summary,
-              prompt: task.prompt,
-            },
-            run: {
-              trial,
-              seed,
-              model: record.run.model,
-              reasoning: record.reasoning,
-              browser: record.run.browser,
-              humanize: record.run.humanize,
-              commit: record.run.revision.commit,
-              dirty: record.run.revision.dirty,
-            },
-            outcome: {
-              status: record.status,
-              reason: record.reason,
-              pass: record.pass,
-              detail: record.detail,
-              answer: record.answer,
-              calls: record.accounting.calls,
-              knownUsd: record.accounting.knownUsd,
-              seconds,
-            },
-          });
+          yield* recorder
+            .finish({
+              task: {
+                name: task.name,
+                kind: task.kind,
+                summary: task.summary,
+                prompt: task.prompt,
+              },
+              run: {
+                trial,
+                seed,
+                model: record.run.model,
+                reasoning: record.reasoning,
+                browser: record.run.browser,
+                humanize: record.run.humanize,
+                commit: record.run.revision.commit,
+                dirty: record.run.revision.dirty,
+              },
+              outcome: {
+                status: record.status,
+                reason: record.reason,
+                pass: record.pass,
+                detail: record.detail,
+                answer: record.answer,
+                calls: record.accounting.calls,
+                knownUsd: record.accounting.knownUsd,
+                seconds,
+              },
+            })
+            .pipe(
+              // A recording that cannot be written loses the replay, not the run's other trials.
+              Effect.catchTag("BenchError", (error) =>
+                Console.error(`${task.name} #${trial}: recording not written: ${error.message}`),
+              ),
+            );
         yield* Console.log(
           `${task.name.padEnd(14)}${arm === null ? "" : ` arm ${arm}`} #${trial}  ${record.status === "graded" ? (record.pass === true ? "pass" : "FAIL") : record.status}  ${record.reason}  ${seconds.toFixed(1)}s  ${record.accounting.calls} calls  $${record.accounting.knownUsd.toFixed(4)} known + $${record.accounting.reservedUsd.toFixed(4)} unresolved  ${record.error ?? record.detail}`,
         );
