@@ -746,7 +746,13 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         () => [call("done", { answer: "seen" }), finish],
       ]);
 
-      const result = yield* Agent.run("Use the extra tool.", { additionalTools: Additional }).pipe(
+      const program = Agent.run("Use the extra tool.", { additionalTools: Additional });
+
+      expectTypeOf<Effect.Services<typeof program>>().toEqualTypeOf<
+        Browser | LanguageModel.LanguageModel | Tool.Handler<"browser_wait">
+      >();
+
+      const result = yield* program.pipe(
         Effect.provide([
           Additional.toLayer({
             browser_wait: ({ label }) =>
