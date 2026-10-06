@@ -1,0 +1,22 @@
+{
+  "name": "bench",
+  "private": true,
+  "description": "Benchmarks for effect-browser: can a model operate and understand canvas games, charts and forms?",
+  "type": "module",
+  "scripts": {
+    "bench": "node --conditions=@effect-browser/source run.ts",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --run"
+  },
+  "devDependencies": {
+    "@effect/ai-openrouter": "4.0.0",
+    "@effect/vitest": "4.0.0",
+    "@types/node": "26.1.2",
+    "effect": "4.0.0",
+    "effect-browser": "workspace:*",
+    "effect-browserbase": "workspace:*",
+    "playwright-core": "1.63.0",
+    "typescript": "7.0.2",
+    "vite-plus": "0.3.2"
+  }
+}

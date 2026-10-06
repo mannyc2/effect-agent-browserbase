@@ -1,7 +1,7 @@
 {
   "name": "effect-browser",
-  "version": "0.2.0-beta.9",
-  "description": "Shared Effect browser sessions, modeled control and capture with an isolated Chromium launcher.",
+  "version": "0.3.0-beta.0",
+  "description": "Effect browser sessions, page control, screencast and agent tools over Playwright and CDP.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,21 +15,18 @@
   "type": "module",
   "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts",
-    "./bootstrap": "./src/Bootstrap.ts",
-    "./browser": "./src/Browser.ts",
-    "./browser-data": "./src/BrowserData.ts",
-    "./browser-runtime": "./src/BrowserRuntime.ts",
-    "./capture": "./src/Capture.ts",
-    "./capture-data": "./src/CaptureData.ts",
-    "./chromium": "./src/Chromium.ts",
-    "./errors": "./src/Errors.ts",
-    "./page-control": "./src/PageControl.ts",
-    "./plan": "./src/Plan.ts",
-    "./plan-data": "./src/PlanData.ts",
-    "./testing": "./src/Testing.ts",
-    "./timeline": "./src/Timeline.ts",
-    "./timeline-data": "./src/TimelineData.ts"
+    ".": {
+      "@effect-browser/source": "./src/index.ts",
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./*": {
+      "@effect-browser/source": "./src/*.ts",
+      "types": "./dist/*.d.mts",
+      "default": "./dist/*.mjs"
+    },
+    "./internal/*": null,
+    "./index": null
   },
   "publishConfig": {
     "access": "public"
@@ -37,27 +34,19 @@
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
-    "install:test-browser": "playwright-core install --with-deps chromium",
-    "test:native": "vp test --config vite.native.config.ts --run"
+    "test": "vp test --run"
   },
   "devDependencies": {
-    "@effect/platform-bun": "4.0.0-rc.117",
-    "@effect/platform-node": "4.0.0-rc.117",
-    "@effect/vitest": "4.0.0-rc.117",
+    "@effect/vitest": "4.0.0",
     "@types/node": "26.1.2",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "playwright-core": "1.63.0",
     "typescript": "7.0.2",
     "vite-plus": "0.3.2"
   },
   "peerDependencies": {
-    "effect": "4.0.0-rc.117",
-    "playwright-core": "1.63.0"
-  },
-  "peerDependenciesMeta": {
-    "playwright-core": {
-      "optional": true
-    }
+    "effect": "^4.0.0",
+    "playwright-core": "^1.63.0"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

@@ -3,26 +3,30 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "bench"
   ],
   "packageManager": "bun@1.4.2",
   "scripts": {
     "patch:tsgo": "effect-tsgo patch --typescript --oxlint",
-    "check:exports": "tsc --noEmit -p scripts/tsconfig.json && bun scripts/verify-package-exports.ts",
-    "verify:package-purity": "bun scripts/verify-package-purity.ts"
+    "fmt": "vp fmt packages bench lint vite.config.ts",
+    "fmt:check": "vp fmt --check packages bench lint vite.config.ts",
+    "lint": "oxlint -c lint/.oxlintrc.json --deny-warnings --report-unused-disable-directives-severity=error packages bench",
+    "check": "bun run --filter '*' check",
+    "test": "bun run --filter '*' test",
+    "build": "bun run --filter '*' build",
+    "ready": "bun run fmt:check && bun run lint && bun run check && bun run test && bun run build"
   },
   "devDependencies": {
-    "@effect/platform-node": "4.0.0-rc.117",
     "@effect/tsgo": "0.45.0",
     "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "26.1.2",
-    "effect": "4.0.0-rc.117",
-    "esbuild": "0.28.1",
+    "effect": "4.0.0",
     "oxfmt": "0.64.0",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
+    "playwright-core": "1.63.0",
     "typescript": "7.0.2",
-    "typescript-twoslash": "npm:typescript@6.0.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.2",
     "vite-plus": "0.3.2",
     "vitest": "4.1.11"

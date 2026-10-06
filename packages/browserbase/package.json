@@ -1,7 +1,7 @@
 {
   "name": "effect-browserbase",
-  "version": "0.2.0-beta.9",
-  "description": "Effect-based Browserbase resources and hosted integration for effect-browser.",
+  "version": "0.3.0-beta.0",
+  "description": "Browserbase for effect-browser: hosted browser sessions, contexts, web search and page fetch.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,34 +15,17 @@
   "type": "module",
   "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts",
-    "./account": "./src/Account.ts",
-    "./agents": "./src/Agents.ts",
-    "./allocation": "./src/Allocation.ts",
-    "./browser": "./src/Browser.ts",
-    "./browser-binding": "./src/BrowserBinding.ts",
-    "./certificates": "./src/Certificates.ts",
-    "./cleanup": "./src/Cleanup.ts",
-    "./client": "./src/Client.ts",
-    "./context-coordination": "./src/ContextCoordination.ts",
-    "./contexts": "./src/Contexts.ts",
-    "./downloads": "./src/Downloads.ts",
-    "./errors": "./src/Errors.ts",
-    "./extensions": "./src/Extensions.ts",
-    "./functions": "./src/Functions.ts",
-    "./launch": "./src/Launch.ts",
-    "./page-fetch": "./src/PageFetch.ts",
-    "./projects": "./src/Projects.ts",
-    "./recordings": "./src/Recordings.ts",
-    "./references": "./src/References.ts",
-    "./replays": "./src/Replays.ts",
-    "./search": "./src/Search.ts",
-    "./session-data": "./src/SessionData.ts",
-    "./sessions": "./src/Sessions.ts",
-    "./testing": "./src/Testing.ts",
-    "./transfers": "./src/Transfers.ts",
-    "./uploads": "./src/Uploads.ts",
-    "./webhooks": "./src/Webhooks.ts"
+    ".": {
+      "@effect-browser/source": "./src/index.ts",
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./*": {
+      "@effect-browser/source": "./src/*.ts",
+      "types": "./dist/*.d.mts",
+      "default": "./dist/*.mjs"
+    },
+    "./index": null
   },
   "publishConfig": {
     "access": "public"
@@ -50,23 +33,21 @@
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
-    "install:test-browser": "playwright-core install --with-deps chromium",
-    "test:native": "vp test --config vite.native.config.ts --run"
+    "test": "vp test --run"
   },
   "devDependencies": {
-    "@effect/platform-bun": "4.0.0-rc.117",
-    "@effect/platform-node": "4.0.0-rc.117",
-    "@effect/vitest": "4.0.0-rc.117",
+    "@effect/vitest": "4.0.0",
     "@types/node": "26.1.2",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "effect-browser": "workspace:*",
     "playwright-core": "1.63.0",
     "typescript": "7.0.2",
     "vite-plus": "0.3.2"
   },
   "peerDependencies": {
-    "effect": "4.0.0-rc.117",
-    "effect-browser": "workspace:*"
+    "effect": "^4.0.0",
+    "effect-browser": "^0.3.0-beta.0",
+    "playwright-core": "^1.63.0"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

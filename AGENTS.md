@@ -1,40 +1,34 @@
 # Repository guide
 
-This repository owns three packages, `packages/browser` (`effect-browser`), `packages/browserbase` (`effect-browserbase`) and `packages/agent-browser` (`effect-agent-browser`), as one Bun workspace. The adapter builds on Effect Agent, which is an npm dependency like any other: `effect-agent` and `@effect-agent/testing` are pinned exactly and updated through Dependabot. Read `README.md`, `CONTRIBUTING.md`, the package guide and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
+Two packages and a bench in one Bun workspace: `packages/browser` (`effect-browser`),
+`packages/browserbase` (`effect-browserbase`) and the private `bench`. Read `README.md`,
+`CONTRIBUTING.md` and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
 
-## Contracts
+## Code
 
-- Preserve Effect `E`/`R`, scoped resource ownership, bounded work and typed outcomes.
-- Keep the actual Effect, AgentRuntime and Playwright integration. Do not substitute contracts or native engines to satisfy tests.
-- Keep public exports deliberate. Provider credentials and native SDK values are not durable or model-facing values.
-- Never replay an unresolved mutation, and never weaken the unsupported network policies to make them appear supported.
-- Use the coordinated pins in `.node-version`, the root and package `package.json` files, `bun.lock` and `CONTRIBUTING.md`. Every manifest names one exact version of each dependency, and the tooling tests refuse a disagreement. A version upgrade needs source review and fresh acceptance; `agent-browser`'s exact `effect-agent` peer moves with its development version.
+- Idiomatic Effect 4: services with `Context.Service` and layers, scoped resources, typed errors
+  with reasons, `Schema` for data at boundaries, `Config.Redacted` for secrets. Read
+  `node_modules/effect/AGENTS.md` before writing Effect code.
+- Few files, each with one clear job. Prefer deleting code to adding options. A module's doc
+  comment says what it is for.
+- `effect-browser` depends on `effect` and `playwright-core` only; `effect-browserbase` reaches it
+  only through its public entry points. Tests stay in their package's `test/`.
+- Fix a lint finding or Effect diagnostic rather than suppress it. `bun run fmt` formats;
+  `oxlint -c lint/.oxlintrc.json --fix <files>` fixes the stylistic rules `fmt` leaves alone.
+- `bun run ready` is the gate CI runs. Check its exit code, not piped output.
 
-## Package boundaries
+## Safety
 
-- `effect-browser` owns the shared runtime, browser data, bindings, capture and page control. Its root must not import the Chromium process implementation; launch and borrowed loopback attachment live at `/chromium`.
-- Browserbase supplies provider lifetimes through the supported `/browser-runtime` constructor. Provider resources, receipt authorization and release/status facts remain in `effect-browserbase`.
-- `effect-agent-browser` adapts either exact session through the same tools. It calls the owner's checked cleanup and keeps typed errors and references on the original browser; it never parses provider receipts or opens another connection.
-- Every test stays in its owning package's `test/`, including a regression that needs both sides: it reaches the other package only through public exports and the public testing entries (`effect-browser/testing`, `effect-browserbase/testing`). There is no repository-level test tree. Tests are never exports or published files.
-
-## Working
-
-- A session often starts on a host whose Node and Bun differ from the pins, where the workspace installer and acceptance refuse to run. Install the pinned runtimes first: `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"`. Never relax a version assertion or accept the host's versions.
-- `bun install --frozen-lockfile --ignore-scripts && ./node_modules/.bin/vp run patch:tsgo` installs this checkout; work in it with Vite+ commands and read `node_modules/effect/AGENTS.md` completely before writing Effect code. `bash tools/workspace.sh <new directory>` installs the committed HEAD into a fresh directory, as acceptance and the hosted workflow do.
-- Formatting comes from the workspace's own Oxfmt: `vp fmt` for whitespace, and `oxlint -c lint/.oxlintrc.json --fix <file>` for the stylistic rules that `fmt` leaves alone. Scope `--fix` to the files you touched. Do not hand-write formatting to satisfy a gate.
-- Owned code follows the strict policy in `lint/.oxlintrc.json` and the owned tsconfigs; `CONTRIBUTING.md` describes it. Fix a lint finding or Effect diagnostic rather than suppress it. A genuine exception states its reason, and acceptance rejects an Oxlint directive that no longer suppresses anything.
-- The maintenance tools are dependency-free Node scripts: `npm_config_offline=true node --test tools/test/*.test.mjs`. `tools/release` is an isolated ts-release application: `bun install --frozen-lockfile --ignore-scripts`, then `bun test`. Both are host-only tools, not public runtime APIs.
-- Commit the candidate, then `bash tools/run-acceptance.sh library` (or `full`); acceptance rejects dirty source and reused output directories. Read the actual exit records and the current Actions results; a saved result is historical evidence, not a new execution. The documentation, library and full profiles are distinct evidence, never interchangeable passes. Keep the classifier, the stage inventory, failure artifacts and `timings.tsv`, and never cache a browser installation as though a task result restored it.
-- The paid hosted checks live in `packages/browserbase/hosted/` and run only through `tools/hosted-run.sh` behind an explicit opt-in. Ordinary CI cannot reach them, and no maintenance request authorizes a hosted session, paid inference, deployment, provisioning or publication.
-- Evaluation campaigns (`packages/agent-browser/test/evaluation`, `campaign`) are the one other paid entry point. A campaign needs `EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1`, and `EFFECT_AGENT_BROWSERBASE_LIVE=1` as well when it allocates hosted sessions. It runs only the plan whose digest the operator approved, which bounds its model spend and its session count. It reads its source revision from a clean checkout that matches the workspace, and checksums its output. The same authorization rule applies: none of this authorizes a campaign.
-- Generated output stays ignored and in Actions artifacts; `docs/media/` is the one budgeted exception. Rationale and results belong in PRs, not in committed planning documents or transient logs. Historical material lives in Git history, and `docs/STATUS.md` records where to find it.
-- Ordinary CI is the fixed acceptance program, not a scratchpad: no disposable workflow to run an experiment or to back up, restore or delete a branch. Use `git` for ordinary changes rather than whole-file replacements. When a host cannot reach GitHub or the publishers, report that prerequisite failure; do not generalize another host's connectivity or silently change the workflow.
-- Keep the branch list short. Delete a branch once its work is merged or abandoned, and do not leave a pull request in draft over a formatting-only failure that one `vp fmt` resolves.
-
-## Safety and release
-
-Ordinary CI is read-only: no `pull_request_target`, no auto-writing formatters, no hosted browser or model credentials, no publication.
-
-`docs/RELEASING.md` describes a separately enabled, tag-scoped npm OIDC workflow. Preparing or testing it does not authorize running its publishing job, registering a package, changing account permissions or creating release tags. Preserve commit history; use normal commits, never force-push or rewrite accepted history.
-
-Retain `ts-release-prepared/*` and `ts-release-journal/*` branches for release recovery. Prepared branches are immutable; journal branches append history. Never delete or replace them to retry an uncertain publication. Their guarded create/append operations are release storage, not permission to rewrite source branches.
+- Model calls and hosted Browserbase sessions cost money. Only the bench makes them, and only
+  behind `EFFECT_BROWSER_BENCH_LIVE=1` or `EFFECT_BROWSER_BENCH_HOSTED=1`; no maintenance request
+  authorizes setting either. Tests use scripted models and a fake Browserbase API.
+- Keep API keys, connect URLs and Live View URLs out of model inputs, logs, commits and PRs. Never
+  commit provider account identifiers such as project or session ids; document how to find them.
+- Refer to downstream applications as "the consumer"; do not name them in this repository.
+- Ordinary CI is read-only: no `pull_request_target`, no hosted or model credentials, no
+  publication.
+- `docs/RELEASING.md` describes a manual, tag-scoped npm workflow. Preparing or testing it does
+  not authorize publishing, registering a package, changing account permissions or creating tags.
+- Preserve history: normal commits, never force-push or rewrite accepted history. Keep the
+  `ts-release-prepared/*` and `ts-release-journal/*` branches; they are release recovery storage.
+- Retarget PRs stacked on a branch before deleting it.

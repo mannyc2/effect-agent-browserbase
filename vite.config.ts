@@ -3,7 +3,7 @@ import { defineConfig } from "vite-plus";
 
 // Formatting follows Effect Agent's recommended Oxfmt defaults (danieljvdm/effect-agent@bcc2bb7,
 // MIT; see LICENSE-effect-agent), which these packages were formatted with before they left
-// its workspace. Lint policy is lint/.oxlintrc.json, which acceptance runs on its own.
+// its workspace. Lint policy is lint/.oxlintrc.json, which `bun run lint` applies.
 const fmt = {
   arrowParens: "always",
   endOfLine: "lf",
