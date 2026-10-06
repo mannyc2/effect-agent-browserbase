@@ -17,6 +17,9 @@
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
   events; browser-wide pointer ownership and bounded event replay with explicit expiration.
+- Humanized scrolling to off-screen targets, bounded fallback and approval revalidation; typing
+  near 75 WPM with overlapping holds, slower word starts and opt-in corrected prose slips.
+  Sampled presentation pauses retain the functional navigation wait.
 - `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics

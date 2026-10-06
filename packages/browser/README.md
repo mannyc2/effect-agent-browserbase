@@ -75,10 +75,26 @@ the library never retries the action or the policy automatically. A policy timeo
 `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed receipts. Without a
 guard, actions are allowed. Canvas and opaque frames expose their outer element's metadata.
 
+With `humanize`, off-screen ref targets are reached with visible wheel input before the pointer
+moves to them. Scroll attempts are bounded and may use one instant fallback. A denied or held action
+does not scroll. After scrolling, the library checks the original target again; a page handler that
+changes its meaning can therefore stop an action after its wheel input but before a click. Drag
+endpoints are resolved together in the final viewport before the button is pressed.
+
 Typing sends key pairs for printable US characters in both plain and humanized modes; other text
-uses Unicode insertion. Humanized keys follow their schedule without waiting for each network reply.
+uses Unicode insertion. Humanized typing aims for about 75 WPM including slower word starts, with
+key holds around 110 ms that can overlap. The ordered schedule releases a repeated physical key
+before pressing it again. Keys follow that schedule without waiting for each network reply.
 Pending replies are bounded and drained before an action succeeds; interruption stops new input and
-releases submitted held keys. Shortcut chords retain Playwright’s platform-specific editing behavior.
+releases every submitted held key. Shortcut chords retain Playwright’s platform-specific editing behavior.
+
+`Page.type(text, { prose: true })` opts eligible textarea or contenteditable prose into occasional
+corrected slips when humanized, with an explicit `into` ref and whole-field replacement. The
+`browser_type` tool exposes the same `prose` flag. It is off by default; explicit opt-in cannot enable
+it for numbers, URLs, credentials, payment/order fields or other excluded targets. The field is
+checked again after focus, and its final text must match before Enter can submit. Append and
+implicit-focus typing stay exact. Presentation pauses come from bounded distributions and
+supplement the functional navigation delay and document wait; they never shorten that wait.
 
 `Browser.now`, event stamps, frame `receivedAt` and `Moment.at` share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.

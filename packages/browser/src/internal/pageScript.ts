@@ -73,6 +73,7 @@ export interface InspectedTarget {
   readonly cursor: string;
   readonly href?: string | undefined;
   readonly fingerprint: string;
+  readonly prose: boolean;
 }
 
 export interface PreparedInput {
@@ -87,7 +88,7 @@ export type PreparedInputResult =
   | { readonly error: string; readonly detail: string };
 
 export type ValidatedInputResult =
-  | { readonly targets: ReadonlyArray<ResolvedPoint | null> }
+  | { readonly ok: true }
   | { readonly error: string; readonly detail: string };
 
 export type EditResult =
@@ -97,11 +98,15 @@ export type EditResult =
 export interface PageApi {
   readonly version: number;
   snapshot(request: SnapshotRequest): SnapshotResult;
-  point(target: string | { readonly x: number; readonly y: number }): PointResult;
+  point(target: string | { readonly x: number; readonly y: number }, scroll?: boolean): PointResult;
+  scrollPlan(
+    ref: string,
+  ): { readonly x: number; readonly y: number; readonly dx: number; readonly dy: number } | null;
   viewport(): { readonly width: number; readonly height: number };
   prepareInput(plan: InputPlan): PreparedInputResult;
-  validateInput(plan: InputPlan, prepared: PreparedInput): ValidatedInputResult;
+  validateInput(plan: InputPlan, prepared: PreparedInput, focused?: boolean): ValidatedInputResult;
   focus(ref: string, replace: boolean): EditResult;
+  checkText(ref: string, expected: string): EditResult;
   select(ref: string, values: ReadonlyArray<string>): EditResult;
   hasText(text: string): boolean;
 }
@@ -114,7 +119,7 @@ declare global {
 export const install = (): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 3) return installed;
+  if (installed !== undefined && installed.version === 4) return installed;
 
   const byElement = new WeakMap<Element, string>();
   const byRef = new Map<string, WeakRef<Element>>();
@@ -710,7 +715,10 @@ export const install = (): PageApi => {
     };
   };
 
-  const point = (target: string | { readonly x: number; readonly y: number }): PointResult => {
+  const point = (
+    target: string | { readonly x: number; readonly y: number },
+    scroll = true,
+  ): PointResult => {
     if (typeof target !== "string") {
       const { x, y } = target;
 
@@ -736,7 +744,7 @@ export const install = (): PageApi => {
       return { error: "stale", detail: `${ref} is not on the page any more` };
     if (isDisabled(element)) return { error: "disabled", detail: `${ref} is disabled` };
     const view = element.ownerDocument.defaultView ?? window;
-    let rect = element.getBoundingClientRect();
+    const rect = element.getBoundingClientRect();
 
     if (rect.width === 0 && rect.height === 0)
       return { error: "hidden", detail: `${ref} has no size on the page` };
@@ -746,13 +754,35 @@ export const install = (): PageApi => {
       rect.bottom > view.innerHeight ||
       rect.right > view.innerWidth
     ) {
+      if (!scroll) return { error: "offscreen", detail: ref + " is outside the viewport" };
       element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-      rect = element.getBoundingClientRect();
+
+      return point(target, false);
     }
-    const left = Math.max(rect.left, 0);
-    const top = Math.max(rect.top, 0);
-    const right = Math.min(rect.right, view.innerWidth);
-    const bottom = Math.min(rect.bottom, view.innerHeight);
+    let left = Math.max(rect.left, 0);
+    let top = Math.max(rect.top, 0);
+    let right = Math.min(rect.right, view.innerWidth);
+    let bottom = Math.min(rect.bottom, view.innerHeight);
+
+    // A field can be inside the viewport and still clipped by a nested scrolling panel.
+    for (let ancestor = parentOf(element); ancestor !== null; ancestor = parentOf(ancestor)) {
+      const style = view.getComputedStyle(ancestor);
+      const box = ancestor.getBoundingClientRect();
+
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+        left = Math.max(left, box.left + ancestor.clientLeft);
+        right = Math.min(right, box.left + ancestor.clientLeft + ancestor.clientWidth);
+      }
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+        top = Math.max(top, box.top + ancestor.clientTop);
+        bottom = Math.min(bottom, box.top + ancestor.clientTop + ancestor.clientHeight);
+      }
+    }
+    if (scroll && (right <= left || bottom <= top)) {
+      element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+
+      return point(target, false);
+    }
 
     if (right <= left || bottom <= top)
       return { error: "offscreen", detail: `${ref} could not be scrolled into view` };
@@ -781,6 +811,63 @@ export const install = (): PageApi => {
       Math.round(x + offsetX),
       Math.round(y + offsetY),
     );
+  };
+
+  // Suggest one visible wheel origin. Unsupported frame geometry and fully clipped panels use
+  // the bounded instant fallback; guessing their coordinates could scroll an unrelated control.
+  const scrollPlan = (ref: string) => {
+    const element = lookup(ref);
+
+    if (element === undefined || element.ownerDocument !== document) return null;
+    const target = element.getBoundingClientRect();
+    const centerX = (target.left + target.right) / 2;
+    const centerY = (target.top + target.bottom) / 2;
+
+    for (let ancestor = parentOf(element); ancestor !== null; ancestor = parentOf(ancestor)) {
+      const style = window.getComputedStyle(ancestor);
+
+      const horizontal =
+        /^(auto|scroll)$/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth;
+
+      const vertical =
+        /^(auto|scroll)$/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight;
+
+      if (!horizontal && !vertical) continue;
+      const box = ancestor.getBoundingClientRect();
+      const left = Math.max(0, box.left + ancestor.clientLeft);
+      const top = Math.max(0, box.top + ancestor.clientTop);
+
+      const right = Math.min(
+        window.innerWidth,
+        box.left + ancestor.clientLeft + ancestor.clientWidth,
+      );
+
+      const bottom = Math.min(
+        window.innerHeight,
+        box.top + ancestor.clientTop + ancestor.clientHeight,
+      );
+
+      if (right <= left || bottom <= top) continue;
+      const x = (left + right) / 2;
+      const y = (top + bottom) / 2;
+      const dx = horizontal && (target.left < left || target.right > right) ? centerX - x : 0;
+      const dy = vertical && (target.top < top || target.bottom > bottom) ? centerY - y : 0;
+
+      if (dx === 0 && dy === 0) continue;
+      const hit = hitAt(document, x, y);
+
+      if (hit !== null && (hit === ancestor || ancestor.contains(hit))) return { x, y, dx, dy };
+    }
+
+    const dx =
+      target.left < 0 || target.right > window.innerWidth ? centerX - window.innerWidth / 2 : 0;
+
+    const dy =
+      target.top < 0 || target.bottom > window.innerHeight ? centerY - window.innerHeight / 2 : 0;
+
+    return dx === 0 && dy === 0
+      ? null
+      : { x: window.innerWidth / 2, y: window.innerHeight / 2, dx, dy };
   };
 
   const isButton = (element: Element): element is HTMLButtonElement => element.tagName === "BUTTON";
@@ -907,8 +994,39 @@ export const install = (): PageApi => {
     if (link?.hasAttribute("download") === true) classifications.push("download");
     if (isInput(control) && control.type === "file") classifications.push("upload");
 
-    // The policy sees control semantics, never a password, field value, or form payload.
+    const typingAttributes = [
+      control.getAttribute("id"),
+      control.getAttribute("name"),
+      control.getAttribute("inputmode"),
+      control.getAttribute("autocomplete"),
+      control.getAttribute("aria-label"),
+      metadata.name,
+      form?.getAttribute("id"),
+      form?.getAttribute("name"),
+      form?.getAttribute("aria-label"),
+      submitter === undefined ? null : nameOf(submitter, roleOf(submitter)),
+    ];
+
+    const sensitive =
+      /password|passwd|secret|credential|token|username|user.?name|login|sign.?in|one.?time|otp|security|auth|email|e-mail|url|website|phone|tel(?:ephone)?|account|card|payment|billing|order|trade|quantity|amount|price|postal|zip|address|iban|routing|cc-/i;
+
+    const inputMode = control.getAttribute("inputmode");
+
+    const prose =
+      (isTextArea(control) || (isHtml(control) && control.isContentEditable)) &&
+      !isDisabled(control) &&
+      !control.hasAttribute("readonly") &&
+      control.getAttribute("aria-readonly") !== "true" &&
+      (inputMode === null || inputMode === "" || inputMode === "text") &&
+      !typingAttributes.some(
+        (value) => value !== null && value !== undefined && sensitive.test(value),
+      );
+
+    // Approval and prose eligibility share the same immutable inspection. A focus or scroll
+    // handler changing these attributes must not leave an old permission behind.
     const fingerprint = JSON.stringify([
+      typingAttributes,
+      prose,
       metadata.element,
       metadata.role,
       metadata.name,
@@ -943,6 +1061,7 @@ export const install = (): PageApi => {
       cursor: metadata.cursor,
       ...(metadata.href === undefined ? {} : { href: metadata.href }),
       fingerprint,
+      prose,
     };
 
     return { inspected, classifications, destination };
@@ -1019,7 +1138,11 @@ export const install = (): PageApi => {
     };
   };
 
-  const validateInput = (plan: InputPlan, prepared: PreparedInput): ValidatedInputResult => {
+  const validateInput = (
+    plan: InputPlan,
+    prepared: PreparedInput,
+    focused = false,
+  ): ValidatedInputResult => {
     const current = prepareInput(plan);
 
     if ("error" in current) return { error: "changed", detail: current.detail };
@@ -1044,20 +1167,39 @@ export const install = (): PageApi => {
         detail: "the page or input target changed while the policy was deciding",
       };
 
-    const targets: Array<ResolvedPoint | null> = [];
+    if (focused) {
+      const active = activeElement();
+      const expected = prepared.targets[0];
 
-    for (const target of plan.targets) {
-      if (target === null) {
-        targets.push(null);
-        continue;
-      }
-      const resolved = point(target);
-
-      if ("error" in resolved) return resolved;
-      targets.push(resolved);
+      if (
+        active === null ||
+        expected === null ||
+        expected === undefined ||
+        refFor(active) !== expected.ref
+      )
+        return { error: "changed", detail: "focus moved away from the approved text field" };
     }
 
-    return { targets };
+    return { ok: true };
+  };
+
+  // A corrected slip must not submit a different value when a widget swallowed the correction.
+  // Report only equality, never the field's contents.
+  const checkText = (ref: string, expected: string): EditResult => {
+    const element = lookup(ref);
+
+    if (element === undefined || !inCurrentDocument(element) || activeElement() !== element)
+      return { error: "the prose field changed before its final value could be checked" };
+
+    const value = isTextArea(element)
+      ? element.value
+      : isHtml(element) && element.isContentEditable
+        ? element.innerText
+        : undefined;
+
+    return value === expected
+      ? { ok: true, detail: "corrected prose matches the requested text" }
+      : { error: "corrected prose did not match the requested text" };
   };
 
   const focus = (ref: string, replace: boolean): EditResult => {
@@ -1112,13 +1254,15 @@ export const install = (): PageApi => {
     (document.body?.innerText ?? "").toLowerCase().includes(text.toLowerCase());
 
   const api: PageApi = {
-    version: 3,
+    version: 4,
     snapshot,
     point,
+    scrollPlan,
     viewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
     prepareInput,
     validateInput,
     focus,
+    checkText,
     select,
     hasText,
   };
@@ -1178,6 +1322,7 @@ export const PreparedInputResultSchema = Schema.Union([
           cursor: Schema.String,
           href: Schema.optional(Schema.String),
           fingerprint: Schema.String,
+          prose: Schema.Boolean,
         }),
       ),
     ),
@@ -1188,9 +1333,18 @@ export const PreparedInputResultSchema = Schema.Union([
 ]);
 
 export const ValidatedInputResultSchema = Schema.Union([
-  Schema.Struct({ targets: Schema.Array(Schema.NullOr(ResolvedPointSchema)) }),
+  Schema.Struct({ ok: Schema.Literal(true) }),
   InputPreparationError,
 ]);
+
+export const ScrollPlanSchema = Schema.NullOr(
+  Schema.Struct({
+    x: Schema.Finite,
+    y: Schema.Finite,
+    dx: Schema.Finite,
+    dy: Schema.Finite,
+  }),
+);
 
 export const ViewportResultSchema = Schema.Struct({
   width: Schema.Finite,

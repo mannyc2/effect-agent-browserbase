@@ -108,6 +108,9 @@ const punctuation: ReadonlyArray<readonly [string, string, number]> = [
  * payload cannot submit a form; only an explicit Enter or submit option may do that.
  */
 export const description = (character: string): Description | undefined => {
+  // Prose correction uses the same raw key path so its deletion has a matched release.
+  if (character === "Backspace")
+    return { code: "Backspace", keyCode: 8, key: "Backspace", text: "" };
   if (character.length !== 1) return undefined;
   if (/^[A-Za-z]$/.test(character)) {
     const upper = character.toUpperCase();

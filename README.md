@@ -115,9 +115,15 @@ const watch = Effect.gen(function* () {
   `PolicyDenied` to deny, or waits for an external signal to hold. Holds have a separate
   `policyTimeout` (five minutes by default) and leave the page unlocked. Changed targets fail before
   input when a hold resumes. With no guard, every action is allowed.
-- `humanize` moves the pointer along curves and types at a human pace for watched sessions. Keys
-  keep their schedule over slow connections, with bounded pending acknowledgements. Plain typing
-  also sends key events for printable US characters; other text uses Unicode insertion.
+- `humanize` moves the pointer along curves and scrolls off-screen targets into view with visible
+  wheel input, using bounded attempts and an instant fallback. It rechecks the approved target
+  before activation. Typing aims for about 75 WPM, with overlapping key holds and slower word
+  starts; bounded pending replies keep connection latency out of the intended schedule.
+- `Page.type(text, { prose: true })` and the `browser_type` tool's `prose` flag allow occasional
+  corrected slips when replacing an explicitly targeted prose field while humanized. Final text
+  is checked before submit; numbers, URLs, credentials and payment/order fields stay exact.
+  Presentation pauses supplement the functional navigation wait.
+  Printable US text uses key events; other text uses Unicode insertion.
 - Events, frame arrivals and moments share the owning browser’s host monotonic clock in milliseconds.
   `Browser.now` reads that clock. These stamps measure elapsed time, not calendar dates.
 - `Browser.events()` carries the timed input track for the consumer’s cursor rendering: complete
