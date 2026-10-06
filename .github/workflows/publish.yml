@@ -72,7 +72,16 @@ jobs:
           DIST_TAG: ${{ steps.tag.outputs.dist-tag }}
         run: |
           set -euo pipefail
-          for file in "$RUNNER_TEMP"/packages/*.tgz; do npm publish "$file" --dry-run --tag "$DIST_TAG"; done
+          version="${GITHUB_REF_NAME#v}"
+          for name in effect-browser effect-browserbase effect-browser-human-strokes; do
+            # npm 11 refuses even a dry run over a published version, so a re-dispatch skips it,
+            # as the publish job does.
+            if [ -n "$(npm view "$name@$version" version 2>/dev/null)" ]; then
+              echo "$name@$version is already on npm."
+              continue
+            fi
+            npm publish "$RUNNER_TEMP/packages/$name-$version.tgz" --dry-run --tag "$DIST_TAG"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: packages
