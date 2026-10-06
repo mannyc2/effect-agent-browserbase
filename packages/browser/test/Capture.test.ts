@@ -1,10 +1,10 @@
 import { assert, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Option, Schedule, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
-import type { Frame } from "../src/Frame.ts";
+import type { Frame, Image } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
 import type { Page } from "../src/Page.ts";
 
@@ -181,6 +181,163 @@ const busyContext = Effect.fnUntraced(function* (contextOrigin: "fresh" | "borro
   return yield* makeBrowser(context, { id: "busy-capture", provider: "test", contextOrigin });
 });
 
+// Paint keeps changing, but each native frame reaches the host 150 ms after Chromium sent it, as
+// over a remote transport. A press turns the page red.
+const delayedCapture = Effect.fnUntraced(function* () {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+  const context = yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+    (context) => Effect.promise(() => context.close()),
+  );
+
+  const createSession = context.newCDPSession.bind(context);
+
+  context.newCDPSession = async (target) => {
+    const cdp = await createSession(target);
+    const emitter = cdp as EmittingSession;
+    const emit = emitter.emit.bind(emitter);
+
+    emitter.emit = (event, ...args) => {
+      if (event !== "Page.screencastFrame") return emit(event, ...args);
+      setTimeout(() => emit(event, ...args), 150);
+
+      return true;
+    };
+
+    return cdp;
+  };
+
+  const browser = yield* makeBrowser(context, { id: "delayed-capture", provider: "test" });
+  const page = yield* browser.newPage();
+
+  yield* page.goto(
+    "data:text/html," +
+      encodeURIComponent(`<body style="margin:0;height:100vh;background:rgb(0,0,255)">
+<canvas id="spinner" width="80" height="80"></canvas>
+<script>
+  let turn = 0;
+  (function draw() {
+    const g = spinner.getContext("2d");
+    g.fillStyle = "hsl(" + (turn++ * 15) + ",80%,50%)";
+    g.fillRect(0, 0, 80, 80);
+    requestAnimationFrame(draw);
+  })();
+  addEventListener("mousedown", () => { document.body.style.background = "rgb(255,0,0)"; });
+</script></body>`),
+  );
+  yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+  // Let frames painted well after navigation arrive, so only the input rule can refuse them.
+  yield* Effect.sleep("600 millis");
+
+  const pressed = browser.recentEvents.pipe(
+    Effect.map((events) => events.find((event) => event._tag === "PointerPressed")?.at),
+    Effect.repeat({
+      schedule: Schedule.spaced("5 millis"),
+      until: (at) => at !== undefined,
+    }),
+    Effect.timeout("5 seconds"),
+    Effect.map((at) => at ?? Infinity),
+  );
+
+  // A reused frame is one of the retained screencast frames, returned by reference; it is stale if
+  // its paint could precede the given time.
+  const reusedBefore = (image: Image, time: number) =>
+    page.recentFrames.pipe(
+      Effect.map((frames) =>
+        frames.some(
+          (frame) =>
+            frame.data === image.data && frame.hostTime - frame.timing.uncertaintyMillis <= time,
+        ),
+      ),
+    );
+
+  return { browser, page, pressed, reusedBefore };
+});
+
+// The centre pixel of an image, decoded by the page itself.
+const centreOf = (page: Page, image: Image) =>
+  Effect.promise(() =>
+    page.playwright.evaluate(async (bytes) => {
+      const bitmap = await createImageBitmap(
+        new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
+      );
+
+      const canvas = new OffscreenCanvas(1, 1).getContext("2d");
+
+      if (canvas === null) throw new Error("no 2d canvas");
+      canvas.drawImage(bitmap, bitmap.width / 2, bitmap.height / 2, 1, 1, 0, 0, 1, 1);
+      const [red = 0, green = 0, blue = 0] = canvas.getImageData(0, 0, 1, 1).data;
+
+      return { red, green, blue };
+    }, Array.from(image.data)),
+  );
+
+// Chromium's screencast can miss a page's final paint. The relay withholds native frames on
+// request, so the newest delivered frame shows an animation the page has already finished.
+const withheldFinalPaint = Effect.fnUntraced(function* () {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+  const context = yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+    (context) => Effect.promise(() => context.close()),
+  );
+
+  const createSession = context.newCDPSession.bind(context);
+  let withholding = false;
+
+  context.newCDPSession = async (target) => {
+    const cdp = await createSession(target);
+    const emitter = cdp as EmittingSession;
+    const emit = emitter.emit.bind(emitter);
+
+    emitter.emit = (event, ...args) =>
+      event === "Page.screencastFrame" && withholding ? true : emit(event, ...args);
+
+    return cdp;
+  };
+
+  const browser = yield* makeBrowser(context, { id: "final-paint", provider: "test" });
+  const page = yield* browser.newPage();
+
+  yield* page.goto(
+    "data:text/html," +
+      encodeURIComponent(`<body style="margin:0;height:100vh">
+<script>
+  let turn = 0, running = true;
+  (function draw() {
+    if (!running) return;
+    document.body.style.background = "hsl(" + (120 + (turn++ % 60)) + ",80%,40%)";
+    requestAnimationFrame(draw);
+  })();
+  window.finish = () => { running = false; document.body.style.background = "rgb(255,0,0)"; };
+</script></body>`),
+  );
+  yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+  yield* Effect.sleep("400 millis");
+
+  const centre = (image: Image) => centreOf(page, image);
+
+  const retained = (image: Image) =>
+    page.recentFrames.pipe(
+      Effect.map((frames) => frames.some((frame) => frame.data === image.data)),
+    );
+
+  return {
+    browser,
+    page,
+    centre,
+    retained,
+    withhold: () => {
+      withholding = true;
+    },
+  };
+});
+
 const firstFrame = (page: Page) =>
   page.screencast().pipe(Stream.take(1), Stream.runCollect, Effect.timeout("15 seconds"));
 
@@ -297,6 +454,130 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
+    it.effect("never reuses paint from before input submitted by a running action", () =>
+      Effect.gen(function* () {
+        const { page, pressed, reusedBefore } = yield* delayedCapture();
+
+        const clicking = yield* page
+          .click({ x: 400, y: 300 }, { holdMillis: 1500 })
+          .pipe(Effect.forkChild);
+
+        yield* pressed;
+        // While the action may still change the page, no cached paint is current.
+        const image = yield* page.screenshot();
+
+        assert.isFalse(yield* reusedBefore(image, Infinity));
+        yield* Fiber.join(clicking);
+      }),
+    );
+
+    it.effect("never reuses paint from before input of an action the caller interrupted", () =>
+      Effect.gen(function* () {
+        const { browser, page, pressed, reusedBefore } = yield* delayedCapture();
+
+        const clicking = yield* page
+          .click({ x: 400, y: 300 }, { holdMillis: 1500 })
+          .pipe(Effect.forkChild);
+
+        const input = yield* pressed;
+
+        yield* Fiber.interrupt(clicking);
+        const image = yield* page.screenshot();
+
+        assert.isFalse(yield* reusedBefore(image, input));
+
+        const action = (yield* browser.recentEvents).find(
+          (event) => event._tag === "Action" && event.name === "click",
+        );
+
+        assert.deepStrictEqual(
+          action?._tag === "Action" ? [action.ok, action.dispatched, action.error] : undefined,
+          [false, true, "interrupted"],
+        );
+      }),
+    );
+
+    it.effect(
+      "reuses an animating page's newest frame but never a stale one after paint stops",
+      () =>
+        Effect.gen(function* () {
+          const { browser, page, centre, retained, withhold } = yield* withheldFinalPaint();
+
+          // While the page animates, a frame painted moments ago is current.
+          yield* Effect.gen(function* () {
+            const latest = yield* page.latestFrame;
+            const at = yield* browser.now;
+
+            return Option.isSome(latest) && at - latest.value.hostTime < 50;
+          }).pipe(
+            Effect.repeat({ schedule: Schedule.spaced("5 millis"), until: (fresh) => fresh }),
+            Effect.timeout("5 seconds"),
+          );
+          assert.isTrue(yield* retained(yield* page.screenshot()));
+
+          // The final paint never reaches the host; the newest frame still shows the animation.
+          withhold();
+          yield* Effect.promise(() =>
+            page.playwright.evaluate(() => (window as unknown as { finish: () => void }).finish()),
+          );
+          yield* Effect.sleep("400 millis");
+          const image = yield* page.screenshot();
+          const pixel = yield* centre(image);
+
+          assert.isFalse(yield* retained(image));
+          assert.isAbove(pixel.red, 200);
+          assert.isBelow(pixel.green, 60);
+        }),
+    );
+
+    it.effect("makes a moment's last frame the page now, after a stopped capture and input", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext("fresh");
+        const page = yield* browser.newPage();
+
+        // The page repaints a few times before it settles, so several frames are retained.
+        yield* page.goto(
+          "data:text/html," +
+            encodeURIComponent(`<body style="margin:0;background:rgb(255,0,0)">
+<button style="position:absolute;left:10px;top:10px;width:100px;height:40px"
+  onclick="document.body.style.background = 'rgb(0,0,255)'">go</button>
+<script>
+  let shade = 0;
+  const repaint = setInterval(() => {
+    document.body.style.background = shade++ % 2 === 0 ? "rgb(200,0,0)" : "rgb(255,0,0)";
+    if (shade === 8) clearInterval(repaint);
+  }, 40);
+</script></body>`),
+        );
+        // Waiting for the screen to settle runs and stops a capture; its frames stay retained.
+        yield* page.waitForStill({ quietMillis: 300 });
+        const retained = yield* page.recentFrames;
+
+        assert.isAbove(retained.length, 1);
+        yield* page.click({ x: 50, y: 30 });
+
+        const moment = yield* Moment.capture(page, { frames: 2 }).pipe(
+          Effect.provideService(Browser, browser),
+        );
+
+        const last = moment.frames.at(-1);
+
+        const click = moment.events.find(
+          (event) => event._tag === "Action" && event.name === "click",
+        );
+
+        assert.isDefined(last);
+        assert.isDefined(click);
+        if (last === undefined || click === undefined) return;
+        assert.strictEqual(last.timing._tag, "Screenshot");
+        assert.isAbove(last.hostTime, click.at);
+        assert.isAbove((yield* centreOf(page, last.image)).blue, 200);
+        // The moment still begins where its window does, not just before its last frame.
+        assert.strictEqual(moment.frames.length, 2);
+        assert.strictEqual(moment.frames[0]?.hostTime, retained[0]?.hostTime);
+      }),
+    );
+
     it.effect("rejects invalid history bounds before taking over a borrowed context", () =>
       Effect.gen(function* () {
         const native = (yield* Browser).context.browser();
@@ -325,6 +606,38 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(context.pages().length, 1);
         }
         assert.strictEqual(yield* Effect.promise(() => page.title()), "Existing document");
+      }),
+    );
+
+    it.effect("rejects invalid action and navigation timeouts before taking over a context", () =>
+      Effect.gen(function* () {
+        const native = (yield* Browser).context.browser();
+
+        if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+        const context = yield* Effect.acquireRelease(
+          Effect.promise(() => native.newContext()),
+          (context) => Effect.promise(() => context.close()),
+        );
+
+        for (const name of ["actionTimeout", "navigationTimeout"] as const)
+          for (const timeout of [
+            Duration.zero,
+            Duration.millis(-1),
+            Duration.millis(Number.NaN),
+            Duration.infinity,
+          ]) {
+            const error = yield* makeBrowser(
+              context,
+              { id: "invalid-timeout", provider: "test" },
+              { [name]: timeout },
+            ).pipe(Effect.flip);
+
+            assert.strictEqual(error.reason._tag, "InvalidRequest", `${name} ${String(timeout)}`);
+            assert.match(error.message, new RegExp(name));
+            assert.isFalse(error.dispatched);
+          }
+        assert.isEmpty(context.pages());
       }),
     );
 
@@ -604,7 +917,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("bounds a stalled stop reply and reports it before another capture can start", () =>
+    it.effect("bounds a stalled stop reply and starts the next capture once it settles", () =>
       Effect.gen(function* () {
         const fixture = yield* setup();
 
@@ -621,7 +934,59 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.match(error.message, /stop.*deadline/i);
         assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 1);
         assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 1);
+
+        // The late stop succeeds; it delayed capture but must not disable it for the page.
         fixture.releaseReply();
+
+        const frames = yield* fixture.page
+          .screencast()
+          .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+
+        assert.strictEqual(frames.length, 1);
+        assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 2);
+        assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 2);
+      }),
+    );
+
+    it.effect("rejects a reader whose explicit options differ from the running capture", () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup();
+        const small = { size: { width: 160, height: 120 }, quality: 10 };
+
+        // Keep painting, so a reader that joins later still receives frames.
+        yield* Effect.promise(() =>
+          fixture.page.playwright.evaluate(() => {
+            let turn = 0;
+
+            setInterval(() => {
+              document.body.style.background = `hsl(${(turn += 30)}, 70%, 50%)`;
+            }, 40);
+          }),
+        );
+
+        yield* fixture.page.screencast(small).pipe(Stream.runDrain, Effect.forkChild);
+        yield* fixture.template;
+
+        for (const conflicting of [{ quality: 95 }, { size: { width: 800, height: 600 } }]) {
+          const error = yield* fixture.page
+            .screencast(conflicting)
+            .pipe(Stream.runDrain, Effect.flip, Effect.timeout("5 seconds"));
+
+          assert.strictEqual(error.reason._tag, "InvalidRequest");
+          assert.isFalse(error.dispatched);
+        }
+        // Readers without options, or with the same ones, share the running capture.
+        for (const sharing of [{}, small]) {
+          const frames = yield* fixture.page
+            .screencast(sharing)
+            .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+
+          assert.deepStrictEqual(
+            frames.map((frame) => [frame.width, frame.height]),
+            [[160, 120]],
+          );
+        }
+        assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 1);
       }),
     );
 

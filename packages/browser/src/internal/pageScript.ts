@@ -73,7 +73,6 @@ export interface InspectedTarget {
   readonly cursor: string;
   readonly href?: string | undefined;
   readonly fingerprint: string;
-  readonly prose: boolean;
 }
 
 export interface PreparedInput {
@@ -83,17 +82,43 @@ export interface PreparedInput {
   readonly destination?: string | undefined;
 }
 
-export type PreparedInputResult =
-  | PreparedInput
-  | { readonly error: string; readonly detail: string };
+/** A refusal; a stale target is named by its index in the plan. */
+export interface InputFailure {
+  readonly error: string;
+  readonly detail: string;
+  readonly index?: number | undefined;
+}
 
-export type ValidatedInputResult =
-  | { readonly ok: true }
-  | { readonly error: string; readonly detail: string };
+export type PreparedInputResult = PreparedInput | InputFailure;
+
+export type ValidatedInputResult = { readonly ok: true } | InputFailure;
+
+/** A point where a target, by its index in the plan, is about to receive a press. */
+export interface Press {
+  readonly index: number;
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface ValidationOptions {
+  /** Require focus on the first target. */
+  readonly focused?: boolean;
+  /** After the pointer's own events have run, each target must still receive its press. */
+  readonly presses?: ReadonlyArray<Press>;
+}
 
 export type EditResult =
   | { readonly ok: true; readonly detail: string }
-  | { readonly error: string };
+  | { readonly error: string; readonly stale?: boolean };
+
+/** A focused field, and whether opted-in prose slips may apply to it as it is now. */
+export type FocusResult =
+  | { readonly ok: true; readonly detail: string; readonly prose: boolean }
+  | { readonly error: string; readonly stale?: boolean };
+
+export type TypeableResult =
+  | { readonly ok: true }
+  | { readonly error: "stale" | "untypeable"; readonly detail: string };
 
 export interface PageApi {
   readonly version: number;
@@ -104,8 +129,13 @@ export interface PageApi {
   ): { readonly x: number; readonly y: number; readonly dx: number; readonly dy: number } | null;
   viewport(): { readonly width: number; readonly height: number };
   prepareInput(plan: InputPlan): PreparedInputResult;
-  validateInput(plan: InputPlan, prepared: PreparedInput, focused?: boolean): ValidatedInputResult;
-  focus(ref: string, replace: boolean): EditResult;
+  validateInput(
+    plan: InputPlan,
+    prepared: PreparedInput,
+    options?: ValidationOptions,
+  ): ValidatedInputResult | Promise<ValidatedInputResult>;
+  typeable(ref: string | null): TypeableResult;
+  focus(ref: string, replace: boolean): FocusResult;
   checkText(ref: string, expected: string): EditResult;
   select(ref: string, values: ReadonlyArray<string>): EditResult;
   hasText(text: string): boolean;
@@ -598,10 +628,14 @@ export const install = (): PageApi => {
     };
   };
 
+  // A ref names an element of the current documents only: nodes of a navigated frame can stay
+  // connected to their old document, and must not be measured or typed into.
   const lookup = (ref: string): Element | undefined => {
     const element = byRef.get(ref)?.deref();
 
-    return element !== undefined && element.isConnected ? element : undefined;
+    return element !== undefined && element.isConnected && inCurrentDocument(element)
+      ? element
+      : undefined;
   };
 
   const describe = (element: Element): string => {
@@ -662,6 +696,21 @@ export const install = (): PageApi => {
     return true;
   };
 
+  /** Whether `node` is `ancestor` or inside it, across shadow roots and same-origin frames. */
+  const within = (ancestor: Element, node: Element): boolean => {
+    for (let current: Element | null = node; current !== null;) {
+      if (current === ancestor) return true;
+      current = parentOf(current) ?? current.ownerDocument.defaultView?.frameElement ?? null;
+    }
+
+    return false;
+  };
+
+  // A press at a point reaches the element when the top-document hit is the element, inside it,
+  // or one of its containers (whose activation the element's own classification already covers).
+  const receives = (element: Element, hit: Element): boolean =>
+    within(element, hit) || within(hit, element);
+
   const hitAt = (root: Document | ShadowRoot, x: number, y: number): Element | null => {
     let hit = root.elementFromPoint(x, y);
 
@@ -687,16 +736,124 @@ export const install = (): PageApi => {
     return hit;
   };
 
-  const details = (element: Element, hit: Element, x: number, y: number): ResolvedPoint => {
-    let link: Element | null = element;
+  const isLabel = (element: Element): element is HTMLLabelElement => element.tagName === "LABEL";
 
-    while (link !== null && (link.tagName !== "A" || !link.hasAttribute("href")))
-      link = parentOf(link);
+  // HTML links, SVG links and image-map areas all navigate; SVG keeps lowercase tag names.
+  const hrefAttribute = (element: Element): string | null =>
+    element.localName === "a" || element.localName === "area"
+      ? (element.getAttribute("href") ??
+        element.getAttributeNS("http://www.w3.org/1999/xlink", "href"))
+      : null;
+
+  const linkOf = (element: Element): Element | undefined => {
+    for (let node: Element | null = element; node !== null; node = parentOf(node))
+      if (hrefAttribute(node) !== null) return node;
+
+    return undefined;
+  };
+
+  /**
+   * The element whose activation behaviour a click or key on `element` runs, as the browser
+   * resolves it along the composed path: a link, button, input, summary or a label's control.
+   */
+  const activationTarget = (element: Element): Element | undefined => {
+    for (let node: Element | null = element; node !== null; node = parentOf(node)) {
+      if (
+        hrefAttribute(node) !== null ||
+        node.tagName === "BUTTON" ||
+        node.tagName === "SUMMARY" ||
+        (isInput(node) && node.type !== "hidden")
+      )
+        return node;
+      if (isLabel(node) && node.control !== null) return node.control;
+    }
+
+    return undefined;
+  };
+
+  /**
+   * A control between a press's hit and the approved target that is not the target's own
+   * activation, such as a link or button a hover handler nested into it. The approval classified
+   * the target, so that control would act unapproved.
+   */
+  const nestedControl = (element: Element, hit: Element): Element | undefined => {
+    // A container of the target is covered by the target's own classification.
+    if (!within(element, hit)) return undefined;
+    const own = activationTarget(element);
+
+    for (
+      let node: Element | null = hit;
+      node !== null && node !== element;
+      node = parentOf(node) ?? node.ownerDocument.defaultView?.frameElement ?? null
+    )
+      if (
+        node !== own &&
+        (hrefAttribute(node) !== null ||
+          node.tagName === "BUTTON" ||
+          node.tagName === "SUMMARY" ||
+          (isInput(node) && node.type !== "hidden") ||
+          isSelect(node) ||
+          isTextArea(node) ||
+          (isLabel(node) && node.control !== null && node.control !== own) ||
+          activatingRoles.has(roleOf(node) ?? ""))
+      )
+        return node;
+
+    return undefined;
+  };
+
+  const textEntry = (element: Element): boolean =>
+    (isInput(element) &&
+      ![
+        "button",
+        "reset",
+        "submit",
+        "image",
+        "checkbox",
+        "radio",
+        "file",
+        "range",
+        "color",
+        "hidden",
+      ].includes(element.type)) ||
+    isTextArea(element) ||
+    (isHtml(element) && element.isContentEditable);
+
+  const activatingRoles = new Set([
+    "button",
+    "link",
+    "checkbox",
+    "radio",
+    "switch",
+    "tab",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "treeitem",
+  ]);
+
+  // Typed text goes wherever focus is, and a typed space or letter can press a focused button,
+  // toggle a box, follow a link or change a select. Only fields, or elements that are none of
+  // these (a page or a canvas game), may receive text.
+  const typingRefusal = (element: Element, explicit: boolean): string | undefined =>
+    textEntry(element)
+      ? undefined
+      : explicit
+        ? `${describe(element)} is not a text field`
+        : activationTarget(element) !== undefined ||
+            isSelect(element) ||
+            activatingRoles.has(roleOf(element) ?? "")
+          ? `focus is on ${describe(element)}, which typed text could activate or change; type into a text field by ref, or use press for keys`
+          : undefined;
+
+  const details = (element: Element, hit: Element, x: number, y: number): ResolvedPoint => {
+    const link = linkOf(element);
     let href: string | undefined;
 
-    if (link !== null) {
+    if (link !== undefined) {
       try {
-        href = new URL(link.getAttribute("href") ?? "", link.ownerDocument.baseURI).href;
+        href = new URL(hrefAttribute(link) ?? "", link.ownerDocument.baseURI).href;
       } catch {
         href = undefined;
       }
@@ -743,74 +900,94 @@ export const install = (): PageApi => {
     if (element === undefined)
       return { error: "stale", detail: `${ref} is not on the page any more` };
     if (isDisabled(element)) return { error: "disabled", detail: `${ref} is disabled` };
-    const view = element.ownerDocument.defaultView ?? window;
     const rect = element.getBoundingClientRect();
 
     if (rect.width === 0 && rect.height === 0)
       return { error: "hidden", detail: `${ref} has no size on the page` };
-    if (
-      rect.top < 0 ||
-      rect.left < 0 ||
-      rect.bottom > view.innerHeight ||
-      rect.right > view.innerWidth
-    ) {
-      if (!scroll) return { error: "offscreen", detail: ref + " is outside the viewport" };
-      element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
 
-      return point(target, false);
-    }
-    let left = Math.max(rect.left, 0);
-    let top = Math.max(rect.top, 0);
-    let right = Math.min(rect.right, view.innerWidth);
-    let bottom = Math.min(rect.bottom, view.innerHeight);
+    // Input arrives in top-document viewport pixels, so geometry and occlusion are measured
+    // there: a frame's own viewport cannot say whether the frame is scrolled away or covered.
+    let box = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    let visible = { ...box };
+    let outside = false;
 
-    // A field can be inside the viewport and still clipped by a nested scrolling panel.
-    for (let ancestor = parentOf(element); ancestor !== null; ancestor = parentOf(ancestor)) {
-      const style = view.getComputedStyle(ancestor);
-      const box = ancestor.getBoundingClientRect();
+    for (let inner: Element = element; ;) {
+      const view = inner.ownerDocument.defaultView ?? window;
 
-      if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
-        left = Math.max(left, box.left + ancestor.clientLeft);
-        right = Math.min(right, box.left + ancestor.clientLeft + ancestor.clientWidth);
+      outside ||=
+        box.left < 0 || box.top < 0 || box.right > view.innerWidth || box.bottom > view.innerHeight;
+      visible = {
+        left: Math.max(visible.left, 0),
+        top: Math.max(visible.top, 0),
+        right: Math.min(visible.right, view.innerWidth),
+        bottom: Math.min(visible.bottom, view.innerHeight),
+      };
+
+      // A field can be inside the viewport and still clipped by a nested scrolling panel.
+      for (let ancestor = parentOf(inner); ancestor !== null; ancestor = parentOf(ancestor)) {
+        const style = view.getComputedStyle(ancestor);
+        const clip = ancestor.getBoundingClientRect();
+
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+          visible.left = Math.max(visible.left, clip.left + ancestor.clientLeft);
+          visible.right = Math.min(
+            visible.right,
+            clip.left + ancestor.clientLeft + ancestor.clientWidth,
+          );
+        }
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+          visible.top = Math.max(visible.top, clip.top + ancestor.clientTop);
+          visible.bottom = Math.min(
+            visible.bottom,
+            clip.top + ancestor.clientTop + ancestor.clientHeight,
+          );
+        }
       }
-      if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
-        top = Math.max(top, box.top + ancestor.clientTop);
-        bottom = Math.min(bottom, box.top + ancestor.clientTop + ancestor.clientHeight);
+
+      const frame = view.frameElement;
+
+      if (frame === null) break;
+      const frameBox = frame.getBoundingClientRect();
+      const dx = frameBox.left + frame.clientLeft;
+      const dy = frameBox.top + frame.clientTop;
+
+      box = {
+        left: box.left + dx,
+        top: box.top + dy,
+        right: box.right + dx,
+        bottom: box.bottom + dy,
+      };
+      visible = {
+        left: Math.max(visible.left + dx, dx),
+        top: Math.max(visible.top + dy, dy),
+        right: Math.min(visible.right + dx, dx + frame.clientWidth),
+        bottom: Math.min(visible.bottom + dy, dy + frame.clientHeight),
+      };
+      inner = frame;
+    }
+
+    if (outside || visible.right <= visible.left || visible.bottom <= visible.top) {
+      if (scroll) {
+        element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+
+        return point(target, false);
       }
+
+      return {
+        error: "offscreen",
+        detail: outside
+          ? ref + " is outside the viewport"
+          : `${ref} could not be scrolled into view`,
+      };
     }
-    if (scroll && (right <= left || bottom <= top)) {
-      element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    const x = (visible.left + visible.right) / 2;
+    const y = (visible.top + visible.bottom) / 2;
+    const hit = hitAt(document, x, y);
 
-      return point(target, false);
-    }
-
-    if (right <= left || bottom <= top)
-      return { error: "offscreen", detail: `${ref} could not be scrolled into view` };
-    const x = (left + right) / 2;
-    const y = (top + bottom) / 2;
-    const root = element.getRootNode();
-    const hit = isRoot(root) ? root.elementFromPoint(x, y) : null;
-
-    if (hit !== null && hit !== element && !element.contains(hit) && !hit.contains(element))
+    if (hit !== null && !receives(element, hit))
       return { error: "covered", detail: `${ref} is covered by ${describe(hit)}` };
-    let offsetX = 0;
-    let offsetY = 0;
-    let frame = view.frameElement;
 
-    while (frame !== null) {
-      const box = frame.getBoundingClientRect();
-
-      offsetX += box.left + frame.clientLeft;
-      offsetY += box.top + frame.clientTop;
-      frame = frame.ownerDocument.defaultView?.frameElement ?? null;
-    }
-
-    return details(
-      element,
-      isRoot(root) ? (hitAt(root, x, y) ?? element) : element,
-      Math.round(x + offsetX),
-      Math.round(y + offsetY),
-    );
+    return details(element, hit ?? element, Math.round(x), Math.round(y));
   };
 
   // Suggest one visible wheel origin. Unsupported frame geometry and fully clipped panels use
@@ -912,10 +1089,67 @@ export const install = (): PageApi => {
     return true;
   };
 
+  // form.elements omits image submitters. Walk the whole root in tree order so an Enter
+  // submission uses the real default button, including controls associated from outside the form.
+  const defaultSubmitter = (form: HTMLFormElement) => {
+    const root = form.getRootNode();
+
+    return isRoot(root)
+      ? Array.from(root.querySelectorAll("button,input")).find(
+          (candidate): candidate is HTMLButtonElement | HTMLInputElement =>
+            isSubmitter(candidate) && candidate.form === form,
+        )
+      : undefined;
+  };
+
+  const sensitive =
+    /password|passwd|secret|credential|token|username|user.?name|login|sign.?in|one.?time|otp|security|auth|email|e-mail|url|website|phone|tel(?:ephone)?|account|card|payment|billing|order|trade|quantity|amount|price|postal|zip|address|iban|routing|cc-/i;
+
+  // Attributes that say what a field is for. They bind an approval and decide prose eligibility.
+  const purpose = (control: Element, form: HTMLFormElement | null) => [
+    control.getAttribute("id"),
+    control.getAttribute("name"),
+    control.getAttribute("inputmode"),
+    control.getAttribute("autocomplete"),
+    control.getAttribute("aria-label"),
+    form?.getAttribute("id"),
+    form?.getAttribute("name"),
+    form?.getAttribute("aria-label"),
+  ];
+
+  /** Free prose only: never numbers, addresses, credentials, payment or order fields. */
+  const proseEligible = (control: Element): boolean => {
+    const form = isTextArea(control) ? control.form : null;
+    const submitter = form === null ? undefined : defaultSubmitter(form);
+    const inputMode = control.getAttribute("inputmode");
+
+    return (
+      (isTextArea(control) || (isHtml(control) && control.isContentEditable)) &&
+      !isDisabled(control) &&
+      !control.hasAttribute("readonly") &&
+      control.getAttribute("aria-readonly") !== "true" &&
+      (inputMode === null || inputMode === "" || inputMode === "text") &&
+      ![
+        ...purpose(control, form),
+        nameOf(control, roleOf(control)),
+        submitter === undefined ? null : nameOf(submitter, roleOf(submitter)),
+      ].some((value) => value !== null && value !== undefined && sensitive.test(value))
+    );
+  };
+
+  // What an approval binds of a URL. A fragment that names a place on the page, which scroll-spy
+  // and feed pages rewrite as they scroll, is left out. A hash route (#/… or #!…) stays: it
+  // selects what the page's controls act on.
+  const boundUrl = (url: string): string => {
+    const hash = url.indexOf("#");
+
+    return hash === -1 || /^#[/!]/.test(url.slice(hash)) ? url : url.slice(0, hash);
+  };
+
   const inspectInput = (element: Element, plan: InputPlan) => {
     const metadata = details(element, element, 0, 0);
-    const forwarded = element.closest("label")?.control;
-    const control = forwarded ?? element;
+    // Classify what the input activates, such as the submit button around a painted label.
+    const control = activationTarget(element) ?? element;
 
     const form =
       isInput(control) || isButton(control) || isTextArea(control) || isSelect(control)
@@ -928,36 +1162,20 @@ export const install = (): PageApi => {
       plan.action === "click" ||
       (plan.action === "press" && (enter || plan.keys?.split("+").at(-1) === "Space"));
 
+    // Enter submits a form from any input but buttons, file and color pickers, including
+    // checkboxes, radios and ranges.
     const fieldEnter =
       isInput(control) &&
-      ![
-        "button",
-        "reset",
-        "submit",
-        "image",
-        "checkbox",
-        "radio",
-        "file",
-        "range",
-        "color",
-        "hidden",
-      ].includes(control.type) &&
+      !["button", "reset", "submit", "image", "file", "color", "hidden"].includes(control.type) &&
       ((plan.action === "press" && enter) || (plan.action === "type" && plan.submit));
 
     const submits = form !== null && ((activation && isSubmitter(control)) || fieldEnter);
 
-    const formRoot = form?.getRootNode();
-
-    // form.elements omits image submitters. Walk the whole root in tree order so an Enter
-    // submission uses the real default button, including controls associated from outside the form.
     const submitter = isSubmitter(control)
       ? control
-      : formRoot === undefined || !isRoot(formRoot)
+      : form === null
         ? undefined
-        : Array.from(formRoot.querySelectorAll("button,input")).find(
-            (candidate): candidate is HTMLButtonElement | HTMLInputElement =>
-              isSubmitter(candidate) && candidate.form === form,
-          );
+        : defaultSubmitter(form);
 
     const formDestination =
       form === null
@@ -980,58 +1198,46 @@ export const install = (): PageApi => {
           ? submitter.formTarget
           : form.target;
 
-    let link: Element | null = element;
-
-    while (link !== null && (link.tagName !== "A" || !link.hasAttribute("href")))
-      link = parentOf(link);
-    const destination = submits ? formDestination : metadata.href;
+    const link = linkOf(element);
+    // Only activation follows a link or opens a file chooser; hovering or scrolling over a
+    // control does neither, and names say nothing about where the pointer merely rests.
+    const destination = submits ? formDestination : activation ? metadata.href : undefined;
     const classifications: Array<Classification> = [];
 
+    const names =
+      control === element ? metadata.name : `${metadata.name} ${nameOf(control, roleOf(control))}`;
+
     if (submits) classifications.push("form-submit");
-    if (/\b(?:buy|pay|order|purchase)\b/i.test(metadata.name)) classifications.push("purchase");
-    if (/\bdelete\b/i.test(metadata.name)) classifications.push("delete");
-    if (/\bconfirm\b/i.test(metadata.name)) classifications.push("confirm");
-    if (link?.hasAttribute("download") === true) classifications.push("download");
-    if (isInput(control) && control.type === "file") classifications.push("upload");
+    if (plan.action !== "hover" && plan.action !== "scroll") {
+      if (/\b(?:buy|pay|order|purchase)\b/i.test(names)) classifications.push("purchase");
+      if (/\bdelete\b/i.test(names)) classifications.push("delete");
+      if (/\bconfirm\b/i.test(names)) classifications.push("confirm");
+    }
+    if (activation && link?.hasAttribute("download") === true) classifications.push("download");
+    if (activation && isInput(control) && control.type === "file") classifications.push("upload");
 
-    const typingAttributes = [
-      control.getAttribute("id"),
-      control.getAttribute("name"),
-      control.getAttribute("inputmode"),
-      control.getAttribute("autocomplete"),
-      control.getAttribute("aria-label"),
-      metadata.name,
-      form?.getAttribute("id"),
-      form?.getAttribute("name"),
-      form?.getAttribute("aria-label"),
-      submitter === undefined ? null : nameOf(submitter, roleOf(submitter)),
-    ];
+    // Bind what decides the consequence and the control's identity. Names bind interactive
+    // controls only: other text, such as a live price or a page's own text, may change freely.
+    const role = metadata.role;
 
-    const sensitive =
-      /password|passwd|secret|credential|token|username|user.?name|login|sign.?in|one.?time|otp|security|auth|email|e-mail|url|website|phone|tel(?:ephone)?|account|card|payment|billing|order|trade|quantity|amount|price|postal|zip|address|iban|routing|cc-/i;
-
-    const inputMode = control.getAttribute("inputmode");
-
-    const prose =
-      (isTextArea(control) || (isHtml(control) && control.isContentEditable)) &&
-      !isDisabled(control) &&
-      !control.hasAttribute("readonly") &&
-      control.getAttribute("aria-readonly") !== "true" &&
-      (inputMode === null || inputMode === "" || inputMode === "text") &&
-      !typingAttributes.some(
-        (value) => value !== null && value !== undefined && sensitive.test(value),
-      );
+    const boundName =
+      role !== null &&
+      (interactiveRoles.has(role) || role === "canvas" || role === "iframe") &&
+      !(isHtml(element) && element.isContentEditable)
+        ? metadata.name
+        : null;
 
     // Approval and prose eligibility share the same immutable inspection. A focus or scroll
     // handler changing these attributes must not leave an old permission behind.
     const fingerprint = JSON.stringify([
-      typingAttributes,
-      prose,
-      metadata.element,
-      metadata.role,
-      metadata.name,
+      purpose(control, form),
+      proseEligible(control),
+      element.tagName,
+      element.id,
+      role,
+      boundName,
       metadata.href,
-      forwarded === null || forwarded === undefined ? null : refFor(forwarded),
+      control === element ? null : refFor(control),
       isInput(control) || isButton(control) ? control.type : control.tagName,
       control.matches(":disabled") || isDisabled(control),
       control.getAttribute("readonly"),
@@ -1042,11 +1248,11 @@ export const install = (): PageApi => {
       control.hasAttribute("multiple"),
       link?.getAttribute("download"),
       form === null ? null : refFor(form),
-      form?.action,
+      form === null ? null : boundUrl(form.action),
       form?.method,
       form?.target,
       submitter === undefined ? null : refFor(submitter),
-      formDestination,
+      formDestination === undefined ? undefined : boundUrl(formDestination),
       formMethod,
       formTarget,
       submitter?.formNoValidate,
@@ -1061,7 +1267,6 @@ export const install = (): PageApi => {
       cursor: metadata.cursor,
       ...(metadata.href === undefined ? {} : { href: metadata.href }),
       fingerprint,
-      prose,
     };
 
     return { inspected, classifications, destination };
@@ -1074,7 +1279,7 @@ export const install = (): PageApi => {
     const classifications = new Set<Classification>();
     let destination = plan.destination ?? undefined;
 
-    for (const target of plan.targets) {
+    for (const [index, target] of plan.targets.entries()) {
       let element: Element | null | undefined;
 
       if (target === null) {
@@ -1082,7 +1287,7 @@ export const install = (): PageApi => {
       } else if (typeof target === "string") {
         element = lookup(target);
         if (element === undefined)
-          return { error: "stale", detail: target + " is not on the page any more" };
+          return { error: "stale", detail: target + " is not on the page any more", index };
       } else {
         if (
           !Number.isFinite(target.x) ||
@@ -1105,7 +1310,10 @@ export const install = (): PageApi => {
         continue;
       }
       if (!inCurrentDocument(element))
-        return { error: "stale", detail: "the input target belongs to a replaced document" };
+        return { error: "stale", detail: "the input target belongs to a replaced document", index };
+      const refusal = plan.action === "type" ? typingRefusal(element, target !== null) : undefined;
+
+      if (refusal !== undefined) return { error: "untypeable", detail: refusal };
       const inspected = inspectInput(element, plan);
 
       targets.push(inspected.inspected);
@@ -1131,24 +1339,27 @@ export const install = (): PageApi => {
     }
 
     return {
-      url: location.href,
+      url: boundUrl(location.href),
       targets,
       classifications: [...classifications],
       ...(destination === undefined ? {} : { destination }),
     };
   };
 
-  const validateInput = (
+  const validate = (
     plan: InputPlan,
     prepared: PreparedInput,
-    focused = false,
+    options: ValidationOptions,
   ): ValidatedInputResult => {
     const current = prepareInput(plan);
 
-    if ("error" in current) return { error: "changed", detail: current.detail };
+    if ("error" in current)
+      return current.error === "stale" ? current : { error: "changed", detail: current.detail };
     if (
       current.url !== prepared.url ||
-      current.destination !== prepared.destination ||
+      (current.destination === undefined || prepared.destination === undefined
+        ? current.destination !== prepared.destination
+        : boundUrl(current.destination) !== boundUrl(prepared.destination)) ||
       JSON.stringify(current.classifications) !== JSON.stringify(prepared.classifications) ||
       current.targets.length !== prepared.targets.length ||
       current.targets.some((target, index) => {
@@ -1167,7 +1378,7 @@ export const install = (): PageApi => {
         detail: "the page or input target changed while the policy was deciding",
       };
 
-    if (focused) {
+    if (options.focused === true) {
       const active = activeElement();
       const expected = prepared.targets[0];
 
@@ -1177,10 +1388,50 @@ export const install = (): PageApi => {
         expected === undefined ||
         refFor(active) !== expected.ref
       )
-        return { error: "changed", detail: "focus moved away from the approved text field" };
+        return { error: "changed", detail: "focus moved away from the approved element" };
+    }
+
+    for (const press of options.presses ?? []) {
+      const expected = prepared.targets[press.index];
+
+      const element =
+        expected === null || expected === undefined ? undefined : lookup(expected.ref);
+
+      const hit = hitAt(document, press.x, press.y);
+
+      if (element === undefined || hit === null || !receives(element, hit))
+        return {
+          error: "changed",
+          detail: `the approved target is no longer under the pointer at (${press.x}, ${press.y})`,
+        };
+
+      const nested = nestedControl(element, hit);
+
+      if (nested !== undefined)
+        return {
+          error: "changed",
+          detail: `${describe(nested)} inside the approved target would receive the press at (${press.x}, ${press.y})`,
+        };
     }
 
     return { ok: true };
+  };
+
+  // Chromium delivers pointer moves with the next frame. A press check waits until the frame
+  // after it, so it sees what the page did when the pointer arrived, such as a menu opened over
+  // the target. A hidden document draws no frames, and its moves wait for the press instead.
+  const validateInput = (
+    plan: InputPlan,
+    prepared: PreparedInput,
+    options: ValidationOptions = {},
+  ): ValidatedInputResult | Promise<ValidatedInputResult> => {
+    if ((options.presses ?? []).length === 0) return validate(plan, prepared, options);
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    if (document.visibilityState === "hidden") resolve();
+    else requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+
+    return promise.then(() => validate(plan, prepared, options));
   };
 
   // A corrected slip must not submit a different value when a widget swallowed the correction.
@@ -1202,30 +1453,39 @@ export const install = (): PageApi => {
       : { error: "corrected prose did not match the requested text" };
   };
 
-  const focus = (ref: string, replace: boolean): EditResult => {
+  const typeable = (ref: string | null): TypeableResult => {
+    const element = ref === null ? activeElement() : lookup(ref);
+
+    if (element === undefined)
+      return {
+        error: "stale",
+        detail: `${ref ?? "the focused element"} is not on the page any more`,
+      };
+    const refusal = element === null ? undefined : typingRefusal(element, ref !== null);
+
+    return refusal === undefined ? { ok: true } : { error: "untypeable", detail: refusal };
+  };
+
+  const focus = (ref: string, replace: boolean): FocusResult => {
     const element = lookup(ref);
 
-    if (element === undefined) return { error: `${ref} is not on the page any more` };
+    if (element === undefined) return { error: `${ref} is not on the page any more`, stale: true };
     if (isDisabled(element)) return { error: `${ref} is disabled` };
-    if (
-      !isInput(element) &&
-      !isTextArea(element) &&
-      !(isHtml(element) && element.isContentEditable)
-    )
-      return { error: `${ref} is ${describe(element)}, not a text field` };
+    if (!textEntry(element)) return { error: `${ref} is ${describe(element)}, not a text field` };
     if (isHtml(element)) element.focus();
     if (replace) {
       if (isInput(element) || isTextArea(element)) element.select();
       else element.ownerDocument.getSelection()?.selectAllChildren(element);
     }
 
-    return { ok: true, detail: describe(element) };
+    // Decided after focusing: a focus handler can mark the field sensitive.
+    return { ok: true, detail: describe(element), prose: proseEligible(element) };
   };
 
   const select = (ref: string, values: ReadonlyArray<string>): EditResult => {
     const element = lookup(ref);
 
-    if (element === undefined) return { error: `${ref} is not on the page any more` };
+    if (element === undefined) return { error: `${ref} is not on the page any more`, stale: true };
     if (!isSelect(element))
       return {
         error: `${ref} is ${describe(element)}, not a <select>; click it and pick an option`,
@@ -1261,6 +1521,7 @@ export const install = (): PageApi => {
     viewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
     prepareInput,
     validateInput,
+    typeable,
     focus,
     checkText,
     select,
@@ -1307,7 +1568,11 @@ export const PointResultSchema = Schema.Union([
   }),
 ]);
 
-const InputPreparationError = Schema.Struct({ error: Schema.String, detail: Schema.String });
+const InputPreparationError = Schema.Struct({
+  error: Schema.String,
+  detail: Schema.String,
+  index: Schema.optional(Schema.Finite),
+});
 
 export const PreparedInputResultSchema = Schema.Union([
   Schema.Struct({
@@ -1322,7 +1587,6 @@ export const PreparedInputResultSchema = Schema.Union([
           cursor: Schema.String,
           href: Schema.optional(Schema.String),
           fingerprint: Schema.String,
-          prose: Schema.Boolean,
         }),
       ),
     ),
@@ -1351,7 +1615,19 @@ export const ViewportResultSchema = Schema.Struct({
   height: Schema.Finite,
 });
 
+export const TypeableResultSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true) }),
+  Schema.Struct({ error: Schema.Literals(["stale", "untypeable"]), detail: Schema.String }),
+]);
+
+const EditFailure = Schema.Struct({ error: Schema.String, stale: Schema.optional(Schema.Boolean) });
+
+export const FocusResultSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String, prose: Schema.Boolean }),
+  EditFailure,
+]);
+
 export const EditResultSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String }),
-  Schema.Struct({ error: Schema.String }),
+  EditFailure,
 ]);

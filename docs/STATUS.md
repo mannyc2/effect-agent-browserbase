@@ -24,8 +24,9 @@
 - Humanized scrolling to off-screen targets, bounded fallback and approval revalidation; typing
   near 75 WPM with overlapping holds, slower word starts and opt-in corrected prose slips.
   Sampled presentation pauses retain the functional navigation wait.
-- Browser paint mapped onto the host clock with explicit uncertainty, timestamped mouse and raw
-  text-key input, startup capture calibration for newly owned sessions, and per-page capture
+- Browser paint mapped onto the host clock with explicit uncertainty through one browser-wide
+  clock mapping, timestamped mouse and raw text-key input, a best-effort startup capture
+  calibration for newly owned sessions, and per-page capture
   counters for filtering, paint gaps and observed subscriber loss. Screenshot timing has its own
   provenance; borrowed pages receive no probe input.
 - `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,

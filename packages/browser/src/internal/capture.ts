@@ -5,7 +5,7 @@
 import { Clock, Duration, Effect, Exit, Option, Queue, Semaphore, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
-import type { BrowserError } from "../BrowserError.ts";
+import { BrowserError, InvalidRequest } from "../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../Frame.ts";
 import { type Estimate, toHostTime } from "./clock.ts";
 
@@ -20,7 +20,8 @@ interface Options {
   readonly clock: Clock.Clock;
   readonly calibrate: Effect.Effect<Estimate, BrowserError>;
   readonly frameHistory: number;
-  readonly viewport: () => Size | null;
+  /** The viewport in CSS pixels; a capture is scaled to fit it, as screenshots are. */
+  readonly viewport: Effect.Effect<Size, BrowserError>;
   readonly imageSize: (data: Uint8Array) => Size | undefined;
   readonly error: (cause: unknown) => BrowserError;
   readonly onClose: (callback: () => void) => () => void;
@@ -43,6 +44,9 @@ interface NativeFrame {
 interface Generation {
   readonly subscribers: Set<Queue.Queue<Envelope>>;
   readonly calibration: Estimate;
+  /** The native capture's settings; every reader of this generation shares them. */
+  readonly quality: number;
+  readonly size: Size | null;
   readonly onFrame: (frame: NativeFrame) => void;
   accepting: boolean;
   predecessor: number | undefined;
@@ -68,7 +72,9 @@ export const make = (options: Options) =>
     const replies = new Set<Promise<void>>();
     let generation: Generation | undefined;
     let closed = false;
-    let teardownFailure: BrowserError | undefined;
+    // The latest stop whose reply has not settled. A new capture waits for it rather than
+    // assuming it was lost; it is never submitted again.
+    let unsettledStop: Promise<void> | undefined;
     let latest = Option.none<Frame>();
     let history: ReadonlyArray<Frame> = [];
     let received = 0;
@@ -100,25 +106,25 @@ export const make = (options: Options) =>
       try {
         response = options.cdp.send("Page.stopScreencast");
       } catch (cause) {
-        const failure = options.error(cause);
-
-        teardownFailure ??= failure;
-        notifyFailure(current, failure);
+        notifyFailure(current, options.error(cause));
 
         return;
       }
 
       // Attach both handlers in the callback turn. Even a caller that leaves immediately never
       // abandons a rejected native reply, and an uncertain stop is never submitted twice.
-      current.stopReply = response.then(
+      const reply = response.then(
         () => undefined,
         (cause: unknown) => {
-          const failure = options.error(cause);
-
-          teardownFailure ??= failure;
-          notifyFailure(current, failure);
+          notifyFailure(current, options.error(cause));
         },
       );
+
+      current.stopReply = reply;
+      unsettledStop = reply;
+      void reply.then(() => {
+        if (unsettledStop === reply) unsettledStop = undefined;
+      });
     };
 
     const fail = (current: Generation, failure: BrowserError) => {
@@ -134,6 +140,8 @@ export const make = (options: Options) =>
       }),
     );
 
+    const stopDeadline = () => options.error(new Error("screencast stop exceeded its deadline"));
+
     const awaitStop = (current: Generation) =>
       Effect.suspend(() =>
         current.stopReply === undefined
@@ -142,18 +150,23 @@ export const make = (options: Options) =>
               Effect.interruptible,
               Effect.timeoutOrElse({
                 duration: deadline,
-                orElse: () =>
-                  Effect.sync(() => {
-                    const failure = options.error(
-                      new Error("screencast stop exceeded its deadline"),
-                    );
-
-                    teardownFailure ??= failure;
-                    notifyFailure(current, failure);
-                  }),
+                orElse: () => Effect.sync(() => notifyFailure(current, stopDeadline())),
               }),
             ),
       ).pipe(Effect.provideService(Clock.Clock, options.clock));
+
+    // A late stop only delays the next capture; once its reply settles, capture can start again.
+    const awaitPreviousStop = Effect.suspend(() =>
+      unsettledStop === undefined
+        ? Effect.void
+        : Effect.promise(() => unsettledStop ?? Promise.resolve()).pipe(
+            Effect.interruptible,
+            Effect.timeoutOrElse({
+              duration: deadline,
+              orElse: () => Effect.fail(stopDeadline()),
+            }),
+          ),
+    ).pipe(Effect.provideService(Clock.Clock, options.clock));
 
     const release = (current: Generation, subscription: Queue.Queue<Envelope>) =>
       lock.withPermits(1)(
@@ -171,18 +184,30 @@ export const make = (options: Options) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
           if (closed) return yield* options.error(new Error("Target page has been closed"));
-          if (teardownFailure !== undefined) return yield* teardownFailure;
           let current = generation;
           const starting = current === undefined;
 
           if (current === undefined) {
+            yield* awaitPreviousStop;
             const calibration = yield* options.calibrate.pipe(Effect.interruptible);
+
+            // A page too busy to report its viewport is still captured, at device size.
+            const size =
+              screencast.size ??
+              (yield* options.viewport.pipe(
+                Effect.interruptible,
+                Effect.timeoutOrElse({ duration: deadline, orElse: () => Effect.succeed(null) }),
+                Effect.orElseSucceed(() => null),
+                Effect.provideService(Clock.Clock, options.clock),
+              ));
 
             if (closed) return yield* options.error(new Error("Target page has been closed"));
 
             const created: Generation = {
               subscribers: new Set(),
               calibration,
+              quality: screencast.quality ?? 80,
+              size,
               accepting: true,
               predecessor: undefined,
               failure: undefined,
@@ -238,7 +263,7 @@ export const make = (options: Options) =>
                 const data = Buffer.from(native.data, "base64");
 
                 const size = options.imageSize(data) ??
-                  options.viewport() ?? {
+                  created.size ?? {
                     width: native.metadata.deviceWidth,
                     height: native.metadata.deviceHeight,
                   };
@@ -278,7 +303,25 @@ export const make = (options: Options) =>
             current = created;
             generation = current;
             latest = Option.none();
-          }
+          } else if (
+            (screencast.quality !== undefined && screencast.quality !== current.quality) ||
+            (screencast.size !== undefined &&
+              (screencast.size.width !== current.size?.width ||
+                screencast.size.height !== current.size.height))
+          )
+            // One native capture serves every reader; silently giving a reader other settings
+            // than it asked for would misstate its frames.
+            return yield* new BrowserError({
+              operation: "screencast",
+              reason: new InvalidRequest({
+                detail: `a screencast with quality ${current.quality}${
+                  current.size === null
+                    ? ""
+                    : ` and size ${current.size.width}x${current.size.height}`
+                } is already running on this page; read it without options or with the same ones`,
+              }),
+              dispatched: false,
+            });
           // The callback API must apply sliding synchronously; PubSub.publishUnsafe skips it.
           const subscription = yield* Queue.sliding<Envelope>(subscriberCapacity);
 
@@ -292,13 +335,13 @@ export const make = (options: Options) =>
 
           if (starting) {
             options.cdp.on("Page.screencastFrame", current.onFrame);
-            const size = screencast.size ?? options.viewport();
+            const { quality, size } = current;
 
             const started = yield* Effect.tryPromise({
               try: () =>
                 options.cdp.send("Page.startScreencast", {
                   format: "jpeg",
-                  quality: screencast.quality ?? 80,
+                  quality,
                   ...(size === null ? {} : { maxWidth: size.width, maxHeight: size.height }),
                 }),
               catch: options.error,

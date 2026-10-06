@@ -114,12 +114,16 @@ const describeWith = (
 
     const prompts: Array<Prompt.Prompt> = [];
     const histories: Array<ReadonlyArray<Frame>> = [];
+    const currents: Array<Frame> = [];
     let frameAfter = 0;
 
     const observed: Page = {
       ...page,
       recentFrames: page.recentFrames.pipe(
         Effect.tap((frames) => Effect.sync(() => histories.push(frames))),
+      ),
+      currentFrame: page.currentFrame.pipe(
+        Effect.tap((frame) => Effect.sync(() => currents.push(frame))),
       ),
     };
 
@@ -149,6 +153,7 @@ const describeWith = (
       outcome,
       prompts,
       history: histories.at(-1) ?? [],
+      current: currents.at(-1),
       frameAfter,
       events: yield* browser.recentEvents,
     };
@@ -382,7 +387,11 @@ describe("understanding evidence", () => {
   ] as const) {
     it.live(`${name} describes frames from before and after its trigger`, () =>
       Effect.gen(function* () {
-        const { outcome, prompts, history, events, frameAfter } = yield* describeWith(name, answer);
+        const { outcome, prompts, history, current, events, frameAfter } = yield* describeWith(
+          name,
+          answer,
+        );
+
         const prompt = prompts[0];
 
         assert.isTrue(outcome.pass, outcome.detail);
@@ -396,9 +405,17 @@ describe("understanding evidence", () => {
           isDeepStrictEqual(frame.data, selected.at(-1)?.data),
         );
 
-        if (final === undefined)
-          throw new Error("the final description image is not a captured frame");
-        assert.isAtLeast(paintTime(final), frameAfter);
+        // The final picture is a retained paint after the barrier or, when none was demonstrably
+        // current, the moment's own screenshot, taken after a paint at the barrier arrived.
+        if (final === undefined) {
+          const reached = history.find((frame) => paintTime(frame) >= frameAfter);
+
+          if (current === undefined || reached === undefined)
+            throw new Error("the final description image is not a captured frame");
+          assert.strictEqual(current.timing._tag, "Screenshot");
+          assert.deepStrictEqual(current.data, selected.at(-1)?.data);
+          assert.isAtLeast(current.hostTime - current.timing.uncertaintyMillis, reached.receivedAt);
+        } else assert.isAtLeast(paintTime(final), frameAfter);
         assert.include(textOf(prompt), "click");
 
         const lastClick = events.findLast(

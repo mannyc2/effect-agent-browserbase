@@ -436,6 +436,17 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* page.type("x");
         const events = yield* fixture.browser.recentEvents;
 
+        // The caller interrupted both actions after their input reached the page.
+        assert.deepStrictEqual(
+          events.flatMap((event) =>
+            event._tag === "Action" ? [[event.name, event.ok, event.dispatched, event.error]] : [],
+          ),
+          [
+            ["click", false, true, "interrupted"],
+            ["press", false, true, "interrupted"],
+            ["type", true, true, undefined],
+          ],
+        );
         assert.strictEqual(events.filter((event) => event._tag === "PointerPressed").length, 1);
         assert.strictEqual(events.filter((event) => event._tag === "PointerReleased").length, 1);
         assert.deepStrictEqual(

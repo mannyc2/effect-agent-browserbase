@@ -12,6 +12,7 @@ import {
   Context,
   Duration,
   Effect,
+  Exit,
   Option,
   Queue,
   Ref,
@@ -19,7 +20,12 @@ import {
   Semaphore,
   type Stream,
 } from "effect";
-import type { BrowserContext, Page as PlaywrightPage } from "playwright-core";
+import type {
+  BrowserContext,
+  Dialog,
+  Frame as PlaywrightFrame,
+  Page as PlaywrightPage,
+} from "playwright-core";
 
 import { BrowserError, Failed, InvalidRequest } from "./BrowserError.ts";
 import {
@@ -41,11 +47,11 @@ export interface Options {
   /** Move the pointer along curved paths and type with human pacing. Defaults to false. */
   readonly humanize?: boolean | undefined;
   /**
-   * Bound on each action. Defaults to 10 seconds. Humanized pointer glides, up to 5 seconds each
-   * and two per drag, count against it.
+   * Bound on each action; finite and positive. Defaults to 10 seconds. Humanized pointer glides,
+   * up to 5 seconds each and two per drag, count against it.
    */
   readonly actionTimeout?: Duration.Input | undefined;
-  /** Bound on each navigation. Defaults to 30 seconds. */
+  /** Bound on each navigation; finite and positive. Defaults to 30 seconds. */
   readonly navigationTimeout?: Duration.Input | undefined;
   /** Screencast frames each page keeps for `recentFrames`. Defaults to 60. */
   readonly frameHistory?: number | undefined;
@@ -75,7 +81,10 @@ export interface Service {
   readonly now: Effect.Effect<number>;
   /** The Playwright context, for anything this API does not cover. Never give it to a model. */
   readonly context: BrowserContext;
-  /** Measured on a private startup page only when the provider attested a fresh context. */
+  /**
+   * Measured on a private startup page only when the provider attested a fresh context. A failed
+   * measurement leaves it empty rather than failing the browser.
+   */
   readonly captureCalibration: Option.Option<CaptureCalibration>;
   /** Open pages in the order they opened. */
   readonly pages: Effect.Effect<ReadonlyArray<Page.Page>>;
@@ -92,7 +101,9 @@ export class Browser extends Context.Service<Browser, Service>()("effect-browser
 
 /**
  * Build the service over a context the provider owns. The provider closes the context; this only
- * tracks its pages and events, for as long as the surrounding scope is open.
+ * tracks its pages and events, for as long as the surrounding scope is open. Each page's protocol
+ * session, capture and listeners end when that page closes or when the scope does, so a closed
+ * tab retains nothing and the context keeps none of them afterwards.
  */
 export const make = Effect.fn("Browser.make")(function* (
   context: BrowserContext,
@@ -107,26 +118,35 @@ export const make = Effect.fn("Browser.make")(function* (
   const motion = yield* Motion.Motion;
   const ownerScope = yield* Scope.Scope;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
-  const policyTimeout = Duration.fromInput(options.policyTimeout ?? Duration.minutes(5));
 
-  if (
-    Option.isNone(policyTimeout) ||
-    !Number.isFinite(Duration.toMillis(policyTimeout.value)) ||
-    !Duration.isPositive(policyTimeout.value)
-  )
-    return yield* new BrowserError({
-      operation: "make",
-      reason: new InvalidRequest({ detail: "policyTimeout must be finite and greater than zero" }),
-      dispatched: false,
-    });
+  // Every bound guards a lock or a held key, so each must be a real, finite deadline.
+  const bound = (name: string, input: Duration.Input | undefined, fallback: Duration.Duration) => {
+    const decoded = Duration.fromInput(input ?? fallback);
+
+    return Option.isSome(decoded) &&
+      Number.isFinite(Duration.toMillis(decoded.value)) &&
+      Duration.isPositive(decoded.value)
+      ? Effect.succeed(decoded.value)
+      : Effect.fail(
+          new BrowserError({
+            operation: "make",
+            reason: new InvalidRequest({ detail: `${name} must be finite and greater than zero` }),
+            dispatched: false,
+          }),
+        );
+  };
 
   const settings: Page.Settings = {
     humanize: options.humanize ?? false,
-    actionTimeout: Duration.fromInputUnsafe(options.actionTimeout ?? Duration.seconds(10)),
-    navigationTimeout: Duration.fromInputUnsafe(options.navigationTimeout ?? Duration.seconds(30)),
+    actionTimeout: yield* bound("actionTimeout", options.actionTimeout, Duration.seconds(10)),
+    navigationTimeout: yield* bound(
+      "navigationTimeout",
+      options.navigationTimeout,
+      Duration.seconds(30),
+    ),
     frameHistory: options.frameHistory ?? 60,
     guard: options.guard,
-    policyTimeout: policyTimeout.value,
+    policyTimeout: yield* bound("policyTimeout", options.policyTimeout, Duration.minutes(5)),
   };
 
   if (!Number.isSafeInteger(settings.frameHistory) || settings.frameHistory < 1)
@@ -147,18 +167,17 @@ export const make = Effect.fn("Browser.make")(function* (
 
   // A caller's scripts or existing tabs can react to probe input. Providers opt fresh allocations
   // into this private phase before scripts, page registration or the public service exist.
+  // A failed measurement leaves `captureCalibration` empty; the browser still opens.
   const startup =
     info.contextOrigin === "fresh"
-      ? Option.some(
-          yield* Startup.owned(context, clock).pipe(
-            Effect.mapError(
-              (error) =>
-                new BrowserError({
-                  operation: "calibrate",
-                  reason: Page.reasonOf(error.cause),
-                  dispatched: false,
-                }),
-            ),
+      ? yield* Startup.owned(context, clock).pipe(
+          Effect.mapError(
+            (error) =>
+              new BrowserError({
+                operation: "calibrate",
+                reason: Page.reasonOf(error.cause),
+                dispatched: false,
+              }),
           ),
         )
       : Option.none<Startup.StartupCalibration>();
@@ -194,6 +213,17 @@ export const make = Effect.fn("Browser.make")(function* (
       Effect.ignore,
     );
 
+  // Each tab owns its protocol session, capture and listeners in a scope of its own. It closes
+  // with the tab, so a closed tab retains nothing, and with the browser, so a caller's context
+  // keeps none of our listeners, such as the dialog handler, after this browser is gone.
+  const closing = yield* Queue.unbounded<Scope.Closeable>();
+
+  yield* Queue.take(closing).pipe(
+    Effect.flatMap((scope) => Scope.close(scope, Exit.void)),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+
   const register = (playwright: PlaywrightPage) =>
     registering.withPermits(1)(
       Effect.gen(function* () {
@@ -206,49 +236,79 @@ export const make = Effect.fn("Browser.make")(function* (
             reason: new Failed({ detail: "the page closed as it opened" }),
             dispatched: false,
           });
-        const cdp = yield* native("newPage", () => context.newCDPSession(playwright));
-        const id = `p${++counter}`;
+        const scope = yield* Scope.fork(ownerScope);
 
-        const page = yield* Page.make({
-          id,
-          playwright,
-          cdp,
-          settings,
-          motion,
-          clock,
-          mapping,
-          publish,
-          pointer,
-          inputLock,
-        }).pipe(
-          Effect.provideService(Scope.Scope, ownerScope),
-          Effect.onError(() => releaseNative(() => cdp.detach())),
-        );
+        return yield* Effect.gen(function* () {
+          const cdp = yield* native("newPage", () => context.newCDPSession(playwright));
 
-        registry.set(playwright, page);
-        playwright.on("framenavigated", (frame) => {
-          if (frame === playwright.mainFrame())
-            publish(new Navigated({ at: now(), page: id, url: frame.url() }));
-        });
-        playwright.on("close", () => {
-          registry.delete(playwright);
-          publish(new PageClosed({ at: now(), page: id }));
-        });
-        playwright.on("dialog", (dialog) => {
-          const kind = dialog.type();
+          yield* Effect.addFinalizer(() => releaseNative(() => cdp.detach()));
+          const id = `p${++counter}`;
 
-          publish(
-            new DialogShown({ at: now(), page: id, kind, message: dialog.message().slice(0, 500) }),
+          const page = yield* Page.make({
+            id,
+            playwright,
+            cdp,
+            settings,
+            motion,
+            clock,
+            mapping,
+            publish,
+            pointer,
+            inputLock,
+          });
+
+          const onNavigated = (frame: PlaywrightFrame) => {
+            if (frame === playwright.mainFrame())
+              publish(new Navigated({ at: now(), page: id, url: frame.url() }));
+          };
+
+          const onClose = () => {
+            if (registry.get(playwright) !== page) return;
+            registry.delete(playwright);
+            publish(new PageClosed({ at: now(), page: id }));
+            Queue.offerUnsafe(closing, scope);
+          };
+
+          const onDialog = (dialog: Dialog) => {
+            const kind = dialog.type();
+
+            publish(
+              new DialogShown({
+                at: now(),
+                page: id,
+                kind,
+                message: dialog.message().slice(0, 500),
+              }),
+            );
+
+            const answer =
+              kind === "alert" || kind === "beforeunload" ? dialog.accept() : dialog.dismiss();
+
+            answer.catch(() => undefined);
+          };
+
+          registry.set(playwright, page);
+          publish(new PageOpened({ at: now(), page: id, url: playwright.url() }));
+          yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              playwright.on("framenavigated", onNavigated);
+              playwright.on("close", onClose);
+              playwright.on("dialog", onDialog);
+            }),
+            () =>
+              Effect.sync(() => {
+                playwright.off("framenavigated", onNavigated);
+                playwright.off("close", onClose);
+                playwright.off("dialog", onDialog);
+              }),
           );
+          if (playwright.isClosed()) onClose();
 
-          const answer =
-            kind === "alert" || kind === "beforeunload" ? dialog.accept() : dialog.dismiss();
-
-          answer.catch(() => undefined);
-        });
-        publish(new PageOpened({ at: now(), page: id, url: playwright.url() }));
-
-        return page;
+          return page;
+        }).pipe(
+          Scope.provide(scope),
+          Effect.onError(() => Scope.close(scope, Exit.void)),
+        );
       }),
     );
 

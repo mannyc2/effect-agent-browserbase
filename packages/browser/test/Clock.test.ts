@@ -1,10 +1,14 @@
 import { assert, layer } from "@effect/vitest";
 import { Clock, Duration, Effect, Layer, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
 import * as Moment from "../src/Moment.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
+
+const refOf = (text: string, role: string, name: string) =>
+  new RegExp(`${role} "${name}"[^\\n]*?\\[ref=(e\\d+)\\]`).exec(text)?.[1];
 
 const controlledClock = (
   live: Clock.Clock,
@@ -122,8 +126,11 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         const moment = yield* capture;
 
         assert.strictEqual(moment.at, 5500);
-        assert.strictEqual(moment.frames.length, 1);
+        // That capture has stopped, so its frame leads up to a new screenshot of the moment.
+        assert.strictEqual(moment.frames.length, 2);
         assert.strictEqual(moment.frames[0], frame);
+        assert.strictEqual(moment.frames[1]?.timing._tag, "Screenshot");
+        assert.strictEqual(moment.frames[1]?.hostTime, 5500);
         assert.isAbove(moment.events.length, 0);
         assert.isTrue(moment.events.every((event) => event.at === 5000));
         assert.include(moment.timeline, "-0.5s navigated");
@@ -138,5 +145,53 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(later.frames[0]?.timing._tag, "Screenshot");
         assert.strictEqual(later.frames[0]?.hostTime, 7000);
       }),
+  );
+  it.effect("keeps page pacing and deadlines on the owner clock under a caller's TestClock", () =>
+    Effect.gen(function* () {
+      const live = yield* Clock.Clock;
+
+      const { browser, page } = yield* setup(live, {
+        humanize: true,
+        actionTimeout: Duration.seconds(5),
+      });
+
+      const site = yield* Site;
+
+      // A caller's TestClock never advances on its own; the browser must not sleep on it.
+      const caller = <A, E>(effect: Effect.Effect<A, E>) =>
+        effect.pipe(Effect.provide(TestClock.layer()));
+
+      yield* page.goto(site.url("/form"));
+      const other = yield* browser.newPage(site.url("/form"));
+      const amount = refOf((yield* page.snapshot()).text, "textbox", "Amount");
+
+      assert.isDefined(amount);
+      if (amount === undefined) return;
+
+      // A stalled caller-clock action would also hold the browser-wide input lock from `other`.
+      yield* Effect.all([caller(page.click(amount)), other.click({ x: 400, y: 500 })], {
+        concurrency: 2,
+      }).pipe(Effect.timeout("20 seconds"));
+      yield* Effect.all(
+        [
+          caller(page.type("12", { into: amount })),
+          caller(page.press("ArrowLeft", { holdMillis: 50 })),
+          caller(page.scroll({ dy: 200 })),
+        ],
+        { concurrency: 1 },
+      ).pipe(Effect.timeout("30 seconds"));
+      assert.strictEqual(
+        yield* Effect.promise(() => page.playwright.locator("#amount").inputValue()),
+        "12",
+      );
+
+      // A deadline measured on the caller's clock would never expire.
+      const missing = yield* caller(page.waitForText("never shown", Duration.millis(300))).pipe(
+        Effect.flip,
+        Effect.timeout("5 seconds"),
+      );
+
+      assert.strictEqual(missing.reason._tag, "NotFound");
+    }),
   );
 });

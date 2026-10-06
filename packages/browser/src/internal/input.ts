@@ -33,10 +33,14 @@ export interface Run {
 export const make = () => {
   const outstanding = new Set<Promise<void>>();
 
-  const begin = Effect.gen(function* () {
-    // A timed-out action keeps capacity until its real replies arrive. Waiting for them sends
-    // nothing, so cancellation here cannot leave a detached continuation that later types.
+  // A timed-out action keeps capacity until its real replies arrive. Waiting for them sends
+  // nothing, so cancellation here cannot leave a detached continuation that later types.
+  const idle = Effect.gen(function* () {
     while (outstanding.size > 0) yield* Effect.promise(() => Promise.all(outstanding));
+  });
+
+  const begin = Effect.gen(function* () {
+    yield* idle;
     const pending = new Set<Promise<void>>();
     const held: Array<{ readonly key: string; readonly release: () => Promise<unknown> }> = [];
     let failure: InputFailure | undefined;
@@ -150,5 +154,6 @@ export const make = () => {
     return run;
   });
 
-  return { begin };
+  /** `idle` lets a caller wait for this page's replies before taking a browser-wide lock. */
+  return { idle, begin };
 };

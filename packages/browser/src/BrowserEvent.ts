@@ -29,7 +29,10 @@ export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
   url: Schema.String,
 }) {}
 
-/** One page operation ended. Point actions carry the viewport point they used. */
+/**
+ * One page operation ended, including one its caller interrupted (`error: "interrupted"`).
+ * Point actions carry the viewport point they used.
+ */
 export class Action extends Schema.TaggedClass<Action>()("Action", {
   at: Schema.Finite,
   startedAt: Schema.Finite,

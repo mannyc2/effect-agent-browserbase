@@ -524,7 +524,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       act(`Scrolled ${op.direction}.`, (tab) =>
         Effect.gen(function* () {
           const at = op.ref === undefined && op.x === undefined ? undefined : yield* target(op);
-          const viewport = tab.playwright.viewportSize() ?? { width: 1280, height: 720 };
+          const viewport = yield* tab.viewport;
           const pages = op.pages ?? 0.8;
           const vertical = op.direction === "down" ? 1 : op.direction === "up" ? -1 : 0;
           const horizontal = op.direction === "right" ? 1 : op.direction === "left" ? -1 : 0;

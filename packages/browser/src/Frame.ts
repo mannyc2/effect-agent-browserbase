@@ -112,9 +112,14 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Cap
   }),
 }) {}
 
+/**
+ * Settings for a page's one native capture. Readers that join a running capture share its
+ * settings: one without options accepts them, and one whose explicit options differ fails with
+ * `InvalidRequest`.
+ */
 export interface ScreencastOptions {
   /** JPEG quality, 0 to 100. Defaults to 80. */
   readonly quality?: number | undefined;
-  /** Frames are scaled down to fit this box. Defaults to the viewport. */
+  /** Frames are scaled down to fit this box. Defaults to the viewport in CSS pixels. */
   readonly size?: { readonly width: number; readonly height: number } | undefined;
 }

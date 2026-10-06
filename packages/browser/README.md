@@ -51,6 +51,9 @@ using them as click coordinates.
 `Page.click` returns a `ResolvedTarget` captured before input: the requested point, element label,
 role, accessible name, cursor and link target. Pixel targeting resolves through the page script and
 keeps the original point; the receipt names the control even when a nested child received the hit.
+Refs inside same-origin frames are measured, scrolled and checked for cover in the top viewport.
+A ref that no longer names an element of the current documents, including one in a frame that has
+since navigated, fails with `StaleRef` naming that ref, with or without a guard.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
@@ -62,8 +65,11 @@ handler and answers as not executed.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action,
 resolved element and inferred `classifications`: `form-submit`, `purchase`, `delete`, `confirm`,
-`cross-origin`, `download` and `upload`. More than one may apply. `point` is present for literal
-pixel targets; a ref's coordinates are resolved after approval so preparation never scrolls.
+`cross-origin`, `download` and `upload`. More than one may apply. They describe what the input
+activates, found as the browser finds it: the submit button around a painted label, an SVG link
+around a shape, an image-map area. Hovering and scrolling activate nothing and carry none. `point`
+is present for literal pixel targets; a ref's coordinates are resolved after approval so
+preparation never scrolls.
 It covers clicks, drags, typing, keys, selection, hover, scroll and navigation, including a new
 tab's destination.
 
@@ -84,17 +90,31 @@ const browser = Chromium.layer({
 ```
 
 Holds use `policyTimeout`, a finite positive duration defaulting to five minutes, separately from
-the action timeout. They do not keep the page locked. After approval, the library verifies the
-same document, target and relevant facts before sending input. Changed targets fail undispatched;
-the library never retries the action or the policy automatically. A policy timeout is a typed
-`PolicyTimeout`, and tools surface both timeout and denial as ordinary failed receipts. Without a
-guard, actions are allowed. Canvas and opaque frames expose their outer element's metadata.
+the action timeout. They do not keep the page locked. After approval, the library verifies the same
+document, target and relevant facts before sending input: a control's name is bound but other page
+text, such as a live price, is not; the URL is bound without a fragment that only marks a place on
+the page, as scroll-spy and feed pages rewrite while scrolling (a `#/` or `#!` hash route stays
+bound). Changed targets fail undispatched; the library never retries the action or the policy
+automatically. A pointer press is checked again once the pointer has arrived and the page has had a
+frame to react: the approved control must still receive the press point, so a control that appears
+under the pointer, such as a hover menu, stops the action before the button goes down. A link,
+button or other control nested inside the target between it and the press point stops it too, since
+the approval classified the target, not that control. Each
+further press of a double or triple click is checked the same way after the earlier clicks' handlers
+have run. Typing checks before each further key that the approved control still has focus, so a key
+handler that moves focus stops the typing before any key reaches another control; this waits for
+each key's answer, about two protocol round trips per key, and the typing deadline allows 250 ms
+per key for it. A policy timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
+receipts. Without a guard, actions are allowed and nothing is revalidated. Canvas and opaque frames
+expose their outer element's metadata.
 
 With `humanize`, off-screen ref targets are reached with visible wheel input before the pointer
 moves to them. Scroll attempts are bounded and may use one instant fallback. A denied or held action
-does not scroll. After scrolling, the library checks the original target again; a page handler that
-changes its meaning can therefore stop an action after its wheel input but before a click. Drag
-endpoints are resolved together in the final viewport before the button is pressed.
+does not scroll. After scrolling, a guarded action checks the original target again; a page handler
+that changes its meaning can therefore stop it after its wheel input but before a click, and the
+failure is undispatched: travel toward a press is not the action's input. Drag endpoints are
+resolved together in the final viewport, and checked under the pointer, before the button is
+pressed.
 
 Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. It evaluates the model
 every 16.7 ms but sends a move only when the pointer reaches a new pixel; the exact destination
@@ -127,33 +147,51 @@ At most 2,112 input commands and reservations are owned at once; ordinary input 
 stops the unsent suffix and releases held input.
 
 Typing sends key pairs for printable US characters in both plain and humanized modes; other text
-uses Unicode insertion. Humanized typing aims for about 75 WPM including slower word starts, with
-key holds around 110 ms that can overlap. The ordered schedule releases a repeated physical key
-before pressing it again. Keys follow that schedule without waiting for each network reply.
-Pending replies are bounded and drained before an action succeeds; interruption stops new input and
-releases every submitted held key. Shortcut chords retain Playwright’s platform-specific editing behavior.
+uses Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
+link or change a select, so `type` refuses before any input when its `into` ref is not a text field
+or, without `into`, when focus is on such a control; `press` sends keys to those. Humanized typing
+aims for about 75 WPM including slower word starts, with key holds around 110 ms that can overlap.
+The ordered schedule releases a repeated physical key before pressing it again. Keys follow that
+schedule without waiting for each network reply. Pending replies are bounded and drained before an
+action succeeds; interruption stops new input and releases every submitted held key. Shortcut chords
+retain Playwright’s platform-specific editing behavior. Before each key, typing and repeated presses
+check that the page is still in the document the action began in, and stop with a dispatched
+`NotActionable` once it has moved on. The browser reports a new document as it commits, so a key
+sent within about one protocol round trip of that commit can still reach it. Under a guard, typing's
+submit Enter and each repeated Enter or Space are first checked against the approved element.
 
 `Page.type(text, { prose: true })` opts eligible textarea or contenteditable prose into occasional
 corrected slips when humanized, with an explicit `into` ref and whole-field replacement. The
 `browser_type` tool exposes the same `prose` flag. It is off by default; explicit opt-in cannot enable
-it for numbers, URLs, credentials, payment/order fields or other excluded targets. The field is
-checked again after focus, and its final text must match before Enter can submit. Append and
-implicit-focus typing stay exact. Presentation pauses come from bounded distributions and
-supplement the functional navigation delay and document wait; they never shorten that wait.
+it for numbers, URLs, credentials, payment/order fields or other excluded targets. Eligibility is
+decided once the field has focus, after its focus handlers ran, and its final text must match
+before Enter can submit. Append and implicit-focus typing stay exact. Presentation pauses come
+from bounded distributions and supplement the functional navigation delay and document wait; they
+never shorten that wait.
 
 `Browser.now`, event stamps, frame `receivedAt` and `Moment.at` share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.
+Page operations also pace input and measure their deadlines on that clock, so a caller running
+under another `Clock`, such as a `TestClock`, cannot stall an action or the browser-wide input lock.
 Compare these stamps only within that clock: they are not epoch dates or comparable across hosts.
 `Frame.timing` distinguishes `BrowserPaint` from `Screenshot`. Native frames retain browser epoch
 milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
 Screenshot fallbacks have only a host capture interval; their `timestamp` getter is undefined.
 Moment windows and frame captions use `hostTime`, so delayed delivery cannot make old paint current.
-`Page.screenshot({ fresh: true })` bypasses the frame cache.
+`Page.screenshot({ fresh: true })` bypasses the frame cache. A cached frame is reused only while no
+action is changing the page, if it was painted after the page's latest submitted input (including
+input of an interrupted action) and delivered within the last 250 ms: a screencast sends only
+changes and can miss a final paint, so a page that stopped changing gets a new capture. `Page.currentFrame` applies the same rule and
+returns the new capture as a `Screenshot`-timed frame. A `Moment`'s last frame comes from it, so a
+stopped capture, a lost final paint or later input never presents older paint as the moment.
+Every operation is recorded as an `Action`, also when its caller interrupts it.
 
 Local launches and new Browserbase sessions measure clock offset and send-to-captured-image delay
 on a private blank page before user scripts or public pages run. `Browser.captureCalibration`
 holds those samples; `delayFor(frame)` maps their median delay onto that frame's clock estimate for
 the consumer's compositor. This measures the first observed captured marker, not pure rendering lag.
+The measurement is evidence, not a prerequisite: if it fails, `captureCalibration` is empty and the
+browser opens anyway. Only a private page that cannot be closed fails `Browser.make`.
 Supplied contexts and attached sessions receive read-only clock probes and expose no active startup
 measurement. Transport asymmetry remains in the reported uncertainty.
 
@@ -170,10 +208,14 @@ unstamped so the measurement remains observable.
 
 `Page.captureStats` reports lifetime received and accepted frames, missing timestamps, frames
 dropped out of order, observed subscriber losses and paint-time gap totals/minimum/maximum/last.
-Concurrent readers share one native screencast, each with a bounded 16-frame queue; a slow reader's
+Concurrent readers share one native screencast and its quality and size: a reader without options
+joins whatever is running, and one whose explicit options differ fails with `InvalidRequest` rather
+than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
 observed sequence gaps add to `subscriberMissed`. Late subscribers do not count earlier history.
 ACKs are independent of reader speed and bounded to 32 unresolved replies; exhaustion ends capture
-with a typed error. Frame history remains bounded by `frameHistory`.
+with a typed error. Frame history remains bounded by `frameHistory`. Capture stops when its last
+reader leaves; a stop whose reply is late is never resent, and the next capture waits for it (up
+to 2 s per attempt) rather than disabling capture for the page.
 
 `Browser.events()` streams `RecordedEvent` values: `{ sequence, event }`. The sequence orders
 all browser events and is the replay cursor. Call `browser.events({ after: lastSequence })` to
@@ -198,7 +240,11 @@ submission, including cleanup releases. Cursor shape comes from resolved target 
 narrative timeline. Compositing remains the consumer’s job.
 
 The pointer starts at the first active viewport’s center and belongs to the browser across tabs.
-Input actions share ownership of it; a policy hold still leaves that ownership free. Every sent
+Input actions share ownership of it, one at a time across tabs; navigation and a policy hold leave
+that ownership free. An action first waits for its own page (another operation there, its unresolved
+input replies, its first clock probe) and only then queues for the browser-wide turn, so one slow tab
+never holds the others up. The action's timeout bounds those waits before a full timeout bounds the
+action itself. Every sent
 move updates the position, including a partially cancelled glide. A later viewport clamps the
 starting point to its bounds if necessary.
 

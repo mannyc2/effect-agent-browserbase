@@ -1,5 +1,9 @@
+import type { EventEmitter } from "node:events";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Fiber, Layer, Schedule, Stream } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Schedule, Scope, Stream } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
@@ -115,6 +119,75 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("refuses to type where a space or letter could activate the focused control", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const snapshot = yield* page.snapshot();
+
+      const focus = (selector: string) =>
+        Effect.promise(() => page.playwright.locator(selector).focus());
+
+      yield* focus("#submit");
+      assert.deepStrictEqual(yield* reason(page.type("a b")), {
+        tag: "NotActionable",
+        dispatched: false,
+      });
+      assert.deepStrictEqual(
+        yield* reason(page.type("ok go", { into: refOf(snapshot, "button", "Submit") })),
+        { tag: "NotActionable", dispatched: false },
+      );
+      yield* focus("#agree");
+      assert.deepStrictEqual(yield* reason(page.type(" ")), {
+        tag: "NotActionable",
+        dispatched: false,
+      });
+      assert.strictEqual(yield* text(page, "#outcome"), "Not ordered");
+      assert.isFalse(yield* Effect.promise(() => page.playwright.locator("#agree").isChecked()));
+
+      // A page without a focused control, such as a keyboard game, still receives typed keys.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          (document.activeElement as HTMLElement | null)?.blur();
+          document.addEventListener("keydown", (event) => {
+            document.body.dataset.keys = (document.body.dataset.keys ?? "") + event.key;
+          });
+        }),
+      );
+      yield* page.type("wasd");
+      assert.strictEqual(
+        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.keys)),
+        "wasd",
+      );
+    }),
+  );
+
+  it.effect("stops repeated keys at a navigation instead of pressing on the next page", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const armed = (yield* Site).url("/armed");
+
+      // The next page focuses a destructive control on load, where a second Enter would land.
+      yield* Effect.promise(() =>
+        page.playwright.route(armed, (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: "<title>Armed</title><button autofocus onclick=\"document.title='Deleted'\">Delete account</button>",
+          }),
+        ),
+      );
+      yield* Effect.promise(() =>
+        page.playwright.setContent('<a id="next" href="' + armed + '">Next</a>'),
+      );
+      yield* Effect.promise(() => page.playwright.locator("#next").focus());
+
+      assert.deepStrictEqual(yield* reason(page.press("Enter", { times: 2, holdMillis: 600 })), {
+        tag: "NotActionable",
+        dispatched: true,
+      });
+      assert.strictEqual(yield* page.title, "Armed");
+    }),
+  );
+
   it.effect("drags a slider between points", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
@@ -154,6 +227,48 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         tag: "InvalidRequest",
         dispatched: false,
       });
+
+      // Nodes of a navigated frame can stay connected to their old document; they are stale too.
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<iframe name="child" srcdoc="<button>Frame action</button>"></iframe>',
+        ),
+      );
+      const framed = refOf(yield* page.snapshot(), "button", "Frame action");
+
+      yield* Effect.promise(() =>
+        page.playwright.frame({ name: "child" })!.goto(site.url("/next")),
+      );
+      assert.deepStrictEqual(yield* reason(page.click(framed)), {
+        tag: "StaleRef",
+        dispatched: false,
+      });
+    }),
+  );
+
+  it.effect("goes back through frame-only history and refuses when there is nothing behind", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const site = yield* Site;
+      const fresh = yield* Effect.acquireRelease(browser.newPage(), (page) => page.close);
+
+      assert.deepStrictEqual(yield* reason(fresh.back), { tag: "NotFound", dispatched: false });
+
+      const page = yield* open("/form");
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(`<iframe name="child" src="${site.url("/next")}"></iframe>`),
+      );
+      const child = page.playwright.frame({ name: "child" });
+
+      assert.isNotNull(child);
+      if (child === null) return;
+      yield* Effect.promise(() => child.waitForLoadState());
+      yield* Effect.promise(() => child.goto(site.url("/chart")));
+
+      // Only the frame navigated: the traversal must finish without a main-frame navigation.
+      yield* page.back.pipe(Effect.timeout(Duration.seconds(5)));
+      assert.strictEqual(child.url(), site.url("/next"));
     }),
   );
 
@@ -447,6 +562,42 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect(
+    "measures frame refs in the top viewport: covered frames refuse, distant ones scroll",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* open("/form");
+        const record = (name: string) => `parent.document.body.dataset.${name}=1`;
+
+        yield* Effect.promise(() =>
+          page.playwright.setContent(
+            `<body style="margin:0;height:4000px">` +
+              `<iframe style="position:absolute;left:0;top:0;width:400px;height:200px;border:0" srcdoc="<body style='margin:0'><button style='width:400px;height:200px' onclick='${record("covered")}'>Covered action</button>"></iframe>` +
+              `<div style="position:absolute;left:0;top:0;width:400px;height:200px;z-index:5" onmousedown="document.body.dataset.cover=1"></div>` +
+              `<iframe style="position:absolute;left:0;top:1500px;width:400px;height:200px;border:0" srcdoc="<body style='margin:0'><button style='width:200px;height:50px' onclick='${record("deep")}'>Deep action</button>"></iframe></body>`,
+          ),
+        );
+        const snapshot = yield* page.snapshot({ full: true });
+
+        assert.deepStrictEqual(
+          yield* reason(page.click(refOf(snapshot, "button", "Covered action"))),
+          {
+            tag: "NotActionable",
+            dispatched: false,
+          },
+        );
+
+        const deep = yield* page.click(refOf(snapshot, "button", "Deep action"));
+
+        const dataset = yield* Effect.promise(() =>
+          page.playwright.evaluate(() => ({ ...document.body.dataset })),
+        );
+
+        assert.isBelow(deep.point.y, 720);
+        assert.deepStrictEqual(dataset, { deep: "1" });
+      }),
+  );
+
   it.effect("keeps transformed iframe receipts conservative without changing the click", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
@@ -519,3 +670,83 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 });
+
+setFlagsFromString("--expose_gc");
+const collectGarbage = runInNewContext("gc") as () => void;
+
+const ownContext = Effect.gen(function* () {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires a launched Chromium");
+
+  return yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext()),
+    (context) => Effect.promise(() => context.close()),
+  );
+});
+
+layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
+  "Page lifetime",
+  (it) => {
+    it.effect("releases a closed tab's frames while its browser stays open", () =>
+      Effect.gen(function* () {
+        const context = yield* ownContext;
+        const browser = yield* makeBrowser(context, { id: "lifetime", provider: "test" });
+        const frames: Array<WeakRef<object>> = [];
+
+        const visit = Effect.gen(function* () {
+          const page = yield* browser.newPage("data:text/html,<h1>Captured tab</h1>");
+
+          yield* page.screencast().pipe(Stream.take(1), Stream.runDrain);
+          for (const frame of yield* page.recentFrames) frames.push(new WeakRef(frame));
+          yield* page.close;
+        });
+
+        for (let index = 0; index < 3; index++) yield* visit;
+        yield* (yield* browser.page).close;
+        yield* browser.pages.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced(Duration.millis(50)),
+            until: (open) => open.length === 0,
+          }),
+        );
+        for (let attempt = 0; attempt < 3; attempt++) {
+          yield* Effect.sleep("100 millis");
+          collectGarbage();
+        }
+
+        assert.isAbove(frames.length, 0);
+        assert.strictEqual(frames.filter((frame) => frame.deref() !== undefined).length, 0);
+      }),
+    );
+
+    it.effect("leaves a caller's context with none of its listeners once it closes", () =>
+      Effect.gen(function* () {
+        const context = yield* ownContext;
+        const page = yield* Effect.promise(() => context.newPage());
+        const scope = yield* Scope.make();
+
+        // Playwright's pages are event emitters; its typings omit the count.
+        const listeners = () =>
+          (["dialog", "close", "framenavigated"] as const).map((event) =>
+            (page as unknown as EventEmitter).listenerCount(event),
+          );
+
+        const before = listeners();
+
+        yield* makeBrowser(context, { id: "short", provider: "test" }).pipe(Scope.provide(scope));
+        assert.notDeepEqual(listeners(), before);
+        yield* Scope.close(scope, Exit.void);
+        assert.deepStrictEqual(listeners(), before);
+
+        // The caller now answers its own dialogs; a leftover handler would dismiss them first.
+        page.on("dialog", (dialog) => {
+          dialog.accept("from the caller").catch(() => undefined);
+        });
+        const answer = yield* Effect.promise(() => page.evaluate(() => prompt("name?")));
+
+        assert.strictEqual(answer, "from the caller");
+      }),
+    );
+  },
+);

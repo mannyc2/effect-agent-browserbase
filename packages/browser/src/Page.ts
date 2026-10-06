@@ -1,11 +1,14 @@
 /**
  * One browser tab: navigation, snapshots, pictures and input.
  *
- * Input dispatch is serialized across the browser's pages. A policy holds outside the input
- * locks while other actions continue; its target is revalidated before dispatch. Element targets are refs from
- * a snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
- * screenshot's pixels. Mouse and keyboard input share a bounded pipeline, so pacing does not
- * wait for each protocol reply. Target lookup happens before the input is sent.
+ * Input dispatch is serialized across the browser's pages; navigation is serialized only with
+ * its own page. An action waits for its own page (other operations, unresolved input replies)
+ * before joining the browser-wide queue, and its timeout bounds those waits before a full timeout
+ * bounds the action itself. A policy holds outside the input locks while other actions continue;
+ * its target is revalidated before dispatch. Element targets are refs from a snapshot; point
+ * targets are viewport coordinates in CSS pixels, the same coordinates as a screenshot's pixels.
+ * Mouse and keyboard input share a bounded pipeline, so pacing does not wait for each protocol
+ * reply. Target lookup happens before the input is sent.
  *
  * @since 0.3.0
  */
@@ -23,7 +26,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import type { CDPSession, Frame as PlaywrightFrame, Page as PlaywrightPage } from "playwright-core";
+import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
 import {
   BrowserError,
@@ -51,7 +54,7 @@ import {
   TrackPlanned,
   WheelScrolled,
 } from "./BrowserEvent.ts";
-import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
+import { type CaptureStats, Frame, Image, type ScreencastOptions, Screenshot } from "./Frame.ts";
 import * as Capture from "./internal/capture.ts";
 import * as BrowserClock from "./internal/clock.ts";
 import * as Human from "./internal/human.ts";
@@ -104,7 +107,7 @@ export interface ClickOptions {
 }
 
 export interface TypeOptions {
-  /** Type into this field: it is focused first, and its content replaced unless `replace` is false. */
+  /** Type into this text field: it is focused first, and its content replaced unless `replace` is false. */
   readonly into?: string | undefined;
   readonly replace?: boolean | undefined;
   /** Press Enter afterwards. */
@@ -193,6 +196,7 @@ export interface Page {
   readonly title: Effect.Effect<string, BrowserError>;
 
   readonly goto: (url: string) => Effect.Effect<void, BrowserError>;
+  /** The previous history entry, including one only a frame created; `NotFound` when none. */
   readonly back: Effect.Effect<void, BrowserError>;
   readonly reload: Effect.Effect<void, BrowserError>;
   /** Make this the visible tab. Background tabs paint rarely and send few screencast frames. */
@@ -200,10 +204,27 @@ export interface Page {
   readonly close: Effect.Effect<void>;
 
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
-  /** A picture of the viewport: the latest screencast frame when one is current, else a screenshot. */
+  /**
+   * A picture of the viewport: the latest screencast frame when no action is changing the page and
+   * it was painted after the latest input and delivered within the last 250 ms, else a new
+   * screenshot.
+   */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
+  /**
+   * The viewport now, with its timing: the newest screencast frame under the same rule as
+   * `screenshot`, else a new screenshot timed by the host interval in which it was taken.
+   */
+  readonly currentFrame: Effect.Effect<Frame, BrowserError>;
   /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
   readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
+  /**
+   * The viewport's size in CSS pixels, the space of points, crops and page scrolls. Over CDP the
+   * page reports it, within the action timeout.
+   */
+  readonly viewport: Effect.Effect<
+    { readonly width: number; readonly height: number },
+    BrowserError
+  >;
   /** An outline, a picture, or both (the default), taken together. */
   readonly observe: (options?: {
     readonly mode?: ObservationMode;
@@ -218,11 +239,15 @@ export interface Page {
   ) => Effect.Effect<ResolvedTarget, BrowserError>;
   readonly hover: (target: Target) => Effect.Effect<void, BrowserError>;
   readonly drag: (from: Target, to: Target) => Effect.Effect<void, BrowserError>;
+  /** Type into a text field, or to whatever has focus unless a typed key could activate it. */
   readonly type: (text: string, options?: TypeOptions) => Effect.Effect<void, BrowserError>;
   /** Keys such as `"Enter"`, `"Space"`, `"ArrowLeft"` or `"Control+A"`. */
   readonly press: (keys: string, options?: PressOptions) => Effect.Effect<void, BrowserError>;
   readonly scroll: (options?: ScrollOptions) => Effect.Effect<void, BrowserError>;
-  /** Choose options of a `<select>` by value or label; returns the chosen labels. */
+  /**
+   * Choose options of a `<select>` by value or label; returns the chosen labels. A refusal, such
+   * as no matching option, is undispatched.
+   */
   readonly select: (
     ref: string,
     values: ReadonlyArray<string>,
@@ -238,7 +263,10 @@ export interface Page {
     readonly timeout?: Duration.Input;
   }) => Effect.Effect<void, BrowserError>;
 
-  /** Screencast frames for as long as the stream runs. Concurrent streams share one screencast. */
+  /**
+   * Screencast frames for as long as the stream runs. Concurrent streams share one screencast and
+   * its settings; explicit options that differ from a running screencast's fail with InvalidRequest.
+   */
   readonly screencast: (options?: ScreencastOptions) => Stream.Stream<Frame, BrowserError>;
   /** Native delivery, filtering and observed subscriber loss across capture generations. */
   readonly captureStats: Effect.Effect<CaptureStats>;
@@ -327,6 +355,16 @@ type MouseEvent = {
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
 
+// Under a guard, each key after the first waits for the earlier keys' answers and a focus check,
+// about two protocol round trips, so the typing deadline allows this much more per key.
+const guardedKeyMillis = 250;
+
+// Several 60 Hz frame intervals: while a page changes, its stream keeps delivering and its newest
+// frame is reused; once the stream goes quiet, a real capture is taken. A lost final paint can be
+// served for at most this long after the last frame that did arrive. Delivery time, not paint
+// time, measures this, so a remote browser's transport delay does not disqualify every frame.
+const currentPaintMillis = 250;
+
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const { id, playwright, cdp, settings, motion, clock, mapping, pointer, inputLock, publish } =
     options;
@@ -334,8 +372,22 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
-  const lastInputAt = yield* Ref.make(0);
+  // Actions that have started changing the page and not yet ended, and the latest submitted input
+  // or page change. While an action runs no cached paint is current; afterwards only paint from
+  // after its latest input is. An action ends after its input was handled, so if that input changed
+  // the page, newer paint follows; a lost final paint is bounded by recency instead.
+  let changing = 0;
+  let inputAt = 0;
+
+  const noteInput = () => {
+    inputAt = Math.max(inputAt, now());
+  };
+
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  // Deadlines and pacing guard the browser-wide input lock, so page operations run on the
+  // owner's clock; a caller's clock, such as a TestClock, cannot stall or stretch them.
+  const owned = Effect.provideService(Clock.Clock, clock);
+
   const input = Input.make();
   const inputClocks = new WeakMap<Input.Run, BrowserClock.Estimate>();
 
@@ -399,6 +451,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
     const response = cdp.send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 
+    noteInput();
     if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
     if (track !== undefined) publish(track);
     submitted?.();
@@ -453,12 +506,61 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     const event = new KeyChanged({ at, page: id, key, phase });
     const response = command(at, inputClocks.get(run));
 
+    noteInput();
     publish(event);
 
     return response;
   };
 
+  const dispatchText = (text: string) => {
+    const track = new TextInserted({ at: now(), page: id, text });
+    const response = cdp.send("Input.insertText", { text });
+
+    noteInput();
+    publish(track);
+
+    return response;
+  };
+
   const flush = (operation: string, run: Input.Run) => inputCall(operation, run.drain);
+
+  // A multi-key action stops before its next key once the page has moved to another document.
+  // This session counts main-frame commits as the browser reports them, so a key sent within
+  // about one protocol round trip of a commit can still reach the new document.
+  let documents = 0;
+  let watchingDocuments = false;
+
+  cdp.on("Page.frameNavigated", ({ frame }) => {
+    if (frame.parentId === undefined) documents++;
+  });
+
+  const currentDocument = (operation: string) =>
+    Effect.suspend(() =>
+      watchingDocuments
+        ? Effect.void
+        : native(operation, () => cdp.send("Page.enable")).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                watchingDocuments = true;
+              }),
+            ),
+          ),
+    ).pipe(Effect.map(() => documents));
+
+  const sameDocument = (operation: string, since: number) =>
+    Effect.suspend(() =>
+      documents === since
+        ? Effect.void
+        : Effect.fail(
+            new BrowserError({
+              operation,
+              reason: new NotActionable({
+                detail: "the page moved to another document, so the remaining keys were not sent",
+              }),
+              dispatched: false,
+            }),
+          ),
+    );
 
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
@@ -496,6 +598,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         contextId,
         expression: `globalThis.__effectBrowser.${call}`,
         returnByValue: true,
+        awaitPromise: true,
       }),
     ).pipe(
       Effect.flatMap((result) =>
@@ -568,7 +671,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     clock,
     calibrate: mapping.refresh(calibrateClock),
     frameHistory: settings.frameHistory,
-    viewport: () => playwright.viewportSize(),
+    viewport: Effect.suspend(() => viewportFor("screencast")),
     onClose: (listener) => {
       playwright.on("close", listener);
       if (playwright.isClosed()) listener();
@@ -596,15 +699,39 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         ),
       );
 
+  // Playwright knows the viewport only of a context it created; over CDP it reports none, so the
+  // page answers. Pointer bounds, page scrolls, crops, capture size and frame reuse all read this
+  // one source; the latest answer serves checks that cannot wait for the page.
+  let measuredViewport: { readonly width: number; readonly height: number } | null = null;
+
+  const knownViewport = () => playwright.viewportSize() ?? measuredViewport;
+
+  const viewportFor = (operation: string) =>
+    Effect.suspend(() => {
+      const known = playwright.viewportSize();
+
+      return known === null
+        ? evaluate(operation, scriptCall("viewport")).pipe(
+            Effect.flatMap(decodeWith(operation, Script.ViewportResultSchema)),
+            Effect.tap((measured) =>
+              Effect.sync(() => {
+                measuredViewport = measured;
+              }),
+            ),
+          )
+        : Effect.succeed(known);
+    });
+
   interface Approval {
     readonly contextId: number;
-    readonly targets: ReadonlyArray<Script.InspectedTarget | null>;
-    readonly check: (focused?: boolean) => Effect.Effect<void, BrowserError>;
-    readonly navigate?: Effect.Effect<void, BrowserError> | undefined;
+    readonly check: (options?: Script.ValidationOptions) => Effect.Effect<void, BrowserError>;
   }
 
   interface InputMarks {
+    /** The action's own input, such as a press, key or wheel, has reached the page. */
     readonly sent: Effect.Effect<void>;
+    /** Preparatory input, such as the pointer travelling to a target, has reached the page. */
+    readonly touched: Effect.Effect<void>;
     readonly at: (point: Point) => Effect.Effect<void>;
     readonly input: Input.Run;
   }
@@ -618,51 +745,85 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   // while a policy is waiting. Validation binds approval to the document and targets it saw.
   const perform = <A>(
     name: string,
-    info: { readonly target?: string | undefined; readonly text?: string | undefined },
+    info: {
+      readonly target?: string | undefined;
+      readonly text?: string | undefined;
+      /** False for navigation, which sends no input and leaves the browser-wide lock free. */
+      readonly input?: boolean | undefined;
+    },
     timeout: Duration.Duration,
     prepare: Effect.Effect<PolicyPlan, BrowserError>,
     body: (marks: InputMarks, approval: Approval | undefined) => Effect.Effect<A, BrowserError>,
   ): Effect.Effect<A, BrowserError> =>
     Effect.gen(function* () {
       const startedAt = now();
+      const sendsInput = info.input ?? true;
       const sent = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
 
+      // The page may react to preparatory input, so no cached paint is current while the action
+      // runs, but only the action's own input can have given it effect. `touched` covers both and
+      // changes in one step with `changing`, so an interruption cannot unbalance the count.
+      let touched = false;
+
+      const touch = Effect.sync(() => {
+        if (!touched) changing += 1;
+        touched = true;
+        noteInput();
+      });
+
       const marks = {
-        sent: Ref.set(sent, true),
+        sent: Ref.set(sent, true).pipe(Effect.andThen(touch)),
+        touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
       };
+
+      const timedOut = (duration: Duration.Duration) =>
+        Effect.fail(
+          new BrowserError({
+            operation: name,
+            reason: new Timeout({ millis: Duration.toMillis(duration) }),
+            dispatched: false,
+          }),
+        );
 
       const bounded = <Value>(
         effect: Effect.Effect<Value, BrowserError>,
         duration: Duration.Duration,
-      ) =>
-        effect.pipe(
-          Effect.timeoutOrElse({
-            duration,
-            orElse: () =>
-              Effect.fail(
-                new BrowserError({
-                  operation: name,
-                  reason: new Timeout({ millis: Duration.toMillis(duration) }),
-                  dispatched: false,
-                }),
-              ),
-          }),
-        );
+      ) => effect.pipe(Effect.timeoutOrElse({ duration, orElse: () => timedOut(duration) }));
+
+      // Admission waits only on this page: its own unresolved replies and, before the browser's
+      // first input, its clock mapping. It runs under the page lock but before the browser-wide
+      // input lock, so a stalled page cannot delay input on other pages. The run re-checks the
+      // replies under both locks.
+      let estimate: BrowserClock.Estimate | undefined;
+
+      const admit = input.idle.pipe(
+        Effect.andThen(
+          sendsInput
+            ? mapping.current(calibrateClock).pipe(
+                Effect.tap((current) =>
+                  Effect.sync(() => {
+                    estimate = current;
+                  }),
+                ),
+                Effect.mapError(
+                  (error) =>
+                    new BrowserError({ operation: name, reason: error.reason, dispatched: false }),
+                ),
+              )
+            : Effect.void,
+        ),
+      );
 
       const useInput = <Value>(action: (run: Input.Run) => Effect.Effect<Value, BrowserError>) =>
-        mapping.current(calibrateClock).pipe(
-          Effect.mapError(
-            (error) =>
-              new BrowserError({ operation: name, reason: error.reason, dispatched: false }),
-          ),
+        input.begin.pipe(
           // A capture can recalibrate while input is running. One run, including delayed cleanup
           // releases, keeps one mapping so epoch stamps cannot jump backwards during a stroke.
-          Effect.flatMap((estimate) =>
-            input.begin.pipe(
-              Effect.tap((run) => Effect.sync(() => inputClocks.set(run, estimate))),
-            ),
+          Effect.tap((run) =>
+            Effect.sync(() => {
+              if (estimate !== undefined) inputClocks.set(run, estimate);
+            }),
           ),
           Effect.flatMap((run) =>
             action(run).pipe(
@@ -682,18 +843,42 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           ),
         );
 
+      // Admission and lock waits end at the action's deadline, undispatched. Holding the locks
+      // starts a full deadline of its own, so contention never truncates input under way.
+      // Locks are always taken page first, then browser-wide, and the browser-wide one is never
+      // held while waiting for anything on one page: its navigation, zoom, replies or clock.
       const dispatch = <Value>(action: Effect.Effect<Value, BrowserError>) =>
-        inputLock.withPermits(1)(lock.withPermits(1)(bounded(action, timeout)));
+        Effect.gen(function* () {
+          const held = yield* Deferred.make<void>();
+
+          const acquired = Deferred.succeed(held, undefined).pipe(
+            Effect.andThen(bounded(action, timeout)),
+          );
+
+          const deadline = Effect.sleep(timeout).pipe(
+            Effect.andThen(Deferred.isDone(held)),
+            Effect.flatMap((done) => (done ? Effect.never : timedOut(timeout))),
+          );
+
+          return yield* Effect.raceFirst(
+            admit.pipe(
+              Effect.andThen(sendsInput ? inputLock.withPermits(1)(acquired) : acquired),
+              lock.withPermits(1),
+            ),
+            deadline,
+          );
+        });
 
       const guard = settings.guard;
 
+      // Only an approval needs binding: without a guard, input goes straight to the page.
       const run =
-        guard === undefined && !settings.humanize
+        guard === undefined
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
-              const plan = yield* lock.withPermits(1)(bounded(prepare, settings.actionTimeout));
+              const plan = yield* bounded(lock.withPermits(1)(prepare), settings.actionTimeout);
 
-              yield* (guard === undefined ? Effect.void : guard(plan.request)).pipe(
+              yield* guard(plan.request).pipe(
                 Effect.mapError(
                   (reason) => new BrowserError({ operation: name, reason, dispatched: false }),
                 ),
@@ -721,45 +906,81 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               );
             });
 
-      const exit = yield* Effect.exit(run);
-      const dispatched = yield* Ref.get(sent);
-      const point = yield* Ref.get(at);
+      // Record the outcome even when the caller interrupts: its input may already be in the page.
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(restore(run));
+          const dispatched = yield* Ref.get(sent);
+          const point = yield* Ref.get(at);
 
-      if (dispatched) yield* Ref.set(lastInputAt, now());
-      const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
+          if (touched) changing -= 1;
+          const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
 
-      publish(
-        new Action({
-          at: now(),
-          startedAt,
-          page: id,
-          name,
-          target: info.target,
-          text: info.text === undefined ? undefined : info.text.slice(0, 200),
-          x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
-          y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
-          ok: Exit.isSuccess(exit),
-          dispatched,
-          error: Option.getOrUndefined(Option.map(failure, (error) => error.message)),
+          publish(
+            new Action({
+              at: now(),
+              startedAt,
+              page: id,
+              name,
+              target: info.target,
+              text: info.text === undefined ? undefined : info.text.slice(0, 200),
+              x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
+              y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
+              ok: Exit.isSuccess(exit),
+              dispatched,
+              error: Option.match(failure, {
+                onNone: () => (Exit.hasInterrupts(exit) ? "interrupted" : undefined),
+                onSome: (error) => error.message,
+              }),
+            }),
+          );
+          if (Exit.isSuccess(exit)) return exit.value;
+          if (dispatched)
+            return yield* Exit.mapError(exit, (error) =>
+              error.dispatched
+                ? error
+                : new BrowserError({
+                    operation: error.operation,
+                    reason: error.reason,
+                    dispatched: true,
+                  }),
+            );
+
+          return yield* exit;
         }),
       );
-      if (Exit.isSuccess(exit)) return exit.value;
-      if (dispatched)
-        return yield* Exit.mapError(exit, (error) =>
-          error.dispatched
-            ? error
-            : new BrowserError({
-                operation: error.operation,
-                reason: error.reason,
-                dispatched: true,
-              }),
-        );
-
-      return yield* exit;
-    });
+    }).pipe(owned);
 
   const failWith = (operation: string, reason: Reason) =>
     Effect.fail(new BrowserError({ operation, reason, dispatched: false }));
+
+  // A ref that names nothing is stale on every path, named by the target that failed.
+  const inputFailure = (
+    operation: string,
+    targets: Script.InputPlan["targets"],
+    failure: Script.InputFailure,
+  ) => {
+    const target = failure.index === undefined ? undefined : targets[failure.index];
+
+    return failWith(
+      operation,
+      failure.error === "outside"
+        ? new InvalidRequest({ detail: failure.detail })
+        : failure.error === "stale" && typeof target === "string"
+          ? new StaleRef({ ref: target })
+          : new NotActionable({ detail: failure.detail }),
+    );
+  };
+
+  const editFailure = (
+    operation: string,
+    ref: string,
+    failure: { readonly error: string; readonly stale?: boolean | undefined },
+  ) =>
+    failWith(
+      operation,
+      failure.stale === true ? new StaleRef({ ref }) : new NotActionable({ detail: failure.error }),
+    );
 
   const readPoint = (
     operation: string,
@@ -860,15 +1081,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       const prepared = yield* decodeWith(action, Script.PreparedInputResultSchema)(value);
 
-      if ("error" in prepared)
-        return yield* failWith(
-          action,
-          prepared.error === "outside"
-            ? new InvalidRequest({ detail: prepared.detail })
-            : prepared.error === "stale" && typeof targets[0] === "string"
-              ? new StaleRef({ ref: targets[0] })
-              : new NotActionable({ detail: prepared.detail }),
-        );
+      if ("error" in prepared) return yield* inputFailure(action, targets, prepared);
       const first = prepared.targets[0];
       const target = targets[0];
 
@@ -886,8 +1099,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         classifications: prepared.classifications,
       });
 
-      const check = (focused = false) =>
-        evaluateIn(action, scriptCall("validateInput", input, prepared, focused), contextId).pipe(
+      const check = (options: Script.ValidationOptions = {}) =>
+        evaluateIn(action, scriptCall("validateInput", input, prepared, options), contextId).pipe(
           Effect.catchIf(contextGone, () =>
             failWith(
               action,
@@ -896,16 +1109,13 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           ),
           Effect.flatMap(decodeWith(action, Script.ValidatedInputResultSchema)),
           Effect.flatMap((result) =>
-            "error" in result
-              ? failWith(action, new NotActionable({ detail: result.detail }))
-              : Effect.void,
+            "error" in result ? inputFailure(action, targets, result) : Effect.void,
           ),
         );
 
       const validate = check().pipe(
         Effect.as<Approval>({
           contextId,
-          targets: prepared.targets,
           check,
         }),
       );
@@ -913,16 +1123,32 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       return { request, validate };
     });
 
-  const mutate = (operation: string, call: string, approval: Approval | undefined) =>
+  // `mayHaveRun` hears of a failure the script may have started before: without its context or
+  // the library's API in it, the call never ran.
+  const mutate = (
+    operation: string,
+    call: string,
+    approval: Approval | undefined,
+    mayHaveRun: Effect.Effect<void> = Effect.void,
+  ) =>
     (approval === undefined
       ? Ref.get(world).pipe(
           Effect.flatMap(
             Option.match({ onNone: () => createWorld(operation), onSome: Effect.succeed }),
           ),
-          Effect.flatMap((contextId) => evaluateIn(operation, call, contextId)),
         )
-      : evaluateIn(operation, call, approval.contextId)
+      : Effect.succeed(approval.contextId)
     ).pipe(
+      Effect.flatMap((contextId) =>
+        evaluateIn(operation, call, contextId).pipe(
+          Effect.tapError((error) =>
+            error.reason._tag === "Failed" &&
+            /Cannot find context|__effectBrowser/i.test(error.reason.detail)
+              ? Effect.void
+              : mayHaveRun,
+          ),
+        ),
+      ),
       Effect.catchIf(contextGone, () =>
         failWith(
           operation,
@@ -953,7 +1179,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       );
 
       if (plan === null) break;
-      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+      const viewport = yield* viewportFor(operation);
       const point = { x: plan.x, y: plan.y };
 
       yield* marks.at(point);
@@ -972,7 +1198,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
     // Wheels may be prevented or the target may need unsupported nested/frame geometry. One
     // explicit fallback preserves reachability without a distance-dependent protocol loop.
-    yield* marks.sent;
+    yield* marks.touched;
     yield* resolve(operation, target, approval);
     yield* Effect.sleep("150 millis");
     if (approval !== undefined) yield* approval.check();
@@ -980,15 +1206,18 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     return yield* resolve(operation, target, approval, false);
   });
 
+  // Travel toward a press only prepares the action; a hover is its travel, and a drag holds the
+  // button it has already pressed.
   const moveTo = (
     operation: string,
     marks: InputMarks,
     to: Point,
     cursor?: string,
-    dragging = false,
+    travel: "approach" | "hover" | "drag" = "approach",
   ) =>
     Effect.gen(function* () {
-      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+      const dragging = travel === "drag";
+      const viewport = yield* viewportFor(operation);
 
       const previous = Option.getOrElse(yield* Ref.get(pointer), () => ({
         x: Math.round(viewport.width / 2),
@@ -1045,7 +1274,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               const remaining = at + sample.afterMillis - now();
 
               if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
-              yield* marks.sent;
+              yield* travel === "approach" ? marks.touched : marks.sent;
               yield* inputCall(
                 operation,
                 run.send(() =>
@@ -1149,8 +1378,27 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(point);
           yield* moveTo("click", marks, point, resolved.cursor);
-          if (approval !== undefined) yield* approval.check();
+          if (approval !== undefined) yield* approval.check({ presses: [{ index: 0, ...point }] });
+          yield* marks.sent;
           for (let index = 1; index <= count; index++) {
+            // An earlier click of a multi-click can replace the approved control under the
+            // pointer. Under a guard, its handlers run before the next press is checked and sent.
+            if (approval !== undefined && index > 1) {
+              yield* flush("click", marks.input);
+              yield* approval.check({ presses: [{ index: 0, ...point }] }).pipe(
+                Effect.catchIf(
+                  (error) => error.reason._tag === "StaleRef",
+                  () =>
+                    failWith(
+                      "click",
+                      new NotActionable({
+                        detail:
+                          "an earlier click removed the approved target, so no further press was sent",
+                      }),
+                    ),
+                ),
+              );
+            }
             yield* sendMouse("click", marks.input, {
               type: "mousePressed",
               ...point,
@@ -1190,7 +1438,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const { point } = resolved;
 
           yield* marks.at(point);
-          yield* moveTo("hover", marks, point, resolved.cursor);
+          yield* moveTo("hover", marks, point, resolved.cursor, "hover");
           yield* flush("hover", marks.input);
         }),
     );
@@ -1212,7 +1460,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(end.point);
           yield* moveTo("drag", marks, start.point, start.cursor);
-          if (approval !== undefined) yield* approval.check();
+          // Both ends are checked before the button goes down: once it is down, a release cannot
+          // be withheld, and a dragged element under the pointer would hide the drop target.
+          if (approval !== undefined)
+            yield* approval.check({
+              presses: [
+                { index: 0, ...start.point },
+                { index: 1, ...end.point },
+              ],
+            });
+          yield* marks.sent;
           yield* sendMouse("drag", marks.input, {
             type: "mousePressed",
             ...start.point,
@@ -1220,7 +1477,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             buttons: 1,
             clickCount: 1,
           });
-          yield* moveTo("drag", marks, end.point, end.cursor, true);
+          yield* moveTo("drag", marks, end.point, end.cursor, "drag");
           yield* sendMouse("drag", marks.input, {
             type: "mouseReleased",
             ...end.point,
@@ -1263,14 +1520,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       Effect.gen(function* () {
         if (event.phase === "insert") {
           yield* run.reserve(1);
-          yield* run.send(() => {
-            const track = new TextInserted({ at: now(), page: id, text: event.key });
-            const response = cdp.send("Input.insertText", { text: event.key });
-
-            publish(track);
-
-            return response;
-          });
+          yield* run.send(() => dispatchText(event.key));
 
           return;
         }
@@ -1332,7 +1582,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       { target: typeOptions.into, text },
       Duration.sum(
         settings.actionTimeout,
-        Duration.millis(settings.humanize ? Human.typingDuration(text) : 0),
+        Duration.millis(
+          (settings.humanize ? Human.typingDuration(text) : 0) +
+            (settings.guard === undefined ? 0 : guardedKeyMillis * text.length),
+        ),
       ),
       preparePolicy("type", { target: typeOptions.into, text }, [typeOptions.into ?? null], {
         submit: typeOptions.submit ?? false,
@@ -1340,21 +1593,44 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       (marks, approval) =>
         Effect.gen(function* () {
           const replace = typeOptions.replace ?? true;
+          const into = typeOptions.into;
           let corrected = false;
+          let eligible = false;
 
-          if (typeOptions.into !== undefined) {
-            const ref = typeOptions.into;
+          if (into !== undefined && !/^e\d+$/.test(into))
+            return yield* failWith(
+              "type",
+              new InvalidRequest({ detail: `"${into}" is not a ref; refs look like e12` }),
+            );
 
-            if (!/^e\d+$/.test(ref))
-              return yield* failWith(
-                "type",
-                new InvalidRequest({ detail: `"${ref}" is not a ref; refs look like e12` }),
-              );
+          // A typed space or letter can press a focused button or change a control. Refuse
+          // those before any input, on every path.
+          const typeable = yield* (
+            approval === undefined
+              ? evaluate("type", scriptCall("typeable", into ?? null))
+              : mutate("type", scriptCall("typeable", into ?? null), approval)
+          ).pipe(Effect.flatMap(decodeWith("type", Script.TypeableResultSchema)));
+
+          if ("error" in typeable)
+            return yield* failWith(
+              "type",
+              typeable.error === "stale" && into !== undefined
+                ? new StaleRef({ ref: into })
+                : new NotActionable({ detail: typeable.detail }),
+            );
+
+          const since = yield* currentDocument("type");
+
+          if (into !== undefined) {
+            const ref = into;
             const target = yield* targetFor("type", ref, approval, marks);
 
             yield* marks.at(target.point);
             if (settings.humanize) {
               yield* moveTo("type", marks, target.point, target.cursor);
+              if (approval !== undefined)
+                yield* approval.check({ presses: [{ index: 0, ...target.point }] });
+              yield* marks.sent;
               yield* sendMouse("type", marks.input, {
                 type: "mousePressed",
                 ...target.point,
@@ -1376,18 +1652,32 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             yield* marks.sent;
 
             const focused = yield* mutate("type", scriptCall("focus", ref, replace), approval).pipe(
-              Effect.flatMap(decodeWith("type", Script.EditResultSchema)),
+              Effect.flatMap(decodeWith("type", Script.FocusResultSchema)),
             );
 
-            if ("error" in focused)
-              return yield* failWith("type", new NotActionable({ detail: focused.error }));
+            if ("error" in focused) return yield* editFailure("type", ref, focused);
+            eligible = focused.prose;
           }
           yield* presentationPause("focus");
-          if (approval !== undefined) yield* approval.check(true);
+          if (approval !== undefined) yield* approval.check({ focused: true });
           yield* marks.sent;
-          if (text === "" && replace && typeOptions.into !== undefined)
+
+          // A key's handlers can move focus, and later keys then reach a control nobody approved.
+          // Under a guard, the earlier keys are answered and focus is checked before each further
+          // key, so no key goes to another control.
+          let keys = 0;
+
+          const beforeKey = Effect.gen(function* () {
+            if (approval !== undefined && keys > 0) yield* flush("type", marks.input);
+            yield* sameDocument("type", since);
+            if (approval !== undefined && keys > 0) yield* approval.check({ focused: true });
+            keys += 1;
+          });
+
+          if (text === "" && replace && typeOptions.into !== undefined) {
+            yield* sameDocument("type", since);
             yield* keyStroke("type", marks.input, ["Delete"]);
-          else {
+          } else {
             // Separate down/up deadlines permit overlapping holds without adding one hold to
             // every inter-key gap. The same bounded run owns all releases and interruptions.
             if (settings.humanize) {
@@ -1395,7 +1685,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 typeOptions.prose === true &&
                 typeOptions.into !== undefined &&
                 replace &&
-                approval?.targets[0]?.prose === true &&
+                eligible &&
                 !/\d|@|[a-z][a-z\d+.-]*:\/\/|\bwww\.|\b[a-z\d-]+\.[a-z]{2,}\b/i.test(text);
 
               const plan = yield* Human.typing(text, { prose });
@@ -1407,10 +1697,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 yield* Effect.sleep(
                   Duration.millis(Math.max(0, started + event.afterMillis - now())),
                 );
+                if (event.phase !== "up") yield* beforeKey;
                 yield* typeEvent(marks.input, event);
               }
             } else {
               for (const character of text) {
+                yield* beforeKey;
                 if (Keys.description(character) === undefined)
                   yield* typeEvent(marks.input, { phase: "insert", key: character });
                 else {
@@ -1430,10 +1722,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               approval,
             ).pipe(Effect.flatMap(decodeWith("type", Script.EditResultSchema)));
 
-            if ("error" in checked)
-              return yield* failWith("type", new NotActionable({ detail: checked.error }));
+            if ("error" in checked) return yield* editFailure("type", typeOptions.into, checked);
           }
           if (typeOptions.submit === true) {
+            // Typing can move focus or change the form; Enter goes only to the approved field.
+            if (approval !== undefined) yield* approval.check({ focused: true });
+            yield* sameDocument("type", since);
             yield* keyStroke("type", marks.input, ["Enter"]);
             yield* flush("type", marks.input);
             yield* settle;
@@ -1460,7 +1754,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             )
           : preparePolicy("press", { text: combination }, [null], { keys: combination });
       }),
-      (marks) =>
+      (marks, approval) =>
         Effect.gen(function* () {
           if (!Number.isFinite(pressOptions.times ?? 1))
             return yield* failWith("press", new InvalidRequest({ detail: "times must be finite" }));
@@ -1475,10 +1769,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             );
           const times = Math.max(1, Math.min(50, pressOptions.times ?? 1));
           const hold = pressOptions.holdMillis ?? 0;
+          const activates = parts.at(-1) === "Enter" || parts.at(-1) === "Space";
+          const since = yield* currentDocument("press");
           let due = now();
 
           yield* marks.sent;
           for (let index = 0; index < times; index++) {
+            // A repeated key stays in the document it began in. Under a guard, a repeated Enter
+            // or Space must also reach the approved element after the previous press settled.
+            if (index > 0 && approval !== undefined && activates) {
+              yield* flush("press", marks.input);
+              yield* approval.check({ focused: true });
+            }
+            yield* sameDocument("press", since);
             yield* keyStroke("press", marks.input, parts, hold);
             if (index + 1 < times && settings.humanize) {
               due += hold + (yield* Human.keyDelay);
@@ -1490,67 +1793,74 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         }),
     );
 
-  const scroll = (scrollOptions: ScrollOptions = {}) =>
-    Effect.suspend(() => {
-      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+  const scroll = (scrollOptions: ScrollOptions = {}) => {
+    const target = scrollOptions.at;
 
-      const middle = {
-        x: Math.round(viewport.width / 2),
-        y: Math.round(viewport.height / 2),
-      };
+    const valid =
+      Number.isFinite(scrollOptions.dx ?? 0) && Number.isFinite(scrollOptions.dy ?? 0)
+        ? Effect.void
+        : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
 
-      const target = scrollOptions.at ?? middle;
-
-      const dx = scrollOptions.dx ?? 0;
-
-      const dy =
-        scrollOptions.dy ??
-        (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
-
-      const valid =
-        Number.isFinite(dx) && Number.isFinite(dy)
-          ? Effect.void
-          : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
-
-      return perform(
-        "scroll",
-        {
-          target:
-            scrollOptions.at === undefined
-              ? undefined
-              : typeof scrollOptions.at === "string"
-                ? scrollOptions.at
-                : `${scrollOptions.at.x},${scrollOptions.at.y}`,
-        },
-        settings.actionTimeout,
-        valid.pipe(
-          Effect.andThen(
-            preparePolicy("scroll", { target: typeof target === "string" ? target : undefined }, [
-              target,
-            ]),
+    return perform(
+      "scroll",
+      {
+        target:
+          scrollOptions.at === undefined
+            ? undefined
+            : typeof scrollOptions.at === "string"
+              ? scrollOptions.at
+              : `${scrollOptions.at.x},${scrollOptions.at.y}`,
+      },
+      settings.actionTimeout,
+      valid.pipe(
+        Effect.andThen(
+          // Scrolling the page has no target: whatever sits mid-viewport is not what is scrolled.
+          preparePolicy(
+            "scroll",
+            { target: typeof target === "string" ? target : undefined },
+            target === undefined ? [] : [target],
           ),
         ),
-        (marks, approval) =>
-          Effect.gen(function* () {
-            yield* valid;
+      ),
+      (marks, approval) =>
+        Effect.gen(function* () {
+          yield* valid;
+          // Over CDP the page reports its own viewport, so the read shares the action's deadline.
+          const viewport = yield* viewportFor("scroll");
 
-            const resolved =
-              approval === undefined && scrollOptions.at === undefined
-                ? undefined
-                : yield* targetFor("scroll", target, approval, marks);
+          const middle = {
+            x: Math.round(viewport.width / 2),
+            y: Math.round(viewport.height / 2),
+          };
 
-            const point = resolved?.point ?? middle;
+          const dx = scrollOptions.dx ?? 0;
 
-            yield* marks.at(point);
-            yield* moveTo("scroll", marks, point, resolved?.cursor);
+          const dy =
+            scrollOptions.dy ??
+            (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
 
-            yield* wheel("scroll", marks.input, point, dx, dy);
-            yield* flush("scroll", marks.input);
-            yield* Effect.sleep(Duration.millis(150));
-            yield* presentationPause("action");
-          }),
-      );
-    });
+          // A page scroll has no target, but a visible pointer still shows the cursor it lands on.
+          const resolved =
+            target !== undefined
+              ? yield* targetFor("scroll", target, approval, marks)
+              : settings.humanize
+                ? yield* resolve("scroll", middle, approval).pipe(
+                    Effect.orElseSucceed(() => undefined),
+                  )
+                : undefined;
+
+          const point = resolved?.point ?? middle;
+
+          yield* marks.at(point);
+          yield* moveTo("scroll", marks, point, resolved?.cursor);
+          yield* marks.sent;
+          yield* wheel("scroll", marks.input, point, dx, dy);
+          yield* flush("scroll", marks.input);
+          yield* Effect.sleep(Duration.millis(150));
+          yield* presentationPause("action");
+        }),
+    );
+  };
 
   const select = (ref: string, values: ReadonlyArray<string>) =>
     perform(
@@ -1562,64 +1872,87 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         Effect.gen(function* () {
           yield* targetFor("select", ref, approval, marks);
 
-          yield* marks.sent;
-
-          const result = yield* mutate("select", scriptCall("select", ref, values), approval).pipe(
-            Effect.flatMap(decodeWith("select", Script.EditResultSchema)),
+          // The script refuses before it changes anything. Only a choice it made, or a script
+          // that may have run without an intact answer, may have reached the page.
+          const result = yield* mutate(
+            "select",
+            scriptCall("select", ref, values),
+            approval,
+            marks.sent,
+          ).pipe(
+            Effect.flatMap((value) =>
+              decodeWith(
+                "select",
+                Script.EditResultSchema,
+              )(value).pipe(Effect.tapError(() => marks.sent)),
+            ),
           );
 
-          return "error" in result
-            ? yield* failWith("select", new NotActionable({ detail: result.error }))
-            : result.detail;
+          if ("error" in result) return yield* editFailure("select", ref, result);
+          yield* marks.sent;
+
+          return result.detail;
         }),
     );
 
-  const navigation = (
-    name: string,
-    run: () => Promise<unknown>,
-    url: string,
-    prepare = preparePolicy(name, { target: url }, [], { destination: url }),
-  ) =>
-    perform(name, { target: url }, settings.navigationTimeout, prepare, (marks, approval) =>
-      marks.sent.pipe(
-        Effect.andThen(approval?.navigate ?? native(name, run)),
-        Effect.mapError((error) =>
-          error.reason._tag === "Failed" &&
-          /net::|NS_ERROR|Cannot navigate/i.test(error.reason.detail)
-            ? new BrowserError({
-                operation: name,
-                reason: new NavigationFailed({ url, detail: error.reason.detail }),
-                dispatched: true,
-              })
-            : error,
+  const navigation = (name: string, run: () => Promise<unknown>, url: string) =>
+    perform(
+      name,
+      { target: url, input: false },
+      settings.navigationTimeout,
+      preparePolicy(name, { target: url }, [], { destination: url }),
+      (marks) =>
+        marks.sent.pipe(
+          Effect.andThen(native(name, run)),
+          Effect.mapError((error) =>
+            error.reason._tag === "Failed" &&
+            /net::|NS_ERROR|Cannot navigate/i.test(error.reason.detail)
+              ? new BrowserError({
+                  operation: name,
+                  reason: new NavigationFailed({ url, detail: error.reason.detail }),
+                  dispatched: true,
+                })
+              : error,
+          ),
+          Effect.asVoid,
         ),
-        Effect.asVoid,
-      ),
     );
+
+  const history = native("back", () => cdp.send("Page.getNavigationHistory"));
+
+  // While a traversal swaps documents, Chromium can briefly route this session to the outgoing
+  // document, which has become inactive (for instance after it entered the back-forward cache),
+  // so a read during the traversal is retried until the session reaches the active document.
+  const traversingHistory = history.pipe(
+    Effect.retry({
+      schedule: Schedule.spaced(Duration.millis(50)),
+      while: (error) =>
+        error.reason._tag === "Failed" &&
+        /not attached to an active page/i.test(error.reason.detail),
+    }),
+  );
+
+  const noPrevious = failWith("back", new NotFound({ target: "a previous page in this tab" }));
 
   const prepareBack = Effect.gen(function* () {
-    const history = yield* native("back", () => cdp.send("Page.getNavigationHistory"));
-    const current = history.entries[history.currentIndex];
-    const previous = history.entries[history.currentIndex - 1];
+    const before = yield* history;
+    const current = before.entries[before.currentIndex];
+    const previous = before.entries[before.currentIndex - 1];
 
-    const plan = yield* preparePolicy(
-      "back",
-      {},
-      [],
-      previous === undefined ? {} : { destination: previous.url },
-    );
+    if (previous === undefined) return yield* noPrevious;
+    const plan = yield* preparePolicy("back", {}, [], { destination: previous.url });
 
     return {
       request: plan.request,
       validate: Effect.gen(function* () {
         const approval = yield* plan.validate;
-        const latestHistory = yield* native("back", () => cdp.send("Page.getNavigationHistory"));
+        const latest = yield* history;
 
         if (
-          latestHistory.currentIndex !== history.currentIndex ||
-          latestHistory.entries[latestHistory.currentIndex]?.id !== current?.id ||
-          latestHistory.entries[latestHistory.currentIndex - 1]?.id !== previous?.id ||
-          latestHistory.entries[latestHistory.currentIndex - 1]?.url !== previous?.url
+          latest.currentIndex !== before.currentIndex ||
+          latest.entries[latest.currentIndex]?.id !== current?.id ||
+          latest.entries[latest.currentIndex - 1]?.id !== previous.id ||
+          latest.entries[latest.currentIndex - 1]?.url !== previous.url
         )
           return yield* failWith(
             "back",
@@ -1628,40 +1961,48 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             }),
           );
 
-        const navigate =
-          previous === undefined
-            ? Effect.void
-            : Effect.gen(function* () {
-                const committed = yield* Deferred.make<void>();
-
-                const onNavigation = (frame: PlaywrightFrame) => {
-                  if (frame === playwright.mainFrame()) Deferred.doneUnsafe(committed, Effect.void);
-                };
-
-                // A history traversal can keep the URL unchanged. Subscribe before dispatch instead
-                // of treating an already-matching URL as evidence that the traversal finished.
-                yield* Effect.acquireUseRelease(
-                  Effect.sync(() => playwright.on("framenavigated", onNavigation)),
-                  () =>
-                    native("back", () =>
-                      cdp.send("Page.navigateToHistoryEntry", { entryId: previous.id }),
-                    ).pipe(
-                      Effect.andThen(Deferred.await(committed)),
-                      Effect.andThen(
-                        native("back", () =>
-                          playwright.waitForLoadState("domcontentloaded", { timeout: 0 }),
-                        ),
-                      ),
-                      Effect.asVoid,
-                    ),
-                  () => Effect.sync(() => playwright.off("framenavigated", onNavigation)),
-                );
-              });
-
-        return { ...approval, navigate };
+        return approval;
       }),
     };
   });
+
+  // One protocol traversal on every path. It has committed once the tab leaves its entry, which
+  // also covers entries that only an iframe created, where the main frame never navigates, and
+  // entries sharing a URL. A frame navigation then shows Playwright has caught up before the
+  // main document's readiness is read.
+  const goBack = (marks: InputMarks) =>
+    Effect.gen(function* () {
+      const before = yield* history;
+      const current = before.entries[before.currentIndex];
+      const previous = before.entries[before.currentIndex - 1];
+
+      if (current === undefined || previous === undefined) return yield* noPrevious;
+      const navigated = yield* Deferred.make<void>();
+
+      const onNavigation = () => {
+        Deferred.doneUnsafe(navigated, Effect.void);
+      };
+
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => playwright.on("framenavigated", onNavigation)),
+        () =>
+          Effect.gen(function* () {
+            yield* marks.sent;
+            yield* native("back", () =>
+              cdp.send("Page.navigateToHistoryEntry", { entryId: previous.id }),
+            );
+            yield* traversingHistory.pipe(
+              Effect.repeat({
+                schedule: Schedule.spaced(Duration.millis(50)),
+                until: (latest) => latest.entries[latest.currentIndex]?.id !== current.id,
+              }),
+            );
+            yield* Deferred.await(navigated);
+          }),
+        () => Effect.sync(() => playwright.off("framenavigated", onNavigation)),
+      );
+      yield* native("back", () => playwright.waitForLoadState("domcontentloaded", { timeout: 0 }));
+    });
 
   const goto = (url: string) => {
     const parsed = Url.parse(url);
@@ -1710,27 +2051,33 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         orElse: () =>
           failWith("snapshot", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
       }),
+      owned,
     );
 
-  const screenshot = (screenshotOptions: ScreenshotOptions = {}) =>
-    Effect.gen(function* () {
-      const frame = yield* capture.latest;
-      const active = yield* capture.active;
-      const since = yield* Ref.get(lastInputAt);
+  // The newest screencast frame, only while it demonstrably shows the viewport now. Delivery can
+  // be delayed, so its whole paint interval must follow the latest input, and no action may be
+  // changing the page. A screencast sends only changes and can miss a page's final paint, so a
+  // quiet stream is no evidence that its newest frame is still current: it must also have been
+  // delivered recently, at the viewport's size.
+  const currentPaint = Effect.gen(function* () {
+    const frame = yield* capture.latest;
+    const active = yield* capture.active;
+    const viewport = knownViewport();
 
-      // Delivery can be delayed. Only paint whose entire clock interval follows input is reusable.
-      const viewport = playwright.viewportSize();
-
-      if (
-        screenshotOptions.fresh !== true &&
-        screenshotOptions.clip === undefined &&
+    return Option.filter(
+      frame,
+      (latest) =>
         active &&
-        Option.isSome(frame) &&
-        frame.value.hostTime - frame.value.timing.uncertaintyMillis > since + 100 &&
-        frame.value.width === viewport?.width &&
-        frame.value.height === viewport.height
-      )
-        return frame.value.image;
+        changing === 0 &&
+        latest.hostTime - latest.timing.uncertaintyMillis > inputAt &&
+        latest.receivedAt > now() - currentPaintMillis &&
+        latest.width === viewport?.width &&
+        latest.height === viewport.height,
+    );
+  });
+
+  const takeScreenshot = (screenshotOptions: ScreenshotOptions) =>
+    Effect.gen(function* () {
       const quality = screenshotOptions.quality ?? 80;
       const timeout = Duration.toMillis(settings.actionTimeout);
 
@@ -1747,47 +2094,84 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         timeout,
       );
 
-      const size = jpegSize(data) ?? playwright.viewportSize() ?? { width: 0, height: 0 };
+      const size = jpegSize(data) ?? knownViewport() ?? { width: 0, height: 0 };
 
       return new Image({ data, mediaType: "image/jpeg", width: size.width, height: size.height });
     });
 
+  const screenshot = (screenshotOptions: ScreenshotOptions = {}) =>
+    Effect.gen(function* () {
+      const reusable =
+        screenshotOptions.fresh === true || screenshotOptions.clip !== undefined
+          ? Option.none<Frame>()
+          : yield* currentPaint;
+
+      return Option.isSome(reusable)
+        ? reusable.value.image
+        : yield* takeScreenshot(screenshotOptions);
+    });
+
+  // A new screenshot has no paint time, only the host interval in which it was taken.
+  const currentFrame = Effect.gen(function* () {
+    const reusable = yield* currentPaint;
+
+    if (Option.isSome(reusable)) return reusable.value;
+    const startedAt = now();
+    const image = yield* takeScreenshot({});
+    const finishedAt = now();
+
+    return new Frame({
+      page: id,
+      data: image.data,
+      timing: new Screenshot({
+        hostTime: startedAt + (finishedAt - startedAt) / 2,
+        uncertaintyMillis: (finishedAt - startedAt) / 2,
+      }),
+      receivedAt: finishedAt,
+      width: image.width,
+      height: image.height,
+    });
+  }).pipe(owned);
+
   const zoom = (requested: Region) =>
-    lock.withPermits(1)(
-      Effect.gen(function* () {
-        const region = yield* Schema.decodeEffect(Region)(requested).pipe(
-          Effect.mapError(
-            (error) =>
-              new BrowserError({
-                operation: "zoom",
-                reason: new InvalidRequest({ detail: error.message }),
-                dispatched: false,
-              }),
-          ),
-        );
-
-        const viewport =
-          playwright.viewportSize() ??
-          (yield* evaluate("zoom", scriptCall("viewport")).pipe(
-            Effect.flatMap(decodeWith("zoom", Script.ViewportResultSchema)),
-          ));
-
-        if (region.x + region.width > viewport.width || region.y + region.height > viewport.height)
-          return yield* failWith(
-            "zoom",
-            new InvalidRequest({ detail: "the crop must fit entirely within the viewport" }),
+    lock
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const region = yield* Schema.decodeEffect(Region)(requested).pipe(
+            Effect.mapError(
+              (error) =>
+                new BrowserError({
+                  operation: "zoom",
+                  reason: new InvalidRequest({ detail: error.message }),
+                  dispatched: false,
+                }),
+            ),
           );
-        const image = yield* screenshot({ clip: region });
 
-        return new Zoom({ page: id, region, image });
-      }).pipe(
+          const viewport = yield* viewportFor("zoom");
+
+          if (
+            region.x + region.width > viewport.width ||
+            region.y + region.height > viewport.height
+          )
+            return yield* failWith(
+              "zoom",
+              new InvalidRequest({ detail: "the crop must fit entirely within the viewport" }),
+            );
+          const image = yield* screenshot({ clip: region });
+
+          return new Zoom({ page: id, region, image });
+        }),
+      )
+      .pipe(
+        // Waiting behind another operation on this page counts against the deadline too.
         Effect.timeoutOrElse({
           duration: settings.actionTimeout,
           orElse: () =>
             failWith("zoom", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
         }),
-      ),
-    );
+        owned,
+      );
 
   const observe = (
     observeOptions: {
@@ -1829,6 +2213,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         orElse: () => failWith("waitForText", new NotFound({ target: JSON.stringify(text) })),
       }),
       Effect.asVoid,
+      owned,
     );
 
   const screencast = capture.stream;
@@ -1851,6 +2236,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             }),
           ),
       }),
+      owned,
     );
   };
 
@@ -1860,11 +2246,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     url: Effect.sync(() => playwright.url()),
     title: native("title", () => playwright.title()),
     goto,
-    back: navigation(
+    back: perform(
       "back",
-      () => playwright.goBack({ waitUntil: "domcontentloaded", timeout: 0 }),
-      "back",
+      { target: "back", input: false },
+      settings.navigationTimeout,
       prepareBack,
+      goBack,
     ),
     reload: Effect.suspend(() =>
       navigation(
@@ -1877,7 +2264,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     close: Effect.tryPromise(() => playwright.close()).pipe(Effect.ignore),
     snapshot,
     screenshot,
+    currentFrame,
     zoom,
+    viewport: viewportFor("viewport").pipe(
+      Effect.timeoutOrElse({
+        duration: settings.actionTimeout,
+        orElse: () =>
+          failWith("viewport", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
+      }),
+      owned,
+    ),
     observe,
     hasText,
     click,
