@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import {
   Cause,
   Clock,
@@ -33,6 +34,7 @@ import {
   type Timing,
 } from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
+import * as Recorder from "./Recorder.ts";
 import { frameHistory, type Task, tasks } from "./Tasks.ts";
 import {
   type Classification,
@@ -66,6 +68,10 @@ const help = `Usage: bun run bench -- [options]
   --rates <in,out>      Provider price ceilings in USD/million tokens; defaults to listed prices.
   --browser <name>      chromium (default) or browserbase.
   --humanize           Move the pointer and type at a human pace.
+  --record             Record each trial's frames, events and turns for replay,
+                       in a directory beside the results file.
+  --narrate <seconds>  With --model, caption operate tasks' pages this often while
+                       the agent works, with reasoning off; captions are recorded.
   --out <dir>          Results directory. Defaults to .work/bench in the repository.`;
 
 // A hosted session outlives the trial that owns it only until Browserbase's own timeout, which
@@ -101,6 +107,8 @@ const flags = Effect.try({
         rates: { type: "string" },
         browser: { type: "string", default: "chromium" },
         humanize: { type: "boolean", default: false },
+        record: { type: "boolean", default: false },
+        narrate: { type: "string" },
         out: { type: "string" },
         help: { type: "boolean", default: false },
       },
@@ -183,6 +191,12 @@ const main = Effect.gen(function* () {
     return yield* refuse("--max-usd must be finite and positive");
   if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 16)
     return yield* refuse("--max-output-tokens must be an integer of at least 16");
+  const narrateSeconds = options.narrate === undefined ? undefined : Number(options.narrate);
+
+  if (narrateSeconds !== undefined && !(Number.isFinite(narrateSeconds) && narrateSeconds >= 1))
+    return yield* refuse("--narrate must be at least 1 second");
+  if (narrateSeconds !== undefined && model === undefined)
+    return yield* refuse("--narrate needs --model: captions are model calls");
   if (options.reasoning !== undefined && reasoning === undefined)
     return yield* refuse(`--reasoning must be one of ${efforts.join(", ")}`);
   if (options.browser !== "chromium" && options.browser !== "browserbase")
@@ -235,6 +249,7 @@ const main = Effect.gen(function* () {
   const stamp = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-");
   const directory = options.out ?? fileURLToPath(new URL("../.work/bench/", import.meta.url));
   const file = join(directory, `${stamp}-${label}.jsonl`);
+  const recordings = join(directory, `${stamp}-${label}`);
 
   const jobs = selected.flatMap((task) =>
     Array.from({ length: trials }, (_, index) => ({ task, trial: index + 1 })),
@@ -317,14 +332,31 @@ const main = Effect.gen(function* () {
 
         if (account !== undefined) yield* units.begin(index, account);
 
-        const work =
+        const recorder = options.record
+          ? Recorder.make(join(recordings, `${task.name}-${trial}`))
+          : undefined;
+
+        const trace = recorder?.trace;
+
+        const unrecorded =
           runner !== undefined && account !== undefined
             ? runner.withModel(
-                task.withModel({ seed, onUsage: () => Effect.void }),
+                task.withModel({
+                  seed,
+                  onUsage: () => Effect.void,
+                  trace,
+                  narrate:
+                    narrateSeconds === undefined ? undefined : Duration.seconds(narrateSeconds),
+                  captionCall: OpenRouterLanguageModel.withConfigOverride({
+                    reasoning: { effort: "none" },
+                  }),
+                }),
                 effectiveReasoning,
                 account,
               )
-            : task.scripted({ seed });
+            : task.scripted({ seed, trace });
+
+        const work = recorder === undefined ? unrecorded : recorder.around(unrecorded);
 
         const exit =
           halted || denied
@@ -380,6 +412,35 @@ const main = Effect.gen(function* () {
         };
 
         yield* units.settle(index, save(record));
+        if (recorder !== undefined)
+          yield* recorder.finish({
+            task: {
+              name: task.name,
+              kind: task.kind,
+              summary: task.summary,
+              prompt: task.prompt,
+            },
+            run: {
+              trial,
+              seed,
+              model: record.run.model,
+              reasoning: record.reasoning,
+              browser: record.run.browser,
+              humanize: record.run.humanize,
+              commit: record.run.revision.commit,
+              dirty: record.run.revision.dirty,
+            },
+            outcome: {
+              status: record.status,
+              reason: record.reason,
+              pass: record.pass,
+              detail: record.detail,
+              answer: record.answer,
+              calls: record.accounting.calls,
+              knownUsd: record.accounting.knownUsd,
+              seconds,
+            },
+          });
         yield* Console.log(
           `${task.name.padEnd(14)} #${trial}  ${record.status === "graded" ? (record.pass === true ? "pass" : "FAIL") : record.status}  ${record.reason}  ${seconds.toFixed(1)}s  ${record.accounting.calls} calls  $${record.accounting.knownUsd.toFixed(4)} known + $${record.accounting.reservedUsd.toFixed(4)} unresolved  ${record.error ?? record.detail}`,
         );

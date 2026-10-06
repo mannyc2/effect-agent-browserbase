@@ -110,6 +110,22 @@ reservations and uncertain calls), `timing` (seconds queued for budget admission
 provider requests) and elapsed seconds including browser setup and cleanup. The ISO
 start time is a calendar date; elapsed time uses a monotonic clock.
 
+`--record` also records each trial for replay, in a directory named after the results file with
+one subdirectory per trial (`checkout-1/`). Each page's screencast frames are written as JPEG
+files as they arrive, and `recording.json` (`Recording.ts`) holds every browser event, including
+the planned pointer glides and keys, the agent's turns, the frames each understand task showed
+its model with the page's truth, and the trial's outcome, all on the browser's host clock.
+Screencast frames carry no cursor: a player draws it from the recorded glides. Recording runs a
+screencast on every page, so it adds capture load to operate trials, and it continues 500 ms
+after a trial so it ends on the settled page. Lost frames or events are listed in `problems`.
+
+`--narrate <seconds>`, with `--model`, captions an operate task's page that often while its agent
+works: each caption is one structured call over a `Moment` of the time since the previous one, with
+reasoning off. Captions go to the recording; they neither steer nor grade the agent. Their calls
+share the trial's budget, so a caption call with an unknown charge stops the trial's admission as
+any call does. A malformed caption is skipped. When the agent answers, the narrator finishes the
+caption it is writing and starts no other.
+
 ## Outcomes
 
 Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one

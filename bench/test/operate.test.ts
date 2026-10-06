@@ -8,7 +8,8 @@ import { LanguageModel } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { budgetedClient, ledger } from "../Budget.ts";
-import { frameHistory, tasks } from "../Tasks.ts";
+import type { Trace } from "../Recording.ts";
+import { frameHistory, type ModelOptions, tasks } from "../Tasks.ts";
 import { classify, isolatedTrial } from "../Trial.ts";
 
 const completion = (message: unknown) => ({
@@ -28,8 +29,15 @@ const toolCall = (name: string, args: string) =>
     tool_calls: [{ id: "call-1", type: "function", function: { name, arguments: args } }],
   });
 
-/** Run chart-trade with a model whose n-th HTTP answer is `answers(n)`. */
-const trade = Effect.fnUntraced(function* (model: string, answers: (request: number) => unknown) {
+/**
+ * Run chart-trade with a model whose n-th HTTP answer is `answers(n, body)`, optionally narrated
+ * every `narrate` with captions sent to `trace`.
+ */
+const trade = Effect.fnUntraced(function* (
+  model: string,
+  answers: (request: number, body: string) => unknown,
+  narration: Pick<ModelOptions<never>, "narrate" | "trace"> = {},
+) {
   const task = tasks.find((candidate) => candidate.name === "chart-trade");
 
   if (task === undefined) return yield* Effect.die("the bench has no chart-trade task");
@@ -39,7 +47,10 @@ const trade = Effect.fnUntraced(function* (model: string, answers: (request: num
 
   const http = HttpClient.make((request) =>
     Effect.sync(() => {
-      const answer = answers(requests);
+      const body =
+        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+
+      const answer = answers(requests, body);
 
       requests += 1;
 
@@ -65,7 +76,7 @@ const trade = Effect.fnUntraced(function* (model: string, answers: (request: num
   );
 
   const exit = yield* isolatedTrial(
-    task.withModel({ seed: 23, onUsage: () => Effect.void }),
+    task.withModel({ seed: 23, onUsage: () => Effect.void, ...narration }),
     Chromium.layer({ frameHistory }),
   ).pipe(Effect.provideService(LanguageModel.LanguageModel, language), Effect.exit);
 
@@ -132,6 +143,52 @@ describe("operate trials on the real adapter", () => {
       assert.strictEqual(result.requests, 1);
       assert.strictEqual(result.calls.accounting.uncertainCalls, 1);
       assert.deepStrictEqual(result.ledger, { knownUsd: 0, reservedUsd: 0.01 });
+    }),
+  );
+});
+
+describe("narration", () => {
+  it.live("captions the page while the agent works, and skips a malformed caption", () =>
+    Effect.gen(function* () {
+      const captions: Array<string> = [];
+      let captionCalls = 0;
+      let agentCalls = 0;
+
+      const result = yield* trade(
+        "openai/test",
+        (_request, body) => {
+          // Caption calls ask for a JSON object; the agent's calls offer tools.
+          if (body.includes('"response_format"')) {
+            captionCalls += 1;
+
+            // A malformed caption is charged and skipped. An unknown charge would instead stop
+            // the trial's admission, as it does for any call.
+            return completion({
+              role: "assistant",
+              content: captionCalls === 1 ? "not json" : JSON.stringify({ caption: "A chart." }),
+            });
+          }
+          agentCalls += 1;
+
+          return agentCalls === 1
+            ? toolCall("browser_wait", JSON.stringify({ seconds: 3 }))
+            : toolCall("done", JSON.stringify({ answer: { orderId: "ORD-0000" } }));
+        },
+        {
+          narrate: "1 second",
+          trace: (entry: Trace) =>
+            Effect.sync(() => {
+              if (entry._tag === "Moment" && entry.caption !== undefined)
+                captions.push(entry.caption);
+            }),
+        },
+      );
+
+      assert.strictEqual(result.outcome.status, "graded");
+      assert.isAtLeast(captionCalls, 2);
+      // The narrator finishes its last call rather than leaving its charge unknown.
+      assert.strictEqual(result.calls.accounting.uncertainCalls, 0);
+      assert.deepStrictEqual(captions, Array(captionCalls - 1).fill("A chart."));
     }),
   );
 });
