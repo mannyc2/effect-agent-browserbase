@@ -25,9 +25,10 @@ import type { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import * as Browserbase from "effect-browserbase/Browserbase";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
-import { AiError } from "effect/ai";
+import { AiError, type LanguageModel } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 
+import * as Diagnostics from "./Diagnostics.ts";
 import { type Task, tasks } from "./Tasks.ts";
 
 const help = `Usage: bun run bench -- [options]
@@ -81,7 +82,7 @@ const flags = Effect.try({
 
 const efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
-type Reasoning = (typeof efforts)[number];
+export type Reasoning = (typeof efforts)[number];
 
 /** USD per token, also enforced as provider routing ceilings. */
 interface Rates {
@@ -206,6 +207,17 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
       });
 
     return {
+      // Stop only future admission; dispatched calls still own and settle their reservations.
+      stop: Effect.gen(function* () {
+        const next = yield* Deferred.make<void>();
+
+        const previous = yield* Ref.modify(state, (value) => [
+          value.changed,
+          { ...value, blocked: true, changed: next },
+        ]);
+
+        yield* Deferred.succeed(previous, undefined);
+      }),
       snapshot: Ref.get(state).pipe(
         Effect.map((value) => ({
           knownUsd: value.known / units,
@@ -220,12 +232,15 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
       ),
       account: Effect.gen(function* () {
         const account = yield* Ref.make(emptyAccounting);
+        const lastResponse = yield* Ref.make<Diagnostics.LastResponse | null>(null);
 
         return {
           snapshot: Ref.get(account),
+          lastResponse: Ref.get(lastResponse),
           run: <A, E, R>(
             request: Effect.Effect<A, E, R>,
             usageOf: (response: A) => RawUsage | undefined,
+            receiptOf?: (response: A) => Diagnostics.Receipt,
           ): Effect.Effect<A, E | BenchError, R> =>
             Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
@@ -259,12 +274,14 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                   yield* restore(Deferred.await(admission.changed));
                 }
 
-                yield* Ref.update(account, (value) => ({
+                const dispatched = yield* Ref.updateAndGet(account, (value) => ({
                   ...value,
                   calls: value.calls + 1,
                   reservedUsd: value.reservedUsd + reservation / units,
                   uncertainCalls: value.uncertainCalls + 1,
                 }));
+
+                yield* Ref.set(lastResponse, null);
 
                 // Only the provider request is interruptible. Once a receipt arrives, account for
                 // it before any tool, answer decoder, or caller interruption can discard it.
@@ -274,8 +291,14 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
 
                 const usage = usageOf(response);
 
+                const remember = () =>
+                  receiptOf === undefined
+                    ? Effect.void
+                    : Ref.set(lastResponse, { call: dispatched.calls, ...receiptOf(response) });
+
                 if (usage === undefined) {
                   yield* settle(undefined);
+                  yield* remember();
 
                   return response;
                 }
@@ -298,6 +321,7 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                   usage.cost < 0
                 ) {
                   yield* settle(undefined);
+                  yield* remember();
 
                   return response;
                 }
@@ -312,6 +336,8 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                   uncertainCalls: value.uncertainCalls - 1,
                 }));
 
+                yield* remember();
+
                 if (charged > reservation)
                   return yield* refuse(
                     "provider charge exceeded its enforced price/token bounds; stopped",
@@ -325,8 +351,8 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
     };
   });
 
-type Budget = Effect.Success<ReturnType<typeof ledger>>;
-type Account = Effect.Success<Budget["account"]>;
+export type Budget = Effect.Success<ReturnType<typeof ledger>>;
+export type Account = Effect.Success<Budget["account"]>;
 
 /** Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding. */
 export const budgetedClient = (
@@ -376,6 +402,7 @@ export const budgetedClient = (
           },
         }),
         ([response]) => response.usage,
+        Diagnostics.receipt,
       )
       .pipe(
         Effect.mapError((error) =>
@@ -390,7 +417,7 @@ export const budgetedClient = (
       ),
 });
 
-const modelRunner = (options: {
+export const modelRunner = (options: {
   readonly model: string;
   readonly rates: string | undefined;
   readonly maxUsd: number;
@@ -464,35 +491,41 @@ const modelRunner = (options: {
         `a call reserves $${requestUsd.toFixed(6)}, above --max-usd ${options.maxUsd}`,
       );
 
+    const withModel = <A, E, R>(
+      effect: Effect.Effect<A, E, R | LanguageModel.LanguageModel>,
+      reasoning: Reasoning,
+      account: Account,
+    ) => {
+      const client = Layer.effect(
+        OpenRouterClient.OpenRouterClient,
+        Effect.map(OpenRouterClient.OpenRouterClient, (native) =>
+          budgetedClient(native, account, {
+            rates,
+            maxOutputTokens: options.maxOutputTokens,
+            outputParameter: bounds.outputParameter,
+            provider: bounds.provider,
+          }),
+        ),
+      ).pipe(
+        Layer.provide(
+          OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") }),
+        ),
+        Layer.provide(FetchHttpClient.layer),
+      );
+
+      const languageModel = OpenRouterLanguageModel.layer({
+        model: options.model,
+        config: { reasoning: { effort: reasoning } },
+      }).pipe(Layer.provide(client));
+
+      return effect.pipe(Effect.provide(languageModel));
+    };
+
     return {
       ...budget,
-      run: (task: Task, seed: number, reasoning: Reasoning, account: Account) => {
-        const client = Layer.effect(
-          OpenRouterClient.OpenRouterClient,
-          Effect.map(OpenRouterClient.OpenRouterClient, (native) =>
-            budgetedClient(native, account, {
-              rates,
-              maxOutputTokens: options.maxOutputTokens,
-              outputParameter: bounds.outputParameter,
-              provider: bounds.provider,
-            }),
-          ),
-        ).pipe(
-          Layer.provide(
-            OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") }),
-          ),
-          Layer.provide(FetchHttpClient.layer),
-        );
-
-        const languageModel = OpenRouterLanguageModel.layer({
-          model: options.model,
-          config: { reasoning: { effort: reasoning } },
-        }).pipe(Layer.provide(client));
-
-        return task
-          .withModel({ seed, onUsage: () => Effect.void })
-          .pipe(Effect.provide(languageModel));
-      },
+      withModel,
+      run: (task: Task, seed: number, reasoning: Reasoning, account: Account) =>
+        withModel(task.withModel({ seed, onUsage: () => Effect.void }), reasoning, account),
     };
   });
 
@@ -527,6 +560,8 @@ interface TrialRecord {
   readonly pass: boolean;
   readonly detail: string;
   readonly error: string | null;
+  readonly diagnostic: Diagnostics.Failure | null;
+  readonly lastResponse: Diagnostics.LastResponse | null;
   readonly answer: unknown;
   readonly steps: number;
   readonly usage: Agent.Usage | null;
@@ -669,6 +704,9 @@ const main = Effect.gen(function* () {
             ? "Skipped: the remaining model budget cannot reserve another call."
             : (outcome?.detail ?? ""),
           error: exit !== undefined && Exit.isFailure(exit) ? errorText(exit.cause) : null,
+          diagnostic:
+            exit !== undefined && Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,
+          lastResponse: account === undefined ? null : yield* account.lastResponse,
           answer: outcome?.answer ?? null,
           steps: accounting.calls,
           usage: model === undefined ? null : accounting.usage,

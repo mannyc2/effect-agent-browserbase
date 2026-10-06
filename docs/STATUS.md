@@ -31,7 +31,10 @@
 - `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
-  and a shared model admission budget. Paid runs remain opt-in.
+  and a shared model admission budget. Paid runs remain opt-in. A separate quote comparison
+  reuses captured evidence across shipping Moment, the historical on-air representation and
+  visible-DOM conclusions, with paired grading and safe provider diagnostics. Facts remain a
+  bench experiment until measured evidence supports a public input.
 
 `effect-agent-browser` and the Effect Agent dependency are gone: the agent loop is `effect/ai`'s
 `Chat` with the browser toolkit. The tests run against real local Chromium, a fake Browserbase API
