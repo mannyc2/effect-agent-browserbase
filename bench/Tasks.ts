@@ -10,9 +10,8 @@ import { Frame, Screenshot } from "effect-browser/Frame";
 import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import type { Snapshot } from "effect-browser/Snapshot";
-import type { AiError, LanguageModel } from "effect/ai";
+import { type AiError, LanguageModel, Prompt, type Response } from "effect/ai";
 
-import * as QuoteComparison from "./QuoteComparison.ts";
 import {
   CheckoutTruth,
   type FixtureUnreadable,
@@ -67,7 +66,19 @@ export interface Task {
   ) => Effect.Effect<Outcome, BrowserError | EvidenceIncomplete | FixtureUnreadable, Browser>;
 }
 
+/**
+ * How long pages keep screencast frames: the longest understand window, tumble-win's 20 seconds,
+ * plus up to 5 seconds waiting for a final paint.
+ */
+export const frameHistory = Duration.seconds(30);
+
 const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
+
+const usageOf = (usage: Response.Usage): Agent.Usage => ({
+  inputTokens: usage.inputTokens.total ?? 0,
+  outputTokens: usage.outputTokens.total ?? 0,
+  cachedInputTokens: usage.inputTokens.cacheRead ?? 0,
+});
 
 /** Serve the bench pages for the rest of the scope, and open `path` in the first tab. */
 const open = (path: string, seed = 0) =>
@@ -184,7 +195,8 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly beforeCapture?: (page: Page) => Effect.Effect<void, BrowserError>;
   /** Bring the page to the moment, without a model. */
   readonly setup: (page: Page) => Effect.Effect<void, BrowserError>;
-  readonly capture: Moment.CaptureOptions;
+  /** Frames to describe, and the window they span. Defaults to 2 frames over 5 seconds. */
+  readonly capture: { readonly frames?: number; readonly windowMillis?: number };
   /** A count alone cannot show whether the retained frames cover an earlier state. */
   readonly minimumSpanMillis?: (
     page: Page,
@@ -245,8 +257,8 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       const waited = shot === undefined ? 0 : (yield* browser.now) - waiting;
 
       const captured = yield* Moment.capture(page, {
-        ...spec.capture,
-        windowMillis: (spec.capture.windowMillis ?? 5000) + waited,
+        frames: spec.capture.frames,
+        since: Duration.millis((spec.capture.windowMillis ?? 5000) + waited),
       });
 
       // A moment ends with its own fresh screenshot when its newest frame is not demonstrably
@@ -263,8 +275,9 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
         shot === undefined || (newest !== undefined && current(newest))
           ? captured
           : new Moment.Moment({
-              at: captured.at,
               page: captured.page,
+              from: captured.from,
+              at: captured.at,
               frames: [...captured.frames.slice(0, -1), shot],
               snapshot: captured.snapshot,
               events: captured.events,
@@ -306,10 +319,13 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       Effect.gen(function* () {
         const { moment, detail, expected } = yield* prepare(options);
 
-        const { value, usage } = yield* Moment.describe(moment, {
+        const { value, usage: used } = yield* LanguageModel.generateObject({
+          prompt: Prompt.setSystem(Moment.toPrompt(moment), spec.instructions),
           schema: spec.answer,
-          instructions: spec.instructions,
+          objectName: "moment",
         });
+
+        const usage = usageOf(used);
 
         yield* options.onUsage(usage);
         const grade = spec.grade(value, expected);
@@ -598,6 +614,17 @@ const checkout = operate({
     ),
 });
 
+const QuoteAnswer = Schema.Struct({
+  ticker: Schema.String,
+  price: Schema.Finite,
+  change1h: Schema.Finite,
+  change24h: Schema.Finite,
+  column: Schema.String,
+  table: Schema.String,
+});
+
+const QuoteJson = Schema.fromJsonString(QuoteAnswer);
+
 const quoteTask = (dense: boolean) =>
   understand({
     name: dense ? "quote-dense" : "quote-table",
@@ -607,8 +634,9 @@ const quoteTask = (dense: boolean) =>
     start: dense ? routes.denseQuotes : routes.quotes,
     setup: () => Effect.void,
     capture: { frames: 1 },
-    instructions: QuoteComparison.question,
-    answer: QuoteComparison.Answer,
+    instructions:
+      "In the Spot markets table, read the row for the focused asset named in the page's h1 heading. Report its ticker, price, 1-hour and 24-hour percentage changes as displayed, the exact header of the 24-hour percentage column, and the table name. Do not use another period or another table with the same ticker.",
+    answer: QuoteAnswer,
     expected: (page) =>
       truth(page, QuoteTruth).pipe(
         Effect.map((quotes) => ({
@@ -620,7 +648,16 @@ const quoteTask = (dense: boolean) =>
           table: quotes.table,
         })),
       ),
-    grade: QuoteComparison.grade,
+    grade: (answer, expected) => ({
+      pass:
+        answer.ticker === expected.ticker &&
+        answer.price === expected.price &&
+        answer.change1h === expected.change1h &&
+        answer.change24h === expected.change24h &&
+        answer.column === expected.column &&
+        answer.table === expected.table,
+      detail: `answered ${Schema.encodeSync(QuoteJson)(answer)}, expected ${Schema.encodeSync(QuoteJson)(expected)}`,
+    }),
   });
 
 const tumbleWin = understand({

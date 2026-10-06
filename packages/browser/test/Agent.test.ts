@@ -1,4 +1,4 @@
-// The agent, its tools and moment descriptions, driven by scripted models: no model is called.
+// The agent and its tools, driven by scripted models: no model is called.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,6 @@ import * as Agent from "../src/Agent.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { BrowserError, Failed } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
-import * as Moment from "../src/Moment.ts";
 import type { Page } from "../src/Page.ts";
 import * as Tools from "../src/Tools.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
@@ -1583,50 +1582,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         yield* tools.handlers.browser_click({ ref: "e99999" }).pipe(Effect.flip),
         "take a new snapshot",
       );
-    }),
-  );
-
-  it.effect("captures a moment of a spinning game and describes it in one call", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/slots");
-
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* Effect.sleep(Duration.millis(300));
-      yield* page.click({ x: 300, y: 320 });
-      yield* Effect.sleep(Duration.millis(400));
-      const moment = yield* Moment.capture(page, { frames: 2 });
-
-      const model = scripted([
-        (prompt) => {
-          assert.strictEqual(pictures(prompt), 2);
-          assert.include(textOf(prompt), "click 300,320");
-
-          return [
-            {
-              type: "text",
-              text: JSON.stringify({
-                summary: "Three reels are spinning.",
-                activity: "spinning the reels",
-                change: "the reels started",
-                subjects: ["reels", "SPIN button"],
-                mood: "tense",
-              }),
-            },
-            { ...finish, reason: "stop" },
-          ];
-        },
-      ]);
-
-      const { value: description, usage } = yield* Moment.describe(moment).pipe(
-        Effect.provide(model.layer),
-      );
-
-      assert.strictEqual(moment.frames.length, 2);
-      assert.isTrue(
-        moment.events.some((event) => event._tag === "Action" && event.name === "click"),
-      );
-      assert.strictEqual(description.activity, "spinning the reels");
-      assert.deepStrictEqual(usage, { inputTokens: 100, outputTokens: 10, cachedInputTokens: 40 });
     }),
   );
 });

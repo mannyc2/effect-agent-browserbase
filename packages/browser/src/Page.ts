@@ -16,6 +16,7 @@ import { type Duration, type Effect, type Option, Schema, type Stream } from "ef
 import type { Page as PlaywrightPage } from "playwright-core";
 
 import type { BrowserError, PolicyDenied } from "./BrowserError.ts";
+import type { BrowserEvent } from "./BrowserEvent.ts";
 import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import * as Script from "./internal/pageScript.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
@@ -190,8 +191,8 @@ export interface Settings {
   readonly navigationTimeout: Duration.Duration;
   /** Move the pointer along curved paths and type with human pacing, for watched browsing. */
   readonly humanize: boolean;
-  /** Screencast frames kept for `recentFrames`. */
-  readonly frameHistory: number;
+  /** How long screencast frames stay in `recentFrames`, measured back from the newest. */
+  readonly frameHistory: Duration.Duration;
   readonly guard: InputGuard | undefined;
 }
 
@@ -278,6 +279,8 @@ export interface Page {
   /** Native delivery, filtering and observed subscriber loss across capture generations. */
   readonly captureStats: Effect.Effect<CaptureStats>;
   readonly latestFrame: Effect.Effect<Option.Option<Frame>>;
-  /** The frames received in the last `frameHistory` frames, oldest first. */
+  /** Screencast frames painted within `frameHistory` of the newest, oldest first. */
   readonly recentFrames: Effect.Effect<ReadonlyArray<Frame>>;
+  /** This page's events among the browser's latest `eventHistory`, oldest first. */
+  readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
 }

@@ -1,8 +1,8 @@
 # effect-browser
 
 Browser automation for [Effect](https://effect.website) agents: page control, a compact page
-outline for models, screencast frames, browser tools for `effect/ai`, an agent loop, and moments, a
-picture-and-timeline account of what a page showed at one point in time.
+outline for models, screencast frames, browser tools for `effect/ai`, an agent loop, and moments:
+what a page showed, and what happened on it, over a window of time, ready for a model.
 
 | Package                                                  | What it is                                                         |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -33,7 +33,12 @@ const program = Effect.gen(function* () {
   yield* Effect.log(result.answer, result.usage);
 });
 
-const Model = OpenRouterLanguageModel.layer({ model: "<model id>" }).pipe(
+// @effect/ai-openrouter 4.0.0 needs strictJsonSchema for structured output; without it,
+// OpenRouter drops the response format.
+const Model = OpenRouterLanguageModel.layer({
+  model: "<model id>",
+  config: { strictJsonSchema: true },
+}).pipe(
   Layer.provide(OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") })),
   Layer.provide(FetchHttpClient.layer),
 );
@@ -59,11 +64,12 @@ program.pipe(Effect.provide([Hosted, Model]), Effect.runPromise);
 
 ## A moment
 
-`Moment.capture` gathers screencast frames from the last few seconds, a snapshot of the page and
-the browser's events over the same window. `Moment.describe` gives all of it to a vision model in
-one call, and returns a `Description` or any schema you pass:
+`Moment.capture` gathers a page's screencast frames over a window, its outline at the end and its
+events in between. `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call:
 
 ```ts
+import { LanguageModel, Prompt } from "effect/ai";
+
 const VideoPrompt = Schema.Struct({
   scene: Schema.String,
   motion: Schema.String,
@@ -78,14 +84,47 @@ const watch = Effect.gen(function* () {
   yield* Effect.sleep("5 seconds");
 
   const moment = yield* Moment.capture(page, { frames: 3 });
-  const { value } = yield* Moment.describe(moment, {
+
+  const { value } = yield* LanguageModel.generateObject({
+    prompt: Prompt.setSystem(
+      Moment.toPrompt(moment),
+      "Write a prompt for a five-second video of this moment.",
+    ),
     schema: VideoPrompt,
-    instructions: "Write a prompt for a five-second video of this moment.",
   });
 
   return value.prompt;
 }).pipe(Effect.scoped);
 ```
+
+Each moment can start where the last one ended, so a narrator neither repeats nor misses an event.
+Keeping one `Chat` lets the model see what it already said:
+
+```ts
+import { Chat } from "effect/ai";
+
+const narrate = (page: Page.Page) =>
+  Effect.gen(function* () {
+    const chat = yield* Chat.fromPrompt([
+      { role: "system", content: "Caption the stream in five words." },
+    ]);
+
+    let last = yield* Moment.capture(page);
+
+    const caption = Effect.gen(function* () {
+      last = yield* Moment.capture(page, { since: last });
+      const { text } = yield* chat.generateText({ prompt: Moment.toPrompt(last) });
+
+      yield* Effect.log(text);
+    });
+
+    return yield* caption.pipe(Effect.repeat(Schedule.spaced("5 seconds")));
+  });
+```
+
+Every turn adds its moment's pictures to the chat's history, so trim `chat.history` on a long
+stream. Add what your own code knows about the page, such as a game's score, as more text in the
+prompt.
 
 ## How the tools work
 

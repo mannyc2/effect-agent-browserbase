@@ -28,6 +28,11 @@
   fails closed on input with facts when its judge fails; `Agent.run` provides the task and ends
   after three refusals in a row. The judges are tested with scripted models; `bun run judges` in
   the bench grades them against the corpus, with paid arms only on opt-in.
+- Moments: `Moment.capture` gathers a page's frames, outline and events over a window that can
+  start where the previous moment ended, so consecutive moments neither repeat nor miss an event,
+  and needs only the page. `Moment.toPrompt` lays a moment out as one message for any `effect/ai`
+  call; describing it is the caller's own `generateObject`, `generateText` or `Chat` turn. Pages
+  keep the screencast frames of the last 5 seconds (`frameHistory`), a moment's default window.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
@@ -44,11 +49,7 @@
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
   and a shared model admission budget. Every trial is graded, an infrastructure failure, denied
-  or unrun, and summaries keep those denominators apart. Paid runs remain opt-in. A separate
-  quote comparison reuses captured evidence across shipping Moment, the historical on-air
-  representation and conclusions computed from every visible quote table, with paired grading,
-  arm orders balanced within complete blocks and safe provider diagnostics. Facts remain a bench experiment until
-  measured evidence supports a public input.
+  or unrun, and summaries keep those denominators apart. Paid runs remain opt-in.
 
 `effect-agent-browser` and the Effect Agent dependency are gone: the agent loop is `effect/ai`'s
 `Chat` with the browser toolkit. The tests run against real local Chromium, a fake Browserbase API
