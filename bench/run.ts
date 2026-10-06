@@ -158,6 +158,8 @@ interface TrialRecord {
   readonly timing: Timing;
   /** Opening the browser, the model's tool calls and looks at the page, within `seconds`. */
   readonly phases: Trace.Phases;
+  /** A latency run's DevTools commands and round trips, by span; null otherwise. */
+  readonly protocol: Trace.Protocol | null;
   /** The trial's trace, to find it where spans are exported; null for a trial that never ran. */
   readonly traceId: string | null;
   readonly seconds: number;
@@ -193,6 +195,34 @@ const breakdown = (graded: ReadonlyArray<TrialRecord>) => {
   return `mean ${total.toFixed(1)}s per graded trial: ${Object.entries(parts)
     .map(([part, seconds]) => `${part} ${seconds.toFixed(1)}s`)
     .join(", ")}, the rest ${rest.toFixed(1)}s`;
+};
+
+/**
+ * Where a latency run's round trips went, as means per graded trial, by the innermost span open
+ * when each command was sent, busiest first.
+ */
+const roundTrips = (graded: ReadonlyArray<TrialRecord>) => {
+  const bySpan = new Map<string, { readonly roundTrips: number; readonly spans: number }>();
+
+  for (const record of graded)
+    for (const [name, waited] of Object.entries(record.protocol?.bySpan ?? {})) {
+      const sum = bySpan.get(name) ?? { roundTrips: 0, spans: 0 };
+
+      bySpan.set(name, {
+        roundTrips: sum.roundTrips + waited.roundTrips,
+        spans: sum.spans + waited.spans,
+      });
+    }
+
+  const busiest = [...bySpan]
+    .toSorted(([, left], [, right]) => right.roundTrips - left.roundTrips)
+    .slice(0, 8)
+    .map(
+      ([name, sum]) =>
+        `${name} ${(sum.roundTrips / graded.length).toFixed(1)} in ${(sum.spans / graded.length).toFixed(1)} calls`,
+    );
+
+  return `mean ${mean(graded.map((record) => record.protocol?.roundTrips ?? 0)).toFixed(1)} per graded trial: ${busiest.join(", ")}`;
 };
 
 const write = (operation: () => void) =>
@@ -262,14 +292,16 @@ const main = Effect.gen(function* () {
 
   const hosted = options.browser === "browserbase";
 
-  const browser = hosted
-    ? hostedBrowser(options.humanize).pipe(
-        Layer.provide(BrowserbaseClient.layerConfig()),
-        Layer.provide(FetchHttpClient.layer),
-      )
-    : latency !== undefined
-      ? Latency.layer(latency, { humanize: options.humanize, frameHistory })
-      : Chromium.layer({ humanize: options.humanize, frameHistory });
+  // A trial's browser; a latency run's also records the DevTools commands the trial sends.
+  const browser = (record: (command: Latency.Command) => void) =>
+    hosted
+      ? hostedBrowser(options.humanize).pipe(
+          Layer.provide(BrowserbaseClient.layerConfig()),
+          Layer.provide(FetchHttpClient.layer),
+        )
+      : latency !== undefined
+        ? Latency.layer(latency, { humanize: options.humanize, frameHistory }, record)
+        : Chromium.layer({ humanize: options.humanize, frameHistory });
 
   // After a create whose outcome is unknown, no further hosted session is requested.
   const hostedHalt = yield* Ref.make(false);
@@ -376,6 +408,7 @@ const main = Effect.gen(function* () {
         accounting: calls.accounting,
         timing,
         phases: Trace.noPhases,
+        protocol: null,
         traceId: null,
         seconds: 0,
       });
@@ -434,12 +467,16 @@ const main = Effect.gen(function* () {
 
         const work = recorder === undefined ? unrecorded : recorder.around(unrecorded);
         const traced = yield* Trace.collect;
+        const commands: Array<Latency.Command> = [];
 
         // Each trial is a trace of its own, from opening its browser to closing it.
         const exit =
           halted || denied
             ? undefined
-            : yield* isolatedTrial(work, browser).pipe(
+            : yield* isolatedTrial(
+                work,
+                browser((command) => commands.push(command)),
+              ).pipe(
                 Effect.raceFirst(workDeadline(trialTimeout, account?.queued ?? Effect.succeed(0))),
                 // A span's status cannot tell a wrong answer from a broken run; its outcome can.
                 Effect.onExit((ended) =>
@@ -484,6 +521,10 @@ const main = Effect.gen(function* () {
         const seconds =
           exit === undefined ? 0 : Number((yield* Clock.monotonicTimeNanos) - startedNanos) / 1e9;
 
+        // Before the spans are read, so the commands' own spans are among them.
+        const protocol =
+          latency === undefined || exit === undefined ? null : Trace.protocol(traced, commands);
+
         const calls = account === undefined ? noCalls : yield* account.calls;
 
         const outcome: Classification =
@@ -524,6 +565,7 @@ const main = Effect.gen(function* () {
           accounting: calls.accounting,
           timing: account === undefined ? noTiming : yield* account.timing,
           phases: exit === undefined ? Trace.noPhases : Trace.phases(traced.spans),
+          protocol,
           traceId: exit === undefined ? null : Trace.traceOf(traced.spans),
           seconds,
         };
@@ -597,6 +639,10 @@ const main = Effect.gen(function* () {
 
     if (graded.length > 0)
       yield* Console.log(`${arm === null ? "Time" : `Arm ${arm} time`}: ${breakdown(graded)}`);
+    if (graded.length > 0 && latency !== undefined)
+      yield* Console.log(
+        `${arm === null ? "Round trips" : `Arm ${arm} round trips`} at ${latency}ms: ${roundTrips(graded)}`,
+      );
   }
 
   if (model !== undefined) {

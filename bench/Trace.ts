@@ -1,8 +1,10 @@
 // A run's traces: exported over OTLP when the environment asks for it, and each unit's own spans
 // collected, so its record can say where its time went and its recording can keep them.
-import { Effect, Layer, Option, Tracer } from "effect";
+import { Context, Effect, Exit, Layer, Option, Tracer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { Otlp, OtlpSerialization } from "effect/observability";
+
+import type { Command } from "./Latency.ts";
 
 /**
  * Export over OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT` the signals named by
@@ -96,6 +98,121 @@ export const noPhases: Phases = { setupSeconds: 0, toolSeconds: 0, observeSecond
 /** The trace a unit's spans belong to: its root's. */
 export const traceOf = (spans: ReadonlyArray<Tracer.Span>): string | null =>
   spans.find((span) => Option.isNone(span.parent))?.traceId ?? null;
+
+const startOf = (span: Tracer.Span) => span.status.startTime;
+
+// The innermost span open at `at`: the latest started of those not yet ended.
+const innermost = (spans: ReadonlyArray<Tracer.Span>, at: bigint) => {
+  let found: Tracer.Span | undefined;
+
+  for (const span of spans)
+    if (
+      startOf(span) <= at &&
+      (span.status._tag === "Started" || span.status.endTime >= at) &&
+      (found === undefined || startOf(span) >= startOf(found))
+    )
+      found = span;
+
+  return found;
+};
+
+// Round trips taken one after another: a command sent before the earlier ones were all answered
+// shares their round trip.
+const roundTrips = (sent: ReadonlyArray<Command>) => {
+  let count = 0;
+  let busyUntil: bigint | undefined;
+
+  for (const command of sent) {
+    if (busyUntil === undefined || command.sent >= busyUntil) count++;
+    if (busyUntil === undefined || command.ended > busyUntil) busyUntil = command.ended;
+  }
+
+  return count;
+};
+
+/** The DevTools commands sent while spans of one name were the innermost open. */
+export interface Waited {
+  /** Spans of the name, whether or not they sent anything. */
+  readonly spans: number;
+  readonly commands: number;
+  readonly roundTrips: number;
+  readonly methods: Readonly<Record<string, number>>;
+}
+
+/** What a unit asked of its browser over the DevTools protocol, and where it was waiting. */
+export interface Protocol {
+  readonly commands: number;
+  readonly roundTrips: number;
+  /** By the innermost span open when each command was sent; only names that sent any. */
+  readonly bySpan: Readonly<Record<string, Waited>>;
+}
+
+const failures = { error: "cdp_error", none: "unanswered" } as const;
+
+/**
+ * Put each command in the trace, as a client span under the innermost span open when it was sent,
+ * and count the commands and round trips by that span's name. Attribution is by time alone, so a
+ * command sent in the background, such as a screencast frame's acknowledgement, lands on whatever
+ * span was open.
+ */
+export const protocol = (collected: Collected, sent: ReadonlyArray<Command>): Protocol => {
+  // Taken before the commands' own spans join them.
+  const spans = [...collected.spans];
+  const ordered = sent.toSorted((left, right) => Number(left.sent - right.sent));
+  const byParent = new Map<Tracer.Span, Array<Command>>();
+
+  for (const command of ordered) {
+    const parent = innermost(spans, command.sent);
+
+    if (parent === undefined) continue;
+
+    const span = collected.tracer.span({
+      name: `CDP ${command.method}`,
+      parent: Option.some(parent),
+      annotations: Context.empty(),
+      links: [],
+      startTime: command.sent,
+      kind: "client",
+      root: false,
+      sampled: parent.sampled,
+    });
+
+    span.attribute("rpc.system", "cdp");
+    span.attribute("rpc.method", command.method);
+    if (command.answer !== "result") span.attribute("error.type", failures[command.answer]);
+    span.end(
+      command.ended,
+      command.answer === "result" ? Exit.void : Exit.fail(failures[command.answer]),
+    );
+
+    const siblings = byParent.get(parent);
+
+    if (siblings === undefined) byParent.set(parent, [command]);
+    else siblings.push(command);
+  }
+
+  const bySpan = new Map<
+    string,
+    { spans: number; commands: number; roundTrips: number; methods: Record<string, number> }
+  >();
+
+  for (const span of spans) {
+    const own = byParent.get(span) ?? [];
+    const waited = bySpan.get(span.name) ?? { spans: 0, commands: 0, roundTrips: 0, methods: {} };
+
+    waited.spans++;
+    waited.commands += own.length;
+    waited.roundTrips += roundTrips(own);
+    for (const { method } of own) waited.methods[method] = (waited.methods[method] ?? 0) + 1;
+    bySpan.set(span.name, waited);
+  }
+
+  return {
+    commands: ordered.length,
+    roundTrips: roundTrips(ordered),
+    bySpan: Object.fromEntries([...bySpan].filter(([, waited]) => waited.commands > 0)),
+  };
+};
 
 /** One finished span, timed on a recording's host clock. */
 export interface Timed {

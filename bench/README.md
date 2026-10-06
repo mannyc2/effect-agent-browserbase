@@ -111,8 +111,9 @@ error with its closed diagnostic, the call `accounting` (calls, tokens, known do
 reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
 provider requests), `phases` (seconds opening the browser, in the model's tool calls, and looking
 at the page outside them: the agent's observations, an arm's own pictures and outlines, a moment's
-capture), the trial's `traceId` and elapsed seconds including browser setup and cleanup. The ISO
-start time is a calendar date; elapsed time uses a monotonic clock.
+capture), a latency run's `protocol` (see below), the trial's `traceId` and elapsed seconds
+including browser setup and cleanup. The ISO start time is a calendar date; elapsed time uses a
+monotonic clock.
 
 The run ends by saying where graded trials' time went, as means that add up to the mean total:
 model requests, the budget queue, those phases and the rest (the fixture, grading, closing the
@@ -157,9 +158,24 @@ the trial's spans in `recording.json`, on the recording's host clock.
 `--latency <ms>` runs the local Chromium over the DevTools protocol through a proxy that adds that
 many milliseconds to each round trip, half each way, with a fresh 1280×720 context calibrated as a
 new hosted session's is. It costs nothing, so hosted round trips can be measured before paying for
-sessions; it reproduces neither a hosted browser's network nor its machine. At 80 ms, opening the
-browser took about 3.4 seconds and an observation with an outline and a screenshot about 0.7
-seconds, nearly all of it the screenshot's eight protocol commands in a row.
+sessions; it reproduces neither a hosted browser's network nor its machine.
+
+The proxy also reads the protocol. Each command a trial sends becomes a `CDP <method>` client span
+under the innermost span open when it was sent, lasting until its answer reaches the bench, so a
+trace shows which commands each operation waited on and whether they went one after another. The
+trial's `protocol` counts its commands and round trips, in all and by the name of that span with
+its methods; commands in flight together share a round trip. The run ends with the span names that
+took the most round trips. Attribution is by time alone, so a background command, such as a
+screencast frame's acknowledgement, lands on whatever span was open. Only method names are kept,
+since parameters can carry typed text. The proxy declines the WebSocket compression the bench
+offers, to read the messages; a round trip costs the same, as the proxy adds delay but no bandwidth
+limit.
+
+At 80 ms, a scripted trial took 43 to 91 round trips. Opening the browser took about 3.4 seconds
+and 25 round trips, 20 of them calibrating the fresh context, and a new page about 9 more. A click
+took two (finding its point, then the mouse events together) and a 120 ms settle. A fresh capture
+took six in a row, five of them Playwright's screenshot, so an observation with an outline and a
+capture took about 0.7 seconds.
 
 ## Arms
 
