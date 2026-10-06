@@ -41,7 +41,7 @@ to cover its paying cascades, rather than asking the model to count transitions 
 pictures, and its capture is incomplete if two consecutive frames are 1,800 ms (one cascade) or
 more apart. The jump task's first frame must precede the jump, and its control's frames must all
 precede any jump. Half the chart seeds drift up and half down, so a constant trend answer cannot
-pass. Operate tasks receive an outline and screenshot once per turn; calls within a
+pass. Operate tasks in the default arm receive an outline and screenshot once per turn; calls within a
 turn halt on the first failure. `browser_zoom` adds requested viewport crops to that observation;
 pixel clicks return the element under the requested point. Runs without a model still use the free
 scripted solutions. Runs allow input by default; a caller's `Browser.Options.guard` can deny or
@@ -102,22 +102,24 @@ all further admission. Only non-streaming chat completions are budgeted: the cli
 streaming, decisions and raw generated requests before sending them.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
-the task, base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
+the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
 model, pinned endpoint with its rates and per-call reservation, browser, humanize, output-token
-limit, budget and concurrency), effective reasoning, status and reason, the answer, any
+limit, budget and concurrency), effective reasoning, status and reason, the answer, model turns
+(`steps`) and tool calls (`actions`) once a trial has an outcome, any
 error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
 reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
 provider requests) and elapsed seconds including browser setup and cleanup. The ISO
 start time is a calendar date; elapsed time uses a monotonic clock.
 
-`--record` also records each trial for replay, in a directory named after the results file with
-one subdirectory per trial (`checkout-1/`). Each page's screencast frames are written as JPEG
-files as they arrive, and `recording.json` (`Recording.ts`) holds every browser event, including
-the planned pointer glides and keys, the agent's turns, the frames each understand task showed
-its model with the page's truth, and the trial's outcome, all on the browser's host clock.
-Screencast frames carry no cursor: a player draws it from the recorded glides. Recording runs a
-screencast on every page, so it adds capture load to operate trials, and it continues 500 ms
-after a trial so it ends on the settled page. Lost frames or events are listed in `problems`.
+`--record` also records each trial for replay, in a directory named after the results file with one
+subdirectory per trial (`checkout-1/`, or `checkout-arm2-1/` with `--arm`). Each page's screencast
+frames are written as JPEG files as they arrive, and `recording.json` (`Recording.ts`) holds every
+browser event, including the planned pointer glides and keys, the agent's turns, the frames each
+understand task showed its model with the page's truth, and the trial's outcome, all on the
+browser's host clock. Screencast frames carry no cursor: a player draws it from the recorded glides.
+Recording runs a screencast on every page, so it adds capture load to operate trials, and it
+continues 500 ms after a trial so it ends on the settled page. Lost frames or events are listed in
+`problems`.
 
 `--narrate <seconds>`, with `--model`, captions an operate task's page that often while its agent
 works: each caption is one structured call over a `Moment` of the time since the previous one, with
@@ -125,6 +127,54 @@ reasoning off. Captions go to the recording; they neither steer nor grade the ag
 share the trial's budget, so a caption call with an unknown charge stops the trial's admission as
 any call does. A malformed caption is skipped. When the agent answers, the narrator finishes the
 caption it is writing and starts no other.
+
+## Arms
+
+`--arm` sets how a model sees a page and acts on it, for the paired experiment. Repeated, it runs
+every selected arm on the same seeds, so trials pair by task and trial number. The summary gives
+each arm's tallies, its median seconds, model turns and tool calls per graded trial, and for each
+two arms the pairs graded in both, split by which arm passed.
+
+| Arm | Operate tasks                                                                                                                                             | Understand tasks                                    |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| 1   | Per-action outline: every action's receipt carries a fresh outline; pictures come only from `browser_screenshot`; no batching hint and no `browser_zoom`  | As arm 5                                            |
+| 2   | Vision first: a screenshot after each batch and no outline; pixel targets and `browser_zoom`; no `browser_snapshot`, `browser_select` or waiting for text | The moment without its outline: frames and timeline |
+| 5   | `Agent.run`, the default: an outline and a screenshot after each batch                                                                                    | `Moment.toPrompt` as it is                          |
+
+Arm 5 is the default. Arms 1 and 2 run in the bench's own loop over the public `Tools`
+(`Arms.ts`), because `Agent.run` cannot replace its observation, its tools or its system prompt.
+The loop keeps `Agent.run`'s rules: a turn's calls halt on the first failure or on `done`, the
+latest three pictures stay in the conversation, and a response that cannot be read goes back to
+the model. Arm 1 keeps the halt too, although the tools ran every call before batching. Arms 3
+(parsed frames), 4 (a local grounder) and 6 (vision-native computer use) are not built.
+
+```sh
+EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
+  bun run bench -- --model openai/gpt-6-luna --task checkout --arm 1 --arm 2 --arm 5 --trials 20
+```
+
+The first paired run, on 2026-10-06, used `openai/gpt-6-luna` (medium reasoning for operate tasks,
+none for understand tasks) with seed 1: 20 trials of each operate task per arm in local Chromium,
+5 on Browserbase, and 10 of each understand task in arms 2 and 5, for $0.91 in all. Every trial
+was graded. The operate pages do not vary with the seed, so a task's trials repeat one page and
+are not independent observations. The graders match exactly: "On the page" also counts the
+`checkout` trials that left the right order and gave the issued number inside a sentence
+("Order placed successfully. Confirmation number: CONF-48213."), which the grader fails.
+
+| Arm | Operate, local | On the page | Median s | $ per trial | Operate, Browserbase | Median s | Understand |
+| --- | -------------- | ----------- | -------- | ----------- | -------------------- | -------- | ---------- |
+| 1   | 32/60          | 43/60       | 16.5     | 0.0022      | 10/15                | 34.8     | As arm 5   |
+| 2   | 46/60          | 50/60       | 41.9     | 0.0035      | 12/15                | 79.9     | 69/90      |
+| 5   | 33/60          | 48/60       | 23.4     | 0.0056      | 9/15                 | 39.2     | 64/90      |
+
+- **Canvas:** `casino-play` passed 3, 16 and 8 of 20 locally in arms 1, 2 and 5.
+- **Forms:** every `checkout` trial in arms 1 and 5 left the right order; arm 2 did in 14 of 20
+  and ran out of steps in the other 6. Counted on the page, arm 2's lead over the other arms comes
+  from `casino-play` alone. `chart-trade` passed 20 of 20 in every arm.
+- **Speed:** arm 5 was not faster than arm 1: a paired median of 1.46 times arm 1's time locally,
+  where model calls were 95% of it, and 1.03 times on Browserbase.
+- **Prompts:** the arms' system prompts differ beyond what they show: only arm 2 has the
+  drop-down hint, only arm 5 the input-policy lines, and arm 1 no batching hint.
 
 ## Outcomes
 

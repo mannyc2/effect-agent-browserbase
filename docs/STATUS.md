@@ -49,7 +49,9 @@
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
   and a shared model admission budget. Every trial is graded, an infrastructure failure, denied
-  or unrun, and summaries keep those denominators apart. Paid runs remain opt-in.
+  or unrun, and summaries keep those denominators apart. `--arm` runs the paired experiment's
+  arms 1 (an outline with every action), 2 (vision first) and 5 (`Agent.run`) on the same
+  seeds; arms 1 and 2 use a bench loop over the public `Tools`. Paid runs remain opt-in.
 - `demos` (private): a static site that replays bench runs recorded with `--record`: the
   screencast as video, the planned pointer path, agent turns, a narrator's captions (`--narrate`)
   and the pictures a model was shown, with each run's grade against the page's truth. Agent runs,
