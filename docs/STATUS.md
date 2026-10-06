@@ -23,6 +23,11 @@
   action stops at a new document. Guards receive structural facts, never keyword categories, and
   page evidence around the target without field values; text typed into secret fields is redacted
   from requests and recorded events. A 77-control labelled corpus grades the facts in `ready`.
+  `Policy` adds judges over `effect/ai` (`reviewer` on a `LanguageModel`, `decider` on a
+  `DecisionModel` such as Jev) and `make`, a guard that denies a risk the task does not ask for and
+  fails closed on input with facts when its judge fails; `Agent.run` provides the task and ends
+  after three refusals in a row. The judges are tested with scripted models; grading them against
+  the corpus is a paid bench run.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor

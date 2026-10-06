@@ -325,6 +325,11 @@ export interface Tools {
   readonly page: Effect.Effect<Page.Page, BrowserError>;
   /** Drain the requested crops, once per batch, to include beside the observation. */
   readonly takeZooms: Effect.Effect<ReadonlyArray<Page.Zoom>>;
+  /**
+   * Why the input policy refused each action since the last action it allowed, oldest first.
+   * Hovering, scrolling and waiting count as neither.
+   */
+  readonly refusals: Effect.Effect<ReadonlyArray<string>>;
 }
 
 const target = (op: {
@@ -373,6 +378,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   // Why the current tab last changed, for that refusal.
   let changed = "";
   let zooms: Array<Page.Zoom> = [];
+  let refusals: ReadonlyArray<string> = [];
   const zoomLock = yield* Semaphore.make(1);
 
   const takeZooms = zoomLock.withPermits(1)(
@@ -437,10 +443,33 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       ),
     );
 
-  /** Run an action on the current tab, follow a tab it opens, then answer with a receipt. */
+  /** Note a refusal, and forget them all once the policy allows an action it decides on. */
+  const tally = <A>(action: Effect.Effect<A, BrowserError | string>, judged: boolean) =>
+    action.pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          if (
+            typeof error !== "string" &&
+            (error.reason._tag === "PolicyDenied" || error.reason._tag === "PolicyTimeout")
+          )
+            refusals = [...refusals, error.reason.message];
+        }),
+      ),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (judged) refusals = [];
+        }),
+      ),
+    );
+
+  /**
+   * Run an action on the current tab, follow a tab it opens, then answer with a receipt. A
+   * `judged` action, one the input policy decides on, ends a run of refusals when it goes through.
+   */
   const act = <A>(
     done: string | ((result: A) => string),
     run: (tab: Page.Page) => Effect.Effect<A, BrowserError | string>,
+    judged = true,
   ) =>
     Effect.gen(function* () {
       const { tab } = yield* resolve;
@@ -451,7 +480,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
         return yield* Effect.fail(
           `Not done: ${changed} It is ${yield* describeTab(tab)}. Look at it first.`,
         );
-      const result = yield* run(tab);
+      const result = yield* tally(run(tab), judged);
       const receipt = typeof done === "string" ? done : done(result);
 
       // A tab that registers later is followed when the tools next look; either way, later
@@ -511,7 +540,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
           ),
       ),
     browser_hover: (op) =>
-      act(`Hovered over ${named(op)}.`, (tab) => Effect.flatMap(target(op), tab.hover)),
+      act(`Hovered over ${named(op)}.`, (tab) => Effect.flatMap(target(op), tab.hover), false),
     browser_type: ({ text, ref, append, submit, prose }) =>
       act(`Typed ${JSON.stringify(text)}${ref === undefined ? "" : ` into ${ref}`}.`, (tab) =>
         tab.type(text, { into: ref, replace: append !== true, submit, prose }),
@@ -521,20 +550,23 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
         tab.press(keys, { times, holdMillis }),
       ),
     browser_scroll: (op) =>
-      act(`Scrolled ${op.direction}.`, (tab) =>
-        Effect.gen(function* () {
-          const at = op.ref === undefined && op.x === undefined ? undefined : yield* target(op);
-          const viewport = yield* tab.viewport;
-          const pages = op.pages ?? 0.8;
-          const vertical = op.direction === "down" ? 1 : op.direction === "up" ? -1 : 0;
-          const horizontal = op.direction === "right" ? 1 : op.direction === "left" ? -1 : 0;
+      act(
+        `Scrolled ${op.direction}.`,
+        (tab) =>
+          Effect.gen(function* () {
+            const at = op.ref === undefined && op.x === undefined ? undefined : yield* target(op);
+            const viewport = yield* tab.viewport;
+            const pages = op.pages ?? 0.8;
+            const vertical = op.direction === "down" ? 1 : op.direction === "up" ? -1 : 0;
+            const horizontal = op.direction === "right" ? 1 : op.direction === "left" ? -1 : 0;
 
-          yield* tab.scroll({
-            at,
-            dy: Math.round(vertical * pages * viewport.height),
-            dx: Math.round(horizontal * pages * viewport.width),
-          });
-        }),
+            yield* tab.scroll({
+              at,
+              dy: Math.round(vertical * pages * viewport.height),
+              dx: Math.round(horizontal * pages * viewport.width),
+            });
+          }),
+        false,
       ),
     browser_drag: (op) => {
       const from = { ref: op.fromRef, x: op.fromX, y: op.fromY };
@@ -571,6 +603,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
             : still === true
               ? tab.waitForStill()
               : Effect.sleep(Duration.seconds(Math.min(Math.max(seconds ?? 1, 0), 30))),
+        false,
       ),
     browser_tabs: ({ action, index, url }) =>
       Effect.gen(function* () {
@@ -582,7 +615,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
         if (action === "new") {
           const tab = yield* url === undefined
             ? browser.newPage()
-            : Effect.flatMap(destination(url), (address) => browser.newPage(address));
+            : Effect.flatMap(destination(url), (address) => tally(browser.newPage(address), true));
 
           seen.add(tab.id);
           become(tab, "browser_tabs opened a new tab and made it current.");
@@ -607,5 +640,6 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     batch: batch(toolkit),
     page,
     takeZooms,
+    refusals: Effect.sync(() => refusals),
   } satisfies Tools;
 });
