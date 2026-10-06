@@ -32,6 +32,7 @@ export interface ResolvedPoint {
   readonly x: number;
   readonly y: number;
   readonly element: string;
+  readonly tag: string;
   readonly role: string | null;
   readonly name: string;
   readonly cursor: string;
@@ -900,6 +901,7 @@ export const install = (): PageApi => {
       x,
       y,
       element: describe(element),
+      tag: element.tagName.toLowerCase(),
       role,
       name: nameOf(element, role),
       cursor: view.getComputedStyle(hit).cursor,
@@ -1830,6 +1832,7 @@ const ResolvedPointSchema = Schema.Struct({
   x: Schema.Finite,
   y: Schema.Finite,
   element: Schema.String,
+  tag: Schema.String,
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   cursor: Schema.String,

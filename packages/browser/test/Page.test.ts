@@ -116,6 +116,21 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* page.click(refOf(snapshot, "checkbox", "I agree"));
       yield* page.click(refOf(snapshot, "button", "Submit"));
       assert.strictEqual(yield* text(page, "#outcome"), "Ordered 25 eth (agreed)");
+
+      // Each action records what it acted on by role and name, which outlive the refs.
+      assert.deepStrictEqual(
+        (yield* page.recentEvents).flatMap((event) =>
+          event._tag === "Action" && event.name !== "navigate"
+            ? [[event.name, event.subject?.role, event.subject?.name, event.subject?.tag]]
+            : [],
+        ),
+        [
+          ["type", "textbox", "Amount", "input"],
+          ["select", "combobox", "Coin", "select"],
+          ["click", "checkbox", "I agree", "input"],
+          ["click", "button", "Submit", "button"],
+        ],
+      );
     }),
   );
 
@@ -209,6 +224,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.isAbove(level, 35);
       assert.isBelow(level, 65);
+
+      const drag = (yield* page.recentEvents).find(
+        (event) => event._tag === "Action" && event.name === "drag",
+      );
+
+      assert.deepStrictEqual(
+        drag?._tag === "Action" ? [drag.subject?.name, drag.to?.role] : undefined,
+        ["Level", "slider"],
+      );
     }),
   );
 
