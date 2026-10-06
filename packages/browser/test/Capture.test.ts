@@ -6,6 +6,7 @@ import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Frame } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
+import type { Page } from "../src/Page.ts";
 
 interface RawFrame {
   readonly data: string;
@@ -160,6 +161,29 @@ const setup = Effect.fnUntraced(function* (controlled = false) {
 const count = (calls: ReadonlyArray<Call>, method: string) =>
   calls.filter((call) => call.method === method).length;
 
+// Back-to-back long tasks with only timer gaps keep any in-page clock probe waiting, as a heavy
+// game or chart can, while the browser itself still composites and captures the page.
+const busy = `<h1 style="font-size:80px">Busy</h1><script>
+  function spin() { const end = performance.now() + 800; while (performance.now() < end) {} setTimeout(spin, 0); }
+  setTimeout(spin, 50);
+</script>`;
+
+const busyContext = Effect.fnUntraced(function* (contextOrigin: "fresh" | "borrowed") {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+  const context = yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+    (context) => Effect.promise(() => context.close()),
+  );
+
+  return yield* makeBrowser(context, { id: "busy-capture", provider: "test", contextOrigin });
+});
+
+const firstFrame = (page: Page) =>
+  page.screencast().pipe(Stream.take(1), Stream.runCollect, Effect.timeout("15 seconds"));
+
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Capture",
   (it) => {
@@ -181,6 +205,95 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.isEmpty(owned.context.pages());
         assert.isEmpty(yield* owned.pages);
         assert.isEmpty(yield* owned.recentEvents);
+      }),
+    );
+
+    it.effect("captures a busy page with the clock mapping its browser already holds", () =>
+      Effect.gen(function* () {
+        // A fresh browser holds its startup estimate; a borrowed one takes it from an idle page.
+        for (const origin of ["fresh", "borrowed"] as const) {
+          const browser = yield* busyContext(origin);
+
+          if (origin === "borrowed") {
+            const idle = yield* browser.newPage();
+
+            yield* firstFrame(idle);
+          }
+          const page = yield* browser.newPage();
+
+          yield* Effect.promise(() => page.playwright.setContent(busy));
+          yield* Effect.sleep("300 millis");
+          const frames = yield* firstFrame(page);
+          const frame = frames[0];
+
+          assert.strictEqual(frame?.timing._tag, "BrowserPaint", origin);
+          assert.isAtMost(
+            frame?.hostTime ?? Infinity,
+            (frame?.receivedAt ?? 0) + (frame?.timing.uncertaintyMillis ?? 0) + 5,
+          );
+        }
+      }),
+    );
+
+    it.effect("keeps every tab's input stamps when a busy tab's capture measures the clock", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext("fresh");
+
+        const quiet = yield* browser.newPage(
+          "data:text/html," +
+            encodeURIComponent(`<body style="margin:0;height:100vh"><script>
+  window.deltas = [];
+  addEventListener("mousedown", (event) => deltas.push(performance.now() - event.timeStamp));
+</script></body>`),
+        );
+
+        const deltas = Effect.promise(() =>
+          quiet.playwright.evaluate(() => (window as unknown as { deltas: number[] }).deltas),
+        );
+
+        for (let index = 0; index < 3; index++) yield* quiet.click({ x: 50, y: 50 });
+        const before = (yield* deltas).length;
+
+        // Back-to-back 150 ms tasks with no timer gaps delay every clock probe in that tab.
+        const busy = yield* browser.newPage(
+          "data:text/html," +
+            encodeURIComponent(`<body>busy<script>
+  const channel = new MessageChannel();
+  let turns = 0;
+  channel.port1.onmessage = () => {
+    const end = performance.now() + 150;
+    while (performance.now() < end) {}
+    if (++turns < 200) channel.port2.postMessage(0);
+  };
+  channel.port2.postMessage(0);
+</script></body>`),
+        );
+
+        yield* busy
+          .screencast()
+          .pipe(Stream.take(1), Stream.runDrain, Effect.timeout("15 seconds"));
+        for (let index = 0; index < 3; index++) yield* quiet.click({ x: 50, y: 50 });
+        const after = (yield* deltas).slice(before);
+
+        // Handler time minus the stamped event time: a future stamp would make it negative.
+        assert.strictEqual(after.length, 3);
+        assert.isBelow(Math.max(...after.map(Math.abs)), 50, JSON.stringify(after));
+      }),
+    );
+
+    it.effect("fails a busy page's first capture, undispatched, only while no mapping exists", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext("borrowed");
+        const page = yield* browser.newPage();
+
+        yield* Effect.promise(() => page.playwright.setContent(busy));
+        yield* Effect.sleep("300 millis");
+        const error = yield* firstFrame(page).pipe(Effect.flip);
+
+        assert.strictEqual(error._tag, "BrowserError");
+        if (error._tag !== "BrowserError") return;
+        assert.strictEqual(error.operation, "calibrate");
+        assert.isFalse(error.dispatched);
       }),
     );
 

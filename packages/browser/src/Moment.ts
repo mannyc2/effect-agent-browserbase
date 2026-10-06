@@ -14,7 +14,6 @@ import { Effect, Schema } from "effect";
 import { type AiError, LanguageModel, Prompt } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
-import type { BrowserError } from "./BrowserError.ts";
 import { BrowserEvent, TrackEvent } from "./BrowserEvent.ts";
 import { Frame, Screenshot } from "./Frame.ts";
 import * as Usage from "./internal/usage.ts";
@@ -237,13 +236,3 @@ export function describe(
     Effect.withSpan("Moment.describe"),
   );
 }
-
-/** Capture the page's current moment and describe it. */
-export const describeNow = (
-  page: Page.Page,
-  options: CaptureOptions & DescribeOptions = {},
-): Effect.Effect<
-  Described<Description>,
-  AiError.AiError | BrowserError,
-  Browser | LanguageModel.LanguageModel
-> => capture(page, options).pipe(Effect.flatMap((moment) => describe(moment, options)));

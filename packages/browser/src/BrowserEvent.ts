@@ -52,7 +52,7 @@ export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlann
   at: Schema.Finite,
   page: Schema.String,
   from: Motion.Point,
-  samples: Schema.Array(Motion.Sample),
+  samples: Motion.Plan,
 }) {}
 
 /**

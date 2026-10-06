@@ -4,9 +4,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Fiber, Layer, Redacted } from "effect";
 import { Browser } from "effect-browser/Browser";
-import { FetchHttpClient } from "effect/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
+import { TestClock } from "effect/testing";
 import { chromium } from "playwright-core";
 
 import * as Browserbase from "../src/Browserbase.ts";
@@ -310,6 +311,95 @@ describe("BrowserbaseClient", () => {
 });
 
 describe("Browserbase", () => {
+  it.effect("settles a session create that never answers, without sending it again", () =>
+    Effect.gen(function* () {
+      let requests = 0;
+
+      const silent = HttpClient.make(() =>
+        Effect.sync(() => {
+          requests += 1;
+        }).pipe(Effect.andThen(Effect.never)),
+      );
+
+      const client = clientLayer({
+        apiKey: Redacted.make("test-key"),
+        baseUrl: "http://127.0.0.1:9",
+      }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, silent)));
+
+      const open = Browserbase.open().pipe(Effect.scoped, Effect.provide(client));
+
+      // Alone, the create fails at its deadline with the reason that says it may exist.
+      const alone = yield* Effect.forkChild(Effect.flip(open));
+
+      yield* TestClock.adjust("60 seconds");
+      const error = yield* Fiber.join(alone);
+
+      assert.deepStrictEqual(
+        [error.operation, error.reason._tag, error.message],
+        ["createSession", "Transport", "Browserbase createSession failed: no answer within 1m"],
+      );
+
+      // A caller that stops waiting, such as a trial timeout, finishes once the create settles.
+      const stopped = yield* Effect.forkChild(open);
+      const stopping = yield* Effect.forkChild(Fiber.interrupt(stopped));
+
+      yield* TestClock.adjust("60 seconds");
+      yield* Fiber.join(stopping);
+      assert.strictEqual(requests, 2);
+    }),
+  );
+
+  it.live("releases a created session whose answer does not decode", () =>
+    Effect.gen(function* () {
+      const api = yield* fakeApi((request) =>
+        request.method === "POST" && request.url === "/v1/sessions"
+          ? { status: 201, body: { id: "s9", status: "RUNNING" } }
+          : { status: 200, body: { ...session("s9"), status: "COMPLETED" } },
+      );
+
+      const error = yield* Browserbase.open().pipe(
+        Effect.scoped,
+        Effect.provide(api.client),
+        Effect.flip,
+      );
+
+      assert.deepStrictEqual([error.operation, error.reason._tag], ["createSession", "Decode"]);
+      assert.include(error.message, "session s9 was released");
+      assert.deepStrictEqual(
+        api.received.map((request) => [request.method, request.url, request.body]),
+        [
+          ["POST", "/v1/sessions", {}],
+          ["POST", "/v1/sessions/s9", { status: "REQUEST_RELEASE" }],
+        ],
+      );
+    }),
+  );
+
+  it.live("keeps the session's connect URL out of a failed connect", () =>
+    Effect.gen(function* () {
+      const { origin } = yield* listen((_request, response) => {
+        response.writeHead(401);
+        response.end();
+      });
+
+      const signingKey = "bb-signing-key-0123456789";
+
+      const api = yield* fakeApi(() => ({
+        status: 200,
+        body: session("s1", `${origin}/?signingKey=${signingKey}`),
+      }));
+
+      const error = yield* Effect.flip(
+        Browserbase.attach("s1").pipe(Effect.scoped, Effect.provide(api.client)),
+      );
+
+      assert.strictEqual(error._tag, "BrowserError");
+      assert.notInclude(error.message, signingKey);
+      assert.notInclude(JSON.stringify(error), signingKey);
+      assert.include(error.message, origin);
+    }),
+  );
+
   it.live("opens a browser on a new session and releases the session when the scope closes", () =>
     Effect.gen(function* () {
       const port = yield* listen(() => undefined).pipe(

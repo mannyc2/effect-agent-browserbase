@@ -1,8 +1,10 @@
 # Repository guide
 
-Two packages and a bench in one Bun workspace: `packages/browser` (`effect-browser`),
-`packages/browserbase` (`effect-browserbase`) and the private `bench`. Read `README.md`,
-`CONTRIBUTING.md` and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
+Three packages and a bench in one Bun workspace: `packages/browser` (`effect-browser`),
+`packages/browserbase` (`effect-browserbase`), the optional `packages/human-strokes`
+(`effect-browser-human-strokes`, MIT code with CC BY 4.0 stroke data) and the private `bench`. Read
+`README.md`, `CONTRIBUTING.md` and the neighbouring tests before editing; `docs/STATUS.md` is the
+current state.
 
 ## Code
 
@@ -11,8 +13,9 @@ Two packages and a bench in one Bun workspace: `packages/browser` (`effect-brows
   `node_modules/effect/AGENTS.md` before writing Effect code.
 - Few files, each with one clear job. Prefer deleting code to adding options. A module's doc
   comment says what it is for.
-- `effect-browser` depends on `effect` and `playwright-core` only; `effect-browserbase` reaches it
-  only through its public entry points. Tests stay in their package's `test/`.
+- `effect-browser` depends on `effect` and `playwright-core` only; `effect-browserbase` and
+  `effect-browser-human-strokes` reach it only through its public entry points. Tests stay in their
+  package's `test/`.
 - Fix a lint finding or Effect diagnostic rather than suppress it. `bun run fmt` formats;
   `oxlint -c lint/.oxlintrc.json --fix <files>` fixes the stylistic rules `fmt` leaves alone.
 - `bun run ready` is the gate CI runs. Check its exit code, not piped output.

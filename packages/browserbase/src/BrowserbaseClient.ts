@@ -6,15 +6,18 @@
  * key travels only in the `X-BB-API-Key` header and is redacted from logs and traces. Redirects
  * are refused rather than followed, because following one would send the key wherever it points.
  *
+ * Every request has a deadline, so a provider that never answers cannot hold a caller's scope open.
  * Reads are retried twice on transient failures. Writes are not: a session create that fails in
- * transit may still have created the session, which then ends at its timeout.
+ * transit or misses its deadline may still have created the session, which then ends at its timeout.
  *
  * @since 0.3.0
  */
 import {
   Config,
   Context,
+  Duration,
   Effect,
+  Exit,
   flow,
   identity,
   Layer,
@@ -205,11 +208,14 @@ export interface Options {
   readonly apiKey: Redacted.Redacted<string>;
   /** Defaults to `https://api.browserbase.com`. */
   readonly baseUrl?: string | undefined;
+  /** Bound on each request attempt, including reading its answer. Defaults to 60 seconds. */
+  readonly requestTimeout?: Duration.Input | undefined;
 }
 
 const ids = /^[A-Za-z0-9_-]{1,128}$/;
 const ErrorBody = Schema.fromJsonString(Schema.Struct({ message: Schema.String }));
 const SearchResponse = Schema.Struct({ results: Schema.Array(SearchResult) });
+const CreatedId = Schema.Struct({ id: Schema.String.check(Schema.isPattern(ids)) });
 
 const statusReason = (status: number, detail: string): Reason => {
   if (status < 200 || (status >= 300 && status < 400)) {
@@ -254,6 +260,8 @@ export const make = Effect.fnUntraced(function* (options: Options) {
   const failure = (operation: string, reason: Reason) =>
     new BrowserbaseError({ operation, reason });
 
+  const requestTimeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(60));
+
   /** Send one request; on a success status, read the answer with `read`. */
   const send = <A>(
     operation: string,
@@ -278,6 +286,20 @@ export const make = Effect.fnUntraced(function* (options: Options) {
               ),
             ),
       ),
+      // The deadline also applies inside a caller's uninterruptible acquisition, such as the
+      // session create in Browserbase.open, so that acquisition always settles.
+      Effect.timeoutOrElse({
+        duration: requestTimeout,
+        orElse: () =>
+          Effect.fail(
+            failure(
+              operation,
+              new Transport({
+                detail: `no answer within ${Duration.format(requestTimeout)}`,
+              }),
+            ),
+          ),
+      }),
       request.method === "GET"
         ? Effect.retry({
             while: isTransient,
@@ -318,11 +340,52 @@ export const make = Effect.fnUntraced(function* (options: Options) {
           ),
         );
 
-  return BrowserbaseClient.of({
-    createSession: (body = {}) =>
-      withBody("createSession", HttpClientRequest.post("/v1/sessions"), body).pipe(
-        Effect.flatMap((request) => send("createSession", request, json("createSession", Session))),
+  const releaseSession = (id: string) =>
+    checkId("releaseSession", id).pipe(
+      Effect.flatMap(() =>
+        withBody("releaseSession", HttpClientRequest.post(`/v1/sessions/${id}`), {
+          status: "REQUEST_RELEASE",
+        }),
       ),
+      Effect.flatMap((request) => send("releaseSession", request, ignoreBody)),
+    );
+
+  // A success answer means the session exists even if the rest of it does not decode. Only an id
+  // lets anyone end it early, so release it here before reporting the unexpected answer.
+  const createSession = (body: SessionOptions) =>
+    withBody("createSession", HttpClientRequest.post("/v1/sessions"), body).pipe(
+      Effect.flatMap((request) =>
+        send("createSession", request, json("createSession", Schema.Unknown)),
+      ),
+      Effect.flatMap((answer) =>
+        Schema.decodeUnknownEffect(Session)(answer).pipe(
+          Effect.catch((error) => {
+            const detail = error.message.split("\n")[0] ?? "";
+
+            return Option.match(Schema.decodeUnknownOption(CreatedId)(answer), {
+              onNone: () => Effect.fail(failure("createSession", new Decode({ detail }))),
+              onSome: ({ id }) =>
+                releaseSession(id).pipe(
+                  Effect.exit,
+                  Effect.flatMap((released) =>
+                    Effect.fail(
+                      failure(
+                        "createSession",
+                        new Decode({
+                          detail: `${detail}; session ${id} ${Exit.isSuccess(released) ? "was released" : "could not be released and ends at its timeout"}`,
+                        }),
+                      ),
+                    ),
+                  ),
+                ),
+            });
+          }),
+        ),
+      ),
+    );
+
+  return BrowserbaseClient.of({
+    createSession: (body = {}) => createSession(body),
     getSession: (id) =>
       checkId("getSession", id).pipe(
         Effect.flatMap(() =>
@@ -344,15 +407,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
         }),
         json("listSessions", Schema.Array(Session)),
       ),
-    releaseSession: (id) =>
-      checkId("releaseSession", id).pipe(
-        Effect.flatMap(() =>
-          withBody("releaseSession", HttpClientRequest.post(`/v1/sessions/${id}`), {
-            status: "REQUEST_RELEASE",
-          }),
-        ),
-        Effect.flatMap((request) => send("releaseSession", request, ignoreBody)),
-      ),
+    releaseSession,
     liveView: (id, options = {}) =>
       checkId("liveView", id).pipe(
         Effect.flatMap(() =>

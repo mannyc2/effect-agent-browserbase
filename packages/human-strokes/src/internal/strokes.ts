@@ -1,4 +1,7 @@
-import { Result, Schema } from "effect";
+import { promisify } from "node:util";
+import { brotliDecompress } from "node:zlib";
+
+import { Effect, Result, Schema } from "effect";
 import * as Motion from "effect-browser/Motion";
 
 /** The fixed bundled recording could not be read or validated. */
@@ -11,6 +14,18 @@ export const rawBytes = 10_411_952;
 export const strokeCount = 32_130;
 export const pointCount = 2_604_684;
 const ticks = 4096;
+const decompress = promisify(brotliDecompress);
+
+/** Inflate on the thread pool, bounded to the payload size, without blocking the event loop. */
+export const inflate = (compressed: Uint8Array) =>
+  Effect.tryPromise({
+    try: () => decompress(compressed, { maxOutputLength: rawBytes }),
+    catch: () =>
+      new DataError({
+        reason: "Compression",
+        detail: "The bundled human-stroke asset could not be decompressed.",
+      }),
+  });
 
 export interface Record {
   readonly offset: number;

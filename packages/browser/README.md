@@ -82,23 +82,28 @@ does not scroll. After scrolling, the library checks the original target again; 
 changes its meaning can therefore stop an action after its wheel input but before a click. Drag
 endpoints are resolved together in the final viewport before the button is pressed.
 
-Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. `Motion.Motion` is a
-service reference with that default; the browser captures it once when constructed. A custom
-`plan(from, to)` returns a complete schedule with finite coordinates and nondecreasing absolute
-`afterMillis` offsets, at most 2,048 samples and 5,000 milliseconds, ending at the exact destination.
-Invalid plans fail with `InvalidRequest` before their track or input is sent. Equal-time samples
-are retained. Plain pointer movement does not use the service.
+Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. It evaluates the model
+every 16.7 ms but sends a move only when the pointer reaches a new pixel; the exact destination
+lands at the model's end time, so only that final move can repeat the position before it.
+`Motion.Motion` is a service reference with that default; the browser captures it once when
+constructed. A custom `plan(from, to)` returns a complete schedule with finite coordinates and
+nondecreasing absolute `afterMillis` offsets, at most 2,048 samples and 5,000 milliseconds, ending
+at the exact destination. The browser decodes it with `Motion.Plan` into its own copy, then checks
+the endpoint; invalid plans fail with `InvalidRequest` before their track or input is sent.
+Equal-time samples are retained. Plain pointer movement does not use the service.
 
 For recorded human strokes, install the optional `effect-browser-human-strokes` package and
-provide its ready-made layer:
+provide it to the layer that builds the browser:
 
 ```ts
-import { Layer } from "effect";
 import * as Chromium from "effect-browser/Chromium";
 import * as HumanStrokes from "effect-browser-human-strokes";
 
-const browser = Chromium.layer({ humanize: true }).pipe(Layer.provide(HumanStrokes.layer));
+const browser = HumanStrokes.provideTo(Chromium.layer({ humanize: true }));
 ```
+
+Because the planner is read once, at construction, merging `HumanStrokes.layer` beside a browser
+layer instead of providing it to that layer leaves the default planner in place.
 
 That package bundles 32,130 attributed CC BY 4.0 strokes, preserving their original sample times.
 The core package includes no stroke data. Every glide reserves its full bounded schedule before
@@ -137,6 +142,13 @@ holds those samples; `delayFor(frame)` maps their median delay onto that frame's
 the consumer's compositor. This measures the first observed captured marker, not pure rendering lag.
 Supplied contexts and attached sessions receive read-only clock probes and expose no active startup
 measurement. Transport asymmetry remains in the reported uncertainty.
+
+Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its
+pages. The startup measurement seeds it; otherwise the first page that needs it probes it. Each new
+capture refreshes the mapping and keeps the previous estimate if the page cannot answer in time, so a
+busy page only fails while its browser has no estimate at all; that failure is undispatched. A new
+measurement replaces the estimate only if it is no less certain, or if its interval cannot contain
+the current offset (the clocks moved); a probe slowed by one busy tab cannot skew every tab's stamps.
 
 Mouse input and raw text-key events carry the calibrated epoch timestamp. Shortcut chords retain
 Playwright's platform behavior, and Unicode insertion has no timestamp field. Startup probes are

@@ -72,7 +72,15 @@ const chart = `<!doctype html><title>BTC/USD</title>
   g.stroke();
 </script>`;
 
+// A tab whose first script keeps the renderer busy for longer than a clock probe may wait.
+const busy = `<!doctype html><title>Busy</title><h1>Busy</h1>
+<script>const started = Date.now(); while (Date.now() - started < 5000) {}</script>`;
+
+const opensBusy = `<!doctype html><title>Opener</title><a href="/busy" target="_blank">Open a busy tab</a>`;
+
 const pages: Record<string, string> = {
+  "/busy": busy,
+  "/opens-busy": opensBusy,
   "/form": form,
   "/next": next,
   "/slots": slots,

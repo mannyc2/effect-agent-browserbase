@@ -23,8 +23,27 @@ export const Sample = Schema.Struct({
 
 export type Sample = typeof Sample.Type;
 
+/** A complete glide: 1 to 2,048 samples whose offsets never decrease. */
+export const Plan = Schema.Array(Sample).check(
+  Schema.isBetweenLength(1, maximumSamples),
+  Schema.makeFilter(
+    (samples) =>
+      samples.every(
+        (sample, index) => sample.afterMillis >= (samples[index - 1]?.afterMillis ?? 0),
+      ),
+    { expected: "nondecreasing sample offsets" },
+  ),
+);
+
+export type Plan = typeof Plan.Type;
+
 export interface Service {
-  /** Offsets start when the performer publishes the plan, before its first input. */
+  /**
+   * Offsets start when the performer publishes the plan, before its first input. The browser
+   * decodes the result as a `Plan` whose last sample must be exactly `to`. Glide time counts
+   * against the browser's `actionTimeout`, and one action can glide more than once: a drag
+   * performs two glides, so two 5-second plans exceed the 10-second default.
+   */
   readonly plan: (from: Point, to: Point) => Effect.Effect<ReadonlyArray<Sample>>;
 }
 
@@ -116,26 +135,27 @@ const plan: Service["plan"] = Effect.fnUntraced(function* (from, to) {
   );
 
   const samples: Array<Sample> = [];
+  let last: Point = from;
 
   const coordinate = (value: number) =>
     Math.round(Math.max(-Number.MAX_VALUE, Math.min(Number.MAX_VALUE, value * scale)));
 
-  for (let index = 0; index <= count; index++) {
+  for (let index = 0; index < count; index++) {
     const afterMillis = index * sampleMillis;
     const first = cumulative(afterMillis, onset1, mu1, sigma1);
     const second = cumulative(afterMillis, onset2, mu2, sigma2);
     const bend = lateral * Math.sin(Math.PI * first);
+    const x = coordinate(startX + primaryX * first + (deltaX - primaryX) * second - unitY * bend);
+    const y = coordinate(startY + primaryY * first + (deltaY - primaryY) * second + unitX * bend);
 
-    samples.push(
-      index === count
-        ? { ...to, afterMillis }
-        : {
-            x: coordinate(startX + primaryX * first + (deltaX - primaryX) * second - unitY * bend),
-            y: coordinate(startY + primaryY * first + (deltaY - primaryY) * second + unitX * bend),
-            afterMillis,
-          },
-    );
+    // A pointer that stays on its pixel reports nothing; the model's timing is unchanged.
+    if (x === last.x && y === last.y) continue;
+    last = { x, y };
+    samples.push({ x, y, afterMillis });
   }
+
+  // The exact destination always lands at the model's end, even if a dwell precedes it.
+  samples.push({ ...to, afterMillis: count * sampleMillis });
 
   return samples;
 });

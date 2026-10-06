@@ -7,6 +7,7 @@ import type { CDPSession } from "playwright-core";
 import { Browser } from "../src/Browser.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
+import * as BrowserClock from "../src/internal/clock.ts";
 import * as Motion from "../src/Motion.ts";
 import * as Page from "../src/Page.ts";
 
@@ -209,6 +210,7 @@ const setup = Effect.fnUntraced(function* (
     playwright,
     cdp,
     clock: yield* Clock.Clock,
+    mapping: BrowserClock.mapping(Option.none()),
     motion: yield* Motion.Motion,
     pointer: yield* Ref.make(Option.none<Page.Point>()),
     inputLock: yield* Semaphore.make(1),
@@ -334,9 +336,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             relay.dispatches.filter((dispatch) => dispatch.method.startsWith("Input.")).length,
             raw.length,
           );
+          // Typing never evaluates per key. A page's first input also maps its clock once: a
+          // world check and three probes, which registration no longer waits for.
           assert.isAtMost(
             relay.dispatches.filter((dispatch) => dispatch.method === "Runtime.evaluate").length,
-            3,
+            3 + 4,
           );
           assert.isAtMost(relay.maximumOutstanding(), 64);
 

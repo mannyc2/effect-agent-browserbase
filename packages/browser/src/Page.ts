@@ -256,12 +256,16 @@ const closedPattern =
 const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
-/** Map a Playwright or protocol failure to a reason. */
-export const reasonOf = (cause: unknown): Reason => {
+/**
+ * Map a Playwright or protocol failure to a reason. A call that gives Playwright a timeout passes
+ * the same bound, so its `Timeout` reports it; without one, Playwright's own message stays.
+ */
+export const reasonOf = (cause: unknown, timeoutMillis?: number): Reason => {
   const message = messageOf(cause);
 
   if (closedPattern.test(message)) return new Closed();
-  if (cause instanceof Error && cause.name === "TimeoutError") return new Timeout({ millis: 0 });
+  if (cause instanceof Error && cause.name === "TimeoutError" && timeoutMillis !== undefined)
+    return new Timeout({ millis: timeoutMillis });
   const line = message.split("\n")[0] ?? message;
 
   return new Failed({ detail: line.replace(/^[\w.]+: /, "") });
@@ -302,6 +306,8 @@ export interface MakeOptions {
   readonly settings: Settings;
   readonly motion: Motion.Service;
   readonly clock: Clock.Clock;
+  /** The browser's epoch mapping; pages measure it only when the browser has none. */
+  readonly mapping: BrowserClock.Mapping;
   readonly pointer: Ref.Ref<Option.Option<Point>>;
   readonly inputLock: Semaphore.Semaphore;
   readonly publish: (event: BrowserEvent) => number;
@@ -319,10 +325,11 @@ type MouseEvent = {
 };
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
-const isReadonlyArray = (value: unknown): value is ReadonlyArray<unknown> => Array.isArray(value);
 
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
-  const { id, playwright, cdp, settings, motion, clock, pointer, inputLock, publish } = options;
+  const { id, playwright, cdp, settings, motion, clock, mapping, pointer, inputLock, publish } =
+    options;
+
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
@@ -333,11 +340,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   // Every protocol or Playwright call. Errors are undispatched here; `perform` marks them
   // dispatched once input has gone out.
-  const native = <A>(operation: string, run: () => Promise<A>) =>
+  const native = <A>(operation: string, run: () => Promise<A>, timeoutMillis?: number) =>
     Effect.tryPromise({
       try: run,
-      catch: (cause) => new BrowserError({ operation, reason: reasonOf(cause), dispatched: false }),
+      catch: (cause) =>
+        new BrowserError({ operation, reason: reasonOf(cause, timeoutMillis), dispatched: false }),
     });
+
+  // Every run records its mapping when it begins; a missing one leaves Chromium's own receipt time.
+  const stamp = (estimate: BrowserClock.Estimate | undefined, at: number) =>
+    estimate === undefined ? {} : { timestamp: BrowserClock.toBrowserSeconds(estimate, at) };
 
   const inputCall = <A>(operation: string, effect: Effect.Effect<A, Input.InputFailure>) =>
     effect.pipe(
@@ -349,7 +361,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const dispatchMouse = (
     event: MouseEvent,
-    estimate: BrowserClock.Estimate,
+    estimate: BrowserClock.Estimate | undefined,
     submitted?: () => void,
   ) => {
     const at = now();
@@ -384,10 +396,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               })
             : undefined;
 
-    const response = cdp.send("Input.dispatchMouseEvent", {
-      ...event,
-      timestamp: BrowserClock.toBrowserSeconds(estimate, at),
-    });
+    const response = cdp.send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 
     if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
     if (track !== undefined) publish(track);
@@ -406,7 +415,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       operation,
       Effect.gen(function* () {
         const held = `mouse:${event.button ?? "left"}`;
-        const estimate = inputClocks.get(run) ?? calibration.current;
+        const estimate = inputClocks.get(run);
 
         if (event.type === "mouseReleased") return yield* run.up(held);
         if (event.type === "mousePressed") {
@@ -436,12 +445,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const dispatchKey = (
     key: string,
     phase: "down" | "up",
-    command: (at: number, estimate: BrowserClock.Estimate) => Promise<unknown>,
+    command: (at: number, estimate: BrowserClock.Estimate | undefined) => Promise<unknown>,
     run: Input.Run,
   ) => {
     const at = now();
     const event = new KeyChanged({ at, page: id, key, phase });
-    const response = command(at, inputClocks.get(run) ?? calibration.current);
+    const response = command(at, inputClocks.get(run));
 
     publish(event);
 
@@ -549,19 +558,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   );
 
   // Input and capture share the owner's monotonic clock; caller-provided clocks cannot move it.
-  const calibration = { current: yield* calibrateClock };
-
+  // Registration measures nothing: a page that is busy while it opens, such as a popup running
+  // its first script, must still be tracked. The browser's mapping serves every other page, so
+  // only a browser with no estimate yet needs this page's renderer to answer.
   const capture = yield* Capture.make({
     id,
     cdp,
     clock,
-    calibrate: calibrateClock.pipe(
-      Effect.tap((estimate) =>
-        Effect.sync(() => {
-          calibration.current = estimate;
-        }),
-      ),
-    ),
+    calibrate: mapping.refresh(calibrateClock),
     frameHistory: settings.frameHistory,
     viewport: () => playwright.viewportSize(),
     onClose: (listener) => {
@@ -647,10 +651,18 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         );
 
       const useInput = <Value>(action: (run: Input.Run) => Effect.Effect<Value, BrowserError>) =>
-        input.begin.pipe(
+        mapping.current(calibrateClock).pipe(
+          Effect.mapError(
+            (error) =>
+              new BrowserError({ operation: name, reason: error.reason, dispatched: false }),
+          ),
           // A capture can recalibrate while input is running. One run, including delayed cleanup
           // releases, keeps one mapping so epoch stamps cannot jump backwards during a stroke.
-          Effect.tap((run) => Effect.sync(() => inputClocks.set(run, calibration.current))),
+          Effect.flatMap((estimate) =>
+            input.begin.pipe(
+              Effect.tap((run) => Effect.sync(() => inputClocks.set(run, estimate))),
+            ),
+          ),
           Effect.flatMap((run) =>
             action(run).pipe(
               Effect.matchEffect({
@@ -997,8 +1009,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             }))
           : [{ ...to, afterMillis: 0 }];
 
-      // A custom planner is a boundary: validate the entire bounded schedule before publishing
-      // it or reserving input. Copy it so later mutation cannot change the consumer's future.
+      // A custom planner is a boundary. Decoding reads each sample once into a fresh copy and
+      // checks that copy, so neither accessors nor later mutation can change what is admitted.
       const invalid = failWith(
         operation,
         new InvalidRequest({
@@ -1006,36 +1018,18 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         }),
       );
 
-      if (!isReadonlyArray(planned) || planned.length < 1 || planned.length > Motion.maximumSamples)
-        return yield* invalid;
-      // Array.from exposes sparse holes to validation instead of skipping them as .every would.
-      const dense = Array.from(planned);
-
-      if (
-        !dense.every(Schema.is(Motion.Sample)) ||
-        dense.some((sample, index) => sample.afterMillis < (dense[index - 1]?.afterMillis ?? 0)) ||
-        dense.at(-1)?.x !== to.x ||
-        dense.at(-1)?.y !== to.y
-      )
-        return yield* invalid;
-
-      const samples = Object.freeze(
-        dense.map((sample) =>
-          Object.freeze({
-            x: sample.x,
-            y: sample.y,
-            afterMillis: sample.afterMillis,
-          }),
-        ),
+      const samples = yield* Schema.decodeEffect(Motion.Plan)(planned).pipe(
+        Effect.catch(() => invalid),
       );
 
+      if (samples.at(-1)?.x !== to.x || samples.at(-1)?.y !== to.y) return yield* invalid;
       const run = marks.input;
 
       // Admit the whole motion before starting its clock. Dense original samples must not be
       // stretched by per-sample reply backpressure; unsent reservations belong to this run.
       yield* inputCall(operation, run.reserveMotion(samples.length));
       yield* Ref.set(pointer, Option.some(from));
-      const estimate = inputClocks.get(run) ?? calibration.current;
+      const estimate = inputClocks.get(run);
       const at = now();
       let dispatched = 0;
       let last = from;
@@ -1297,7 +1291,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               (at, estimate) =>
                 cdp.send("Input.dispatchKeyEvent", {
                   type: "keyDown",
-                  timestamp: BrowserClock.toBrowserSeconds(estimate, at),
+                  ...stamp(estimate, at),
                   modifiers: 0,
                   windowsVirtualKeyCode: keyCode,
                   code,
@@ -1318,7 +1312,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               (at, estimate) =>
                 cdp.send("Input.dispatchKeyEvent", {
                   type: "keyUp",
-                  timestamp: BrowserClock.toBrowserSeconds(estimate, at),
+                  ...stamp(estimate, at),
                   modifiers: 0,
                   windowsVirtualKeyCode: keyCode,
                   code,
@@ -1737,15 +1731,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       )
         return frame.value.image;
       const quality = screenshotOptions.quality ?? 80;
+      const timeout = Duration.toMillis(settings.actionTimeout);
 
-      const data = yield* native("screenshot", () =>
-        playwright.screenshot({
-          type: "jpeg",
-          quality,
-          scale: "css",
-          timeout: Duration.toMillis(settings.actionTimeout),
-          ...(screenshotOptions.clip === undefined ? {} : { clip: screenshotOptions.clip }),
-        }),
+      const data = yield* native(
+        "screenshot",
+        () =>
+          playwright.screenshot({
+            type: "jpeg",
+            quality,
+            scale: "css",
+            timeout,
+            ...(screenshotOptions.clip === undefined ? {} : { clip: screenshotOptions.clip }),
+          }),
+        timeout,
       );
 
       const size = jpegSize(data) ?? playwright.viewportSize() ?? { width: 0, height: 0 };

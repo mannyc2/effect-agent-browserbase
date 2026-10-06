@@ -139,11 +139,3 @@ export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserErr
     return `${this.operation} failed: ${this.reason.message}${effect}`;
   }
 }
-
-/** Build a `BrowserError` for an operation that sent nothing to the page. */
-export const undispatched = (operation: string, reason: Reason): BrowserError =>
-  new BrowserError({ operation, reason, dispatched: false });
-
-/** Build a `BrowserError` for an operation that may have reached the page. */
-export const dispatched = (operation: string, reason: Reason): BrowserError =>
-  new BrowserError({ operation, reason, dispatched: true });

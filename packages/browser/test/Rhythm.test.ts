@@ -150,7 +150,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
               dy: input.deltaY,
             })),
           );
-          assert.isAtMost(calls.filter((call) => call.method === "Runtime.evaluate").length, 16);
+          // The page's first input also maps its clock once: a world check and three probes.
+          assert.isAtMost(
+            calls.filter((call) => call.method === "Runtime.evaluate").length,
+            16 + 4,
+          );
         }),
     );
 
@@ -165,7 +169,8 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         assert.isAbove(wheelCalls(calls).length, 0);
         assert.isAtMost(wheelCalls(calls).length, 24);
-        assert.isAtMost(calls.filter((call) => call.method === "Runtime.evaluate").length, 16);
+        // The page's first input also maps its clock once: a world check and three probes.
+        assert.isAtMost(calls.filter((call) => call.method === "Runtime.evaluate").length, 16 + 4);
         assert.strictEqual(
           observed.filter((event) => event.type === "click" && event.target === "target").length,
           1,

@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Fiber, Layer, Stream } from "effect";
+import { Duration, Effect, Fiber, Layer, Schedule, Stream } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
@@ -192,6 +192,32 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.isTrue(
         events.some((event) => event._tag === "Action" && event.name === "click" && event.ok),
       );
+    }),
+  );
+
+  it.effect("registers a tab that is busy while it opens", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const page = yield* open("/opens-busy");
+      const before = (yield* browser.pages).length;
+
+      yield* page.click(refOf(yield* page.snapshot(), "link", "Open a busy tab"));
+
+      // Registration must not depend on the new tab's renderer answering in time.
+      const pages = yield* browser.pages.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced(Duration.millis(100)),
+          until: (open) => open.length > before,
+        }),
+        Effect.timeout(Duration.seconds(3)),
+      );
+
+      const opened = pages.filter((other) => other.id !== page.id).at(-1);
+
+      assert.strictEqual(pages.length, before + 1);
+      if (opened === undefined) return;
+      assert.strictEqual(yield* opened.url, (yield* Site).url("/busy"));
+      yield* opened.close;
     }),
   );
 
