@@ -17,7 +17,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./adapter": "./src/Adapter.ts",
-    "./browser-use": "./src/BrowserUse.ts",
+    "./browser-use": "./src/BrowserUseActions.ts",
     "./tools": "./src/Tools.ts"
   },
   "publishConfig": {

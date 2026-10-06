@@ -13,7 +13,7 @@ import type { BrowserError } from "effect-browser/errors";
 
 import { makeActions } from "./internal/BrowserActions.ts";
 import { direct } from "./internal/tools/Handlers.ts";
-import { bindingOf, type ToolHost } from "./internal/tools/Host.ts";
+import { bindingOf, isActionTool, type ToolHost } from "./internal/tools/Host.ts";
 import {
   configuration,
   type HandlerOptions,
@@ -83,12 +83,15 @@ const reading = (options: ReadingOptions) => ({
 /**
  * Effect Agent's `BrowserActions` over one issued Page, or a Frame one of its Pages issued, of a
  * borrowed session, with caller-managed sequencing: provide it to `BrowserUse.make(...).layer()`
- * from `effect-agent/browser-use`. The target and options are checked when the Layer is built.
+ * from `effect-agent/browser-use`, and order its calls with `sequentialScheduling`. The target and
+ * options are checked when the Layer is built.
  *
  * `observe` issues refs that name their observation; only the latest one's refs resolve, and
- * every action retires it. `act` validates every action first, then sends a single action, or a
- * batch of fills and selects with one optional final click as one form. It reports what the
- * browser acknowledged, stops at the first failure, reads the page again and never replays.
+ * every action retires it. Observations are numbered per session, so a Layer built again over the
+ * same session never resolves a ref an earlier one issued. `act` validates every action first,
+ * then sends a single action, or a batch of fills and selects with one optional final click as
+ * one form. It reports what the browser acknowledged, stops at the first failure, reads the page
+ * again and never replays.
  */
 export const layer = <E>(
   browser: BrowserSession<E>,
@@ -101,15 +104,17 @@ export const layer = <E>(
       yield* checkPage(browser, page);
       yield* knownKeys("", options, optionKeys);
 
-      return yield* makeActions(page, yield* resolveOptions(reading(options)), direct);
+      return yield* makeActions(browser, page, yield* resolveOptions(reading(options)), direct);
     }),
   );
 
 /**
  * The same `BrowserActions` through a host `Tools.makeHost` issued: its lane, receipts, failure
  * record and `onInput` callback, its policy, execution and form options and its bound Page. Run
- * the program through `host.run` for its supervision. Records name the Tool `observe` or `act`
- * and carry no tool-call ID. A copy or wrapper of the host is refused when the Layer is built.
+ * the program through `host.run` for its supervision; once this Layer is built, that also runs
+ * `observe` and `act` alone and in the order the model declared them, as it does the host's own
+ * Tools, unless the host schedules by `lane`. Records name the Tool `observe` or `act` and carry
+ * no tool-call ID. A copy or wrapper of the host is refused when the Layer is built.
  */
 export const fromHost = <OwnerError, CallbackError>(
   host: ToolHost<OwnerError, CallbackError>,
@@ -124,7 +129,10 @@ export const fromHost = <OwnerError, CallbackError>(
       yield* knownKeys("", options, readingKeys);
       const read = yield* resolveOptions(reading(options));
 
+      binding.orderActions();
+
       return yield* makeActions(
+        binding.browser,
         binding.page,
         {
           ...binding.options,
@@ -144,11 +152,12 @@ export const fromHost = <OwnerError, CallbackError>(
 /**
  * Effect Agent's `observe` and `act` as sequential barriers, added to whatever the hook already
  * schedules, so the engine runs each one alone and in the order the model declared it. Install
- * it as `RunToolScheduling`, or pass it as `RunOptions.scheduling`; within `host.run`, the Tools'
- * own `sequentialScheduling` composes with it.
+ * it as `RunToolScheduling` for a `layer`, or pass it as `RunOptions.scheduling`, which replaces
+ * the ambient hook, including the one `host.run` provides. `host.run` adds these barriers itself
+ * once `fromHost` is built over its host.
  */
 export const sequentialScheduling = (hook: RunSchedulingHook = {}): RunSchedulingHook => ({
   ...hook,
   toolRequiresSequential: (name) =>
-    name === "observe" || name === "act" || hook.toolRequiresSequential?.(name) === true,
+    isActionTool(name) || hook.toolRequiresSequential?.(name) === true,
 });

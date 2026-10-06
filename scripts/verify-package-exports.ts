@@ -198,6 +198,20 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
         const index = yield* parse(`${base}/src/index.ts`);
         const namespaces = new Set<string>();
 
+        // Modules the root exports under their own name; another namespace may only alias one.
+        const named = new Set(
+          index.statements.flatMap((statement) =>
+            ts.isExportDeclaration(statement) &&
+            statement.exportClause !== undefined &&
+            ts.isNamespaceExport(statement.exportClause) &&
+            statement.moduleSpecifier !== undefined &&
+            ts.isStringLiteral(statement.moduleSpecifier) &&
+            statement.moduleSpecifier.text.endsWith(`/${statement.exportClause.name.text}.ts`)
+              ? [statement.moduleSpecifier.text]
+              : [],
+          ),
+        );
+
         for (const statement of index.statements) {
           if (ts.isEmptyStatement(statement)) continue;
           if (
@@ -229,10 +243,16 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
           namespaces.add(name);
           if (
             !/^[A-Z][A-Za-z0-9]*$/.test(name) ||
-            !statement.moduleSpecifier.text.endsWith(`/${name}.ts`) ||
+            !(
+              statement.moduleSpecifier.text.endsWith(`/${name}.ts`) ||
+              named.has(statement.moduleSpecifier.text)
+            ) ||
             !targets.includes(`./src/${statement.moduleSpecifier.text.slice(2)}`)
           ) {
-            report(index.fileName, `${name} must reference a published same-name source module`);
+            report(
+              index.fileName,
+              `${name} must reference a published same-name source module, or alias one the root also exports under its own name`,
+            );
           }
         }
         const config = yield* parse(`${base}/vite.config.ts`);

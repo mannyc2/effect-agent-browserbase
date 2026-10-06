@@ -166,10 +166,20 @@ const encodeBrowserError = Schema.encodeResult(BrowserError);
 
 /** What another capability composed over a host shares with its Tools; never a public value. */
 export interface HostBinding {
+  /** The borrowed session the host was made over. */
+  readonly browser: object;
   readonly page: Page | Frame;
   readonly options: ResolvedOptions;
   readonly hooks: Hooks;
+  /**
+   * Has this host's `run` order Effect Agent's `observe` and `act` as it orders its own Tools,
+   * unless it schedules by `lane` alone. A BrowserUse Layer over the host calls it when built.
+   */
+  readonly orderActions: () => void;
 }
+
+/** Effect Agent's BrowserUse Tools, whose `BrowserActions` a host may serve. */
+export const isActionTool = (name: string): boolean => name === "observe" || name === "act";
 
 const bindings = new WeakMap<object, HostBinding>();
 
@@ -290,6 +300,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   let receiptSequence = 0n;
   let closed = false;
   let outstanding = 0;
+  let ordersActions = false;
 
   const recordReceipt = (
     call: Call,
@@ -560,18 +571,22 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     layers.observedHandlers,
   );
 
-  /** Browser calls in declaration order, whatever scheduling the caller already provides. */
+  /**
+   * Browser calls in declaration order, whatever scheduling the caller already provides: this
+   * package's Tools, and `observe` and `act` once a BrowserUse Layer serves them through this host.
+   */
   const scheduled = <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
     scheduling === "lane"
       ? effect
       : Effect.gen(function* () {
-          const existing = yield* RunToolScheduling;
+          const hook = sequentialScheduling(yield* RunToolScheduling);
 
-          return yield* Effect.provideService(
-            effect,
-            RunToolScheduling,
-            sequentialScheduling(existing),
-          );
+          return yield* Effect.provideService(effect, RunToolScheduling, {
+            ...hook,
+            // Asked per call: the BrowserUse Layer is usually built inside the program run here.
+            toolRequiresSequential: (name) =>
+              (ordersActions && isActionTool(name)) || hook.toolRequiresSequential?.(name) === true,
+          });
         });
 
   const supervise: ToolHost<OwnerError, E>["run"] = (effect) =>
@@ -622,7 +637,15 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     run: supervise,
   };
 
-  bindings.set(host, { page, options: resolved, hooks });
+  bindings.set(host, {
+    browser,
+    page,
+    options: resolved,
+    hooks,
+    orderActions: () => {
+      ordersActions = true;
+    },
+  });
 
   return host;
 });

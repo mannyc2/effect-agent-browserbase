@@ -80,24 +80,39 @@ const publicEntrypoint = {
     schema: [],
     messages: {
       entrypoint:
-        "Public indexes may only re-export named bindings or same-name local module namespaces, without default exports.",
+        "Public indexes may only re-export named bindings or local module namespaces, without default exports. A namespace takes its module's name, or aliases a module the index also exports under that name.",
     },
   },
   create(context) {
     return {
       Program(program) {
+        const namespace = (node: Node) =>
+          node.type === "ExportAllDeclaration" &&
+          node.exported?.type === "Identifier" &&
+          /^[A-Z][A-Za-z0-9]*$/.test(node.exported.name) &&
+          typeof node.source.value === "string" &&
+          node.source.value.startsWith("./") &&
+          !node.source.value.split("/").includes("internal")
+            ? { name: node.exported.name, source: node.source.value }
+            : undefined;
+
+        const ownName = (entry: { readonly name: string; readonly source: string }) =>
+          entry.source.endsWith(`/${entry.name}.ts`);
+
+        // Modules exported under their own name; another namespace may only alias one of them.
+        const named = new Set(
+          program.body.flatMap((node) => {
+            const entry = namespace(node);
+
+            return entry !== undefined && ownName(entry) ? [entry.source] : [];
+          }),
+        );
+
         for (const node of program.body) {
           if (node.type === "EmptyStatement") continue;
-          if (
-            node.type === "ExportAllDeclaration" &&
-            node.exported?.type === "Identifier" &&
-            /^[A-Z][A-Za-z0-9]*$/.test(node.exported.name) &&
-            typeof node.source.value === "string" &&
-            node.source.value.startsWith("./") &&
-            !node.source.value.split("/").includes("internal") &&
-            node.source.value.endsWith(`/${node.exported.name}.ts`)
-          )
-            continue;
+          const entry = namespace(node);
+
+          if (entry !== undefined && (ownName(entry) || named.has(entry.source))) continue;
           if (
             node.type === "ExportNamedDeclaration" &&
             node.declaration === null &&

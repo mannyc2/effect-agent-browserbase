@@ -12,7 +12,7 @@ import type { Observation, ObservedControl } from "effect-browser/browser-data";
 import { type Call, failureFrom, type Hooks, makeOperations } from "./tools/Handlers.ts";
 import type { BrowserFormFailure, BrowserToolFailure, FillFormParameters } from "./tools/Model.ts";
 import type { ResolvedOptions } from "./tools/Options.ts";
-import { boundary, continuationFor, largest, measure } from "./tools/Results.ts";
+import { boundary, continuationFor, largest, measure, prefixWithin } from "./tools/Results.ts";
 
 type Failure = Pick<BrowserToolFailure, "reason" | "outcome">;
 
@@ -39,6 +39,22 @@ interface Latest {
 
 /** A ref names its observation and the control's position in it, so an older one never resolves. */
 const ref = (generation: number, index: number) => `o${generation}-e${index}`;
+
+/**
+ * The last observation generation issued over each borrowed session, whichever `BrowserActions`
+ * issued it. A Layer built again over the same session, as one per `AgentRuntime.run` on a thread
+ * that persists, continues the count, so a ref an earlier instance showed the model never names a
+ * control of a later one, on that page or any other the session issued.
+ */
+const generations = new WeakMap<object, number>();
+
+const nextGeneration = (session: object): number => {
+  const generation = (generations.get(session) ?? 0) + 1;
+
+  generations.set(session, generation);
+
+  return generation;
+};
 
 const issuedRef = /^o([1-9][0-9]*)-e(?:0|[1-9][0-9]*)$/;
 
@@ -78,12 +94,17 @@ interface Projected {
 
 /**
  * The model's observation: enabled controls only, each select with its enabled options' labels,
- * in document order until `maxControls` of them, options included, are shown. Disabled controls
- * and options are dropped first, so they never spend that budget. effect-browser never reads a
- * field's value, so a text field's `value` is always empty; a select's is its selected options'
- * labels and a toggle's says whether it is checked.
+ * in document order until `maxControls` of them, options included, are shown, and at most
+ * `maxTextBytes` of its text. Disabled controls and options are dropped first, so they never spend
+ * that budget. effect-browser never reads a field's value, so a text field's `value` is always
+ * empty; a select's is its selected options' labels and a toggle's says whether it is checked.
  */
-const project = (observation: Observation, generation: number, maxControls: number): Projected => {
+const project = (
+  observation: Observation,
+  generation: number,
+  maxControls: number,
+  maxTextBytes: number,
+): Projected => {
   const choices = new Map<
     string,
     Array<{ readonly control: ObservedControl; readonly label: string }>
@@ -144,11 +165,14 @@ const project = (observation: Observation, generation: number, maxControls: numb
     });
   }
 
+  // A host's own `observe` may return more text than it was asked for; the model never sees it.
+  const text = prefixWithin(observation.text, maxTextBytes);
+
   return {
     generation,
     observationId: observation.observationId,
-    text: observation.text,
-    textTruncated: observation.textTruncated,
+    text,
+    textTruncated: observation.textTruncated || text.length < observation.text.length,
     entries,
     controlsTruncated: truncated,
   };
@@ -343,13 +367,13 @@ interface Dispatched {
  * observation between an action and the reading after it.
  */
 export const makeActions = Effect.fnUntraced(function* (
+  session: object,
   page: Page | Frame,
   options: ResolvedOptions,
   hooks: Hooks,
 ) {
   const operations = makeOperations(page, options, hooks, continuationFor(page));
   const permit = yield* Semaphore.make(1);
-  let generation = 0;
   let latest: Latest | undefined;
 
   const call = (tool: "observe" | "act"): Call => ({ tool, id: undefined });
@@ -375,7 +399,12 @@ export const makeActions = Effect.fnUntraced(function* (
           Effect.catch(failureFrom(hooks, current, page)),
           Effect.map((observation) => {
             const fitted = fit(
-              project(observation, ++generation, options.maxControls),
+              project(
+                observation,
+                nextGeneration(session),
+                options.maxControls,
+                options.maxTextBytes,
+              ),
               options.resultMaxBytes,
               size,
             );
@@ -448,12 +477,15 @@ export const makeActions = Effect.fnUntraced(function* (
               completed: done + (submit === undefined ? 0 : sent),
               error: described("Completing the form", failure),
             };
+      // Verification runs once every field is filled, and only reads them back.
       if (failure.stage === "verify")
         return {
           completed: done,
-          error: `${described("Checking the filled fields", failure)}${
-            submit === undefined ? "" : " The click was not sent."
-          }`,
+          error: `${described(
+            "Checking the filled fields",
+            failure,
+            "Every field was filled: observe before filling any again.",
+          )}${submit === undefined ? "" : " The click was not sent."}`,
         };
 
       return {

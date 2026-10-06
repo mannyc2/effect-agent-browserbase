@@ -1,10 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, type Layer, type Scope } from "effect";
+import * as Root from "effect-agent-browser";
 import {
   type AdaptedSession,
   type fromSession,
   interactiveLayer,
 } from "effect-agent-browser/adapter";
+import * as BrowserUseActions from "effect-agent-browser/browser-use";
 import type {
   fromHost,
   layer as browserActionsLayer,
@@ -227,6 +229,10 @@ const browserActionsPolicy: Same<BrowserActionsOptions["policy"], HandlerOptions
 
 const browserUseHook: Same<ReturnType<typeof browserUseScheduling>, RunSchedulingHook> = true;
 
+/** The root names the subpath apart from Effect Agent's own `BrowserUse`, and keeps its old name. */
+const rootBrowserUseActions: Same<typeof Root.BrowserUseActions, typeof BrowserUseActions> = true;
+const rootBrowserUse: Same<typeof Root.BrowserUse, typeof BrowserUseActions> = true;
+
 it("retains scoped ownership, original handle identity and typed native Tool failures", () => {
   expect(
     originalContract &&
@@ -264,7 +270,20 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       browserActionsTarget &&
       hostedReading &&
       browserActionsPolicy &&
-      browserUseHook,
+      browserUseHook &&
+      rootBrowserUseActions &&
+      rootBrowserUse,
   ).toBe(true);
   expect(typeof declaredFrameworkFailure).toBe("function");
+});
+
+it("keeps the root's earlier BrowserUse name for the same module", () => {
+  expect(Object.keys(Root).toSorted()).toEqual([
+    "Adapter",
+    "BrowserUse",
+    "BrowserUseActions",
+    "Tools",
+  ]);
+  expect(Root.BrowserUse).toBe(Root.BrowserUseActions);
+  expect(Root.BrowserUseActions).toBe(BrowserUseActions);
 });

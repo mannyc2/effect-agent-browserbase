@@ -7,7 +7,7 @@ import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as BrowserUse from "effect-agent/browser-use";
 import * as InMemory from "effect-agent/in-memory";
-import { RunToolScheduling } from "effect-agent/run-options";
+import { Observation } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import type { Action } from "effect-browser/plan-data";
 import type * as Testing from "effect-browser/testing";
@@ -429,15 +429,16 @@ it.effect("disabled controls and options never spend the controls a model is sho
         ],
       });
 
-      // Fewer: a select keeps the options that fit, and the reading says it left some out.
+      // Fewer: a select keeps the options that fit, and the reading says it left some out. This
+      // second Layer over the same session numbers its observation after the first one's.
       const { actions, observation } = yield* shown(3);
 
       expect(observation).toEqual({
         text: "Sizes\n[Some controls were left out of this observation.]",
-        controls: [{ ref: "o1-e8", kind: "select", name: "Size", value: "S", options: ["S", "M"] }],
+        controls: [{ ref: "o2-e8", kind: "select", name: "Size", value: "S", options: ["S", "M"] }],
       });
       expect(
-        yield* actions.act([{ kind: "select", ref: "o1-e8", value: "L" }]).pipe(Effect.flip),
+        yield* actions.act([{ kind: "select", ref: "o2-e8", value: "L" }]).pipe(Effect.flip),
       ).toMatchObject({ code: "invalid", message: expect.stringContaining("No observed option") });
       expect(dispatched(yield* browser.control.calls)).toEqual([]);
     }),
@@ -586,7 +587,7 @@ it.effect(
     ),
 );
 
-it.effect("an unknown click outcome is reported as possibly sent and never replayed", () =>
+it.effect("an unknown click whose page containment closed is reported as possibly sent", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const browser = yield* session();
@@ -624,6 +625,322 @@ it.effect("an unknown click outcome is reported as possibly sent and never repla
     Effect.catchTag("BrowserError", (error) =>
       error.operation === "close" ? Effect.void : Effect.fail(error),
     ),
+  ),
+);
+
+it.effect(
+  "an unknown click outcome is reported as possibly sent, read after, and never replayed",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The browser acknowledged the click with a result that breaks its contract: whether it
+        // happened is unknown, but nothing was abandoned, so the page stays open to read.
+        const browser = yield* session({ receipt: () => ({ url: "PRIVATE-MALFORMED" }) });
+        const actions = yield* actionsOf(BrowserUseActions.layer(browser, browser.initialPage));
+
+        yield* actions.observe;
+
+        const result = yield* actions.act([{ kind: "click", ref: "o1-e8" }]);
+
+        expect(result).toEqual({
+          completed: 0,
+          error:
+            "click on o1-e8 failed (failed, unknown). It may have happened: observe before anything else, and never repeat it blindly.",
+          observation: expect.objectContaining({
+            controls: expect.arrayContaining([expect.objectContaining({ ref: "o2-e8" })]),
+          }),
+        });
+        expect(JSON.stringify(result)).not.toContain("PRIVATE-");
+        // The model repeats the call: its ref named the observation the click retired.
+        expect(
+          yield* actions.act([{ kind: "click", ref: "o1-e8" }]).pipe(Effect.flip),
+        ).toMatchObject({
+          code: "invalid",
+          message: expect.stringContaining("from an earlier observation"),
+        });
+        expect(dispatched(yield* browser.control.calls)).toEqual([["click", "save"]]);
+      }),
+    ),
+);
+
+it.effect("a Layer built again over the same session refuses the refs an earlier one issued", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* session();
+      const first = yield* actionsOf(BrowserUseActions.layer(browser, browser.initialPage));
+
+      expect(yield* first.observe).toEqual(firstObservation);
+
+      // A later run on the same thread builds the Layer again, this time through a host, while
+      // the model's history still holds the first one's refs.
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
+      const second = yield* actionsOf(BrowserUseActions.fromHost(host));
+      const earlier = { kind: "click", ref: "o1-e8" } as const;
+
+      expect(yield* second.act([earlier]).pipe(Effect.flip)).toMatchObject({
+        code: "invalid",
+        message: expect.stringContaining("no current observation"),
+      });
+      expect((yield* second.observe).controls.map((control) => control.ref)).toEqual(
+        firstObservation.controls.map((control) => control.ref.replace("o1-", "o2-")),
+      );
+      expect(yield* second.act([earlier]).pipe(Effect.flip)).toMatchObject({
+        code: "invalid",
+        message: expect.stringContaining("from an earlier observation"),
+      });
+
+      const third = yield* actionsOf(BrowserUseActions.layer(browser, browser.initialPage));
+
+      expect((yield* third.observe).controls[0]?.ref).toBe("o3-e0");
+      expect(yield* third.act([{ kind: "click", ref: "o2-e8" }]).pipe(Effect.flip)).toMatchObject({
+        code: "invalid",
+        message: expect.stringContaining("from an earlier observation"),
+      });
+      expect(dispatched(yield* browser.control.calls)).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("a host's own reading is held to maxTextBytes, and says it left text out", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* session();
+
+      // A replacement that ignores the bound it is asked for and returns the whole document.
+      const observe: BrowserTools.HandlerOptions["observe"] = (request, page) =>
+        page
+          .observe(request)
+          .pipe(
+            Effect.map((reading) =>
+              Observation.make({ ...reading, text: "Terms apply. ".repeat(1000) }),
+            ),
+          );
+
+      const actions = yield* actionsOf(
+        BrowserUseActions.layer(browser, browser.initialPage, { observe, maxTextBytes: 26 }),
+      );
+
+      const capped =
+        "Terms apply. Terms apply. \n[Some page text was left out of this observation.]";
+
+      expect((yield* actions.observe).text).toBe(capped);
+      expect((yield* actions.act([{ kind: "click", ref: "o1-e8" }])).observation?.text).toBe(
+        capped,
+      );
+    }),
+  ),
+);
+
+/** A batch that fills the email, selects Pro and clicks Pay, sent as one form. */
+const checkoutForm: ReadonlyArray<BrowserUse.Action> = [
+  { kind: "fill", ref: "o1-e0", value: "ada@example.test" },
+  { kind: "select", ref: "o1-e1", value: "Pro" },
+  { kind: "click", ref: "o1-e9" },
+];
+
+// Each field, the verification and the submit is its own `fill-form` call: 1 email, 2 plan,
+// 3 verify, 4 submit. A test arms the one that stops the form; the ones before it pass.
+it.effect.each([
+  {
+    name: "a field whose input was sent",
+    stop: 2,
+    outcome: "performed",
+    reason: Reasons.Failed.make({}),
+    completed: 2,
+    error:
+      "select on o1-e1 failed (failed, performed). Its input was sent before a later step failed: never repeat it.",
+    sent: [["fill-form", "email"]],
+  },
+  {
+    name: "a field whose outcome is unknown",
+    stop: 2,
+    outcome: "unknown",
+    reason: Reasons.Timeout.make({}),
+    completed: 1,
+    error:
+      "select on o1-e1 failed (timeout, unknown). It may have happened: observe before anything else, and never repeat it blindly.",
+    sent: [
+      ["fill-form", "email"],
+      ["fill-form", "plan"],
+    ],
+  },
+  {
+    name: "verification, before its click",
+    stop: 3,
+    outcome: "undispatched",
+    reason: Reasons.Stale.make({}),
+    completed: 2,
+    error:
+      "Checking the filled fields failed (stale, undispatched). Every field was filled: observe before filling any again. The click was not sent.",
+    sent: [
+      ["fill-form", "email"],
+      ["fill-form", "plan"],
+    ],
+  },
+  {
+    name: "a submit whose outcome is unknown",
+    stop: 4,
+    outcome: "unknown",
+    reason: Reasons.Timeout.make({}),
+    completed: 2,
+    error:
+      "click on o1-e9 failed (timeout, unknown). It may have happened: observe before anything else, and never repeat it blindly.",
+    sent: [
+      ["fill-form", "email"],
+      ["fill-form", "plan"],
+      ["fill-form", "pay"],
+    ],
+  },
+  {
+    name: "a submit whose input was sent",
+    stop: 4,
+    outcome: "performed",
+    reason: Reasons.Failed.make({}),
+    completed: 3,
+    error:
+      "click on o1-e9 failed (failed, performed). Its input was sent before a later step failed: never repeat it.",
+    sent: [
+      ["fill-form", "email"],
+      ["fill-form", "plan"],
+    ],
+  },
+  {
+    name: "its first field, failing the form with no stage",
+    stop: 1,
+    outcome: "undispatched",
+    reason: Reasons.Unsupported.make({}),
+    completed: 0,
+    error: "fill on o1-e0 failed (unsupported, undispatched). Nothing was sent.",
+    sent: [],
+  },
+  {
+    name: "its first field's sent input, failing the form with no stage",
+    stop: 1,
+    outcome: "performed",
+    reason: Reasons.Failed.make({}),
+    completed: 1,
+    error:
+      "fill on o1-e0 failed (failed, performed). Its input was sent before a later step failed: never repeat it.",
+    sent: [],
+  },
+] as const)("a form stopped at $name counts what was acknowledged and is never resent", (stopped) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* session();
+      const open = yield* browser.control.gate;
+
+      yield* open.open;
+      for (let step = 1; step < stopped.stop; step++)
+        yield* browser.control.next("fill-form", { _tag: "Hold", gate: open, dispatched: false });
+      yield* browser.control.next("fill-form", {
+        _tag: "Fail",
+        reason: stopped.reason,
+        outcome: stopped.outcome,
+      });
+
+      const actions = yield* actionsOf(BrowserUseActions.layer(browser, browser.initialPage));
+
+      yield* actions.observe;
+
+      const result = yield* actions.act(checkoutForm);
+
+      expect(result.completed).toBe(stopped.completed);
+      // An unknown outcome is contained by closing the page, so no reading follows it.
+      expect(result.error).toBe(
+        stopped.outcome === "unknown"
+          ? `${stopped.error} The observation after acting failed (closed, undispatched). Call observe, and never repeat an acknowledged action. The page is gone: stop using the browser.`
+          : stopped.error,
+      );
+      expect(result.observation === null).toBe(stopped.outcome === "unknown");
+      expect(dispatched(yield* browser.control.calls)).toEqual(stopped.sent);
+
+      // The model sends the same batch again: its refs named a retired observation.
+      expect(yield* actions.act(checkoutForm).pipe(Effect.flip)).toMatchObject({
+        code: "invalid",
+      });
+      expect(dispatched(yield* browser.control.calls)).toEqual(stopped.sent);
+    }),
+  ).pipe(
+    // Containment closed the page; the scope still closes.
+    Effect.catchTag("BrowserError", (error) =>
+      error.operation === "close" ? Effect.void : Effect.fail(error),
+    ),
+  ),
+);
+
+it.effect("a host callback that fails after input counts what was sent, alone or in a form", () =>
+  Effect.gen(function* () {
+    for (const [batch, completed, error] of [
+      [
+        [{ kind: "click", ref: "o1-e8" }],
+        1,
+        "click on o1-e8 failed (failed, performed). Its input was sent before a later step failed: never repeat it.",
+      ],
+      [
+        checkoutForm,
+        3,
+        "Completing the form failed (failed, performed). Its input was sent before a later step failed: never repeat it.",
+      ],
+    ] as const)
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const browser = yield* session();
+
+          const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+            onInput: () => Effect.fail("PRIVATE-CALLBACK"),
+          });
+
+          const actions = yield* actionsOf(BrowserUseActions.fromHost(host));
+
+          yield* actions.observe;
+          const result = yield* actions.act(batch);
+
+          expect(result).toMatchObject({ completed, error });
+          expect(JSON.stringify(result)).not.toContain("PRIVATE-");
+          const sent = dispatched(yield* browser.control.calls);
+
+          expect(sent).toHaveLength(batch.length === 1 ? 1 : 3);
+          // The failed host refuses everything after it, so nothing is sent again.
+          expect(yield* actions.act(batch).pipe(Effect.flip)).toMatchObject({
+            code: "browser",
+            message: expect.stringContaining("(failed, undispatched). Nothing was sent."),
+          });
+          expect(dispatched(yield* browser.control.calls)).toEqual(sent);
+          expect(yield* host.failure.pipe(Effect.flip)).toBe("PRIVATE-CALLBACK");
+        }),
+      );
+  }),
+);
+
+it.live("calls through one direct Layer run one at a time, in the order they were made", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* session();
+      const events: Array<string> = [];
+
+      // A reading that takes a moment, so a call that did not wait would start inside it.
+      const observe: BrowserTools.HandlerOptions["observe"] = (request, page) =>
+        Effect.sync(() => events.push("start")).pipe(
+          Effect.andThen(Effect.sleep(20)),
+          Effect.andThen(page.observe(request)),
+          Effect.tap(() => Effect.sync(() => events.push("end"))),
+        );
+
+      const actions = yield* actionsOf(
+        BrowserUseActions.layer(browser, browser.initialPage, { observe }),
+      );
+
+      const [observed, acted, again] = yield* Effect.all(
+        [actions.observe, actions.act([{ kind: "click", ref: "o1-e8" }]), actions.observe],
+        { concurrency: "unbounded" },
+      );
+
+      expect(observed.controls[0]?.ref).toBe("o1-e0");
+      expect(acted).toMatchObject({ completed: 1, error: null });
+      expect(again.controls[0]?.ref).toBe("o3-e0");
+      expect(events).toEqual(["start", "end", "start", "end", "start", "end"]);
+      expect(dispatched(yield* browser.control.calls)).toEqual([["click", "save"]]);
+    }),
   ),
 );
 
@@ -781,8 +1098,8 @@ it.effect("decision grounding resolves described targets to observed refs before
 );
 
 // The host lane admits one call, so a call the engine starts while another runs is refused: only
-// the scheduling hook makes the act that names the observation's ref wait for that observation.
-it.live("sequential scheduling runs observe and act alone, in the order the model sent them", () =>
+// scheduling makes the act that names the observation's ref wait for that observation.
+it.live("host.run runs observe and act alone, in the order the model sent them, unasked", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const hook = BrowserUseActions.sequentialScheduling({
@@ -810,10 +1127,10 @@ it.live("sequential scheduling runs observe and act alone, in the order the mode
         () => Effect.sync(() => Object.assign(page, { observe: original })),
       );
 
-      const host = yield* BrowserTools.makeHost(browser, page, { lane: { maxOutstanding: 1 } });
       const browserUse = BrowserUse.make();
 
-      const turns: ReadonlyArray<ScriptedTurnInput> = [
+      /** One response that observes and then clicks the ref that observation will issue. */
+      const turns = (ref: string, result: unknown): ReadonlyArray<ScriptedTurnInput> => [
         {
           _tag: "Stream",
           parts: [
@@ -822,34 +1139,57 @@ it.live("sequential scheduling runs observe and act alone, in the order the mode
               type: "tool-call",
               id: "c2",
               name: "act",
-              params: { action: { kind: "click", ref: "o1-e8" } },
+              params: { action: { kind: "click", ref } },
             },
             { type: "finish", reason: "tool-calls", usage },
           ],
           termination: { _tag: "Complete" },
         },
         answer((request) => {
-          expect(toolResults(request, "act")).toMatchObject([
-            { isFailure: false, result: { completed: 1, error: null } },
-          ]);
+          expect(toolResults(request, "act")).toMatchObject([result]);
         }),
       ];
 
-      // Installed around `host.run`, which adds the Tools' own barriers to it.
-      yield* host
-        .run(
-          AgentRuntime.run(agent(browserUse.toolkit, {}), "save").pipe(
-            Effect.provide(
-              browserUse.layer().pipe(Layer.provide(BrowserUseActions.fromHost(host))),
+      const run = <OwnerError, CallbackError>(
+        host: BrowserTools.ToolHost<OwnerError, CallbackError>,
+        script: ReadonlyArray<ScriptedTurnInput>,
+      ) =>
+        host
+          .run(
+            AgentRuntime.run(agent(browserUse.toolkit, {}), "save").pipe(
+              Effect.provide(
+                browserUse.layer().pipe(Layer.provide(BrowserUseActions.fromHost(host))),
+              ),
             ),
-          ),
-        )
-        .pipe(
-          Effect.provideService(RunToolScheduling, BrowserUseActions.sequentialScheduling()),
-          Effect.provide(model(turns)),
-        );
+          )
+          .pipe(Effect.provide(model(script)));
+
+      // Nothing installs a scheduling hook: `host.run` orders the calls `fromHost` serves.
+      const host = yield* BrowserTools.makeHost(browser, page, { lane: { maxOutstanding: 1 } });
+
+      yield* run(host, turns("o1-e8", { isFailure: false, result: { completed: 1, error: null } }));
       expect(dispatched(yield* browser.control.calls)).toEqual([["click", "save"]]);
       expect((yield* host.toolFailures).failures).toEqual([]);
+
+      // A host that schedules by its lane alone leaves the engine to start both at once.
+      const lane = yield* BrowserTools.makeHost(browser, page, {
+        lane: { maxOutstanding: 1 },
+        scheduling: "lane",
+      });
+
+      yield* run(
+        lane,
+        turns("o3-e8", {
+          isFailure: true,
+          result: {
+            _tag: "BrowserUseError",
+            code: "browser",
+            message:
+              "The browser host did not run this call (busy, undispatched). Nothing was sent.",
+          },
+        }),
+      );
+      expect(dispatched(yield* browser.control.calls)).toEqual([["click", "save"]]);
     }),
   ),
 );
