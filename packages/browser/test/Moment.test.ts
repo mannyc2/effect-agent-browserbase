@@ -5,7 +5,14 @@ import { LanguageModel, Prompt, type Response } from "effect/ai";
 
 import { Browser } from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
-import { Action, DialogShown, Navigated, PointerPressed, TrackEvent } from "../src/BrowserEvent.ts";
+import {
+  Action,
+  DialogShown,
+  Navigated,
+  PointerPressed,
+  Subject,
+  TrackEvent,
+} from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { Frame, Screenshot } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
@@ -59,6 +66,9 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
         page: "p1",
         name: "click",
         target: "e3",
+        subject: new Subject({ role: "button", name: "Pay", tag: "button" }),
+        x: 40,
+        y: 20,
         ok: true,
         dispatched: true,
       }),
@@ -92,7 +102,7 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
       '- button "Pay" [ref=e3]',
       "",
       "Timeline (seconds before the moment, over 5.0s):",
-      "-1.2s click e3",
+      '-1.2s click button "Pay"',
       "-1.0s navigated to https://shop.example/paid",
       '-0.5s a dialog (alert) said "Paid"',
       "",
@@ -104,6 +114,77 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
   assert.deepStrictEqual(
     pictures(prompt).map((part) => part.data),
     moment.frames.map((frame) => frame.data),
+  );
+});
+
+it("names what each action acted on, never by a ref", () => {
+  const action = (at: number, fields: Partial<ConstructorParameters<typeof Action>[0]>) =>
+    new Action({
+      at,
+      startedAt: at,
+      page: "p1",
+      name: "click",
+      ok: true,
+      dispatched: true,
+      ...fields,
+    });
+
+  const prompt = Moment.toPrompt(
+    new Moment.Moment({
+      page: "p1",
+      from: 5000,
+      at: 10_000,
+      frames: [shot(10_000, 1)],
+      events: [
+        action(6000, {
+          target: "300,320",
+          subject: new Subject({ role: "canvas", name: "", tag: "canvas" }),
+          x: 300,
+          y: 320,
+        }),
+        action(7000, {
+          name: "type",
+          target: "e4",
+          text: "ada@example.com",
+          subject: new Subject({ role: "textbox", name: "Email", tag: "input" }),
+          x: 10,
+          y: 10,
+        }),
+        action(7500, {
+          name: "select",
+          target: "e5",
+          text: "eth",
+          subject: new Subject({ role: "combobox", name: "Coin", tag: "select" }),
+        }),
+        action(8000, {
+          name: "drag",
+          target: '"e6" -> {"x":380,"y":40}',
+          subject: new Subject({ role: "slider", name: "Level", tag: "input" }),
+          to: new Subject({ role: null, name: "", tag: "main" }),
+          x: 380,
+          y: 40,
+        }),
+        action(8500, { name: "press", target: "Enter" }),
+        action(9000, {
+          target: "e1",
+          ok: false,
+          dispatched: false,
+          error: "e1 is not on the page any more",
+        }),
+      ],
+    }),
+  );
+
+  assert.include(
+    texts(prompt)[0],
+    [
+      "-4.0s click canvas at (300, 320)",
+      '-3.0s type "ada@example.com" into textbox "Email"',
+      '-2.5s select "eth" in combobox "Coin"',
+      '-2.0s drag slider "Level" to main at (380, 40)',
+      "-1.5s press Enter",
+      "-1.0s click (failed: e1 is not on the page any more)",
+    ].join("\n"),
   );
 });
 
@@ -188,7 +269,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ["system", "user"],
       );
       assert.strictEqual(pictures(prompt).length, 2);
-      assert.include(texts(prompt).join("\n"), "click 300,320");
+      assert.include(texts(prompt).join("\n"), "click canvas at (300, 320)");
       assert.strictEqual(moment.frames.length, 2);
       assert.isTrue(
         moment.events.some((event) => event._tag === "Action" && event.name === "click"),
@@ -200,13 +281,13 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   it.effect("tiles moments, so consecutive ones neither repeat nor skip an event", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
-      const first = yield* Moment.capture(page, { snapshot: false });
+      const first = yield* Moment.capture(page);
 
       yield* page.press("Tab");
-      const second = yield* Moment.capture(page, { since: first, snapshot: false });
+      const second = yield* Moment.capture(page, { since: first });
 
       yield* page.goto((yield* Site).url("/next"));
-      const third = yield* Moment.capture(page, { since: second });
+      const third = yield* Moment.capture(page, { since: second, snapshot: true });
 
       // A moment needs only its page: no Browser in context.
       expectTypeOf(Moment.capture(page)).toEqualTypeOf<
@@ -239,6 +320,35 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           (event) => event.at > first.at && event.at <= third.at && !isTrackEvent(event),
         ),
       );
+    }),
+  );
+
+  it.effect("names the control a navigating click acted on, though its ref now means another", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/form");
+      const before = yield* page.snapshot();
+      const ref = /link "Next page" \[ref=(e\d+)\]/.exec(before.text)?.[1];
+
+      if (ref === undefined) return yield* Effect.die("the form has no Next page link");
+      yield* page.click(ref);
+      yield* page.waitForText("The next page");
+      const moment = yield* Moment.capture(page, { snapshot: true });
+
+      const click = moment.events.find(
+        (event) => event._tag === "Action" && event.name === "click",
+      );
+
+      assert.deepStrictEqual(
+        click?._tag === "Action" ? click.subject : undefined,
+        new Subject({ role: "link", name: "Next page", tag: "a" }),
+      );
+      // The new page's outline gives refs to its own elements; the timeline uses none of them.
+      const [text = ""] = texts(Moment.toPrompt(moment));
+      const timeline = text.slice(text.indexOf("Timeline"));
+
+      assert.match(text, /\[ref=e\d+\]/);
+      assert.include(timeline, 'click link "Next page"');
+      assert.notMatch(timeline, /\be\d+\b/);
     }),
   );
 

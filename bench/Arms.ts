@@ -3,12 +3,11 @@
 // system prompt, which `Agent.run` does not let a caller replace, so the bench drives them with
 // its own loop over the public `Tools`, built like `Agent.run`'s: a turn's calls run in order and
 // halt on the first failure or on `done`, older pictures are pruned, and a response that cannot be
-// read goes back to the model. Understand tasks differ only in arm 2, whose moments leave out the
+// read goes back to the model. Understand tasks differ only in arm 1, whose moments add the
 // outline.
 import { Context, Effect, Exit, Option, Ref, Schema } from "effect";
 import * as Agent from "effect-browser/Agent";
 import type { BrowserError } from "effect-browser/BrowserError";
-import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import * as Tools from "effect-browser/Tools";
 import { AiError, Chat, Prompt, type Response, Tool, Toolkit } from "effect/ai";
@@ -29,9 +28,8 @@ export interface OperateOptions<A, I, E> {
   readonly onStep: (step: Agent.Step) => Effect.Effect<void, E>;
 }
 
-/** What an arm's model is shown of a moment: arm 2 sees the frames and events, without the outline. */
-export const moment = (arm: Arm, captured: Moment.Moment): Moment.Moment =>
-  arm === 2 ? new Moment.Moment({ ...captured, snapshot: undefined }) : captured;
+/** Whether an arm's moments carry the page's outline: only arm 1's, as the library's default leaves it out. */
+export const outline = (arm: Arm): boolean => arm === 1;
 
 type Image = Effect.Success<ReturnType<Page["screenshot"]>>;
 

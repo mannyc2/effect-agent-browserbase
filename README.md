@@ -64,8 +64,9 @@ program.pipe(Effect.provide([Hosted, Model]), Effect.runPromise);
 
 ## A moment
 
-`Moment.capture` gathers a page's screencast frames over a window, its outline at the end and its
-events in between. `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call:
+`Moment.capture` gathers a page's screencast frames over a window and its events in between, naming
+what each action acted on (`click button "Play"`), never by ref; `snapshot: true` adds the page's
+outline at the end. `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call:
 
 ```ts
 import { LanguageModel, Prompt } from "effect/ai";

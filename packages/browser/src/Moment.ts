@@ -1,10 +1,10 @@
 /**
  * What a page showed, and what happened on it, over a window of time.
  *
- * `capture` gathers a page's screencast frames over a window, its snapshot at the end and its
- * events in between. `toPrompt` turns a moment into one user message for any `effect/ai` call: a
- * structured answer from `LanguageModel.generateObject`, a caption from `generateText`, or one
- * turn of a `Chat` that follows moment after moment.
+ * `capture` gathers a page's screencast frames over a window and its events in between, and on
+ * request its snapshot at the end. `toPrompt` turns a moment into one user message for any
+ * `effect/ai` call: a structured answer from `LanguageModel.generateObject`, a caption from
+ * `generateText`, or one turn of a `Chat` that follows moment after moment.
  *
  * Frames come from a running screencast, as far back as the browser's `frameHistory` keeps them.
  * The last frame is the page now: the newest frame while `Page.currentFrame` holds it current,
@@ -16,7 +16,7 @@ import { Duration, Effect, Option, Schema } from "effect";
 import { Prompt } from "effect/ai";
 
 import { BrowserError, InvalidRequest } from "./BrowserError.ts";
-import { BrowserEvent, TrackEvent } from "./BrowserEvent.ts";
+import { type Action, BrowserEvent, type Subject, TrackEvent } from "./BrowserEvent.ts";
 import { Frame } from "./Frame.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
@@ -31,7 +31,7 @@ export class Moment extends Schema.Class<Moment>("effect-browser/Moment")({
   at: Schema.Finite,
   /** Oldest first; the last frame is the page at `at`. */
   frames: Schema.Array(Frame),
-  /** The page at the end of the window, unless the capture left it out. */
+  /** The page at the end of the window, when the capture asked for it. */
   snapshot: Schema.optional(Snapshot),
   /** The page’s events after `from`, up to `at`, oldest first, without the input presentation track. */
   events: Schema.Array(BrowserEvent),
@@ -47,8 +47,12 @@ export interface CaptureOptions {
   readonly since?: Moment | Duration.Input | undefined;
   /** Frames to keep, at least 1, spread over the window and ending with the page now. Defaults to 2. */
   readonly frames?: number | undefined;
-  /** The snapshot's options, or `false` to leave it out. Defaults to 4,000 characters. */
-  readonly snapshot?: SnapshotOptions | false | undefined;
+  /**
+   * Whether to take the page's outline at the end, or its options; `true` means 4,000 characters.
+   * Defaults to `false`: the frames and the timeline carry most moments, while an outline costs a
+   * round trip to the page and can double a moment's tokens.
+   */
+  readonly snapshot?: SnapshotOptions | boolean | undefined;
 }
 
 /** Pick `count` frames spread evenly over `frames`, always including the last. */
@@ -96,14 +100,16 @@ export const capture = Effect.fn("Moment.capture")(function* (
   if (start === undefined)
     return yield* invalid("since must be a moment or a finite duration that is not negative");
 
+  const outline = options.snapshot ?? false;
+
   // The picture and the outline each take a round trip to the page, so they are taken together.
   const { current, snapshot } = yield* Effect.all(
     {
       current: page.currentFrame,
       snapshot:
-        options.snapshot === false
+        outline === false
           ? Effect.void
-          : page.snapshot({ maxChars: 4000, ...options.snapshot }),
+          : page.snapshot({ maxChars: 4000, ...(outline === true ? {} : outline) }),
     },
     { concurrency: 2 },
   );
@@ -132,6 +138,36 @@ export const capture = Effect.fn("Moment.capture")(function* (
 
 const seconds = (moment: Moment, at: number) => `${((at - moment.at) / 1000).toFixed(1)}s`;
 
+const pointOf = (x: number | undefined, y: number | undefined) =>
+  x === undefined || y === undefined ? undefined : `(${Math.round(x)}, ${Math.round(y)})`;
+
+/** A subject in words, such as `button "Play"`; one without a name says where it was. */
+const named = (subject: Subject, point: string | undefined) => {
+  const kind = subject.role ?? subject.tag;
+
+  if (subject.name !== "") return `${kind} ${JSON.stringify(subject.name)}`;
+
+  return point === undefined ? kind : `${kind} at ${point}`;
+};
+
+/**
+ * What an action acted on. Without a subject the action failed before finding it, and a ref it was
+ * given is left out: refs are reused, so the page's outline may give it to something else by now.
+ */
+const acted = (event: Action): string => {
+  const point = pointOf(event.x, event.y);
+
+  if (event.subject === undefined)
+    return event.target === undefined || /\be\d+\b/.test(event.target)
+      ? (point ?? "")
+      : event.target;
+  // A drag's point is where it ended.
+  if (event.to !== undefined)
+    return `${named(event.subject, undefined)} to ${named(event.to, point)}`;
+
+  return named(event.subject, point);
+};
+
 /** The events as lines of text, timed in seconds before the moment. */
 const timeline = (moment: Moment): ReadonlyArray<string> =>
   moment.events.flatMap((event) => {
@@ -144,16 +180,18 @@ const timeline = (moment: Moment): ReadonlyArray<string> =>
         // A navigation that worked also appears as `Navigated`, which covers redirects and in-page moves.
         if (event.ok && ["navigate", "back", "reload"].includes(event.name)) return [];
 
-        const target =
-          event.target ??
-          (event.x === undefined
-            ? ""
-            : `(${Math.round(event.x)}, ${event.y === undefined ? "?" : Math.round(event.y)})`);
-
-        const text = event.text === undefined ? "" : ` ${JSON.stringify(event.text)}`;
+        const target = acted(event);
+        const text = event.text === undefined ? "" : JSON.stringify(event.text);
         const outcome = event.ok ? "" : ` (failed: ${event.error ?? "unknown"})`;
 
-        return [`${when} ${event.name} ${target}${text}${outcome}`.replace(/\s+/g, " ").trim()];
+        const what =
+          event.name === "type" && target !== ""
+            ? `${text} into ${target}`
+            : event.name === "select" && target !== ""
+              ? `${text} in ${target}`
+              : `${target} ${text}`;
+
+        return [`${when} ${event.name} ${what}${outcome}`.replace(/\s+/g, " ").trim()];
       }
       case "Navigated":
         return [`${when} navigated to ${event.url}`];
@@ -167,8 +205,9 @@ const timeline = (moment: Moment): ReadonlyArray<string> =>
   });
 
 /**
- * The moment as one user message: the page's outline, a timeline of its events, and its frames
- * captioned with their times, the last one "the moment". Give a model its task with
+ * The moment as one user message: the page's outline when the moment has one, a timeline of its
+ * events naming what each action acted on, and its frames captioned with their times, the last
+ * one "the moment". Give a model its task with
  * `Prompt.setSystem`, and add what the caller knows about the page as more text.
  */
 export const toPrompt = (moment: Moment): Prompt.Prompt => {
