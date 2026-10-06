@@ -1,72 +1,83 @@
-# Releasing the canonical three-package set
+# Releasing
 
-Publication is not performed by ordinary CI. This workflow prepares three independently published browser packages from this repository's workspace. Effect Agent is published by its own project; `effect-agent-browser` peers on the exact release it was accepted with.
+`effect-browser`, `effect-browserbase` and `effect-browser-human-strokes` are released together,
+at one version, by `.github/workflows/publish.yml`. The workflow runs on a `v<version>` tag on
+`main`, runs `bun run ready`, packs the three packages and publishes them through npm trusted
+publishing: no npm token, and npm signs provenance for each package. Ordinary CI never publishes,
+and preparing or testing a release does not authorize publishing, tagging or changing account
+settings.
 
-The published names are `effect-browser`, `effect-browserbase` and `effect-agent-browser`. This workflow released all three, with provenance, as `0.2.0-beta.0` from tag `v0.2.0-beta.0` (`089a6ea`), `0.2.0-beta.1` from `v0.2.0-beta.1` (`f7b9b7b`), `0.2.0-beta.2` from `v0.2.0-beta.2` (`1fec922`), `0.2.0-beta.3` from `v0.2.0-beta.3` (`fdaa2d2`), `0.2.0-beta.4` from `v0.2.0-beta.4` (`a1c3f1f`), `0.2.0-beta.5` from `v0.2.0-beta.5` (`0c8411d`), `0.2.0-beta.6` from `v0.2.0-beta.6` (`26df73b`), `0.2.0-beta.7` from `v0.2.0-beta.7` (`d63463e`), `0.2.0-beta.8` from `v0.2.0-beta.8` (`5cb3ea2`) and `0.2.0-beta.9` from `v0.2.0-beta.9` (`976d316`). The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`; `v0.1.0-beta.103` was tagged but never published. Repository changes do not register names or perform first-publication account setup. Keep historical prepared-state and journal refs intact for recovery of the releases that created them.
+## One-time setup
 
-## Configure npm trusted publishing
+The owner does this once, in npm and GitHub settings.
 
-In each package's npm settings, configure the following exact identity:
+1. **Reserve `effect-browser-human-strokes`.** Done: npm can only trust a publisher for a name
+   that exists, so the name was published by hand as a placeholder, `0.0.0-reserved.0`, like
+   `effect-browser`'s. npm points `latest` at a name's first version, so `latest` stays on the
+   placeholder until a stable release.
 
-| Setting              | Value                             |
-| -------------------- | --------------------------------- |
-| Provider             | GitHub Actions                    |
-| Organization or user | `mannyc2`                         |
-| Repository           | `effect-agent-browserbase`        |
-| Workflow filename    | `publish.yml` (not the full path) |
-| Environment          | `npm`                             |
-| Allowed action       | Direct `npm publish`              |
+2. **Trust the workflow on npm.** For each of the three packages, open the package's
+   **Settings → Trusted publishing** on npmjs.com, choose **GitHub Actions** and enter:
 
-New npm trusted-publisher configurations default to staged publishing. This workflow uses direct `npm publish`, so explicitly allow that action; `npm stage publish` approval is a different flow, not something this workflow silently substitutes. npm configuration is not validated when saved—successful OIDC authentication remains unverified until an authorized publish occurs.
+   | Field                | Value                      |
+   | -------------------- | -------------------------- |
+   | Organization or user | `mannyc2`                  |
+   | Repository           | `effect-agent-browserbase` |
+   | Workflow filename    | `publish.yml`              |
+   | Environment name     | `npm`                      |
+   | Allowed actions      | `npm publish`              |
 
-Use a GitHub-hosted runner. The native ts-release host pins Node 22.22.2, supported by ts-release 0.4.1 and its Sigstore dependencies. It exchanges GitHub OIDC identity for a package-scoped npm credential and signs/verifies provenance through the native provider; no npm publish subprocess is involved. The emitted package's repository metadata matches this repository. The library acceptance toolchain remains Node 24.14.1 and Bun 1.4.2.
+   The workflow publishes with `npm publish`, so tick it under allowed actions: an entry created
+   after 3 September 2026 allows only `npm stage publish` until you do. `effect-browser` and
+   `effect-browserbase` were published by this workflow file in 0.2, so they should already have
+   this entry; check that it matches. npm does not test the entry when it is saved, so the first
+   release is the test.
 
-Create and protect the GitHub environment **npm** with an approval rule and version-tag restrictions (`v*`). Protect release tags against unauthorized creation or reassignment. Do not store an npm publish token: the publish job requests a short-lived OIDC credential. No repository/environment settings are created by this source change.
+3. **Protect the `npm` environment.** In the repository's **Settings → Environments**, the `npm`
+   environment (it exists from 0.2) should have the owner as a required reviewer, and its
+   deployment branches and tags limited to the tag pattern `v*`. Only the publish job uses it, so
+   a dry run is never held for approval.
 
-Leave repository variable **NPM_PUBLISH_ENABLED** unset until the configuration and intended package identity are reviewed. Only then set it to the literal string `true`. After verifying trusted publishing, restrict traditional token publishing and revoke obsolete automation tokens in npm settings.
+4. **Clean up after the first release.** Once a release has gone through, set each package's
+   **Publishing access** to "Require two-factor authentication and disallow tokens", and revoke
+   any npm automation tokens. The repository variable `NPM_PUBLISH_ENABLED` is no longer read and
+   can be deleted.
 
-Official references: [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/), [npm provenance](https://docs.npmjs.com/generating-provenance-statements/), and [GitHub Actions security](https://docs.github.com/en/actions/reference/security/secure-use).
+## Cut a release
 
-## Prepare a release
+1. In one PR, set the same `version` in all three `packages/*/package.json`, move the
+   `effect-browser` peer ranges in `effect-browserbase` and `effect-browser-human-strokes` if the
+   release needs the new version, and run `bun install --ignore-scripts` so `bun.lock` agrees.
+2. Once it is merged, tag the merge commit and push the tag:
 
-Update all three coordinated package versions in one PR, and run `bun install --ignore-scripts` so `bun.lock` records them; a frozen install refuses a lockfile that disagrees. Keep the accepted Effect/AgentRuntime/Playwright compatibility pins unless the PR is explicitly upgrading them. The three owned packages form their own exact fixed release group, and the adapter's `effect-agent` peer is the exact version its development dependency installs; both are enforced.
+   ```sh
+   git fetch origin
+   git tag v0.3.0-beta.0 origin/main
+   git push origin v0.3.0-beta.0
+   ```
 
-After that PR is merged and acceptance passes, create an immutable `v<package-version>` tag on its commit. This document describes the maintainer release procedure; neither creating a tag nor publishing is part of automated maintenance work.
+3. Dry run, then publish:
 
-Run **npm release** manually on that **tag**. Branch dispatches, tags not reachable from `main`, and tags that do not exactly match the package version are rejected. Tag-scoped execution also ensures provenance refers to the released source commit rather than an unrelated current `main` commit. One dispatch with `publish=true` is the whole release: the protected `npm` environment's approval, which waits until the verified packages exist, is the deliberate human checkpoint. `publish=false` remains available to see that evidence without being asked to approve anything.
+   ```sh
+   gh workflow run publish.yml --ref v0.3.0-beta.0
+   gh workflow run publish.yml --ref v0.3.0-beta.0 -f dry-run=false
+   ```
 
-The workflow first looks for evidence that already exists. When a successful `Library CI` run of `main` (a push, the nightly schedule, or a manual dispatch) ran the **full** profile on exactly the tagged commit, and its acceptance and release-tooling artifacts are still retained (14 days), the `reuse` job downloads them and re-derives what CI recorded: the full stage list, the source commit, the release-set digest and its verification, and the release-tooling archive's hash. Those exact archives are then what gets published, in minutes. Pull-request runs never qualify, because they test a merge candidate rather than the tag. Neither does the focused `library` or `docs` run an ordinary merge gets: it uploads evidence under the same name, so a run counts only when its acceptance job reached the step that records the full release-set digest. Reuse can only shorten a release. If the lookup, a download or the verification fails, the full gate below runs instead. To make a release fast, tag a commit that already has such a run: the nightly one, or dispatch **Library CI** on `main` with `profile: full` before tagging.
+   The dry run checks the tag, runs `bun run ready`, packs, and runs `npm publish --dry-run` on
+   each archive. With `dry-run=false` the publish job then waits for approval in the `npm`
+   environment and publishes the archives the build job checked.
 
-Otherwise the workflow runs full acceptance through `ci.yml` for the tag, which retains measured timings for every stage. It builds all three packages, packs each once, verifies the exact archives in five clean consumers, and performs `npm publish --dry-run --ignore-scripts` for each archive. Resources-only, Chromium, hosted-browser, Chromium-Agent and Browserbase-Agent consumers run on the pinned Node and Bun versions; all public declarations and migrated examples are checked with `skipLibCheck:false`. There is no legacy consumer or compatibility export fallback. It retains the receipt, source, logs, decoded video and SHA-256 checksums. A dry-run does not validate npm OIDC configuration or claim publication.
+The tag must be on `main` and name the version all three packages carry. A prerelease
+`x.y.z-alpha.N`, `-beta.N` or `-rc.N` goes to the dist-tag of that name; only a plain `x.y.z` goes
+to `latest`. Packages publish in dependency order, and a version already on npm is skipped, so
+dispatching the same tag again finishes an interrupted release. A published version cannot be
+replaced; fix a bad one with a new version.
 
-## Publish deliberately
+## History
 
-Run the workflow on the immutable tag with `publish=true` after enabling `NPM_PUBLISH_ENABLED`. The reused or freshly built evidence above is what gets published; the protected `npm` environment then gates the only job with `id-token: write` and `contents: write`. The latter permission is required to retain prepared content and append the release journal in this repository. Configure branch rules to forbid deletion and replacement of `ts-release-prepared/*` and non-fast-forward updates/deletion of `ts-release-journal/*`, while allowing the release workflow to create the former and append the latter. No repository settings are changed by this PR.
-
-That job downloads the exact immutable acceptance and release-tooling artifact IDs returned by its own successful build. The host archive is verified against the build's SHA-256 before extraction; its frozen dependencies were installed with Bun and `--ignore-scripts` in the read-only job. There is no dependency install, build or lifecycle execution in the privileged job.
-
-The application still verifies the successful build's whole **release-set receipt SHA-256**, source commit, coordinated versions, package identities, SHA-256 and SHA-512 of every archive, exports and dependency boundaries. A missing, reordered, mixed-source, mixed-version or corrupted member rejects the set. Native ts-release independently inspects the npm archives and owns the content. It creates GitHub Actions Sigstore provenance for each package, finalizes the Bundle, and authors a native npm Plan with both the provider and adapter depending on the shared browser package. Exact published dependencies are never rewritten to local paths.
-
-Before any npm upload, the complete prepared set—the native Bundle and Plan plus their content-addressed receipt, archives and signed provenance—is committed once to `ts-release-prepared/<source-sha>`. The fixed snapshot has no duplicate archive copies or separate source metadata; source identity belongs to the native provenance intents. Creating that ref is conditional on absence; an existing preparation is restored, never replaced. ts-release's `openGitJournal` stores dispatch and observation history on a deterministic `ts-release-journal/<hash>` branch. Credentials stay in the live host, not the retained files or journal.
-
-`alpha.N`, `beta.N` and `rc.N` versions use their corresponding dist-tag; a stable `x.y.z` release uses `latest`. A prerelease can never fall through to `latest`. npm sets `latest` on a name's first publication, so until a stable release it stays at `0.0.0-reserved.0` for `effect-browser` and `effect-agent-browser` and at `0.1.0-beta.102` for `effect-browserbase`. Moving it earlier is an owner's manual `npm dist-tag add <name>@<version> latest`, never this workflow. This is an ESM distribution with `.d.mts` declarations; it does not claim CommonJS support.
-
-The workflow does not bump versions, push release tags, create GitHub releases, deploy documentation or allocate Browserbase sessions. Its only Git writes are the prepared-state and journal refs. There is no atomic three-package registry transaction.
-
-## Continue an interrupted release
-
-Dispatch the same immutable tag with `publish=true` again. The retained full run is normally reused again, and publication restores the **original** prepared bytes and Plan from Git rather than signing or repacking a replacement. A fresh local journal cache reconnects to the same remote history. Exact registry evidence can satisfy a previous upload; a conflicting integrity blocks. After a dispatch starts, an absent version alone cannot authorize a resend. Provider and adapter publication remain blocked until their shared-browser dependency is satisfied.
-
-The workflow invokes the shipped ts-release CLI with `src/application.js` and a JSON input; the CLI owns interruption, reports and exit codes. For observation with that same workload identity, set `authorize: false` in the input and invoke `node node_modules/.bin/ts-release --observe src/application.js release-input.json`. Disabling authorization also prevents creating a new preparation when none exists.
-
-The workflow retains the CLI’s `publication-report.json` output as an Actions artifact when the engine returns a report. Interruption can prevent a report from being written; the Git journal remains the recovery record. Retain both sets of Git refs indefinitely for releases that may need recovery. Do not delete state, move the version tag, regenerate provenance or use the retired direct publisher to clear uncertainty. Resolve the destination evidence explicitly, or publish a reviewed new version.
-
-The integration tests exercise the actual native npm provider and real Git journal against offline registry responses and local bare remotes, including loss of a publication response, deleting the original local preparation, and restoring its bytes and journal on fresh runners. They do not claim to exercise this repository's live npm permissions, GitHub OIDC exchange or Sigstore signing. Those supported native paths run only during a separately authorized release.
-
-## Package contents and evidence
-
-`tools/packages.mjs` inventories exactly the shared browser, Browserbase and Agent adapter packages in dependency order. Source manifests own their explicit export maps; the adapter is restricted to `.`, `./adapter`, `./browser-use`, and `./tools`. The shared browser has no provider/framework dependency; Browserbase has no framework dependency; the Agent adapter has no Browserbase runtime dependency. Public declarations cannot expose Playwright or an undeclared SDK.
-
-`tools/package-release.mjs` is the single staging path. It produces three dist-only archives and **`release-set.json` (schema version 2)**, with one source SHA, coordinated package version, framework version, release channel, and all member identities/hashes. No old `release.json` reader or success fallback remains. Staging refuses existing output or partial-set reuse; an incomplete packing attempt never writes a success receipt. Preserve failed output for diagnosis, then use a fresh output directory.
-
-`tools/verify-release.mjs` checks the whole source-bound set. `tools/publish-release.mjs` remains its dependency-free dry-run caller; it no longer authorizes publication. `tools/release` is the only publisher and pins `@mannyc1/ts-release` and `@mannyc1/ts-release-npm` to 0.4.1 with Effect 4.0.0-rc.115. That release carries the engine's own fixes for npm's OIDC exchange response and for npm's acknowledgement of a publish (HTTP 200, with public visibility following asynchronously), so a release completes in one dispatch and no patched dependency remains. All remain host-only repository tooling; the OIDC job installs no dependencies and executes no package lifecycle scripts. `tools/packed-consumers.mjs` stages only approved test/example dependency closures, never production source or workspace aliases, and verifies installed member bytes against their candidate archives.
+0.2 was released by a different path: `tools/release`, built on ts-release, which staged the
+archives in five packed consumers and kept recovery records on the `ts-release-prepared/*` and
+`ts-release-journal/*` branches. Keep those branches. It published `effect-browser`,
+`effect-browserbase` and `effect-agent-browser` from `0.2.0-beta.0` to `0.2.0-beta.9`, the last
+from tag `v0.2.0-beta.9` (`976d316`). Before that, `effect-browserbase` and
+`effect-agent-browserbase` ended at `0.1.0-beta.104`. The code is in Git history at `1ed8259`.
