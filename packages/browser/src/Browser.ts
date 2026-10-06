@@ -39,9 +39,10 @@ import {
 import { CaptureCalibration } from "./Frame.ts";
 import * as Startup from "./internal/calibration.ts";
 import * as BrowserClock from "./internal/clock.ts";
+import * as PageImpl from "./internal/page.ts";
 import * as Timeline from "./internal/timeline.ts";
 import * as Motion from "./Motion.ts";
-import * as Page from "./Page.ts";
+import type * as Page from "./Page.ts";
 
 export interface Options {
   /** Move the pointer along curved paths and type with human pacing. Defaults to false. */
@@ -175,7 +176,7 @@ export const make = Effect.fn("Browser.make")(function* (
             (error) =>
               new BrowserError({
                 operation: "calibrate",
-                reason: Page.reasonOf(error.cause),
+                reason: PageImpl.reasonOf(error.cause),
                 dispatched: false,
               }),
           ),
@@ -202,7 +203,7 @@ export const make = Effect.fn("Browser.make")(function* (
     Effect.tryPromise({
       try: run,
       catch: (cause) =>
-        new BrowserError({ operation, reason: Page.reasonOf(cause), dispatched: false }),
+        new BrowserError({ operation, reason: PageImpl.reasonOf(cause), dispatched: false }),
     });
 
   const releaseNative = (run: () => Promise<unknown>) =>
@@ -244,7 +245,7 @@ export const make = Effect.fn("Browser.make")(function* (
           yield* Effect.addFinalizer(() => releaseNative(() => cdp.detach()));
           const id = `p${++counter}`;
 
-          const page = yield* Page.make({
+          const page = yield* PageImpl.make({
             id,
             playwright,
             cdp,
