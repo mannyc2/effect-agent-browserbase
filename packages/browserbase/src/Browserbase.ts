@@ -47,7 +47,14 @@ const holdContext = (id: string) =>
 
     writers.set(id, lock);
 
-    return Effect.acquireRelease(lock.take(1), () => lock.release(1), { interruptible: true });
+    // A second writer waits here for the first one's whole session and the save after it.
+    return Effect.acquireRelease(
+      lock
+        .take(1)
+        .pipe(Effect.withSpan("Browserbase.holdContext", {}, { captureStackTrace: false })),
+      () => lock.release(1),
+      { interruptible: true },
+    );
   });
 
 const ended = (session: Session) => session.status !== "PENDING" && session.status !== "RUNNING";
@@ -71,6 +78,11 @@ const release = (client: Service, id: string, settle: Duration.Duration | undefi
             }),
             Effect.andThen(Effect.sleep(settle)),
           ),
+    ),
+    Effect.withSpan(
+      "Browserbase.release",
+      { attributes: { settle: settle !== undefined } },
+      { captureStackTrace: false },
     ),
   );
 

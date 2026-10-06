@@ -68,6 +68,7 @@ export const open = Effect.fn("Cdp.open")(function* (
       dispatched: false,
     });
 
+  // The endpoint is often a credential, so the connect span names no part of it.
   const connected = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: () =>
@@ -76,7 +77,7 @@ export const open = Effect.fn("Cdp.open")(function* (
           ...(options.headers === undefined ? {} : { headers: { ...options.headers } }),
         }),
       catch: (cause) => failed(cause, timeout),
-    }),
+    }).pipe(Effect.withSpan("Cdp.connect", {}, { captureStackTrace: false })),
     (browser) => Effect.tryPromise(() => browser.close()).pipe(Effect.ignore),
   );
 
