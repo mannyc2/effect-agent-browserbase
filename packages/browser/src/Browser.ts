@@ -16,7 +16,7 @@ import {
   Option,
   Queue,
   Ref,
-  type Scope,
+  Scope,
   Semaphore,
   type Stream,
 } from "effect";
@@ -31,6 +31,8 @@ import {
   PageOpened,
   type RecordedEvent,
 } from "./BrowserEvent.ts";
+import { CaptureCalibration } from "./Frame.ts";
+import * as Startup from "./internal/calibration.ts";
 import * as Timeline from "./internal/timeline.ts";
 import * as Page from "./Page.ts";
 
@@ -53,6 +55,9 @@ export interface Options {
   readonly initScripts?: ReadonlyArray<string> | undefined;
 }
 
+/** Providers attest freshness only immediately after allocating the context or session. */
+export type ContextOrigin = "fresh" | "borrowed";
+
 export interface EventOptions {
   /** Resume after this sequence; 0 replays from the beginning if it is still retained. */
   readonly after?: number | undefined;
@@ -66,6 +71,8 @@ export interface Service {
   readonly now: Effect.Effect<number>;
   /** The Playwright context, for anything this API does not cover. Never give it to a model. */
   readonly context: BrowserContext;
+  /** Measured on a private startup page only when the provider attested a fresh context. */
+  readonly captureCalibration: Option.Option<CaptureCalibration>;
   /** Open pages in the order they opened. */
   readonly pages: Effect.Effect<ReadonlyArray<Page.Page>>;
   /** The first open page, opening one when there is none. */
@@ -85,10 +92,15 @@ export class Browser extends Context.Service<Browser, Service>()("effect-browser
  */
 export const make = Effect.fn("Browser.make")(function* (
   context: BrowserContext,
-  info: { readonly id: string; readonly provider: string },
+  info: {
+    readonly id: string;
+    readonly provider: string;
+    readonly contextOrigin?: ContextOrigin | undefined;
+  },
   options: Options = {},
 ) {
   const clock = yield* Clock.Clock;
+  const ownerScope = yield* Scope.Scope;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   const policyTimeout = Duration.fromInput(options.policyTimeout ?? Duration.minutes(5));
 
@@ -112,6 +124,13 @@ export const make = Effect.fn("Browser.make")(function* (
     policyTimeout: policyTimeout.value,
   };
 
+  if (!Number.isSafeInteger(settings.frameHistory) || settings.frameHistory < 1)
+    return yield* new BrowserError({
+      operation: "make",
+      reason: new InvalidRequest({ detail: "frameHistory must be a positive safe integer" }),
+      dispatched: false,
+    });
+
   const eventHistory = options.eventHistory ?? 4096;
 
   if (!Number.isSafeInteger(eventHistory) || eventHistory < 1)
@@ -120,6 +139,26 @@ export const make = Effect.fn("Browser.make")(function* (
       reason: new InvalidRequest({ detail: "eventHistory must be a positive safe integer" }),
       dispatched: false,
     });
+
+  // A caller's scripts or existing tabs can react to probe input. Providers opt fresh allocations
+  // into this private phase before scripts, page registration or the public service exist.
+  const captureCalibration =
+    info.contextOrigin === "fresh"
+      ? Option.some(
+          new CaptureCalibration(
+            yield* Startup.owned(context, clock).pipe(
+              Effect.mapError(
+                (error) =>
+                  new BrowserError({
+                    operation: "calibrate",
+                    reason: Page.reasonOf(error.cause),
+                    dispatched: false,
+                  }),
+              ),
+            ),
+          ),
+        )
+      : Option.none<CaptureCalibration>();
 
   const timeline = Timeline.make(eventHistory);
 
@@ -139,6 +178,14 @@ export const make = Effect.fn("Browser.make")(function* (
       catch: (cause) =>
         new BrowserError({ operation, reason: Page.reasonOf(cause), dispatched: false }),
     });
+
+  const releaseNative = (run: () => Promise<unknown>) =>
+    Effect.tryPromise(run).pipe(
+      Effect.interruptible,
+      Effect.timeoutOrElse({ duration: Duration.seconds(1), orElse: () => Effect.void }),
+      Effect.provideService(Clock.Clock, clock),
+      Effect.ignore,
+    );
 
   const register = (playwright: PlaywrightPage) =>
     registering.withPermits(1)(
@@ -164,7 +211,10 @@ export const make = Effect.fn("Browser.make")(function* (
           publish,
           pointer,
           inputLock,
-        });
+        }).pipe(
+          Effect.provideService(Scope.Scope, ownerScope),
+          Effect.onError(() => releaseNative(() => cdp.detach())),
+        );
 
         registry.set(playwright, page);
         playwright.on("framenavigated", (frame) => {
@@ -221,7 +271,10 @@ export const make = Effect.fn("Browser.make")(function* (
   const newPage = (url?: string) =>
     Effect.gen(function* () {
       const playwright = yield* native("newPage", () => context.newPage());
-      const page = yield* register(playwright);
+
+      const page = yield* register(playwright).pipe(
+        Effect.onError(() => releaseNative(() => playwright.close())),
+      );
 
       // A rejected or interrupted navigation must not leave the newly allocated blank tab behind.
       if (url !== undefined) yield* page.goto(url).pipe(Effect.onError(() => page.close));
@@ -232,6 +285,7 @@ export const make = Effect.fn("Browser.make")(function* (
   const service: Service = {
     id: info.id,
     provider: info.provider,
+    captureCalibration,
     now: Effect.sync(now),
     context,
     pages,

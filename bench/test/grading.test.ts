@@ -70,34 +70,47 @@ const describeWith = (
 ) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const page = yield* browser.page;
 
     const frameDelayMillis = options.frameDelayMillis ?? 0;
 
     if (frameDelayMillis > 0) {
-      const screencast = page.playwright.screencast;
-      const start = screencast.start.bind(screencast);
+      const context = browser.context;
+      const createSession = context.newCDPSession.bind(context);
       const pending = new Set<ReturnType<typeof setTimeout>>();
 
-      screencast.start = (options) =>
-        start({
-          ...options,
-          onFrame: (frame) => {
-            const timer = setTimeout(() => {
-              pending.delete(timer);
-              options?.onFrame?.(frame);
-            }, frameDelayMillis);
+      context.newCDPSession = async (target) => {
+        const cdp = await createSession(target);
 
-            pending.add(timer);
-          },
-        });
+        const emitter = cdp as typeof cdp & {
+          emit(event: string | symbol, ...args: ReadonlyArray<unknown>): boolean;
+        };
+
+        const emit = emitter.emit.bind(emitter);
+
+        emitter.emit = (event, ...args) => {
+          if (event !== "Page.screencastFrame") return emit(event, ...args);
+
+          const timer = setTimeout(() => {
+            pending.delete(timer);
+            emit(event, ...args);
+          }, frameDelayMillis);
+
+          pending.add(timer);
+
+          return true;
+        };
+
+        return cdp;
+      };
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          screencast.start = start;
+          context.newCDPSession = createSession;
           for (const timer of pending) clearTimeout(timer);
         }),
       );
     }
+
+    const page = yield* browser.page;
 
     const prompts: Array<Prompt.Prompt> = [];
     const histories: Array<ReadonlyArray<Frame>> = [];
@@ -143,6 +156,13 @@ const describeWith = (
     Effect.scoped,
     Effect.provide(Chromium.layer({ frameHistory: options.frameHistory ?? 1200 })),
   );
+
+const paintTime = (frame: Frame): number => {
+  if (frame.timing._tag !== "BrowserPaint")
+    throw new Error("benchmark evidence requires a native browser paint");
+
+  return frame.timing.timestamp;
+};
 
 const pictures = (prompt: Prompt.Prompt) =>
   prompt.content.flatMap((message) =>
@@ -292,13 +312,13 @@ describe("understanding evidence", () => {
         if (earlier === undefined || later === undefined)
           throw new Error("the selected frame sequence is incomplete");
         // One cascade lasts 1,800 ms; a larger gap could conceal an entire paying cascade.
-        assert.isAbove(later.timestamp, earlier.timestamp);
-        assert.isAtMost(later.timestamp - earlier.timestamp, 1900);
+        assert.isAbove(paintTime(later), paintTime(earlier));
+        assert.isAtMost(paintTime(later) - paintTime(earlier), 1900);
       }
       const final = selected.at(-1);
 
       if (final === undefined) throw new Error("the final description image is missing");
-      assert.isAtLeast(final.timestamp, frameAfter);
+      assert.isAtLeast(paintTime(final), frameAfter);
 
       // Timestamp labels come from the selected Moment frames, not the whole retained history.
       const ages = [...textOf(prompt).matchAll(/^(-[\d.]+)s:$/gm)].map(
@@ -351,8 +371,8 @@ describe("understanding evidence", () => {
 
       if (final === undefined)
         throw new Error("the final description image is not a captured frame");
-      assert.isTrue(history.some((frame) => frame.timestamp < frameAfter));
-      assert.isAtLeast(final.timestamp, frameAfter);
+      assert.isTrue(history.some((frame) => paintTime(frame) < frameAfter));
+      assert.isAtLeast(paintTime(final), frameAfter);
     }),
   );
 
@@ -378,7 +398,7 @@ describe("understanding evidence", () => {
 
         if (final === undefined)
           throw new Error("the final description image is not a captured frame");
-        assert.isAtLeast(final.timestamp, frameAfter);
+        assert.isAtLeast(paintTime(final), frameAfter);
         assert.include(textOf(prompt), "click");
 
         const lastClick = events.findLast(

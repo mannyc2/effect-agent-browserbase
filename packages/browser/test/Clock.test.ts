@@ -107,7 +107,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         if (frame === undefined) return;
         assert.strictEqual(frame.receivedAt, 5000);
         // CDP paint time stays in its separate epoch domain.
-        assert.isAbove(frame.timestamp, 1_000_000_000_000);
+        assert.strictEqual(frame.timing._tag, "BrowserPaint");
+        assert.isAbove(frame.timestamp ?? 0, 1_000_000_000_000);
+        assert.closeTo(frame.hostTime, 5000, 1000);
         time.wall -= 3_600_000;
         time.monotonic = 5500;
         const callerTime = { wall: 1_800_000_000_000, monotonic: 900_000 };
@@ -132,7 +134,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(later.at, 7000);
         assert.isEmpty(later.events);
         assert.strictEqual(later.frames[0]?.receivedAt, 7000);
-        assert.strictEqual(later.frames[0]?.timestamp, callerTime.wall);
+        assert.strictEqual(later.frames[0]?.timestamp, undefined);
+        assert.strictEqual(later.frames[0]?.timing._tag, "Screenshot");
+        assert.strictEqual(later.frames[0]?.hostTime, 7000);
       }),
   );
 });

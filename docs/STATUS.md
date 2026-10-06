@@ -20,6 +20,10 @@
 - Humanized scrolling to off-screen targets, bounded fallback and approval revalidation; typing
   near 75 WPM with overlapping holds, slower word starts and opt-in corrected prose slips.
   Sampled presentation pauses retain the functional navigation wait.
+- Browser paint mapped onto the host clock with explicit uncertainty, timestamped mouse and raw
+  text-key input, startup capture calibration for newly owned sessions, and per-page capture
+  counters for filtering, paint gaps and observed subscriber loss. Screenshot timing has its own
+  provenance; borrowed pages receive no probe input.
 - `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
@@ -38,7 +42,7 @@ build. Until the owner has agreed it, no 0.2 PR is closed and no branch is delet
 
 The larger pieces left for later:
 
-- recording to video files, and capture-rate measurement;
+- recording to video files;
 - operator handoff, reconnecting to a kept-alive session, extensions and uploads;
 - the paid hosted checks;
 - an install smoke test of each packed package before a release.

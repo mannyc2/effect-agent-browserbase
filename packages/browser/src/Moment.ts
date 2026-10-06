@@ -10,13 +10,13 @@
  *
  * @since 0.3.0
  */
-import { Clock, Effect, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { type AiError, LanguageModel, Prompt } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
 import { BrowserEvent, TrackEvent } from "./BrowserEvent.ts";
-import { Frame } from "./Frame.ts";
+import { Frame, Screenshot } from "./Frame.ts";
 import * as Usage from "./internal/usage.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot } from "./Snapshot.ts";
@@ -105,20 +105,28 @@ export const capture = Effect.fn("Moment.capture")(function* (
   const browser = yield* Browser;
   const at = yield* browser.now;
   const since = at - (options.windowMillis ?? 5000);
-  const recent = (yield* page.recentFrames).filter((frame) => frame.receivedAt >= since);
+
+  const recent = (yield* page.recentFrames).filter(
+    (frame) => frame.hostTime >= since && frame.hostTime <= at,
+  );
+
   const snapshot = yield* page.snapshot({ maxChars: options.snapshotChars ?? 4000 });
   let frames = spread(recent, options.frames ?? 2);
 
   if (frames.length === 0) {
-    const image = yield* page.screenshot();
+    const startedAt = yield* browser.now;
+    const image = yield* page.screenshot({ fresh: true });
+    const finishedAt = yield* browser.now;
 
     frames = [
       new Frame({
         page: page.id,
         data: image.data,
-        // A screenshot has no browser paint timestamp; keep its wall-time fallback separate.
-        timestamp: yield* Clock.currentTimeMillis,
-        receivedAt: at,
+        timing: new Screenshot({
+          hostTime: startedAt + (finishedAt - startedAt) / 2,
+          uncertaintyMillis: Math.max(0, (finishedAt - startedAt) / 2),
+        }),
+        receivedAt: finishedAt,
         width: image.width,
         height: image.height,
       }),
@@ -184,7 +192,7 @@ const prompt = (moment: Moment, instructions: string | undefined): Prompt.Prompt
             text:
               index === last
                 ? "The moment:"
-                : `${((frame.receivedAt - moment.at) / 1000).toFixed(1)}s:`,
+                : `${((frame.hostTime - moment.at) / 1000).toFixed(1)}s:`,
           }),
           Prompt.makePart("file", { mediaType: "image/jpeg", data: frame.data }),
         ]),
