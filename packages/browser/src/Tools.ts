@@ -4,17 +4,30 @@
  * The model reads a page two ways. A snapshot is a text outline whose controls carry refs such as
  * `e12`. A screenshot is a picture whose pixel coordinates are viewport coordinates. It acts by
  * ref when a control has one, and by point when it does not, as on a canvas game or a chart.
- * Actions answer with short receipts. `Agent` runs them in batches, halts on the first failure
- * and appends one observation of the current tab after each turn. Callers composing their own
- * loop can observe `page` once their batch ends.
+ * Actions answer with short receipts. A turn's calls run as a `batch`: in order, stopping at the
+ * first failure. `Agent` does that and appends one observation of the current tab after each
+ * turn; a caller composing its own loop spreads a fresh `batch` into each model call, then
+ * observes `page` and drains `takeZooms`.
  *
  * @since 0.3.0
  */
-import { Duration, Effect, Option, Schema, Semaphore } from "effect";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Option,
+  Ref,
+  Result,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
+import * as Url from "./internal/url.ts";
 import * as Page from "./Page.ts";
 
 const ref = Schema.optional(Schema.String).annotate({
@@ -46,7 +59,14 @@ export const Navigate = tool("browser_navigate", "Open a URL in the current tab.
   url: Schema.String,
 });
 
-export const Back = tool("browser_back", "Go back to the previous page in the current tab.", {});
+// Without parameters, not with `Schema.Struct({})`: an empty struct's JSON Schema has no object
+// root, which OpenAI's structured outputs reject for the whole request.
+export const Back = Tool.make("browser_back", {
+  description: "Go back to the previous page in the current tab.",
+  success: Schema.String,
+  failure: Schema.String,
+  failureMode: "return",
+});
 
 export const Snapshot = tool(
   "browser_snapshot",
@@ -63,7 +83,7 @@ export const Snapshot = tool(
 
 export const Zoom = tool(
   "browser_zoom",
-  "Read a small viewport region at full CSS resolution. Its image follows the batch; click coordinates stay in viewport space. At most 8 crops per observation.",
+  "Crop a small viewport region at the viewport's own CSS pixel scale, without magnification. Its image follows the batch; click coordinates stay in viewport space. At most 8 crops per observation.",
   Page.Region.fields,
 );
 
@@ -197,11 +217,111 @@ export interface Options {
   readonly snapshotChars?: number | undefined;
 }
 
+/**
+ * Options for one `generateText` call, from `LanguageModel` or `Chat`: spread them into the call.
+ * `effect/ai` runs a response's tool calls concurrently unless `concurrency` is 1, so the toolkit
+ * and that setting travel together.
+ */
+export interface Batch<T extends Record<string, Tool.Any>> {
+  readonly toolkit: Toolkit.WithHandler<T>;
+  readonly concurrency: 1;
+}
+
+/**
+ * One turn of tool calls over a toolkit with handlers. Calls run one at a time in the order the
+ * model made them. The first failure, or a successful call named in `endsBatch`, stops the batch:
+ * every later call answers as not executed. Build a new batch for each turn.
+ */
+export function batch<T extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<T>,
+  options?: { readonly endsBatch?: ReadonlyArray<keyof T & string> | undefined },
+): Effect.Effect<Batch<T>>;
+
+export function batch<T extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<T>,
+  options: { readonly endsBatch?: ReadonlyArray<keyof T & string> | undefined } = {},
+) {
+  const ends = new Set<string>(options.endsBatch ?? []);
+
+  return Effect.map(Ref.make(Option.none<string>()), (halted) => ({
+    concurrency: 1 as const,
+    toolkit: {
+      tools: toolkit.tools,
+      // With concurrency 1, each call starts after the previous one's final result.
+      handle: <Name extends keyof T>(
+        name: Name,
+        params: Tool.ParametersEncoded<T[Name]>,
+        id?: string,
+      ) =>
+        Effect.map(
+          Ref.get(halted),
+          Option.match({
+            onSome: (reason) => Stream.succeed(failedResult("Not executed: " + reason)),
+            onNone: () =>
+              toolkit.handle(name, params, id).pipe(
+                Stream.unwrap,
+                Stream.catchCause((cause) => failedCall(toolkit.tools[name], cause)),
+                Stream.tap((result) =>
+                  result.preliminary
+                    ? Effect.void
+                    : result.isFailure
+                      ? Ref.set(halted, Option.some(`${String(name)} failed.`))
+                      : ends.has(String(name))
+                        ? Ref.set(halted, Option.some(`${String(name)} ended the batch.`))
+                        : Effect.void,
+                ),
+              ),
+          }),
+        ),
+    },
+  }));
+}
+
+const failedResult = (reason: string) => {
+  const result: typeof Tool.ExecutionFailure.Type = { type: "execution-interrupted", reason };
+
+  return { result, encodedResult: result, isFailure: true, preliminary: false };
+};
+
+/**
+ * A tool with failure mode "error" fails its stream instead of returning a result. Answer it
+ * with its failure encoded by the tool's own schema, saying whether the handler could have run:
+ * rejected parameters never reach it. Defects and interruptions stay what they are.
+ */
+const failedCall = <Called extends Tool.Any, E>(tool: Called, cause: Cause.Cause<E>) => {
+  const failure = Cause.findFail(cause);
+
+  if (Result.isFailure(failure)) return Stream.failCause(failure.failure);
+  const { error } = failure.success;
+
+  const rejected =
+    Context.get(Cause.reasonAnnotations(failure.success), Toolkit.FailureOrigin) === "parameters";
+
+  return Stream.fromEffect(
+    Schema.encodeUnknownEffect(Tool.failureResultSchema(tool))(error).pipe(
+      Effect.map((encoded) => JSON.stringify(encoded)),
+      // A failure outside the declared schema still reaches the model, unencoded.
+      Effect.orElseSucceed(() => String(error)),
+      Effect.map((detail) =>
+        failedResult(
+          (rejected
+            ? "Not executed: its parameters are invalid: "
+            : "The call failed and may have taken effect: ") + detail,
+        ),
+      ),
+    ),
+  );
+};
+
 export interface Tools {
   readonly handlers: Toolkit.HandlersFrom<BrowserTools>;
-  /** The toolkit with its handlers, for `LanguageModel.generateText` or `Chat`. */
-  readonly toolkit: Toolkit.WithHandler<BrowserTools>;
-  /** The tab the tools act on. */
+  /** A fresh `batch` of the browser tools for one turn, to spread into a `generateText` call. */
+  readonly batch: Effect.Effect<Batch<BrowserTools>>;
+  /**
+   * The tab the tools act on, after following any tab that opened since they last looked. Observe
+   * it after each batch: actions run only on the tab this last returned, so after a tab opens,
+   * the current one closes or `browser_tabs` switches, they refuse until it is returned here.
+   */
   readonly page: Effect.Effect<Page.Page, BrowserError>;
   /** Drain the requested crops, once per batch, to include beside the observation. */
   readonly takeZooms: Effect.Effect<ReadonlyArray<Page.Zoom>>;
@@ -218,6 +338,21 @@ const target = (op: {
       ? Effect.succeed<Page.Target>({ x: op.x, y: op.y })
       : Effect.fail("give a ref from the snapshot, or x and y from a screenshot");
 
+/** Where a model may go: web addresses, inline data and a blank page, never local files. */
+const destination = (input: string) => {
+  const url = Url.parse(input);
+
+  return url !== null &&
+    (url.protocol === "http:" ||
+      url.protocol === "https:" ||
+      url.protocol === "data:" ||
+      url.href === "about:blank")
+    ? Effect.succeed(url.href)
+    : Effect.fail(
+        `${JSON.stringify(input)} was not opened: the browser tools open http and https addresses, data: URLs and about:blank.`,
+      );
+};
+
 const named = (op: {
   readonly ref?: string | undefined;
   readonly x?: number | undefined;
@@ -229,6 +364,14 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   const browser = yield* Browser;
   const snapshotChars = options.snapshotChars ?? 8000;
   let current = Option.none<Page.Page>();
+  // Tabs the tools have looked at. Any other open tab opened since, perhaps after the receipt of
+  // the action that opened it.
+  const seen = new Set((yield* browser.pages).map((tab) => tab.id));
+  // The tab `page`, which observations use, last returned. The model plans a batch on what it
+  // saw there, so actions run only on that tab; another current tab must be observed first.
+  let observed: string | undefined;
+  // Why the current tab last changed, for that refusal.
+  let changed = "";
   let zooms: Array<Page.Zoom> = [];
   const zoomLock = yield* Semaphore.make(1);
 
@@ -242,15 +385,48 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     }),
   );
 
-  const page: Effect.Effect<Page.Page, BrowserError> = Effect.gen(function* () {
+  const opened = "A new tab opened and is now the current tab.";
+  const closed = "The tab in use closed, and another is now the current tab.";
+
+  const become = (tab: Page.Page, why: string) => {
+    current = Option.some(tab);
+    changed = why;
+  };
+
+  /** Make the newest tab opened since the tools last looked the current one; true if one did. */
+  const follow = Effect.gen(function* () {
     const open = yield* browser.pages;
+    const newest = open.filter((tab) => !seen.has(tab.id)).at(-1);
 
-    if (Option.isSome(current) && open.includes(current.value)) return current.value;
-    const first = yield* browser.page;
+    for (const tab of open) seen.add(tab.id);
+    if (newest === undefined) return false;
+    become(newest, opened);
+    yield* newest.bringToFront.pipe(Effect.ignore);
 
-    current = Option.some(first);
+    return true;
+  });
 
-    return first;
+  /** The current tab, after following a newly opened one, and what this look changed. */
+  const resolve = Effect.gen(function* () {
+    const followed = yield* follow;
+    const open = yield* browser.pages;
+    const kept = Option.filter(current, (tab) => open.includes(tab));
+    const lost = Option.isSome(current) && Option.isNone(kept);
+    const tab = Option.isSome(kept) ? kept.value : yield* browser.page;
+
+    seen.add(tab.id);
+    if (lost) become(tab, closed);
+    current = Option.some(tab);
+    // Before the first look nothing was planned on any tab.
+    observed ??= tab.id;
+
+    return { tab, note: lost ? closed : followed ? opened : undefined };
+  });
+
+  const page: Effect.Effect<Page.Page, BrowserError> = Effect.map(resolve, ({ tab }) => {
+    observed = tab.id;
+
+    return tab;
   });
 
   const describeTab = (tab: Page.Page) =>
@@ -267,24 +443,25 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     run: (tab: Page.Page) => Effect.Effect<A, BrowserError | string>,
   ) =>
     Effect.gen(function* () {
-      const tab = yield* page;
-      const before = yield* browser.pages;
+      const { tab } = yield* resolve;
 
+      // The call was planned on the tab the model last saw: refs restart on every tab, and
+      // coordinates belong to its picture, so it must not run on another one.
+      if (tab.id !== observed)
+        return yield* Effect.fail(
+          `Not done: ${changed} It is ${yield* describeTab(tab)}. Look at it first.`,
+        );
       const result = yield* run(tab);
       const receipt = typeof done === "string" ? done : done(result);
-      const opened = (yield* browser.pages).filter((other) => !before.includes(other));
-      const newest = opened.at(-1);
 
-      if (newest === undefined) return receipt;
-      current = Option.some(newest);
-      yield* newest.bringToFront.pipe(Effect.ignore);
-
-      return `${receipt}\nA new tab opened and is now the current tab.`;
+      // A tab that registers later is followed when the tools next look; either way, later
+      // actions wait until it is observed.
+      return (yield* follow) ? `${receipt}\n${opened}` : receipt;
     }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message)));
 
   const tabList = Effect.gen(function* () {
     const open = yield* browser.pages;
-    const active = yield* page;
+    const { tab: active } = yield* resolve;
 
     const lines = yield* Effect.forEach(open, (tab, index) =>
       Effect.map(
@@ -297,18 +474,18 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   });
 
   const handlers = BrowserToolkit.of({
-    browser_navigate: ({ url }) => {
-      const address = /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
-
-      return act(`Opened ${address}.`, (tab) => tab.goto(address));
-    },
+    browser_navigate: ({ url }) =>
+      Effect.flatMap(destination(url), (address) =>
+        act(`Opened ${address}.`, (tab) => tab.goto(address)),
+      ),
     browser_back: () => act("Went back.", (tab) => tab.back),
     browser_snapshot: ({ full, query }) =>
-      page.pipe(
-        Effect.flatMap((tab) => tab.snapshot({ full, query, maxChars: snapshotChars })),
-        Effect.map((snapshot) => snapshot.rendered),
-        Effect.mapError((error) => error.message),
-      ),
+      Effect.gen(function* () {
+        const { tab, note } = yield* resolve;
+        const snapshot = yield* tab.snapshot({ full, query, maxChars: snapshotChars });
+
+        return note === undefined ? snapshot.rendered : `${note}\n${snapshot.rendered}`;
+      }).pipe(Effect.mapError((error) => error.message)),
     browser_zoom: (region) =>
       zoomLock.withPermits(1)(
         Effect.gen(function* () {
@@ -316,12 +493,12 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
             return yield* Effect.fail(
               "At most 8 zoom crops can await an observation; finish the batch first.",
             );
-          const tab = yield* page;
+          const { tab, note } = yield* resolve;
           const zoom = yield* tab.zoom(region);
 
           zooms.push(zoom);
 
-          return `Captured a zoom from page ${zoom.page} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
+          return `${note === undefined ? "" : note + "\n"}Captured a zoom from page ${zoom.page} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
         }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message))),
       ),
     browser_click: (op) =>
@@ -397,19 +574,24 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       ),
     browser_tabs: ({ action, index, url }) =>
       Effect.gen(function* () {
+        // Take in tabs opened since the last look first, so a selection is not overridden later.
+        yield* follow;
         const open = yield* browser.pages;
         const chosen = index === undefined ? undefined : open[index - 1];
 
         if (action === "new") {
-          const tab = yield* browser.newPage(url);
+          const tab = yield* url === undefined
+            ? browser.newPage()
+            : Effect.flatMap(destination(url), (address) => browser.newPage(address));
 
-          current = Option.some(tab);
+          seen.add(tab.id);
+          become(tab, "browser_tabs opened a new tab and made it current.");
           yield* tab.bringToFront;
         } else if (action === "select" || action === "close") {
           if (chosen === undefined)
             return yield* Effect.fail(`there is no tab ${index ?? "(no index given)"}`);
           if (action === "select") {
-            current = Option.some(chosen);
+            become(chosen, "browser_tabs made another tab current.");
             yield* chosen.bringToFront;
           } else yield* chosen.close;
         }
@@ -422,7 +604,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
 
   return {
     handlers,
-    toolkit,
+    batch: batch(toolkit),
     page,
     takeZooms,
   } satisfies Tools;

@@ -100,11 +100,22 @@ const watch = Effect.gen(function* () {
   viewport CSS pixels, as they appear in a full screenshot. Pixel click receipts name the element
   under that exact point, with its role and accessible name when available.
 - Actions return short receipts. `Agent.run` executes each turn's calls in order, stops at the first
-  failure or completion, and answers the remaining calls as not executed. When a click opens a tab,
-  the tools follow it.
+  failure or completion, and answers the remaining calls as not executed. A loop of your own gets
+  the same by spreading a fresh `yield* tools.batch` into each `generateText` call. When a tab
+  opens, the tools follow it: in the receipt when it registers in time, otherwise when they next
+  look. Actions run only on the tab last observed, since the model planned them on what it saw
+  there: after a tab opens, the current tab closes or `browser_tabs` switches, later actions do
+  nothing and say so until the new current tab has been observed.
 - The model receives one outline and screenshot at the start and after each turn, including failed
-  batches. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
-  is `"both"`. A malformed `done` answer goes back to the model to correct.
+  batches. If the browser is gone, the run fails with its `BrowserError` rather than calling the
+  model again. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
+  is `"both"`. A malformed `done` answer goes back to the model to correct, and so does a response
+  that calls a tool that does not exist or passes arguments that are not JSON: none of its calls
+  run. A provider reply its client cannot decode ends the run instead.
+- `browser_navigate` and `browser_tabs` open only http and https addresses, `data:` URLs and
+  `about:blank`; a model cannot open a local file. An address without a scheme, such as
+  `example.com` or `localhost:3000`, opens over HTTPS, or HTTP on loopback; `Page.goto` reads
+  addresses the same way and also opens the `file:` URLs its caller passes.
 - `browser_zoom` takes a viewport region (`x`, `y`, `width`, `height`) and returns its crop beside
   the next observation, including in outline mode. Captions give the source page and viewport
   origin; clicks still use viewport coordinates. A batch can request at most eight crops.
@@ -137,11 +148,11 @@ const watch = Effect.gen(function* () {
   glide plans, submission receipts, button and key phases, wheel input and cursor shape. Pointer
   position is shared across tabs. Events have sequence cursors for bounded replay; a lagging reader
   gets an explicit history-expired error instead of missing events silently.
-- `additionalTools` accepts an `effect/ai` toolkit, merged after the browser and completion tools.
-  Supply its handlers through their usual layer; on a name clash the added toolkit wins. The same
-  batch halting applies to those tools.
+- `additionalTools` accepts an `effect/ai` toolkit, merged after the browser tools. Supply its
+  handlers through their usual layer; on a name clash with a browser tool the added toolkit wins.
+  `done` and `give_up` stay the agent's own. The same batch halting applies to those tools.
 - `onStep` sees each model call and its tool calls; failing stops the run with that error, which is
-  how a caller enforces a budget.
+  how a caller enforces a budget. Services it uses become requirements of the run.
 
 ## Development
 

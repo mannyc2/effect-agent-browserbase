@@ -3,15 +3,15 @@
  * an answer with `done` or stops with `give_up`.
  *
  * Any `effect/ai` `LanguageModel` drives it. Tool calls run one at a time, in the order the model
- * made them, halting on failure or completion. One observation follows each turn; pictures travel
- * in a user message after the tool results. Only the latest few stay in the conversation: older
- * ones are replaced by a note, several at a time, so a provider's prompt cache keeps most of the
- * conversation between steps.
+ * made them, halting on failure or completion. One observation follows each turn, and a run whose
+ * browser is gone fails with that `BrowserError`. Pictures travel in a user message after the
+ * tool results. Only the latest few stay in the conversation: older ones are replaced by a note,
+ * several at a time, so a provider's prompt cache keeps most of the conversation between steps.
  *
  * @since 0.3.0
  */
-import { Context, Effect, Option, Ref, Schema, Stream } from "effect";
-import { Chat, Prompt, Tool, Toolkit } from "effect/ai";
+import { Context, Effect, Exit, Option, Ref, Schema } from "effect";
+import { AiError, Chat, Prompt, Tool, Toolkit } from "effect/ai";
 
 import * as Usage from "./internal/usage.ts";
 import type { Observation, ObservationMode, Zoom } from "./Page.ts";
@@ -58,6 +58,12 @@ export interface Step {
     readonly isFailure: boolean;
   }>;
   readonly usage: Usage.Usage;
+  /**
+   * Set when the model's response could not be read, such as a call to a tool that does not exist
+   * or arguments that are not JSON. None of its calls ran, the model is asked to try again, and
+   * its usage is not reported.
+   */
+  readonly rejected?: string | undefined;
 }
 
 export interface Result<A> {
@@ -68,9 +74,10 @@ export interface Result<A> {
   readonly history: Prompt.Prompt;
 }
 
-type ExtraTools = Record<string, Tool.Any>;
+/** Tools a caller adds. `done` and `give_up` end the run, so they remain the agent's own. */
+type ExtraTools = Record<string, Tool.Any> & { readonly done?: never; readonly give_up?: never };
 
-export interface Options<E = never, Extra extends ExtraTools = {}> {
+export interface Options<E = never, R = never, Extra extends ExtraTools = {}> {
   /** Model calls before stopping with `StepLimit`. Defaults to 30. */
   readonly maxSteps?: number | undefined;
   /** More guidance for the system prompt, such as a site's rules or what matters in the task. */
@@ -79,11 +86,17 @@ export interface Options<E = never, Extra extends ExtraTools = {}> {
   readonly keepPictures?: number | undefined;
   /** What the model sees initially and after each turn. Defaults to both. */
   readonly observation?: ObservationMode | undefined;
-  /** Additional tools; their definitions and handlers take precedence on a name clash. */
+  /**
+   * Additional tools; their definitions and handlers take precedence over a browser tool of the
+   * same name. They cannot be named `done` or `give_up`.
+   */
   readonly additionalTools?: Toolkit.Toolkit<Extra> | undefined;
   readonly tools?: Tools.Options | undefined;
-  /** Runs after every model call. Failing stops the run with that error, such as a spent budget. */
-  readonly onStep?: ((step: Step) => Effect.Effect<void, E>) | undefined;
+  /**
+   * Runs after every model call. Failing stops the run with that error, such as a spent budget.
+   * The services it needs become the run's requirements.
+   */
+  readonly onStep?: ((step: Step) => Effect.Effect<void, E, R>) | undefined;
 }
 
 const system = (instructions: string | undefined) =>
@@ -93,7 +106,7 @@ const system = (instructions: string | undefined) =>
     "Seeing the page:",
     "- browser_snapshot gives a text outline of the viewport. Controls carry refs such as e12 for the other tools. Refs from an old snapshot can be stale.",
     "- The observation after each turn shows the viewport as an outline, a picture, or both. The full screenshot uses viewport coordinates: use x and y for anything without a ref, such as a canvas game, a chart or a video.",
-    "- browser_zoom shows a small viewport region at full resolution after the batch. Its caption gives the viewport origin; keep using viewport coordinates for clicks.",
+    "- browser_zoom crops a small viewport region and shows it on its own after the batch, at the viewport's own CSS pixel scale: a closer look, not a magnification. Its caption gives the viewport origin; keep using viewport coordinates for clicks.",
     "- Tool calls return receipts. One fresh observation follows the whole batch.",
     "",
     "Acting:",
@@ -142,25 +155,57 @@ const prunePictures = (prompt: Prompt.Prompt, keep: number): Prompt.Prompt => {
   );
 };
 
-const observationMessage = (observation: Observation | undefined, zooms: ReadonlyArray<Zoom>) => {
+/**
+ * Model output that could not be read: `effect/ai`'s decoding of the response, which fails on a
+ * call to a tool that does not exist, or an adapter's parsing of a call's arguments. Both happen
+ * before any handler runs, and the batch answers every handler failure as a result, so nothing
+ * in such a response ran and the chat leaves its history unchanged. A provider client that cannot
+ * decode what its service sent is not the model's to correct: that failure ends the run.
+ */
+const isUnreadable = (
+  error: unknown,
+): error is AiError.AiError & {
+  readonly reason: AiError.InvalidOutputError | AiError.ToolParameterValidationError;
+} =>
+  AiError.isAiError(error) &&
+  ((error.reason._tag === "InvalidOutputError" &&
+    error.module === "LanguageModel" &&
+    error.method === "generateText") ||
+    (error.reason._tag === "ToolParameterValidationError" && error.module !== "Toolkit"));
+
+/** What the model is told about a response that could not be read. */
+const unreadable = (
+  reason: AiError.InvalidOutputError | AiError.ToolParameterValidationError,
+  tools: ReadonlyArray<string>,
+) =>
+  reason._tag === "ToolParameterValidationError"
+    ? `Your call to ${reason.toolName} could not be read, so none of your last response's tool ` +
+      `calls ran: ${reason.description}. Send each call's arguments as one JSON object.`
+    : "Your last response could not be read, so none of its tool calls ran. It most likely " +
+      `called a tool that does not exist. The tools are: ${tools.join(", ")}.`;
+
+const note = (text: string) =>
+  Prompt.makeMessage("user", { content: [Prompt.makePart("text", { text })] });
+
+/** The observation, or why the page could not be observed. */
+const observationMessage = (observed: Observation | string, zooms: ReadonlyArray<Zoom>) => {
+  const image = typeof observed === "string" ? undefined : observed.image;
+
   const content: Array<Prompt.UserMessagePart> = [
     Prompt.makePart("text", {
       text:
-        observation === undefined
-          ? "(the page could not be observed)"
-          : (observation.snapshot?.rendered ?? "Observation of the current viewport."),
+        typeof observed === "string"
+          ? `(the page could not be observed: ${observed})`
+          : (observed.snapshot?.rendered ?? "Observation of the current viewport."),
     }),
   ];
 
-  if (observation?.image !== undefined) {
+  if (image !== undefined) {
     content.push(
       Prompt.makePart("text", {
-        text: `Screenshot: ${observation.image.width}x${observation.image.height}. Its pixel coordinates are viewport coordinates.`,
+        text: `Screenshot: ${image.width}x${image.height}. Its pixel coordinates are viewport coordinates.`,
       }),
-      Prompt.makePart("file", {
-        mediaType: observation.image.mediaType,
-        data: observation.image.data,
-      }),
+      Prompt.makePart("file", { mediaType: image.mediaType, data: image.data }),
     );
   }
 
@@ -176,70 +221,10 @@ const observationMessage = (observation: Observation | undefined, zooms: Readonl
   return Prompt.makeMessage("user", { content });
 };
 
-// Normal resolution recovers individual validation failures; disabling it rejects the whole response.
-// With concurrency 1, each call sees whether the previous result halted the batch.
-function batchToolkit<Extra extends ExtraTools>(
-  toolkit: Toolkit.WithHandler<Extra>,
-): Toolkit.WithHandler<Extra>;
-function batchToolkit<Extra extends ExtraTools>(toolkit: Toolkit.WithHandler<Extra>) {
-  let halted: string | undefined;
-
-  return {
-    tools: toolkit.tools,
-    handle: <Name extends keyof Extra>(
-      name: Name,
-      params: Tool.ParametersEncoded<Extra[Name]>,
-      id?: string,
-    ) => {
-      if (halted !== undefined) {
-        const result: typeof Tool.ExecutionFailure.Type = {
-          type: "execution-interrupted",
-          reason: "Not executed: " + halted,
-        };
-
-        return Effect.succeed(
-          Stream.succeed({ result, encodedResult: result, isFailure: true, preliminary: false }),
-        );
-      }
-
-      return Effect.succeed(
-        toolkit.handle(name, params, id).pipe(
-          Stream.unwrap,
-          Stream.catch((error) => {
-            const result: typeof Tool.ExecutionFailure.Type = {
-              type: "execution-interrupted",
-              reason: "The call failed and may have taken effect: " + String(error),
-            };
-
-            return Stream.succeed({
-              result,
-              encodedResult: result,
-              isFailure: true,
-              preliminary: false,
-            });
-          }),
-          Stream.tap((result) =>
-            Effect.sync(() => {
-              if (
-                !result.preliminary &&
-                (result.isFailure || name === "done" || name === "give_up")
-              ) {
-                halted = result.isFailure
-                  ? String(name) + " failed."
-                  : String(name) + " ended the batch.";
-              }
-            }),
-          ),
-        ),
-      );
-    },
-  };
-}
-
-const loop = <E, Extra extends ExtraTools>(
+const loop = <E, R, Extra extends ExtraTools>(
   answerSchema: Schema.Codec<unknown, unknown>,
   task: string,
-  options: Options<E, Extra>,
+  options: Options<E, R, Extra>,
 ) =>
   Effect.gen(function* () {
     const tools = yield* Tools.make(options.tools);
@@ -264,8 +249,15 @@ const loop = <E, Extra extends ExtraTools>(
       failureMode: "return",
     });
 
-    const AgentToolkit = Toolkit.merge(Tools.BrowserToolkit, Toolkit.make(Done, GiveUp));
-    const CombinedToolkit = Toolkit.merge(AgentToolkit, options.additionalTools ?? Toolkit.empty);
+    const Completion = Toolkit.make(Done, GiveUp);
+    const AgentToolkit = Toolkit.merge(Tools.BrowserToolkit, Completion);
+
+    // Merged last, completion stays the agent's even when the types are bypassed.
+    const CombinedToolkit = Toolkit.merge(
+      Tools.BrowserToolkit,
+      options.additionalTools ?? Toolkit.empty,
+      Completion,
+    );
 
     const defaults = yield* AgentToolkit.toHandlers({
       ...tools.handlers,
@@ -276,9 +268,11 @@ const loop = <E, Extra extends ExtraTools>(
 
     const supplied = yield* Effect.context<Tool.HandlersFor<Extra>>();
 
-    const overrides = Object.values(options.additionalTools?.tools ?? {}).map((tool) =>
-      Context.Service<Tool.HandlersFor<Extra>>(tool.id),
-    );
+    const completion = new Set([Done.id, GiveUp.id]);
+
+    const overrides = Object.values(options.additionalTools?.tools ?? {})
+      .filter((tool) => !completion.has(tool.id))
+      .map((tool) => Context.Service<Tool.HandlersFor<Extra>>(tool.id));
 
     // Only explicitly added tools override defaults; unrelated ambient handlers must not replace them.
     const toolkit = yield* CombinedToolkit.pipe(
@@ -287,18 +281,17 @@ const loop = <E, Extra extends ExtraTools>(
 
     const observe = Effect.gen(function* () {
       const zooms = yield* tools.takeZooms;
+      // Without any page, such as after the browser closed, more model calls cannot help.
+      const page = yield* tools.page;
 
-      const observation = yield* tools.page.pipe(
-        Effect.flatMap((page) =>
-          page.observe({
-            mode: options.observation ?? "both",
-            maxChars: options.tools?.snapshotChars ?? 8000,
-          }),
-        ),
-        Effect.option,
-      );
+      const observed = yield* page
+        .observe({
+          mode: options.observation ?? "both",
+          maxChars: options.tools?.snapshotChars ?? 8000,
+        })
+        .pipe(Effect.catch((error) => Effect.succeed(error.message)));
 
-      return observationMessage(Option.getOrUndefined(observation), zooms);
+      return observationMessage(observed, zooms);
     });
 
     const opening = yield* observe;
@@ -314,29 +307,51 @@ const loop = <E, Extra extends ExtraTools>(
     let idle = 0;
 
     for (let step = 1; step <= maxSteps; step++) {
-      const batch = batchToolkit(toolkit);
+      const response = yield* chat
+        .generateText({
+          prompt: Prompt.fromMessages(next),
+          ...(yield* Tools.batch(toolkit, { endsBatch: ["done", "give_up"] })),
+        })
+        .pipe(
+          Effect.map((turn) => ({ turn })),
+          Effect.catchIf(isUnreadable, (error) => Effect.succeed({ rejected: error.reason })),
+        );
 
-      const response = yield* chat.generateText({
-        prompt: Prompt.fromMessages(next),
-        toolkit: batch,
-        concurrency: 1,
-      });
+      // A browser that is gone ends the run, but only once the paid turn is reported and the
+      // answer it may have given is kept.
+      const observed = yield* Effect.exit(observe);
 
-      const observation = yield* observe;
+      if (Exit.isSuccess(observed))
+        yield* Ref.update(chat.history, (history) =>
+          prunePictures(Prompt.concat(history, [observed.value]), keepPictures),
+        );
 
-      yield* Ref.update(chat.history, (history) =>
-        prunePictures(Prompt.concat(history, [observation]), keepPictures),
-      );
+      if ("rejected" in response) {
+        if (options.onStep !== undefined) {
+          yield* options.onStep({
+            step,
+            text: "",
+            calls: [],
+            results: [],
+            usage: Usage.empty,
+            rejected: response.rejected.description,
+          });
+        }
+        if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
+        idle = 0;
+        next = [note(unreadable(response.rejected, Object.keys(toolkit.tools)))];
+        continue;
+      }
+      const { turn } = response;
+      const stepUsage = Usage.add(Usage.empty, turn.usage);
 
-      const stepUsage = Usage.add(Usage.empty, response.usage);
-
-      usage = Usage.add(usage, response.usage);
+      usage = Usage.add(usage, turn.usage);
       if (options.onStep !== undefined) {
         yield* options.onStep({
           step,
-          text: response.text,
-          calls: response.toolCalls.map((call) => ({ name: call.name, params: call.params })),
-          results: response.toolResults.map((result) => ({
+          text: turn.text,
+          calls: turn.toolCalls.map((call) => ({ name: call.name, params: call.params })),
+          results: turn.toolResults.map((result) => ({
             name: result.name,
             result: result.result,
             isFailure: result.isFailure,
@@ -359,24 +374,17 @@ const loop = <E, Extra extends ExtraTools>(
 
         return { answer: finished.value.answer, steps: step, usage, history };
       }
+      if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
 
-      if (response.toolCalls.length === 0) {
+      if (turn.toolCalls.length === 0) {
         idle += 1;
         if (idle >= 3) {
           return yield* new AgentError({
-            reason: new GaveUp({ reason: `stopped calling tools: ${response.text}` }),
+            reason: new GaveUp({ reason: `stopped calling tools: ${turn.text}` }),
             steps: step,
           });
         }
-        next = [
-          Prompt.makeMessage("user", {
-            content: [
-              Prompt.makePart("text", {
-                text: "Continue with the tools, or call done with the answer.",
-              }),
-            ],
-          }),
-        ];
+        next = [note("Continue with the tools, or call done with the answer.")];
         continue;
       }
       idle = 0;
@@ -387,28 +395,28 @@ const loop = <E, Extra extends ExtraTools>(
   });
 
 /** Run a task to its end. The answer is a string. */
-export function run<E = never, Extra extends ExtraTools = {}>(
+export function run<E = never, R = never, Extra extends ExtraTools = {}>(
   task: string,
-  options?: Options<E, Extra>,
+  options?: Options<E, R, Extra>,
 ): Effect.Effect<
   Result<string>,
-  Effect.Error<ReturnType<typeof loop<E, Extra>>>,
-  Effect.Services<ReturnType<typeof loop<E, Extra>>>
+  Effect.Error<ReturnType<typeof loop<E, R, Extra>>>,
+  Effect.Services<ReturnType<typeof loop<E, R, Extra>>>
 >;
 
 /** Run a task to its end, with an answer of the given shape. */
-export function run<A, I, E = never, Extra extends ExtraTools = {}>(
+export function run<A, I, E = never, R = never, Extra extends ExtraTools = {}>(
   task: string,
-  options: Options<E, Extra> & { readonly answer: Schema.Codec<A, I> },
+  options: Options<E, R, Extra> & { readonly answer: Schema.Codec<A, I> },
 ): Effect.Effect<
   Result<A>,
-  Effect.Error<ReturnType<typeof loop<E, Extra>>>,
-  Effect.Services<ReturnType<typeof loop<E, Extra>>>
+  Effect.Error<ReturnType<typeof loop<E, R, Extra>>>,
+  Effect.Services<ReturnType<typeof loop<E, R, Extra>>>
 >;
 
-export function run<E, Extra extends ExtraTools>(
+export function run<E, R, Extra extends ExtraTools>(
   task: string,
-  options: Options<E, Extra> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
+  options: Options<E, R, Extra> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
 ) {
   return loop(options.answer ?? Schema.String, task, options).pipe(Effect.withSpan("Agent.run"));
 }

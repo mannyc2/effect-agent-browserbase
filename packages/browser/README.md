@@ -26,12 +26,21 @@ npx playwright-core install chromium
 
 `Agent.run` batches each turn's tool calls in order, halting on the first failure or a completed
 `done` / `give_up`. Skipped calls receive a not-executed result. A malformed `done` answer can
-be corrected on the next turn.
+be corrected on the next turn. A response whose model output cannot be read, one calling a tool
+that does not exist or with arguments that are not JSON, runs none of its calls: the model is told
+so, and the turn counts as a step. `onStep` reports it with `rejected` set. A reply that the
+provider's client cannot decode is not the model's to correct and ends the run with its `AiError`.
 
 The model gets one outline and screenshot at the start and after each turn. `observation` selects
-`"outline"`, `"screenshot"`, or `"both"` (the default). `Page.observe` returns that observation as
-a schema value. `Tools.make` returns receipts; a caller writing its own loop observes the current
-`tools.page` after the batch and drains `tools.takeZooms` into that same observation message.
+`"outline"`, `"screenshot"`, or `"both"` (the default). When the current page cannot be observed,
+the model is told why and the run goes on; when no page can be had at all, as after the browser
+closed, the run fails with that `BrowserError` instead of calling the model again. The turn
+before it is still reported to `onStep`, and an answer it gave with `done` is still returned. `Page.observe` returns that observation as
+a schema value. `Tools.make` returns receipts. A caller writing its own loop spreads a fresh
+`yield* tools.batch` into each `generateText` call: it carries the toolkit with the same ordered,
+halting execution and the `concurrency: 1` that `effect/ai` needs to keep calls in order.
+`Tools.batch` does the same for any toolkit with handlers. After the batch, the caller observes
+the current `tools.page` and drains `tools.takeZooms` into that same observation message.
 
 `browser_zoom` captures a region in viewport CSS pixels when the tool runs. Requested crops arrive
 with the next observation even in outline mode, labeled with their source page and viewport origin.
@@ -44,7 +53,12 @@ role, accessible name, cursor and link target. Pixel targeting resolves through 
 keeps the original point; the receipt names the control even when a nested child received the hit.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
-merged last, so the caller's tool wins a name clash, and its calls share the batch's halt behavior.
+merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
+share the batch's halt behavior. `done` and `give_up` end the run and stay the agent's own: a
+toolkit that names either does not type-check.
+A failure of a tool with failure mode `"error"` reaches the model encoded by that tool's failure
+schema and marked as possibly effective; a call whose parameters fail validation never reaches its
+handler and answers as not executed.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action,
 resolved element and inferred `classifications`: `form-submit`, `purchase`, `delete`, `confirm`,
