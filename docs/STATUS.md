@@ -6,7 +6,9 @@
 
 - `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
   `Frame`, `BrowserEvent` and `BrowserError`; `Tools`, `Agent` and `Moment`.
-- `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`.
+- `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`. Stored contexts
+  and uploaded extensions are managed through the client; `Browserbase.open` lets one persisting
+  session at a time write to each context in a process and holds it until the save settles.
 - `effect-browser-human-strokes`: an optional layer with 32,130 recorded, attributed CC BY 4.0
   pointer strokes, retaining their original sample coordinates and times. The core pointer planner
   uses the tuned two-stroke sigma-lognormal model; browsers capture the motion service once.
@@ -67,7 +69,7 @@ build. The 0.2 PRs are closed, except #164, kept open as a reference.
 The larger pieces left for later:
 
 - recording to video files;
-- operator handoff, reconnecting to a kept-alive session, extensions and uploads;
+- operator handoff, reconnecting to a kept-alive session, and uploads;
 - the paid hosted checks.
 
 ## Releases
