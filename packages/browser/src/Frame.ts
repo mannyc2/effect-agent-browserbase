@@ -15,8 +15,9 @@ export class Image extends Schema.Class<Image>("effect-browser/Image")({
 
 /**
  * One screencast frame. `timestamp` is when the browser painted it, by the browser's clock, which
- * spaces frames exactly. `receivedAt` is when it arrived, by the Effect `Clock` that also stamps
- * `BrowserEvent`s, which lines frames up with events even when the browser is remote.
+ * spaces frames exactly. `receivedAt` is its arrival in host monotonic milliseconds, on the owning
+ * browser’s Effect `Clock`, shared with `BrowserEvent` and `Moment`. The clocks have distinct origins;
+ * subtract stamps only within one clock. A screenshot fallback uses host wall time for `timestamp`.
  */
 export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   page: Schema.String,

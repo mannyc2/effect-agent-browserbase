@@ -22,7 +22,7 @@ import type * as Page from "./Page.ts";
 import { Snapshot } from "./Snapshot.ts";
 
 export class Moment extends Schema.Class<Moment>("effect-browser/Moment")({
-  /** When it was captured, by the Effect `Clock`. */
+  /** Host monotonic milliseconds on the owning browser’s clock. */
   at: Schema.Finite,
   page: Schema.String,
   /** Oldest first; the last frame is the page as it was at `at`. */
@@ -101,7 +101,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
   options: CaptureOptions = {},
 ) {
   const browser = yield* Browser;
-  const at = yield* Clock.currentTimeMillis;
+  const at = yield* browser.now;
   const since = at - (options.windowMillis ?? 5000);
   const recent = (yield* page.recentFrames).filter((frame) => frame.receivedAt >= since);
   const snapshot = yield* page.snapshot({ maxChars: options.snapshotChars ?? 4000 });
@@ -114,7 +114,8 @@ export const capture = Effect.fn("Moment.capture")(function* (
       new Frame({
         page: page.id,
         data: image.data,
-        timestamp: at,
+        // A screenshot has no browser paint timestamp; keep its wall-time fallback separate.
+        timestamp: yield* Clock.currentTimeMillis,
         receivedAt: at,
         width: image.width,
         height: image.height,

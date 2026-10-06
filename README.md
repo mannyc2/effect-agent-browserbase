@@ -111,7 +111,11 @@ const watch = Effect.gen(function* () {
   `PolicyDenied` to deny, or waits for an external signal to hold. Holds have a separate
   `policyTimeout` (five minutes by default) and leave the page unlocked. Changed targets fail before
   input when a hold resumes. With no guard, every action is allowed.
-- `humanize` moves the pointer along curves and types at a human pace for watched sessions.
+- `humanize` moves the pointer along curves and types at a human pace for watched sessions. Keys
+  keep their schedule over slow connections, with bounded pending acknowledgements. Plain typing
+  also sends key events for printable US characters; other text uses Unicode insertion.
+- Events, frame arrivals and moments share the owning browser’s host monotonic clock in milliseconds.
+  `Browser.now` reads that clock. These stamps measure elapsed time, not calendar dates.
 - `additionalTools` accepts an `effect/ai` toolkit, merged after the browser and completion tools.
   Supply its handlers through their usual layer; on a name clash the added toolkit wins. The same
   batch halting applies to those tools.

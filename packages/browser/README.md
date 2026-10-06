@@ -75,5 +75,15 @@ the library never retries the action or the policy automatically. A policy timeo
 `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed receipts. Without a
 guard, actions are allowed. Canvas and opaque frames expose their outer element's metadata.
 
+Typing sends key pairs for printable US characters in both plain and humanized modes; other text
+uses Unicode insertion. Humanized keys follow their schedule without waiting for each network reply.
+Pending replies are bounded and drained before an action succeeds; interruption stops new input and
+releases submitted held keys. Shortcut chords retain Playwright’s platform-specific editing behavior.
+
+`Browser.now`, event stamps, frame `receivedAt` and `Moment.at` share host monotonic milliseconds
+from the clock captured when the browser is made. They remain ordered across wall-clock corrections.
+Compare these stamps only within that clock: they are not epoch dates or comparable across hosts.
+`Frame.timestamp` retains browser paint wall time; screenshot fallbacks use host wall time.
+
 Every module is also an entry point, such as `effect-browser/Agent`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.

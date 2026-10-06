@@ -24,7 +24,9 @@ a moment without a model, captures it (`Moment.capture`) and asks a model about 
 turn halt on the first failure. `browser_zoom` adds requested viewport crops to that observation;
 pixel clicks return the element under the requested point. Runs without a model still use the free
 scripted solutions. Runs allow input by default; a caller's `Browser.Options.guard` can deny or
-hold classified input and navigation without a user-facing confirmation prompt.
+hold classified input and navigation without a user-facing confirmation prompt. Typing keeps its
+pacing over delayed connections. Events, frame arrivals and moment windows use the browser’s host
+monotonic clock; these stamps are relative timings, not calendar dates.
 
 ## Running
 
