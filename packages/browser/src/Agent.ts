@@ -15,6 +15,7 @@ import { AiError, Chat, Prompt, Tool, Toolkit } from "effect/ai";
 
 import * as Usage from "./internal/usage.ts";
 import type { Observation, ObservationMode, Zoom } from "./Page.ts";
+import * as Policy from "./Policy.ts";
 import * as Tools from "./Tools.ts";
 
 export type { Usage } from "./internal/usage.ts";
@@ -37,8 +38,17 @@ export class GaveUp extends Schema.TaggedError<GaveUp>()("GaveUp", {
   }
 }
 
+/** The input policy refused three actions in a row: the task needs what the policy forbids. */
+export class Refused extends Schema.TaggedError<Refused>()("Refused", {
+  refusals: Schema.Array(Schema.String),
+}) {
+  override get message() {
+    return `the input policy refused ${this.refusals.length} actions in a row; the last: ${this.refusals.at(-1)}`;
+  }
+}
+
 export class AgentError extends Schema.TaggedError<AgentError>()("AgentError", {
-  reason: Schema.Union([StepLimit, GaveUp]),
+  reason: Schema.Union([StepLimit, GaveUp, Refused]),
   steps: Schema.Finite,
 }) {
   override get message() {
@@ -113,6 +123,7 @@ const system = (instructions: string | undefined) =>
     "- Prefer refs when an outline is available. Use x and y for what the outline cannot show.",
     "- Batch two or more predictable steps in one turn. Calls run in order and stop at the first failure; remaining calls are not executed. Coordinates in a batch refer to the observation before it.",
     "- If an action fails and says it may have taken effect, look at the page before you repeat it.",
+    "- The input policy decides for the user. When it refuses an action, do not try another way to the same effect. Three refusals in a row end the task.",
     "- Work on your own. Do not ask the user anything; if something blocks you, try another way.",
     "- When the task is done, call done with the answer. If it cannot be done, call give_up with the reason.",
     ...(instructions === undefined ? [] : ["", instructions]),
@@ -375,6 +386,12 @@ const loop = <E, R, Extra extends ExtraTools>(
         return { answer: finished.value.answer, steps: step, usage, history };
       }
       if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
+      const refusals = yield* tools.refusals;
+
+      // With nobody to ask, an agent that keeps meeting refusals stops rather than probing for a
+      // way around them.
+      if (refusals.length >= 3)
+        return yield* new AgentError({ reason: new Refused({ refusals }), steps: step });
 
       if (turn.toolCalls.length === 0) {
         idle += 1;
@@ -418,5 +435,8 @@ export function run<E, R, Extra extends ExtraTools>(
   task: string,
   options: Options<E, R, Extra> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
 ) {
-  return loop(options.answer ?? Schema.String, task, options).pipe(Effect.withSpan("Agent.run"));
+  return loop(options.answer ?? Schema.String, task, options).pipe(
+    Effect.provideService(Policy.Task, task),
+    Effect.withSpan("Agent.run"),
+  );
 }

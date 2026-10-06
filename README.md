@@ -129,6 +129,11 @@ const watch = Effect.gen(function* () {
   `PolicyDenied` to deny, or waits for an external signal to hold. Holds have a separate
   `policyTimeout` (five minutes by default) and leave the page unlocked. Changed targets fail before
   input when a hold resumes. With no guard, every action is allowed.
+- `Policy.make` builds a guard for unattended runs. A judge, `Policy.reviewer` over a
+  `LanguageModel` or `Policy.decider` over a `DecisionModel` such as Jev, reads what an input
+  means: a payment, an account, access, a deletion, a message or a secret. The guard denies a risk
+  the user's task does not ask for, and fails closed on input with facts when the judge fails.
+  `Agent.run` gives the guard its task and stops after three refusals in a row.
 - `humanize` uses a tuned two-stroke sigma-lognormal pointer planner and scrolls off-screen targets into view with visible
   wheel input, using bounded attempts and an instant fallback. It rechecks the approved target
   before activation. Typing aims for about 75 WPM, with overlapping key holds and slower word

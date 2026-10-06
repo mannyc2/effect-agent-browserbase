@@ -75,6 +75,8 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("Invali
 /** The input policy refused the action before any input was sent. */
 export class PolicyDenied extends Schema.TaggedError<PolicyDenied>()("PolicyDenied", {
   detail: Schema.String,
+  /** What made the policy deny, such as the failure of the judge it asked. */
+  cause: Schema.optional(Schema.Defect()),
 }) {
   override get message() {
     return `the input policy denied this action: ${this.detail}`;

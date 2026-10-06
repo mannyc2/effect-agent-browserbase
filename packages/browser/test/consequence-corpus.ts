@@ -7,21 +7,7 @@
  * only a judge reading the evidence can recognise them, and the bench grades judges against them.
  */
 import type { Fact } from "../src/Page.ts";
-
-/** What an input means. A judge recognises these; structure alone cannot. */
-export type Risk =
-  /** Purchases, payments, transfers, trades, bids, paid subscriptions and donations. */
-  | "financial"
-  /** Creating an account. */
-  | "account"
-  /** Granting or changing access: consent, sharing, roles, visibility, passwords and 2FA. */
-  | "access"
-  /** Permanently deleting data, content or an account. */
-  | "deletion"
-  /** Sending, posting or publishing to other people. */
-  | "communication"
-  /** Entering a password, code, card number or identity number. */
-  | "secret";
+import type { Risk } from "../src/Policy.ts";
 
 export type Kind =
   | "named"

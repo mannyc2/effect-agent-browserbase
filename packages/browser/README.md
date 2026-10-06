@@ -101,6 +101,40 @@ const browser = Chromium.layer({
 });
 ```
 
+`effect-browser/Policy` builds guards for a browser with nobody watching. A judge reads what an
+input means. `Policy.reviewer()` asks the `LanguageModel` in context for a structured review, and
+`Policy.decider` asks a `DecisionModel`, such as Jev through `@effect/ai-typesafe`. Both give a
+`Judgement`: for each `Risk` (`financial`, `account`, `access`, `deletion`, `communication` and
+`secret`), the probability that the input does it, and the probability that the user's task asks
+for it. `Policy.escalate(first, second)` asks `second` only when `first` is unsure.
+`Policy.make({ judge })` denies an input with a likely risk the task does not ask for, saying which
+and why. `origins` keeps input to some origins, and `deny` refuses facts outright:
+
+```ts
+import { Effect, Layer } from "effect";
+import * as Chromium from "effect-browser/Chromium";
+import * as Policy from "effect-browser/Policy";
+
+const browser = Layer.unwrap(
+  Effect.gen(function* () {
+    const judge = yield* Policy.reviewer();
+
+    return Chromium.layer({ guard: Policy.make({ judge, origins: ["https://shop.example"] }) });
+  }),
+);
+```
+
+The task comes from `Policy.Task`, which `Agent.run` provides to its inputs; elsewhere, provide it
+yourself, or risky input is denied for want of one. A judge sees the task, the action, the typed
+text and the facts as trusted, and the page's text only as evidence. It never sees the agent's own
+words. A judgement only adds to structure: a `secret` fact counts whatever the judge reads. A judge
+that fails or exceeds `timeout` (30 seconds) leaves the input unjudged. `make` then denies the input
+if it has any fact, with the judge's failure as the `PolicyDenied` cause, and lets an input without
+facts, such as a same-origin link, go ahead. `Agent.run` ends with a `Refused` reason after three
+refusals in a row. Through `@effect/ai-openrouter` 4.0.0, structured output needs
+`strictJsonSchema: true` in the model's config, or OpenRouter drops the response format and every
+review fails to decode.
+
 Holds use `policyTimeout`, a finite positive duration defaulting to five minutes, separately from
 the action timeout. They do not keep the page locked. After approval, the library verifies the same
 document, target and relevant facts before sending input: a control's name is bound but other page
