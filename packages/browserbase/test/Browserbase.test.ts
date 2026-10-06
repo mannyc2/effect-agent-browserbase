@@ -563,6 +563,21 @@ describe("Browserbase", () => {
           ["POST", "/v1/sessions"],
         ],
       );
+
+      // A failed open lets its session and context go at once, so a retry in the same scope
+      // takes the context rather than waiting for the scope to close.
+      api.received.length = 0;
+
+      const retried = Browserbase.open({
+        session: { browserSettings: { context: { id: "c2", persist: true } } },
+        contextSettle: "300 millis",
+      }).pipe(Effect.flip, Effect.repeat({ times: 1 }), Effect.provide(api.client));
+
+      yield* retried.pipe(Effect.scoped, Effect.timeout("5 seconds"));
+      assert.deepStrictEqual(
+        api.received.map((request) => request.method),
+        ["POST", "POST", "GET", "POST", "POST", "GET"],
+      );
     }),
   );
 });

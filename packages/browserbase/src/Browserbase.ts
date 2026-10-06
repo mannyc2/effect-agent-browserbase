@@ -13,7 +13,7 @@
  *
  * @since 0.3.0
  */
-import { Duration, Effect, Layer, Schedule, Semaphore } from "effect";
+import { Duration, Effect, Exit, Layer, Schedule, Scope, Semaphore } from "effect";
 import * as Browser from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import * as Cdp from "effect-browser/Cdp";
@@ -65,11 +65,11 @@ const release = (client: Service, id: string, settle: Duration.Duration | undefi
         : client.getSession(id).pipe(
             Effect.repeat({ until: ended, schedule: Schedule.spaced("1 second") }),
             Effect.timeout("1 minute"),
-            Effect.andThen(Effect.sleep(settle)),
             Effect.ignore({
               log: "Warn",
               message: "Browserbase did not report the session ended; its context may change later",
             }),
+            Effect.andThen(Effect.sleep(settle)),
           ),
     ),
   );
@@ -97,23 +97,32 @@ const connect = (
         { contextOrigin },
       );
 
-/** Create a session and open a `Browser` on it, for as long as the scope is open. */
+/**
+ * Create a session and open a `Browser` on it, for as long as the scope is open. If opening
+ * fails, the session and context are released then, so a retry in the same scope can take them.
+ */
 export const open = Effect.fn("Browserbase.open")(function* (options: Options = {}) {
   const client = yield* BrowserbaseClient;
   const context = options.session?.browserSettings?.context;
-
-  if (context?.persist === true) yield* holdContext(context.id);
+  const local = yield* Scope.fork(yield* Effect.scope);
 
   const settle =
     context?.persist === true
       ? Duration.fromInputUnsafe(options.contextSettle ?? Duration.seconds(10))
       : undefined;
 
-  const session = yield* Effect.acquireRelease(client.createSession(options.session), (session) =>
-    release(client, session.id, settle),
-  );
+  return yield* Effect.gen(function* () {
+    if (context?.persist === true) yield* holdContext(context.id);
 
-  return yield* connect("open", session, options, "fresh");
+    const session = yield* Effect.acquireRelease(client.createSession(options.session), (session) =>
+      release(client, session.id, settle),
+    );
+
+    return yield* connect("open", session, options, "fresh");
+  }).pipe(
+    Scope.provide(local),
+    Effect.onError((cause) => Scope.close(local, Exit.failCause(cause))),
+  );
 });
 
 /**
