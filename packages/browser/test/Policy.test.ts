@@ -3,8 +3,9 @@ import { Deferred, Duration, Effect, Fiber, Layer } from "effect";
 
 import { Browser, make as makeBrowser, type Options as BrowserOptions } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
+import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
-import type { InputRequest, Page } from "../src/Page.ts";
+import { type InputRequest, type Page, redacted } from "../src/Page.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
 import * as Tools from "../src/Tools.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
@@ -59,7 +60,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
 })("Policy", (it) => {
-  it.effect("classifies submissions, consequential controls, origins and files before input", () =>
+  it.effect("reports structural facts before input, never what a control is called", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];
 
@@ -90,12 +91,12 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       for (const [role, name, expected] of [
         ["button", "Submit form", ["form-submit"]],
-        ["button", "Buy now", ["purchase"]],
-        ["button", "Pay now", ["purchase"]],
-        ["button", "Place order", ["purchase"]],
-        ["button", "Delete item", ["delete"]],
-        ["button", "Confirm transfer", ["confirm"]],
-        ["button", "Ordinary action", []],
+        ["button", "Buy now", ["scripted"]],
+        ["button", "Pay now", ["scripted"]],
+        ["button", "Place order", ["scripted"]],
+        ["button", "Delete item", ["scripted"]],
+        ["button", "Confirm transfer", ["scripted"]],
+        ["button", "Ordinary action", ["scripted"]],
         ["link", "External destination", ["cross-origin"]],
         ["link", "Save file", ["download"]],
         ["textbox", "Upload file", ["upload"]],
@@ -109,7 +110,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(request.role, role);
         assert.strictEqual(request.name, name);
         assert.deepStrictEqual(
-          [...request.classifications].sort((left, right) => left.localeCompare(right)),
+          [...request.facts].sort((left, right) => left.localeCompare(right)),
           [...expected].sort((left, right) => left.localeCompare(right)),
         );
       }
@@ -125,31 +126,166 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* failure(page.click(point));
       assert.strictEqual(requests.at(-1)!.name, "Buy now");
       assert.deepStrictEqual(requests.at(-1)!.point, point);
-      assert.include(requests.at(-1)!.classifications, "purchase");
+      assert.deepStrictEqual(requests.at(-1)!.facts, ["scripted"]);
 
       yield* Effect.promise(() => page.playwright.locator("#amount").focus());
       yield* failure(page.press("Enter"));
-      assert.include(requests.at(-1)!.classifications, "form-submit");
+      assert.include(requests.at(-1)!.facts, "form-submit");
       assert.strictEqual(requests.at(-1)!.name, "Amount");
       yield* failure(page.type("25", { into: refOf(snapshot, "textbox", "Amount"), submit: true }));
-      assert.include(requests.at(-1)!.classifications, "form-submit");
+      assert.include(requests.at(-1)!.facts, "form-submit");
       yield* failure(page.press("ArrowLeft"));
-      assert.notInclude(requests.at(-1)!.classifications, "form-submit");
+      assert.notInclude(requests.at(-1)!.facts, "form-submit");
       yield* Effect.promise(() => page.playwright.locator("#notes").focus());
       yield* failure(page.press("Enter"));
-      assert.notInclude(requests.at(-1)!.classifications, "form-submit");
+      assert.notInclude(requests.at(-1)!.facts, "form-submit");
       yield* failure(
         page.type("text", { into: refOf(snapshot, "textbox", "Notes"), submit: true }),
       );
-      assert.notInclude(requests.at(-1)!.classifications, "form-submit");
+      assert.notInclude(requests.at(-1)!.facts, "form-submit");
       yield* failure(page.goto(external.href));
-      assert.include(requests.at(-1)!.classifications, "cross-origin");
+      assert.include(requests.at(-1)!.facts, "cross-origin");
       assert.strictEqual(requests.at(-1)!.destination, external.href);
       assert.strictEqual(yield* valueOf(page, "#amount"), "10");
     }),
   );
 
-  it.effect("classifies the first image submitter when Enter implicitly submits a form", () =>
+  it.effect("gives a guard the page's evidence around a target, never a field's value", () =>
+    Effect.gen(function* () {
+      const requests: Array<InputRequest> = [];
+
+      const { page } = yield* setup({
+        guard: (request) =>
+          Effect.sync(() => requests.push(request)).pipe(
+            Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+          ),
+      });
+
+      const site = yield* Site;
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          "<title>Team settings</title><h1>Settings</h1><section><h2>Team members</h2>" +
+            '<ul><li>alex@example.com · Editor <button type="button" aria-describedby="hint">Remove</button></li></ul>' +
+            '<p id="hint">Removes their access at once.</p></section>' +
+            '<dialog open aria-label="Delete repository"><p>This cannot be undone.</p>' +
+            '<form action="/repos/delete" method="post"><label>Repository name <input value="octo-repo-7"></label>' +
+            '<label>Password <input type="password" autocomplete="current-password" value="hunter2"></label>' +
+            '<input type="hidden" name="_method" value="DESTROY"><button>Delete this repository</button></form></dialog>',
+        ),
+      );
+      const snapshot = yield* page.snapshot();
+
+      yield* failure(page.click(refOf(snapshot, "button", "Remove")));
+      yield* failure(page.click(refOf(snapshot, "button", "Delete this repository")));
+
+      const [remove, destroy] = requests.map(
+        ({ url, title, description, facts, context, form }) => ({
+          url,
+          title,
+          description,
+          facts,
+          context,
+          form,
+        }),
+      );
+
+      assert.deepStrictEqual(remove, {
+        url: site.url("/form"),
+        title: "Team settings",
+        description: "Removes their access at once.",
+        facts: ["scripted"],
+        context: {
+          dialog: undefined,
+          heading: "Team members",
+          nearby: "alex@example.com · Editor",
+        },
+        form: undefined,
+      });
+      assert.deepStrictEqual(destroy, {
+        url: site.url("/form"),
+        title: "Team settings",
+        description: undefined,
+        facts: ["form-submit", "secret"],
+        context: {
+          dialog: "Delete repository",
+          heading: undefined,
+          nearby: "Repository name Password",
+        },
+        form: {
+          method: "post",
+          action: site.url("/repos/delete"),
+          fields: [
+            { type: "text", name: "Repository name", filled: true },
+            { type: "password", name: "Password", autocomplete: "current-password", filled: true },
+            { type: "hidden", name: "_method", filled: true },
+          ],
+        },
+      });
+      for (const value of ["octo-repo-7", "hunter2", "DESTROY"])
+        assert.notInclude(JSON.stringify(requests), value);
+    }),
+  );
+
+  it.effect("keeps typed secrets out of the guard's request and the recorded events", () =>
+    Effect.gen(function* () {
+      const requests: Array<InputRequest> = [];
+
+      const guarded = yield* setup({
+        guard: (request) => Effect.sync(() => requests.push(request)),
+      });
+
+      const open = yield* setup({});
+
+      for (const { page } of [guarded, open])
+        yield* Effect.promise(() =>
+          page.playwright.setContent(
+            '<label>Email <input id="email" autocomplete="username"></label>' +
+              '<label>Password <input id="password" type="password" autocomplete="current-password"></label>' +
+              // A field that becomes a password field once focused.
+              '<label>PIN <input id="pin" onfocus="this.type=\'password\'"></label>',
+          ),
+        );
+
+      const typed = yield* guarded.page.snapshot();
+
+      yield* guarded.page.type("alex@example.com", { into: refOf(typed, "textbox", "Email") });
+      yield* guarded.page.type("hunter2", { into: refOf(typed, "textbox", "Password") });
+      // Without a guard nothing is prepared: the field's own state decides, after focusing it.
+      yield* open.page.type("4321", { into: refOf(yield* open.page.snapshot(), "textbox", "PIN") });
+
+      assert.deepStrictEqual(
+        requests.map(({ text, facts }) => [text, facts]),
+        [
+          ["alex@example.com", []],
+          [redacted, ["secret"]],
+        ],
+      );
+
+      const recorded = (events: ReadonlyArray<BrowserEvent>) => ({
+        actions: events.flatMap((event) => (event._tag === "Action" ? [event.text] : [])),
+        keys: events.flatMap((event) =>
+          event._tag === "KeyChanged" && event.phase === "down" ? [event.key] : [],
+        ),
+        inserted: events.flatMap((event) => (event._tag === "TextInserted" ? [event.text] : [])),
+      });
+
+      assert.deepStrictEqual(recorded(yield* guarded.browser.recentEvents), {
+        actions: ["alex@example.com", redacted],
+        keys: [..."alex@example.com", ...Array.from("hunter2", () => "Unidentified")],
+        inserted: [],
+      });
+      assert.deepStrictEqual(recorded(yield* open.browser.recentEvents), {
+        actions: [redacted],
+        keys: Array.from("4321", () => "Unidentified"),
+        inserted: [],
+      });
+      assert.strictEqual(yield* valueOf(guarded.page, "#password"), "hunter2");
+      assert.strictEqual(yield* valueOf(open.page, "#pin"), "4321");
+    }),
+  );
+
+  it.effect("reports the first image submitter when Enter implicitly submits a form", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];
 
@@ -179,12 +315,12 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         dispatched: false,
       });
       assert.strictEqual(requests.at(-1)!.destination, external.href);
-      assert.includeMembers([...requests.at(-1)!.classifications], ["form-submit", "cross-origin"]);
+      assert.includeMembers([...requests.at(-1)!.facts], ["form-submit", "cross-origin"]);
       assert.strictEqual(yield* valueOf(page, "#amount"), "10");
     }),
   );
 
-  it.effect("classifies what a click activates: SVG links, map areas and submitter children", () =>
+  it.effect("reports what a click activates: SVG links, map areas and submitter children", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];
 
@@ -216,9 +352,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.isNotNull(continueAt);
       if (continueAt === null) return;
 
+      // Neither the SVG link nor the map area has a name, so both are opaque as well.
       for (const [target, expected] of [
-        [{ x: 150, y: 50 }, ["cross-origin"]],
-        [{ x: 150, y: 150 }, ["cross-origin", "download"]],
+        [{ x: 150, y: 50 }, ["cross-origin", "opaque"]],
+        [{ x: 150, y: 150 }, ["cross-origin", "download", "opaque"]],
         [
           { x: continueAt.x + continueAt.width / 2, y: continueAt.y + continueAt.height / 2 },
           ["cross-origin", "form-submit"],
@@ -230,7 +367,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           dispatched: false,
         });
         assert.deepStrictEqual(
-          [...requests.at(-1)!.classifications].sort((left, right) => left.localeCompare(right)),
+          [...requests.at(-1)!.facts].sort((left, right) => left.localeCompare(right)),
           [...expected],
         );
         assert.strictEqual(requests.at(-1)!.destination, external.href);
@@ -238,7 +375,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("leaves hover and scroll unclassified over consequential controls", () =>
+  it.effect("reports no facts for hover and scroll over consequential controls", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];
 
@@ -262,7 +399,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* page.scroll({ at: refOf(snapshot, "button", "Delete"), dy: 100 });
 
       assert.deepStrictEqual(
-        requests.map((request) => [request.action, request.classifications, request.destination]),
+        requests.map((request) => [request.action, request.facts, request.destination]),
         [
           ["hover", [], undefined],
           ["scroll", [], undefined],
@@ -271,7 +408,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("refuses typing into a control before asking, and classifies Enter on toggles", () =>
+  it.effect("refuses typing into a control before asking, and reports Enter on toggles", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];
 
@@ -301,7 +438,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           tag: "PolicyDenied",
           dispatched: false,
         });
-        assert.include(requests.at(-1)!.classifications, "form-submit");
+        assert.include(requests.at(-1)!.facts, "form-submit");
       }
     }),
   );
@@ -366,8 +503,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         const { page } = yield* setup({
           humanize,
           guard: (request) =>
-            request.classifications.some((kind) => kind === "delete" || kind === "form-submit")
-              ? Effect.fail(new PolicyDenied({ detail: "deletion and submission are denied" }))
+            request.facts.includes("form-submit")
+              ? Effect.fail(new PolicyDenied({ detail: "submission is denied" }))
               : Effect.void,
         });
 
@@ -414,8 +551,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         const { page } = yield* setup({
           humanize,
           guard: (request) =>
-            request.classifications.some((kind) => kind === "delete" || kind === "form-submit")
-              ? Effect.fail(new PolicyDenied({ detail: "deletion and submission are denied" }))
+            request.facts.includes("form-submit")
+              ? Effect.fail(new PolicyDenied({ detail: "submission is denied" }))
               : Effect.void,
         });
 
@@ -741,7 +878,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   }
 
   // A control that appears inside the approved target, rather than over it, must not receive the
-  // press either: the approval classified the target, not the link or button now under the pointer.
+  // press either: the approval inspected the target, not the link or button now under the pointer.
   // The inserted controls are aria-hidden so the target's name and fingerprint stay unchanged.
   const nestedTrap =
     '<body style="margin:0"><div role="listbox" aria-label="Reports">' +

@@ -45,17 +45,17 @@ export type PointResult =
       readonly detail: string;
     };
 
-export const Classification = Schema.Literals([
+export const Fact = Schema.Literals([
   "form-submit",
-  "purchase",
-  "delete",
-  "confirm",
   "cross-origin",
   "download",
   "upload",
+  "secret",
+  "scripted",
+  "opaque",
 ]);
 
-export type Classification = typeof Classification.Type;
+export type Fact = typeof Fact.Type;
 
 export interface InputPlan {
   readonly action: string;
@@ -72,14 +72,40 @@ export interface InspectedTarget {
   readonly name: string;
   readonly cursor: string;
   readonly href?: string | undefined;
+  /** A field the DOM marks as holding a password, a one-time code or a card's details. */
+  readonly secret: boolean;
   readonly fingerprint: string;
+}
+
+export interface FormField {
+  readonly type: string;
+  readonly name: string;
+  readonly autocomplete?: string | undefined;
+  readonly filled: boolean;
+}
+
+/** Page text about the first target. It never includes what a field holds. */
+export interface Evidence {
+  readonly title: string;
+  readonly description?: string | undefined;
+  readonly dialog?: string | undefined;
+  readonly heading?: string | undefined;
+  readonly nearby?: string | undefined;
+  readonly form?:
+    | {
+        readonly method: string;
+        readonly action: string;
+        readonly fields: ReadonlyArray<FormField>;
+      }
+    | undefined;
 }
 
 export interface PreparedInput {
   readonly url: string;
   readonly targets: ReadonlyArray<InspectedTarget | null>;
-  readonly classifications: ReadonlyArray<Classification>;
+  readonly facts: ReadonlyArray<Fact>;
   readonly destination?: string | undefined;
+  readonly evidence: Evidence;
 }
 
 /** A refusal; a stale target is named by its index in the plan. */
@@ -111,13 +137,21 @@ export type EditResult =
   | { readonly ok: true; readonly detail: string }
   | { readonly error: string; readonly stale?: boolean };
 
-/** A focused field, and whether opted-in prose slips may apply to it as it is now. */
+/**
+ * A focused field, whether opted-in prose slips may apply to it as it is now, and whether it is
+ * secret.
+ */
 export type FocusResult =
-  | { readonly ok: true; readonly detail: string; readonly prose: boolean }
+  | {
+      readonly ok: true;
+      readonly detail: string;
+      readonly prose: boolean;
+      readonly secret: boolean;
+    }
   | { readonly error: string; readonly stale?: boolean };
 
 export type TypeableResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly secret: boolean }
   | { readonly error: "stale" | "untypeable"; readonly detail: string };
 
 export interface PageApi {
@@ -149,7 +183,7 @@ declare global {
 export const install = (): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 4) return installed;
+  if (installed !== undefined && installed.version === 5) return installed;
 
   const byElement = new WeakMap<Element, string>();
   const byRef = new Map<string, WeakRef<Element>>();
@@ -238,6 +272,7 @@ export const install = (): PageApi => {
     isHtml(element) ? element.innerText : (element.textContent ?? "");
 
   const isElement = (node: Node): node is Element => node.nodeType === Node.ELEMENT_NODE;
+  const isDocument = (node: Node): node is Document => node.nodeType === Node.DOCUMENT_NODE;
 
   /** A label's own words, without the options or values of the controls inside it. */
   const labelText = (label: Element): string => {
@@ -707,7 +742,7 @@ export const install = (): PageApi => {
   };
 
   // A press at a point reaches the element when the top-document hit is the element, inside it,
-  // or one of its containers (whose activation the element's own classification already covers).
+  // or one of its containers (whose activation the element's own facts already cover).
   const receives = (element: Element, hit: Element): boolean =>
     within(element, hit) || within(hit, element);
 
@@ -773,11 +808,11 @@ export const install = (): PageApi => {
 
   /**
    * A control between a press's hit and the approved target that is not the target's own
-   * activation, such as a link or button a hover handler nested into it. The approval classified
+   * activation, such as a link or button a hover handler nested into it. The approval inspected
    * the target, so that control would act unapproved.
    */
   const nestedControl = (element: Element, hit: Element): Element | undefined => {
-    // A container of the target is covered by the target's own classification.
+    // A container of the target is covered by the target's own facts.
     if (!within(element, hit)) return undefined;
     const own = activationTarget(element);
 
@@ -1146,9 +1181,197 @@ export const install = (): PageApi => {
     return hash === -1 || /^#[/!]/.test(url.slice(hash)) ? url : url.slice(0, hash);
   };
 
+  // Autocomplete tokens for a password, a one-time code, or a payment card's number, code or expiry.
+  const secretTokens = new Set([
+    "current-password",
+    "new-password",
+    "one-time-code",
+    "cc-number",
+    "cc-csc",
+    "cc-exp",
+    "cc-exp-month",
+    "cc-exp-year",
+  ]);
+
+  /** A field the DOM itself marks as secret, by its type or its autocomplete tokens. */
+  const isSecret = (element: Element): boolean =>
+    (isInput(element) && element.type === "password") ||
+    (element.getAttribute("autocomplete") ?? "")
+      .toLowerCase()
+      .split(/\s+/)
+      .some((token) => secretTokens.has(token));
+
+  type Field = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+  /** A field a submission would send. */
+  const isField = (element: Element): element is Field =>
+    ((isInput(element) && !["button", "submit", "reset", "image"].includes(element.type)) ||
+      isSelect(element) ||
+      isTextArea(element)) &&
+    !element.matches(":disabled");
+
+  const isFilled = (field: Field): boolean =>
+    isInput(field) && (field.type === "checkbox" || field.type === "radio")
+      ? field.checked
+      : isInput(field) && field.type === "file"
+        ? (field.files?.length ?? 0) > 0
+        : field.value !== "";
+
+  const shown = (element: Element): boolean =>
+    element.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+
+  // Text in these says what a control is called, not what the page says around it.
+  const unspoken =
+    "button,select,textarea,option,script,style,noscript,template,[role=button],[role=menuitem],[role=option],[role=tab],[role=switch],[role=checkbox],[role=radio],[aria-hidden=true]";
+
+  // Containers whose text usually describes the controls in them: a row, an item, a group or a form.
+  const groups =
+    "tr,li,article,fieldset,form,section,dialog,[role=row],[role=listitem],[role=group],[role=region],[role=dialog],[role=alertdialog]";
+
+  /** The visible text just before (or after) a target within `scope`, nearest kept, ≤120 characters. */
+  const textBeside = (target: Element, scope: Node, backwards: boolean): string => {
+    const walker = target.ownerDocument.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+
+    const labels =
+      isInput(target) || isTextArea(target) || isSelect(target) || isButton(target)
+        ? Array.from(target.labels ?? [])
+        : [];
+
+    let text = "";
+
+    walker.currentNode = target;
+    for (let steps = 0; steps < 400 && text.replace(/\s+/g, "").length < 120; steps++) {
+      const node = backwards ? walker.previousNode() : walker.nextNode();
+
+      if (node === null) break;
+      const parent = node.parentElement;
+
+      if (
+        parent === null ||
+        target.contains(parent) ||
+        parent.closest(unspoken) !== null ||
+        (isHtml(parent) && parent.isContentEditable) ||
+        labels.some((label) => label.contains(parent)) ||
+        !shown(parent)
+      )
+        continue;
+      text = backwards ? `${node.textContent ?? ""} ${text}` : `${text} ${node.textContent ?? ""}`;
+    }
+    const words = text.replace(/\s+/g, " ").trim();
+
+    return words.length <= 120
+      ? words
+      : backwards
+        ? `…${words.slice(-119).trimStart()}`
+        : `${words.slice(0, 119).trimEnd()}…`;
+  };
+
+  const dialogOf = (element: Element): Element | undefined => {
+    for (let node: Element | null = element; node !== null; node = parentOf(node))
+      if (node.tagName === "DIALOG" || /^(?:alert)?dialog$/.test(node.getAttribute("role") ?? ""))
+        return node;
+
+    return undefined;
+  };
+
+  /** The nearest visible heading before `target` in tree order, within `scope`. */
+  const headingBefore = (target: Element, scope: Node): string | undefined => {
+    const walker = target.ownerDocument.createTreeWalker(scope, NodeFilter.SHOW_ELEMENT);
+
+    walker.currentNode = target;
+    for (let steps = 0; steps < 2000; steps++) {
+      const node = walker.previousNode();
+
+      if (node === null) break;
+      if (isElement(node) && roleOf(node) === "heading" && shown(node)) {
+        const text = clean(textOf(node), 120);
+
+        if (text !== "") return text;
+      }
+    }
+
+    return undefined;
+  };
+
+  /** What the page says about an input's first target, for a judge. Never a field's value. */
+  const evidenceOf = (
+    element: Element,
+    form: HTMLFormElement | null,
+    method: string | undefined,
+    action: string | undefined,
+  ): Evidence => {
+    const name = nameOf(element, roleOf(element));
+    const ids = element.getAttribute("aria-describedby");
+
+    const description = clean(
+      ids === null
+        ? (element.getAttribute("aria-description") ?? element.getAttribute("title"))
+        : ids
+            .split(/\s+/)
+            .map((id) => element.ownerDocument.getElementById(id)?.textContent ?? "")
+            .join(" "),
+      120,
+    );
+
+    const dialog = dialogOf(element);
+
+    const title = dialog?.querySelector("h1,h2,h3,h4,h5,h6,[role=heading]");
+
+    const dialogName =
+      dialog === undefined
+        ? ""
+        : clean(nameOf(dialog, "dialog"), 120) ||
+          (title === null || title === undefined ? "" : clean(textOf(title), 120));
+
+    // Each scope stays in the target's own tree: a walker cannot leave a shadow root.
+    const root = element.getRootNode();
+    const top = isDocument(root) ? (root.body ?? root) : root;
+    const inTree = element.closest("dialog,[role=dialog],[role=alertdialog]");
+    let nearby = "";
+
+    for (const scope of new Set([element.closest(groups), inTree, top]))
+      if (scope !== null && nearby === "")
+        nearby = textBeside(element, scope, true) || textBeside(element, scope, false);
+
+    const heading = headingBefore(element, inTree ?? top);
+
+    const fields =
+      form === null
+        ? []
+        : Array.from(form.elements)
+            .filter(isField)
+            .slice(0, 16)
+            .map((field) => {
+              const autocomplete = clean(field.getAttribute("autocomplete"), 40);
+
+              return {
+                type: isInput(field) ? field.type : field.tagName.toLowerCase(),
+                name: clean(
+                  isInput(field) && field.type === "hidden"
+                    ? field.getAttribute("name")
+                    : nameOf(field, roleOf(field)),
+                  40,
+                ),
+                ...(autocomplete === "" ? {} : { autocomplete }),
+                filled: isFilled(field),
+              };
+            });
+
+    return {
+      title: clean(document.title, 120),
+      ...(description === "" || description === name ? {} : { description }),
+      ...(dialogName === "" ? {} : { dialog: dialogName }),
+      ...(heading === undefined ? {} : { heading }),
+      ...(nearby === "" ? {} : { nearby }),
+      ...(form === null
+        ? {}
+        : { form: { method: method ?? form.method, action: action ?? form.action, fields } }),
+    };
+  };
+
   const inspectInput = (element: Element, plan: InputPlan) => {
     const metadata = details(element, element, 0, 0);
-    // Classify what the input activates, such as the submit button around a painted label.
+    // Facts are about what the input activates, such as the submit button around a painted label.
     const control = activationTarget(element) ?? element;
 
     const form =
@@ -1156,11 +1379,12 @@ export const install = (): PageApi => {
         ? control.form
         : null;
 
-    const enter = plan.keys?.split("+").at(-1) === "Enter";
+    // The chord's last key, which may be the plus key itself: Control++.
+    const key = plan.keys === null ? undefined : /(?:^|\+)(\+|[^+]+)$/.exec(plan.keys)?.[1];
+    const enter = key === "Enter";
 
     const activation =
-      plan.action === "click" ||
-      (plan.action === "press" && (enter || plan.keys?.split("+").at(-1) === "Space"));
+      plan.action === "click" || (plan.action === "press" && (enter || key === "Space"));
 
     // Enter submits a form from any input but buttons, file and color pickers, including
     // checkboxes, radios and ranges.
@@ -1199,22 +1423,45 @@ export const install = (): PageApi => {
           : form.target;
 
     const link = linkOf(element);
+    const href = link === undefined ? null : hrefAttribute(link);
+    // A dialog form only closes its dialog; the page's script decides what that means.
+    const sends = submits && formMethod !== "dialog";
     // Only activation follows a link or opens a file chooser; hovering or scrolling over a
-    // control does neither, and names say nothing about where the pointer merely rests.
-    const destination = submits ? formDestination : activation ? metadata.href : undefined;
-    const classifications: Array<Classification> = [];
+    // control does neither.
+    const destination = sends ? formDestination : activation ? metadata.href : undefined;
+    const acts = plan.action !== "hover" && plan.action !== "scroll";
 
-    const names =
-      control === element ? metadata.name : `${metadata.name} ${nameOf(control, roleOf(control))}`;
+    // What the browser itself does on activation: follow a link, submit or reset a form, choose
+    // a file or a value, toggle a box or a disclosure, or focus a field. Anything else is the
+    // page's script.
+    const builtIn =
+      sends ||
+      (href !== null && !/^\s*(?:#\s*|javascript:[^]*)$/i.test(href)) ||
+      (isInput(control) && !["button", "submit", "image", "reset"].includes(control.type)) ||
+      ((isInput(control) || isButton(control)) && control.type === "reset" && form !== null) ||
+      control.tagName === "SUMMARY" ||
+      control.closest("select") !== null ||
+      textEntry(control);
 
-    if (submits) classifications.push("form-submit");
-    if (plan.action !== "hover" && plan.action !== "scroll") {
-      if (/\b(?:buy|pay|order|purchase)\b/i.test(names)) classifications.push("purchase");
-      if (/\bdelete\b/i.test(names)) classifications.push("delete");
-      if (/\bconfirm\b/i.test(names)) classifications.push("confirm");
-    }
-    if (activation && link?.hasAttribute("download") === true) classifications.push("download");
-    if (activation && isInput(control) && control.type === "file") classifications.push("upload");
+    const facts: Array<Fact> = [];
+
+    // Facts come from structure only. What a name or the text around it says is evidence for a
+    // judge, never a fact: words change meaning with context and language.
+    if (sends) facts.push("form-submit");
+    if (activation && link?.hasAttribute("download") === true) facts.push("download");
+    if (activation && isInput(control) && control.type === "file") facts.push("upload");
+    if (
+      (plan.action === "type" && isSecret(control)) ||
+      (sends &&
+        form !== null &&
+        Array.from(form.elements).some(
+          (field) => isField(field) && isSecret(field) && isFilled(field),
+        ))
+    )
+      facts.push("secret");
+    if (activation && !builtIn) facts.push("scripted");
+    if (acts && (metadata.role === "canvas" || metadata.role === "iframe" || metadata.name === ""))
+      facts.push("opaque");
 
     // Bind what decides the consequence and the control's identity. Names bind interactive
     // controls only: other text, such as a live price or a page's own text, may change freely.
@@ -1266,18 +1513,27 @@ export const install = (): PageApi => {
       name: metadata.name,
       cursor: metadata.cursor,
       ...(metadata.href === undefined ? {} : { href: metadata.href }),
+      secret: isSecret(control),
       fingerprint,
     };
 
-    return { inspected, classifications, destination };
+    return {
+      inspected,
+      facts,
+      destination,
+      explain: () => evidenceOf(element, form, formMethod, formDestination),
+    };
   };
 
   // Approval preparation only reads the DOM. In particular, an offscreen ref must not scroll
   // before the policy has had a chance to deny it.
-  const prepareInput = (plan: InputPlan): PreparedInputResult => {
+  const inspect = (
+    plan: InputPlan,
+  ): (Omit<PreparedInput, "evidence"> & { readonly explain: () => Evidence }) | InputFailure => {
     const targets: Array<InspectedTarget | null> = [];
-    const classifications = new Set<Classification>();
+    const facts = new Set<Fact>();
     let destination = plan.destination ?? undefined;
+    let explain = (): Evidence => ({ title: clean(document.title, 120) });
 
     for (const [index, target] of plan.targets.entries()) {
       let element: Element | null | undefined;
@@ -1316,13 +1572,14 @@ export const install = (): PageApi => {
       if (refusal !== undefined) return { error: "untypeable", detail: refusal };
       const inspected = inspectInput(element, plan);
 
+      if (index === 0) explain = inspected.explain;
       targets.push(inspected.inspected);
-      for (const classification of inspected.classifications) classifications.add(classification);
+      for (const fact of inspected.facts) facts.add(fact);
       destination ??= inspected.destination;
       if (inspected.destination !== undefined) {
         try {
           if (new URL(inspected.destination, location.href).origin !== location.origin)
-            classifications.add("cross-origin");
+            facts.add("cross-origin");
         } catch {
           return { error: "outside", detail: "the input destination is not a valid URL" };
         }
@@ -1332,7 +1589,7 @@ export const install = (): PageApi => {
     if (destination !== undefined) {
       try {
         destination = new URL(destination, location.href).href;
-        if (new URL(destination).origin !== location.origin) classifications.add("cross-origin");
+        if (new URL(destination).origin !== location.origin) facts.add("cross-origin");
       } catch {
         return { error: "outside", detail: "the input destination is not a valid URL" };
       }
@@ -1341,9 +1598,21 @@ export const install = (): PageApi => {
     return {
       url: boundUrl(location.href),
       targets,
-      classifications: [...classifications],
+      facts: [...facts],
       ...(destination === undefined ? {} : { destination }),
+      explain,
     };
+  };
+
+  // Evidence is read once, for the policy. Validation binds the facts and the targets, not the
+  // text around them, which live pages change freely.
+  const prepareInput = (plan: InputPlan): PreparedInputResult => {
+    const inspected = inspect(plan);
+
+    if ("error" in inspected) return inspected;
+    const { explain, ...prepared } = inspected;
+
+    return { ...prepared, evidence: explain() };
   };
 
   const validate = (
@@ -1351,7 +1620,7 @@ export const install = (): PageApi => {
     prepared: PreparedInput,
     options: ValidationOptions,
   ): ValidatedInputResult => {
-    const current = prepareInput(plan);
+    const current = inspect(plan);
 
     if ("error" in current)
       return current.error === "stale" ? current : { error: "changed", detail: current.detail };
@@ -1360,7 +1629,7 @@ export const install = (): PageApi => {
       (current.destination === undefined || prepared.destination === undefined
         ? current.destination !== prepared.destination
         : boundUrl(current.destination) !== boundUrl(prepared.destination)) ||
-      JSON.stringify(current.classifications) !== JSON.stringify(prepared.classifications) ||
+      JSON.stringify(current.facts) !== JSON.stringify(prepared.facts) ||
       current.targets.length !== prepared.targets.length ||
       current.targets.some((target, index) => {
         const previous = prepared.targets[index];
@@ -1463,7 +1732,9 @@ export const install = (): PageApi => {
       };
     const refusal = element === null ? undefined : typingRefusal(element, ref !== null);
 
-    return refusal === undefined ? { ok: true } : { error: "untypeable", detail: refusal };
+    return refusal === undefined
+      ? { ok: true, secret: element !== null && isSecret(element) }
+      : { error: "untypeable", detail: refusal };
   };
 
   const focus = (ref: string, replace: boolean): FocusResult => {
@@ -1478,8 +1749,13 @@ export const install = (): PageApi => {
       else element.ownerDocument.getSelection()?.selectAllChildren(element);
     }
 
-    // Decided after focusing: a focus handler can mark the field sensitive.
-    return { ok: true, detail: describe(element), prose: proseEligible(element) };
+    // Decided after focusing: a focus handler can mark the field sensitive or secret.
+    return {
+      ok: true,
+      detail: describe(element),
+      prose: proseEligible(element),
+      secret: isSecret(element),
+    };
   };
 
   const select = (ref: string, values: ReadonlyArray<string>): EditResult => {
@@ -1514,7 +1790,7 @@ export const install = (): PageApi => {
     (document.body?.innerText ?? "").toLowerCase().includes(text.toLowerCase());
 
   const api: PageApi = {
-    version: 4,
+    version: 5,
     snapshot,
     point,
     scrollPlan,
@@ -1574,6 +1850,28 @@ const InputPreparationError = Schema.Struct({
   index: Schema.optional(Schema.Finite),
 });
 
+export const FormFieldSchema = Schema.Struct({
+  type: Schema.String,
+  name: Schema.String,
+  autocomplete: Schema.optional(Schema.String),
+  filled: Schema.Boolean,
+});
+
+const EvidenceSchema = Schema.Struct({
+  title: Schema.String,
+  description: Schema.optional(Schema.String),
+  dialog: Schema.optional(Schema.String),
+  heading: Schema.optional(Schema.String),
+  nearby: Schema.optional(Schema.String),
+  form: Schema.optional(
+    Schema.Struct({
+      method: Schema.String,
+      action: Schema.String,
+      fields: Schema.Array(FormFieldSchema),
+    }),
+  ),
+});
+
 export const PreparedInputResultSchema = Schema.Union([
   Schema.Struct({
     url: Schema.String,
@@ -1586,12 +1884,14 @@ export const PreparedInputResultSchema = Schema.Union([
           name: Schema.String,
           cursor: Schema.String,
           href: Schema.optional(Schema.String),
+          secret: Schema.Boolean,
           fingerprint: Schema.String,
         }),
       ),
     ),
-    classifications: Schema.Array(Classification),
+    facts: Schema.Array(Fact),
     destination: Schema.optional(Schema.String),
+    evidence: EvidenceSchema,
   }),
   InputPreparationError,
 ]);
@@ -1616,14 +1916,19 @@ export const ViewportResultSchema = Schema.Struct({
 });
 
 export const TypeableResultSchema = Schema.Union([
-  Schema.Struct({ ok: Schema.Literal(true) }),
+  Schema.Struct({ ok: Schema.Literal(true), secret: Schema.Boolean }),
   Schema.Struct({ error: Schema.Literals(["stale", "untypeable"]), detail: Schema.String }),
 ]);
 
 const EditFailure = Schema.Struct({ error: Schema.String, stale: Schema.optional(Schema.Boolean) });
 
 export const FocusResultSchema = Schema.Union([
-  Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String, prose: Schema.Boolean }),
+  Schema.Struct({
+    ok: Schema.Literal(true),
+    detail: Schema.String,
+    prose: Schema.Boolean,
+    secret: Schema.Boolean,
+  }),
   EditFailure,
 ]);
 

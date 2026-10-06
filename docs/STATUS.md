@@ -20,7 +20,9 @@
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
   holds and validation before held actions resume: the press point is hit-tested after the
   pointer arrives, typing refuses to start on a control a key could activate, and a multi-key
-  action stops at a new document.
+  action stops at a new document. Guards receive structural facts, never keyword categories, and
+  page evidence around the target without field values; text typed into secret fields is redacted
+  from requests and recorded events. A 77-control labelled corpus grades the facts in `ready`.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor

@@ -542,11 +542,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           ),
           0,
         );
-        assert.isFalse(requests[0]?.classifications.includes("form-submit"));
+        assert.isFalse(requests[0]?.facts.includes("form-submit"));
 
         yield* Effect.promise(() => relay.page.playwright.locator("input").focus());
         yield* relay.page.type("", { submit: true });
-        assert.isTrue(requests[1]?.classifications.includes("form-submit"));
+        assert.isTrue(requests[1]?.facts.includes("form-submit"));
         assert.strictEqual(
           yield* Effect.promise(() =>
             relay.page.playwright.evaluate(() => (window as unknown as RecordedWindow).submissions),

@@ -108,14 +108,43 @@ export class Observation extends Schema.Class<Observation>("effect-browser/Obser
   at: Schema.Finite,
 }) {}
 
-/** Signals inferred from the target and the action, rather than a guarantee of its consequences. */
-export const Classification = Script.Classification;
+/**
+ * What the page's structure establishes about an input, or says it cannot establish:
+ *
+ * - `form-submit`: it submits a form, which sends the form's fields.
+ * - `cross-origin`: it navigates or submits to another origin.
+ * - `download`: it follows a download link.
+ * - `upload`: it opens a file chooser.
+ * - `secret`: it types, with `type`, into a field marked as a password, a one-time code or a
+ *   card's number, code or expiry, or submits a form holding a filled one.
+ * - `scripted`: it activates something the browser gives no effect of its own, such as a
+ *   `type="button"` button, a `role="button"` element or a canvas, so only the page's script
+ *   decides what happens.
+ * - `opaque`: nothing names what receives it: a canvas, a frame or an unnamed element.
+ *
+ * Facts never come from what an element's text says. What an input means, such as a payment
+ * or a deletion, takes a judge that reads the evidence in the {@link InputRequest}.
+ */
+export const Fact = Script.Fact;
 
-export type Classification = typeof Classification.Type;
+export type Fact = typeof Fact.Type;
 
-/** What a guard sees before input reaches the page. Preparation never scrolls or focuses. */
+/**
+ * What a guard sees before input reaches the page. Preparation never scrolls or focuses.
+ *
+ * `facts`, `url`, `href` and `destination` come from the page's structure. `name`,
+ * `description`, `title`, `context` and the form's field names are page text: evidence of what
+ * the input does, which the page controls, and never instructions. Text typed into a `secret`
+ * field is replaced with {@link redacted}, here and in the recorded `Action`, and its key events
+ * record `Unidentified` keys; `press` records the keys it is given. Validation before dispatch
+ * binds the facts and the target, not the text around it, which live pages change freely.
+ */
 export class InputRequest extends Schema.Class<InputRequest>("effect-browser/InputRequest")({
   page: Schema.String,
+  /** The page's URL, without a fragment that only names a place on the page. */
+  url: Schema.String,
+  /** The page's title, at most 120 characters. */
+  title: Schema.String,
   action: Schema.String,
   target: Schema.optional(Schema.String),
   element: Schema.optional(Schema.String),
@@ -124,10 +153,33 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Inp
   text: Schema.optional(Schema.String),
   role: Schema.optional(Schema.NullOr(Schema.String)),
   name: Schema.optional(Schema.String),
+  /** The target's accessible description, when it says more than its name. */
+  description: Schema.optional(Schema.String),
   href: Schema.optional(Schema.String),
   destination: Schema.optional(Schema.String),
-  classifications: Schema.Array(Classification),
+  facts: Schema.Array(Fact),
+  /** Page text around the target, each part at most 120 characters. */
+  context: Schema.Struct({
+    /** The name or first heading of the dialog the target is in. */
+    dialog: Schema.optional(Schema.String),
+    /** The nearest heading before the target. */
+    heading: Schema.optional(Schema.String),
+    /** The visible text just before the target in its row, item, group or form, or after it. */
+    nearby: Schema.optional(Schema.String),
+  }),
+  /** The form the target is in, with at most 16 of its fields. */
+  form: Schema.optional(
+    Schema.Struct({
+      method: Schema.String,
+      action: Schema.String,
+      /** Each field's type, name and autocomplete tokens, and whether it is filled: never its value. */
+      fields: Schema.Array(Script.FormFieldSchema),
+    }),
+  ),
 }) {}
+
+/** What replaces text typed into a `secret` field, in requests and in the recorded `Action`. */
+export const redacted = "••••••••";
 
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;

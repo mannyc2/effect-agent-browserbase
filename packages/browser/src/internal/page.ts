@@ -54,6 +54,7 @@ import {
   type Page,
   type Point,
   type PressOptions,
+  redacted,
   Region,
   ResolvedTarget,
   type ScreenshotOptions,
@@ -293,14 +294,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       }),
     );
 
+  // Keys and text bound for a secret field are recorded without their content.
   const dispatchKey = (
     key: string,
     phase: "down" | "up",
     command: (at: number, estimate: BrowserClock.Estimate | undefined) => Promise<unknown>,
     run: Input.Run,
+    secret = false,
   ) => {
     const at = now();
-    const event = new KeyChanged({ at, page: id, key, phase });
+    const event = new KeyChanged({ at, page: id, key: secret ? "Unidentified" : key, phase });
     const response = command(at, inputClocks.get(run));
 
     noteInput();
@@ -309,8 +312,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     return response;
   };
 
-  const dispatchText = (text: string) => {
-    const track = new TextInserted({ at: now(), page: id, text });
+  const dispatchText = (text: string, secret: boolean) => {
+    const track = new TextInserted({ at: now(), page: id, text: secret ? "•" : text });
     const response = cdp.send("Input.insertText", { text });
 
     noteInput();
@@ -530,6 +533,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     /** Preparatory input, such as the pointer travelling to a target, has reached the page. */
     readonly touched: Effect.Effect<void>;
     readonly at: (point: Point) => Effect.Effect<void>;
+    /** The action's text is not bound for a secret field, so its record may keep it. */
+    readonly reveal: Effect.Effect<void>;
     readonly input: Input.Run;
   }
 
@@ -545,6 +550,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     info: {
       readonly target?: string | undefined;
       readonly text?: string | undefined;
+      /** The text may be a secret: it is recorded only once the action reveals that it is not. */
+      readonly secret?: boolean | undefined;
       /** False for navigation, which sends no input and leaves the browser-wide lock free. */
       readonly input?: boolean | undefined;
     },
@@ -569,10 +576,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         noteInput();
       });
 
+      // A failure before the action checks its field, a denial included, records no text.
+      let revealed = info.secret !== true;
+
       const marks = {
         sent: Ref.set(sent, true).pipe(Effect.andThen(touch)),
         touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
+        reveal: Effect.sync(() => {
+          revealed = true;
+        }),
       };
 
       const timedOut = (duration: Duration.Duration) =>
@@ -720,7 +733,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               page: id,
               name,
               target: info.target,
-              text: info.text === undefined ? undefined : info.text.slice(0, 200),
+              text:
+                info.text === undefined ? undefined : revealed ? info.text.slice(0, 200) : redacted,
               x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
               y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
               ok: Exit.isSuccess(exit),
@@ -881,19 +895,28 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       if ("error" in prepared) return yield* inputFailure(action, targets, prepared);
       const first = prepared.targets[0];
       const target = targets[0];
+      const { title, description, dialog, heading, nearby, form } = prepared.evidence;
 
       const request = new InputRequest({
         page: id,
+        url: prepared.url,
+        title,
         action,
         target: info.target,
-        text: info.text,
+        text:
+          info.text !== undefined && action === "type" && first?.secret === true
+            ? redacted
+            : info.text,
         element: first?.element,
         role: first?.role,
         name: first?.name,
+        description,
         href: first?.href,
         point: target !== null && typeof target === "object" ? target : undefined,
         destination: prepared.destination,
-        classifications: prepared.classifications,
+        facts: prepared.facts,
+        context: { dialog, heading, nearby },
+        form,
       });
 
       const check = (options: Script.ValidationOptions = {}) =>
@@ -1311,13 +1334,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const typeEvent = (
     run: Input.Run,
     event: { readonly phase: "down" | "up" | "insert"; readonly key: string },
+    secret: boolean,
   ) =>
     inputCall(
       "type",
       Effect.gen(function* () {
         if (event.phase === "insert") {
           yield* run.reserve(1);
-          yield* run.send(() => dispatchText(event.key));
+          yield* run.send(() => dispatchText(event.key, secret));
 
           return;
         }
@@ -1352,6 +1376,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                   isKeypad: false,
                 }),
               run,
+              secret,
             ),
           () =>
             dispatchKey(
@@ -1368,6 +1393,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                   location: 0,
                 }),
               run,
+              secret,
             ),
         );
       }),
@@ -1376,7 +1402,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const typeText = (text: string, typeOptions: TypeOptions = {}) =>
     perform(
       "type",
-      { target: typeOptions.into, text },
+      { target: typeOptions.into, text, secret: true },
       Duration.sum(
         settings.actionTimeout,
         Duration.millis(
@@ -1417,6 +1443,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             );
 
           const since = yield* currentDocument("type");
+          let secret = typeable.secret;
 
           if (into !== undefined) {
             const ref = into;
@@ -1454,7 +1481,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
             if ("error" in focused) return yield* editFailure("type", ref, focused);
             eligible = focused.prose;
+            secret ||= focused.secret;
           }
+          if (!secret) yield* marks.reveal;
           yield* presentationPause("focus");
           if (approval !== undefined) yield* approval.check({ focused: true });
           yield* marks.sent;
@@ -1495,16 +1524,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                   Duration.millis(Math.max(0, started + event.afterMillis - now())),
                 );
                 if (event.phase !== "up") yield* beforeKey;
-                yield* typeEvent(marks.input, event);
+                yield* typeEvent(marks.input, event, secret);
               }
             } else {
               for (const character of text) {
                 yield* beforeKey;
                 if (Keys.description(character) === undefined)
-                  yield* typeEvent(marks.input, { phase: "insert", key: character });
+                  yield* typeEvent(marks.input, { phase: "insert", key: character }, secret);
                 else {
-                  yield* typeEvent(marks.input, { phase: "down", key: character });
-                  yield* typeEvent(marks.input, { phase: "up", key: character });
+                  yield* typeEvent(marks.input, { phase: "down", key: character }, secret);
+                  yield* typeEvent(marks.input, { phase: "up", key: character }, secret);
                 }
               }
             }

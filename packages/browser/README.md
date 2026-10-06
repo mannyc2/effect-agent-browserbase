@@ -63,13 +63,25 @@ A failure of a tool with failure mode `"error"` reaches the model encoded by tha
 schema and marked as possibly effective; a call whose parameters fail validation never reaches its
 handler and answers as not executed.
 
-`Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action,
-resolved element and inferred `classifications`: `form-submit`, `purchase`, `delete`, `confirm`,
-`cross-origin`, `download` and `upload`. More than one may apply. They describe what the input
-activates, found as the browser finds it: the submit button around a painted label, an SVG link
-around a shape, an image-map area. Hovering and scrolling activate nothing and carry none. `point`
-is present for literal pixel targets; a ref's coordinates are resolved after approval so
-preparation never scrolls.
+`Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action, the
+resolved element, the page's URL and title, and the `facts` the page's structure establishes:
+`form-submit`, `cross-origin`, `download`, `upload`, `secret` (typing with `type` into a
+password, one-time code or card field, or submitting a form that holds a filled one), `scripted` (the activated
+control has no effect of the browser's own, so only page script decides what happens) and
+`opaque` (nothing names what receives the input, such as a canvas or an unlabelled icon). More
+than one may apply. They describe what the input activates, found as the browser finds it: the
+submit button around a painted label, an SVG link around a shape, an image-map area. Hovering and
+scrolling activate nothing and carry none. `point` is present for literal pixel targets; a ref's
+coordinates are resolved after approval so preparation never scrolls.
+
+Facts never come from what an element's text says: words change meaning with context and
+language, so a payment, a deletion or a consent is for a judge to recognise. The request carries
+the evidence one needs: the target's name and description, its dialog, the heading before it, the
+text beside it in its row or form, and the form's fields with their types and autocomplete tokens.
+Fields carry whether they are filled, never their values. All of it is page text the page
+controls, to read as evidence and never as instructions. Text typed into a `secret` field reaches
+the guard and the recorded `Action` as `redacted`, and its key events as `Unidentified` keys;
+`press` sends and records the keys it is given, so type secrets with `type`.
 It covers clicks, drags, typing, keys, selection, hover, scroll and navigation, including a new
 tab's destination.
 
@@ -83,8 +95,8 @@ import * as Chromium from "effect-browser/Chromium";
 
 const browser = Chromium.layer({
   guard: (request) =>
-    request.classifications.includes("purchase")
-      ? Effect.fail(new PolicyDenied({ detail: "Purchases are disabled." }))
+    request.facts.includes("secret") && request.facts.includes("cross-origin")
+      ? Effect.fail(new PolicyDenied({ detail: "Secrets are never sent to another site." }))
       : Effect.void,
 });
 ```
@@ -99,7 +111,7 @@ automatically. A pointer press is checked again once the pointer has arrived and
 frame to react: the approved control must still receive the press point, so a control that appears
 under the pointer, such as a hover menu, stops the action before the button goes down. A link,
 button or other control nested inside the target between it and the press point stops it too, since
-the approval classified the target, not that control. Each
+the approval inspected the target, not that control. Each
 further press of a double or triple click is checked the same way after the earlier clicks' handlers
 have run. Typing checks before each further key that the approved control still has focus, so a key
 handler that moves focus stops the typing before any key reaches another control; this waits for
