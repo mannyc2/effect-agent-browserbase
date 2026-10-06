@@ -11,12 +11,16 @@
   pointer strokes, retaining their original sample coordinates and times. The core pointer planner
   uses the tuned two-stroke sigma-lognormal model; browsers capture the motion service once.
   Complete bounded plans are validated and admitted before publication and input.
-- `Agent.run` batches tool calls with halt-on-failure, one outline and screenshot per turn,
-  configurable observations and caller toolkits.
+- `Agent.run` and `Tools.batch` run a turn's tool calls in order and halt on the first failure,
+  with one outline and screenshot per turn, configurable observations and caller toolkits. A
+  response that calls an unknown tool gets a correction rather than ending the run, a browser
+  with no page ends it, and the tools follow a newly opened tab without acting on it unseen.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
-  holds and validation before held actions resume.
+  holds and validation before held actions resume: the press point is hit-tested after the
+  pointer arrives, typing refuses to start on a control a key could activate, and a multi-key
+  action stops at a new document.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
@@ -26,16 +30,18 @@
   Sampled presentation pauses retain the functional navigation wait.
 - Browser paint mapped onto the host clock with explicit uncertainty through one browser-wide
   clock mapping, timestamped mouse and raw text-key input, a best-effort startup capture
-  calibration for newly owned sessions, and per-page capture
-  counters for filtering, paint gaps and observed subscriber loss. Screenshot timing has its own
-  provenance; borrowed pages receive no probe input.
+  calibration for newly owned sessions, and per-page capture counters for filtering, paint gaps
+  and observed subscriber loss. Screenshot timing has its own provenance; a reused screencast
+  frame must postdate the latest input and be recent; borrowed pages receive no probe input.
 - `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
-  and a shared model admission budget. Paid runs remain opt-in. A separate quote comparison
-  reuses captured evidence across shipping Moment, the historical on-air representation and
-  visible-DOM conclusions, with paired grading and safe provider diagnostics. Facts remain a
-  bench experiment until measured evidence supports a public input.
+  and a shared model admission budget. Every trial is graded, an infrastructure failure, denied
+  or unrun, and summaries keep those denominators apart. Paid runs remain opt-in. A separate
+  quote comparison reuses captured evidence across shipping Moment, the historical on-air
+  representation and conclusions computed from every visible quote table, with paired grading,
+  arm orders balanced within complete blocks and safe provider diagnostics. Facts remain a bench experiment until
+  measured evidence supports a public input.
 
 `effect-agent-browser` and the Effect Agent dependency are gone: the agent loop is `effect/ai`'s
 `Chat` with the browser toolkit. The tests run against real local Chromium, a fake Browserbase API

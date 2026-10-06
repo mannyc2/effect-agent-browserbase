@@ -1,14 +1,21 @@
 // Deterministic free checks of shared admission, raw receipts and real browser ownership.
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref, Schema } from "effect";
+import { Cause, ConfigProvider, Deferred, Effect, Exit, Fiber, Ref, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import type { BrowserContext } from "playwright-core";
 
-import { budgetedClient, isolatedTrial, ledger, trialSeed } from "../run.ts";
+import {
+  budgetedClient,
+  eligibleEndpoints,
+  ledger,
+  ListedEndpoint,
+  modelRunner,
+} from "../Budget.ts";
+import { isolatedTrial, trialSeed, workDeadline } from "../Trial.ts";
 
 const receipt = (cost: number) => ({
   prompt_tokens: 100,
@@ -212,6 +219,331 @@ describe("ledger", () => {
         assert.strictEqual(failure, "connection closed");
         assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0.012, reservedUsd: 0.04 });
       }),
+  );
+});
+
+const byokResponse = (usage: Record<string, unknown>) =>
+  HttpClient.make((request) =>
+    Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(
+          JSON.stringify({
+            id: "free-test",
+            object: "chat.completion",
+            created: 0,
+            model: "openai/test",
+            system_fingerprint: null,
+            choices: [
+              {
+                index: 0,
+                finish_reason: "stop",
+                message: { role: "assistant", content: '{"result":1}' },
+              },
+            ],
+            usage: { prompt_tokens: 1000, completion_tokens: 50, total_tokens: 1050, ...usage },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    ),
+  );
+
+/** One generateObject call through the real adapter and the budgeted client. */
+const callWith = (
+  budget: Effect.Success<ReturnType<typeof ledger>>,
+  usage: Record<string, unknown>,
+) =>
+  Effect.gen(function* () {
+    const account = yield* budget.account;
+
+    const native = yield* OpenRouterClient.make({}).pipe(
+      Effect.provideService(HttpClient.HttpClient, byokResponse(usage)),
+    );
+
+    const model = yield* OpenRouterLanguageModel.make({ model: "openai/test" }).pipe(
+      Effect.provideService(
+        OpenRouterClient.OpenRouterClient,
+        budgetedClient(native, account, {
+          rates: { input: 1e-6, output: 2e-6 },
+          maxOutputTokens: 64,
+        }),
+      ),
+    );
+
+    return yield* LanguageModel.generateObject({
+      prompt: "x",
+      schema: Schema.Struct({ result: Schema.Finite }),
+    }).pipe(Effect.provideService(LanguageModel.LanguageModel, model), Effect.exit);
+  });
+
+describe("BYOK receipts", () => {
+  it.effect("charge OpenRouter's fee plus the provider's upstream inference", () =>
+    Effect.gen(function* () {
+      // $0.0015 fee + $0.03 billed by the provider: a $0.10 budget admits two such calls.
+      const budget = yield* ledger(0.1, 0.04);
+
+      const byok = {
+        cost: 0.0015,
+        is_byok: true,
+        cost_details: {
+          upstream_inference_cost: 0.03,
+          upstream_inference_prompt_cost: 0.025,
+          upstream_inference_completions_cost: 0.005,
+        },
+      };
+
+      const exits = [];
+
+      for (let call = 0; call < 4; call++) exits.push((yield* callWith(budget, byok))._tag);
+
+      assert.deepStrictEqual(exits, ["Success", "Success", "Failure", "Failure"]);
+      assert.closeTo((yield* budget.snapshot).knownUsd, 0.063, 1e-9);
+      assert.isTrue(yield* budget.exhausted);
+    }),
+  );
+
+  it.effect("keep a BYOK receipt without its upstream cost reserved as uncertain", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+      const exit = yield* callWith(budget, { cost: 0, is_byok: true });
+
+      assert.strictEqual(exit._tag, "Success");
+      assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0, reservedUsd: 0.04 });
+    }),
+  );
+});
+
+describe("unbudgeted routes", () => {
+  it.effect("refuse streaming, decisions and raw generated requests before sending them", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+      const account = yield* budget.account;
+      let requests = 0;
+
+      const native = yield* OpenRouterClient.make({}).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              requests++;
+
+              return HttpClientResponse.fromWeb(request, new Response("{}"));
+            }),
+          ),
+        ),
+      );
+
+      const wrapped = budgetedClient(native, account, {
+        rates: { input: 1e-6, output: 2e-6 },
+        maxOutputTokens: 64,
+      });
+
+      const request = { model: "openai/test", messages: [{ role: "user" as const, content: "x" }] };
+      const stream = yield* wrapped.createChatCompletionStream(request).pipe(Effect.flip);
+
+      const decisions = yield* wrapped
+        .createDecisions({ model: "openai/test", state: {}, questions: {} })
+        .pipe(Effect.flip);
+
+      const raw = yield* wrapped.client
+        .sendChatCompletionRequest({ payload: request })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(stream.reason._tag, "InvalidRequestError");
+      assert.strictEqual(decisions.reason._tag, "InvalidRequestError");
+      assert.strictEqual(raw._tag, "HttpClientError");
+      assert.strictEqual(requests, 0);
+      assert.strictEqual((yield* account.snapshot).calls, 0);
+    }),
+  );
+});
+
+const listed = (
+  tag: string,
+  supported: ReadonlyArray<string>,
+  pricing: Record<string, string>,
+): Record<string, unknown> => ({
+  tag,
+  status: 0,
+  context_length: 1000,
+  supported_parameters: supported,
+  pricing,
+});
+
+const everything = [
+  "max_tokens",
+  "reasoning",
+  "tools",
+  "tool_choice",
+  "response_format",
+  "structured_outputs",
+];
+
+const listing = [
+  listed("cheap/fp8", ["max_tokens"], { prompt: "0.0000001", completion: "0.0000001" }),
+  listed("fee", everything, { prompt: "0.0000001", completion: "0.0000001", request: "0.01" }),
+  listed("image", everything, { prompt: "0.0000001", completion: "0.0000001", image: "0.001" }),
+  listed("objects", ["max_tokens", "reasoning", "response_format", "structured_outputs"], {
+    prompt: "0.0000001",
+    completion: "0.0000002",
+  }),
+  listed("capable", everything, { prompt: "0.0000002", completion: "0.0000008" }),
+  listed("pricey", everything, { prompt: "0.000002", completion: "0.000008" }),
+];
+
+describe("endpoint pinning", () => {
+  it.effect("keeps only endpoints that serve every sent parameter under the price ceilings", () =>
+    Effect.gen(function* () {
+      const endpoints = yield* Schema.decodeUnknownEffect(Schema.Array(ListedEndpoint))(listing);
+
+      const operate = eligibleEndpoints(endpoints, {
+        maxOutputTokens: 100,
+        needs: { tools: true, structuredOutput: true },
+      });
+
+      const understand = eligibleEndpoints(endpoints, {
+        maxOutputTokens: 100,
+        needs: { tools: false, structuredOutput: true },
+      });
+
+      assert.deepStrictEqual(
+        operate.map((endpoint) => endpoint.tag),
+        ["capable", "pricey"],
+      );
+      assert.deepStrictEqual(
+        understand.map((endpoint) => endpoint.tag),
+        ["objects", "capable", "pricey"],
+      );
+      assert.deepStrictEqual(operate[0], {
+        tag: "capable",
+        contextTokens: 1000,
+        outputParameter: "max_tokens",
+        inputPerMillion: 0.2,
+        outputPerMillion: 0.8,
+        requestUsd: 1000 * 0.0000002 + 100 * 0.0000008,
+      });
+    }),
+  );
+
+  it.effect("records the pinned endpoint and sends its exact listed price ceilings", () =>
+    Effect.gen(function* () {
+      const sent: Array<unknown> = [];
+
+      const stub: typeof globalThis.fetch = async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+        if (url === "https://openrouter.ai/api/v1/models/openai/probe/endpoints")
+          return new Response(JSON.stringify({ data: { endpoints: listing } }), {
+            headers: { "content-type": "application/json" },
+          });
+        if (url !== "https://openrouter.ai/api/v1/chat/completions")
+          throw new Error("the test refuses " + url);
+        sent.push(JSON.parse(await new Response(init?.body).text()));
+
+        return new Response(
+          JSON.stringify({
+            id: "free-test",
+            object: "chat.completion",
+            created: 0,
+            model: "openai/probe",
+            system_fingerprint: null,
+            choices: [
+              {
+                index: 0,
+                finish_reason: "stop",
+                message: { role: "assistant", content: '{"result":1}' },
+              },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, cost: 0 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      };
+
+      const result = yield* Effect.gen(function* () {
+        const runner = yield* modelRunner({
+          model: "openai/probe",
+          rates: undefined,
+          maxUsd: 1,
+          maxOutputTokens: 100,
+          needs: { tools: true, structuredOutput: true },
+        });
+
+        const account = yield* runner.account;
+
+        yield* runner.withModel(
+          LanguageModel.generateObject({
+            prompt: "x",
+            schema: Schema.Struct({ result: Schema.Finite }),
+          }),
+          "none",
+          account,
+        );
+
+        return runner.endpoint;
+      }).pipe(
+        Effect.provideService(FetchHttpClient.Fetch, stub),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ OPENROUTER_API_KEY: "test-not-a-key" }),
+        ),
+      );
+
+      assert.strictEqual(result.tag, "capable");
+      assert.lengthOf(sent, 1);
+      assert.deepInclude(sent[0], {
+        provider: {
+          only: ["capable"],
+          allow_fallbacks: false,
+          require_parameters: true,
+          max_price: { prompt: "0.2", completion: "0.8", request: "0", image: "0", audio: "0" },
+        },
+      });
+    }),
+  );
+});
+
+describe("work deadline", () => {
+  const receipt = { prompt_tokens: 1, completion_tokens: 1, cost: 0 };
+
+  it.live("does not count time queued for budget admission", () =>
+    Effect.gen(function* () {
+      // One reservation fits, so the second call queues until the first settles at 400 ms.
+      const budget = yield* ledger(0.04, 0.04);
+      const holder = yield* budget.account;
+      const queued = yield* budget.account;
+
+      const held = yield* holder
+        .run(Effect.sleep("400 millis").pipe(Effect.as(receipt)), (value) => value)
+        .pipe(Effect.forkChild);
+
+      yield* Effect.sleep("20 millis");
+      const work = queued.run(Effect.sleep("50 millis").pipe(Effect.as(receipt)), (value) => value);
+
+      const exit = yield* work.pipe(
+        Effect.raceFirst(workDeadline("200 millis", queued.queued)),
+        Effect.exit,
+      );
+
+      yield* Fiber.join(held);
+      assert.strictEqual(exit._tag, "Success");
+      assert.isAtLeast((yield* queued.timing).queueSeconds, 0.3);
+    }),
+  );
+
+  it.live("still ends work that runs past it", () =>
+    Effect.gen(function* () {
+      const unfinished = yield* Deferred.make<void>();
+
+      const exit = yield* Deferred.await(unfinished).pipe(
+        Effect.raceFirst(workDeadline("100 millis", Effect.succeed(0))),
+        Effect.exit,
+      );
+
+      assert.isTrue(Exit.isFailure(exit) && Cause.hasFails(exit.cause));
+    }),
   );
 });
 

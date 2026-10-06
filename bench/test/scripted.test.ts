@@ -5,7 +5,7 @@ import { Effect } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 
-import { origin, QuoteTruth, routes, serve, truth } from "../Sites.ts";
+import { MarketTruth, origin, QuoteTruth, routes, serve, truth } from "../Sites.ts";
 import { tasks } from "../Tasks.ts";
 
 describe("scripted solutions", () => {
@@ -71,4 +71,24 @@ describe("quote fixtures", () => {
       }),
     );
   }
+});
+
+describe("market fixture", () => {
+  it.live("drifts up for even seeds and down for odd ones, so no constant trend passes", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const trends: Array<string> = [];
+
+      // The newest route serves each page, so every page is seeded with its own trial.
+      for (const seed of [10, 11, 12, 13]) {
+        yield* serve(browser, seed);
+        const page = yield* browser.newPage(origin + routes.order);
+
+        trends.push((yield* truth(page, MarketTruth)).trend);
+        yield* page.close;
+      }
+
+      assert.deepStrictEqual(trends, ["up", "down", "up", "down"]);
+    }).pipe(Effect.scoped, Effect.provide(Chromium.layer())),
+  );
 });

@@ -5,8 +5,8 @@ import { Cause, Effect, Exit, Schema } from "effect";
 import { AiError, LanguageModel } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
+import { budgetedClient, ledger } from "../Budget.ts";
 import * as Diagnostics from "../Diagnostics.ts";
-import { budgetedClient, ledger } from "../run.ts";
 
 const secret = "PRIVATE-CANARY-session-account-prompt-response";
 

@@ -28,10 +28,19 @@ An operate task gives a model the browser tools (`Agent.run`). An understand tas
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call
 (`Moment.describe`). Capture starts before the scripted setup, and multi-frame tasks check the
 retained time span as well as the frame count. The final frame must follow the fixture's last visual
-change on the browser clock; an incomplete capture fails before any model call. Bench browsers retain up to 1,200 frames for the
+change on the browser clock. A screencast can lose the final paint of a page that then stays
+still, so each fixture paints its settled state once more, and if no frame reaches the barrier the
+final frame is a fresh screenshot with its own capture timing, never a claimed paint time.
+`Moment.capture` also ends with a fresh screenshot whenever its newest frame is not demonstrably
+current (for example on a page that has been still for a while); one taken after the fixture's
+last change was read counts as following it. An
+incomplete capture is an infrastructure failure, before any model call. Bench browsers retain up to 1,200 frames for the
 longest fixture; this does not change the library default. The tumble task selects twelve frames
 to cover its paying cascades, rather than asking the model to count transitions absent from the
-pictures. Operate tasks receive an outline and screenshot once per turn; calls within a
+pictures, and its capture is incomplete if two consecutive frames are 1,800 ms (one cascade) or
+more apart. The jump task's first frame must precede the jump, and its control's frames must all
+precede any jump. Half the chart seeds drift up and half down, so a constant trend answer cannot
+pass. Operate tasks receive an outline and screenshot once per turn; calls within a
 turn halt on the first failure. `browser_zoom` adds requested viewport crops to that observation;
 pixel clicks return the element under the requested point. Runs without a model still use the free
 scripted solutions. Runs allow input by default; a caller's `Browser.Options.guard` can deny or
@@ -63,38 +72,95 @@ EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... \
 
 Model calls and Browserbase sessions cost money, so each needs its environment variable. Trials run
 with bounded concurrency (`--concurrency`, default 4) and separate browsers. Every Browserbase trial gets a
-new 1280×720 session, released when the trial ends. Browserbase time is not part of the model budget.
+new 1280×720 session, released when the trial ends; its own 30-minute timeout ends a session the
+bench could not release. A session create that may have
+allocated a session nobody can release (no answer, a 5xx or 408 status, or a success answer that
+did not decode and whose session the client did not release) stops hosted admission: the run
+requests no further session and records the remaining trials as unrun. A refused create (429 or
+another 4xx) allocated nothing and stops nothing. Browserbase time is not part of
+the model budget.
 The model remains a caller choice. For the research runs, use `openai/gpt-6-luna`; reasoning defaults
 to `medium` for operate tasks and `none` for understand tasks. `--reasoning` overrides both.
 
 Before each model call, the runner reserves a conservative upper bound against the shared
-`--max-usd` budget (default $2). It pins a compatible provider endpoint and uses its prompt-token limit, the highest
-listed tier/cache-write rates and `--max-output-tokens` (default 4,096). `--rates in,out` supplies
-provider price ceilings in USD per million tokens. Trials wait while active calls can release capacity. An actual billed receipt releases the unused reservation. A missing receipt or
+`--max-usd` budget (default $2). It pins one provider endpoint that lists every parameter the run's
+requests send (a reasoning effort, the output-token limit, and tools or a JSON schema response
+format as the selected tasks need) and no per-request, image or audio price, since the request's
+price ceilings allow none. The reservation uses that endpoint's prompt-token limit, its highest
+listed tier, cache-write and reasoning rates, and `--max-output-tokens` (default 4,096). `--rates in,out` supplies
+provider price ceilings in USD per million tokens. Trials wait while active calls can release capacity. An actual billed receipt releases the unused reservation. With the caller's own provider key
+(BYOK), OpenRouter's `cost` is only its fee, so a BYOK receipt is charged that fee plus its
+`upstream_inference_cost`, and one without the upstream cost is uncertain. A missing receipt or
 unknown charge keeps its reservation, so another trial cannot spend it again. This can stop a run
-before the nominal budget is used; it never treats an unknown charge as zero. Billable plugins are disabled in each request; the account
-must allow those overrides, since protected account defaults can add fees outside this token budget.
+before the nominal budget is used; it never treats an unknown charge as zero. Each request disables the plugins its schema can
+disable (web search, file parsing, response healing, context compression and the routers); the
+account must allow those overrides. The request schema cannot disable the `web-fetch` or
+`moderation` plugins, so an account default that enables either, or a protected account default,
+can add fees outside this token budget; a receipt whose charge exceeds its reservation still stops
+all further admission. Only non-streaming chat completions are budgeted: the client refuses
+streaming, decisions and raw generated requests before sending them.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
-the task, base and derived fixture seeds, effective reasoning, completion/failure/skip status and reason, the answer, model calls, tokens,
-known dollars, unresolved reservations, elapsed seconds including browser setup and cleanup, and
-any error. Budget-skipped trials have records with zero calls and do not start a browser.
-`usd` is null when a trial's charge is uncertain; `knownUsd`, `reservedUsd` and
-`uncertainCalls` retain the available accounting facts. The ISO start time is a calendar date;
-elapsed time uses a monotonic clock.
+the task, base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
+model, pinned endpoint with its rates and per-call reservation, browser, humanize, output-token
+limit, budget and concurrency), effective reasoning, status and reason, the answer, any
+error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
+reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
+provider requests) and elapsed seconds including browser setup and cleanup. The ISO
+start time is a calendar date; elapsed time uses a monotonic clock.
+
+## Outcomes
+
+Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one
+status:
+
+- `graded`: the model answered, and `pass` says whether the answer was right. An operate task
+  whose page no longer holds the fixture's state when graded, because the model left it for
+  another page or played in another tab, has failed with a detail saying so; only a closed page
+  or another browser failure is infrastructure. A model that gives
+  up, runs out of steps, or returns output that does not decode as the requested answer (invalid
+  JSON or a mismatched schema, tool arguments that do not parse, or a tool that does not exist,
+  after its receipt was decoded and accounted) has answered wrongly.
+  Such output is a graded failure (`reason: "invalid-output"`) and stops nothing else.
+- `infrastructure-failed`: something other than the answer failed: incomplete or stale capture
+  evidence, the browser, the hosted session, the provider, a charge above its bound, a deadline or
+  a defect. A trial has 10 minutes, and a comparison arm 10 minutes, of work: time queued for
+  budget admission depends on the budget and on other units, so it does not count. These are never counted as wrong answers. A request that ends without a decoded
+  response (a transport failure, or a provider answer that does not decode) may still have run
+  and been billed, so its trial or arm makes no further model call: an agent loop cannot replay
+  it.
+- `denied`: the budget refused admission, before the browser started or at a later call.
+- `unrun`: the unit never reached an outcome, because the run stopped or was interrupted. Once
+  the ledger stops admitting calls (a charge above its bound, or the comparison's stop after an
+  infrastructure failure, an unresolved charge or a broken result sink), it keeps the first
+  reason, and every later unit in both runners is `unrun` with that reason, never `denied`.
+
+An interrupted run (SIGINT, or an interrupted fiber) still records every unit it scheduled: those
+without an outcome are `unrun` with reason `interrupted` and keep what their dispatched calls
+spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside the trials,
+and the comparison writes `summary.json` marked `interrupted`. Playwright exits the process on
+SIGINT once its browsers close, so these records are written synchronously when the signal
+arrives.
+
+`pass` is null except for graded units. Summaries report passes over graded units separately from
+infrastructure failures, denials and unrun units. A run exits successfully only when every unit was
+graded with settled charges; a free run also needs every answer to pass.
 
 ## Paired quote comparison
 
 `bun run understand` runs a free rehearsal through the pinned OpenRouter adapter using an
-in-memory response derived from visible table cells. Its results are marked `dry-run`; they test
+in-memory response that reads the requested row from the visible facts. Its results are marked `dry-run`; they test
 the harness and make no model-accuracy claim.
 
 The comparison prepares one captured moment for each seeded quote fixture and reuses it across
 three arms. A uses the shipping `Moment.describe` prompt, frames, outline and timeline. B uses
 the historical on-air representation: the latest image resized to 640×360 plus the first 4,000
 UTF-8 bytes of visible body text, with no outline or timeline. The `facts` arm uses the identical
-A moment and question, adding conclusions computed from visible table cells through the existing
-instructions option. The library's prompt and API stay unchanged.
+A moment and question, adding conclusions computed from every visible quote table through the
+existing instructions option: each row's values as numbers keyed by its table caption, row asset
+and exact column header. The facts do not pick the requested table, row or period; binding them
+remains the model's task, as it would be for a caller who computes page facts without knowing the
+question. The library's prompt and API stay unchanged.
 
 A native paint barrier and stable visible evidence bracket the shared capture. All arms identify
 the focused asset from the visible page heading. The question names the desired
@@ -105,11 +171,17 @@ model call; there is no automatic validator retry. Image resizing uses Chromium'
 canvas filter, so B reproduces the old payload dimensions and text limit rather than claiming
 bit-for-bit equivalence with the research prototype's Lanczos filter.
 
-The default manifest has 20 dense fixtures and 10 easy controls, with all three arms per case:
-90 calls in a paid run. Arm order varies deterministically by seed. Cases run concurrently, with
+The manifest records the source revision and the pinned endpoint before any call. The default
+manifest has 20 dense fixtures and 10 easy controls, with all three arms per case:
+90 calls in a paid run. Arm order is counterbalanced: every complete block of six consecutive pairs
+of a task uses each of the six orders once, so within those blocks each arm runs first, second and
+third equally often. The default 20 dense pairs and 10 controls are not multiples of six, so their
+last partial block is not balanced; the manifest and summary report the realized count of each arm
+at each position per task, and each record notes its arm's position. Cases run concurrently, with
 one browser per case and the same captured evidence for its arms. A shared admission ledger bounds
-all model calls. An infrastructure failure stops new admissions; already dispatched requests still
-settle, and every unrun arm receives a record. A wrong graded answer remains a comparison result.
+all model calls. An infrastructure failure or an unresolved charge stops new admissions; already
+dispatched requests still settle, and every unrun arm receives a record. A graded answer, including
+malformed model output, remains a comparison result and stops nothing.
 
 A paid run requires an explicit model and the existing live opt-in, separately from this free
 rehearsal:
@@ -120,9 +192,16 @@ EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
 ```
 
 The results distinguish graded mistakes from infrastructure failures and retain paired outcomes,
-latency, token usage and confirmed or unresolved charges, reported separately for dense fixtures
+provider request latency (reported apart from time queued for budget admission), token usage and confirmed or unresolved charges, reported separately for dense fixtures
 and easy controls. Each case also saves its shared image, resized baseline and visible evidence
-for inspecting a result without another model call. First establish that B makes binding
+for inspecting a result without another model call. Every displayed table, row and period has a
+distinct value, so each graded answer's numbers are traced to the cells they were read from:
+`bindingErrors` counts answers with a value from another table, another row of the requested
+table, or another period (1h, 24h or 7d) of the requested row, reported separately, while a
+number that matches no cell is a misread (`unsourced`) and a wrong ticker, table or header text is
+a label error. The summary evaluates the pre-registered rules on the dense fixtures from these
+counts, with `met: null` where there is no graded evidence. The improvement over A has no
+registered threshold, so it reports its paired wins and losses with `met: null`. First establish that B makes binding
 mistakes on the dense fixture, then compare A with `facts`. Beating B alone cannot establish that
 facts improve the shipping implementation; an already-perfect A supplies no evidence to add an
 API. Keep the original quality, cost and latency targets in view and report the limits of this

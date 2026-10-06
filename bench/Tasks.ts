@@ -6,6 +6,7 @@ import { Duration, Effect, Schedule, Schema, Stream } from "effect";
 import * as Agent from "effect-browser/Agent";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
+import { Frame, Screenshot } from "effect-browser/Frame";
 import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import type { Snapshot } from "effect-browser/Snapshot";
@@ -14,6 +15,7 @@ import type { AiError, LanguageModel } from "effect/ai";
 import * as QuoteComparison from "./QuoteComparison.ts";
 import {
   CheckoutTruth,
+  type FixtureUnreadable,
   FrameTruth,
   MarketTruth,
   NavigationTruth,
@@ -25,6 +27,7 @@ import {
   truth,
   TumbleTruth,
 } from "./Sites.ts";
+import { EvidenceIncomplete } from "./Trial.ts";
 
 export interface Grade {
   readonly pass: boolean;
@@ -56,10 +59,12 @@ export interface Task {
     options: ModelOptions<E>,
   ) => Effect.Effect<
     Outcome,
-    AiError.AiError | BrowserError | Agent.AgentError | E,
+    AiError.AiError | BrowserError | Agent.AgentError | EvidenceIncomplete | FixtureUnreadable | E,
     Browser | LanguageModel.LanguageModel
   >;
-  readonly scripted: (options?: TrialOptions) => Effect.Effect<Outcome, BrowserError, Browser>;
+  readonly scripted: (
+    options?: TrialOptions,
+  ) => Effect.Effect<Outcome, BrowserError | EvidenceIncomplete | FixtureUnreadable, Browser>;
 }
 
 const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
@@ -100,6 +105,10 @@ const fill = (page: Page, name: string, text: string) =>
       Effect.flatMap((snapshot) => page.type(text, { into: refOf(snapshot, "textbox", name) })),
     );
 
+// A model that leaves the fixture, for another page or another tab's game, has not done the task.
+const unreadable = (error: FixtureUnreadable): Effect.Effect<Grade> =>
+  Effect.succeed({ pass: false, detail: error.message });
+
 const operate = <A, I>(spec: {
   readonly name: string;
   readonly summary: string;
@@ -107,8 +116,9 @@ const operate = <A, I>(spec: {
   readonly prompt: string;
   readonly answer: Schema.Codec<A, I>;
   readonly maxSteps: number;
-  readonly solve: (page: Page) => Effect.Effect<A, BrowserError>;
-  readonly grade: (answer: A, page: Page) => Effect.Effect<Grade>;
+  readonly solve: (page: Page) => Effect.Effect<A, BrowserError | FixtureUnreadable>;
+  /** Fails with `FixtureUnreadable` when the page no longer holds the fixture's state. */
+  readonly grade: (answer: A, page: Page) => Effect.Effect<Grade, BrowserError | FixtureUnreadable>;
 }): Task => ({
   name: spec.name,
   kind: "operate",
@@ -123,7 +133,9 @@ const operate = <A, I>(spec: {
         onStep: (step) => options.onUsage(step.usage),
       });
 
-      const grade = yield* spec.grade(result.answer, page);
+      const grade = yield* spec
+        .grade(result.answer, page)
+        .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
       return { ...grade, answer: result.answer, steps: result.steps, usage: result.usage };
     }).pipe(Effect.scoped),
@@ -131,11 +143,38 @@ const operate = <A, I>(spec: {
     Effect.gen(function* () {
       const page = yield* open(spec.start, options.seed);
       const answer = yield* spec.solve(page);
-      const grade = yield* spec.grade(answer, page);
+
+      const grade = yield* spec
+        .grade(answer, page)
+        .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
       return { ...grade, answer, steps: 0, usage: noUsage };
     }).pipe(Effect.scoped),
 });
+
+/** A native paint at or after the fixture's last visual change. */
+const after = (frame: Frame, frameAfter: number) =>
+  frame.timestamp !== undefined && frame.timestamp >= frameAfter;
+
+const freshFrame = (page: Page) =>
+  Effect.gen(function* () {
+    const browser = yield* Browser;
+    const startedAt = yield* browser.now;
+    const image = yield* page.screenshot({ fresh: true });
+    const finishedAt = yield* browser.now;
+
+    return new Frame({
+      page: page.id,
+      data: image.data,
+      timing: new Screenshot({
+        hostTime: startedAt + (finishedAt - startedAt) / 2,
+        uncertaintyMillis: (finishedAt - startedAt) / 2,
+      }),
+      receivedAt: finishedAt,
+      width: image.width,
+      height: image.height,
+    });
+  });
 
 const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly name: string;
@@ -147,11 +186,18 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly setup: (page: Page) => Effect.Effect<void, BrowserError>;
   readonly capture: Moment.CaptureOptions;
   /** A count alone cannot show whether the retained frames cover an earlier state. */
-  readonly minimumSpanMillis?: (page: Page) => Effect.Effect<number>;
+  readonly minimumSpanMillis?: (
+    page: Page,
+  ) => Effect.Effect<number, BrowserError | FixtureUnreadable>;
+  /** What else the selected frames must show, read after capture; a problem or undefined. */
+  readonly covers?: (
+    frames: ReadonlyArray<Frame>,
+    page: Page,
+  ) => Effect.Effect<string | undefined, BrowserError | FixtureUnreadable>;
   readonly instructions: string;
   readonly answer: Schema.Codec<A, I>;
   /** What the moment shows, read from the page's truth as it is captured. */
-  readonly expected: (page: Page) => Effect.Effect<A>;
+  readonly expected: (page: Page) => Effect.Effect<A, BrowserError | FixtureUnreadable>;
   readonly grade: (answer: A, expected: A) => Grade;
 }): Task => {
   const prepare = (options: TrialOptions) =>
@@ -168,39 +214,88 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
           schedule: Schedule.spaced("25 millis"),
           until: (frames) => frames.length > 0,
         }),
-        Effect.timeout("5 seconds"),
-        Effect.orDie,
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () =>
+            Effect.fail(new EvidenceIncomplete({ detail: "no screencast frame arrived" })),
+        }),
       );
       yield* spec.setup(page);
       const { frameAfter } = yield* truth(page, FrameTruth);
+      const browser = yield* Browser;
+      const waiting = yield* browser.now;
 
       // A quiet host-side stream can still have the final paint in flight. The fixture records
       // the last visual change on the browser's wall clock, which its frame timestamps share.
-      yield* page.recentFrames.pipe(
+      const reached = yield* page.recentFrames.pipe(
         Effect.repeat({
           schedule: Schedule.spaced("25 millis"),
-          until: (frames) =>
-            frames.some((frame) => frame.timestamp !== undefined && frame.timestamp >= frameAfter),
+          until: (frames) => frames.some((frame) => after(frame, frameAfter)),
         }),
-        Effect.timeout("5 seconds"),
-        Effect.orDie,
+        Effect.as(true),
+        Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.succeed(false) }),
       );
-      const moment = yield* Moment.capture(page, spec.capture);
-      const wanted = spec.capture.frames ?? 2;
-      const first = moment.frames[0];
+
+      // A screencast can drop the final paint of a page that then stays still. A fresh screenshot
+      // still shows that state; it keeps its own capture timing and never claims a paint time.
+      const shot = reached ? undefined : yield* freshFrame(page);
+
+      // Time spent waiting for a paint that never arrived must not push earlier frames out of
+      // the evidence window.
+      const waited = shot === undefined ? 0 : (yield* browser.now) - waiting;
+
+      const captured = yield* Moment.capture(page, {
+        ...spec.capture,
+        windowMillis: (spec.capture.windowMillis ?? 5000) + waited,
+      });
+
+      // A moment ends with its own fresh screenshot when its newest frame is not demonstrably
+      // current, such as on a page that has been still for a while. One taken after the fixture's
+      // last change was read shows that change.
+      const current = (frame: Frame) =>
+        after(frame, frameAfter) ||
+        (frame.timing._tag === "Screenshot" &&
+          frame.hostTime - frame.timing.uncertaintyMillis >= waiting);
+
+      const newest = captured.frames.at(-1);
+
+      const moment =
+        shot === undefined || (newest !== undefined && current(newest))
+          ? captured
+          : new Moment.Moment({
+              at: captured.at,
+              page: captured.page,
+              frames: [...captured.frames.slice(0, -1), shot],
+              snapshot: captured.snapshot,
+              events: captured.events,
+            });
+
       const last = moment.frames.at(-1);
 
-      const span = first === undefined || last === undefined ? 0 : last.hostTime - first.hostTime;
+      if (last === undefined || (last !== shot && !current(last)))
+        return yield* new EvidenceIncomplete({
+          detail: "the final frame precedes the fixture's last change",
+        });
+
+      const wanted = spec.capture.frames ?? 2;
+      const first = moment.frames[0];
+      const span = first === undefined ? 0 : last.hostTime - first.hostTime;
 
       const minimum =
         spec.minimumSpanMillis === undefined ? 0 : yield* spec.minimumSpanMillis(page);
 
-      const evidence = {
-        pass: moment.frames.length === wanted && span >= minimum,
-        detail: `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events`,
-      };
+      const detail = `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events${last.timing._tag === "Screenshot" ? ", final frame from a fresh screenshot" : ""}`;
 
-      return { moment, evidence, expected: yield* spec.expected(page) };
+      if (moment.frames.length !== wanted || span < minimum)
+        return yield* new EvidenceIncomplete({ detail });
+
+      const uncovered =
+        spec.covers === undefined ? undefined : yield* spec.covers(moment.frames, page);
+
+      if (uncovered !== undefined)
+        return yield* new EvidenceIncomplete({ detail: `${uncovered}; ${detail}` });
+
+      return { moment, detail, expected: yield* spec.expected(page) };
     }).pipe(Effect.scoped);
 
   return {
@@ -209,16 +304,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
     summary: spec.summary,
     withModel: (options) =>
       Effect.gen(function* () {
-        const { moment, evidence, expected } = yield* prepare(options);
-
-        if (!evidence.pass)
-          return {
-            pass: false,
-            detail: `capture incomplete: ${evidence.detail}`,
-            answer: null,
-            steps: 0,
-            usage: noUsage,
-          };
+        const { moment, detail, expected } = yield* prepare(options);
 
         const { value, usage } = yield* Moment.describe(moment, {
           schema: spec.answer,
@@ -229,8 +315,8 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
         const grade = spec.grade(value, expected);
 
         return {
-          pass: evidence.pass && grade.pass,
-          detail: `${grade.detail}; ${evidence.detail}`,
+          pass: grade.pass,
+          detail: `${grade.detail}; ${detail}`,
           answer: value,
           steps: 1,
           usage,
@@ -238,17 +324,54 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       }),
     scripted: (options = {}) =>
       Effect.gen(function* () {
-        const { evidence, expected } = yield* prepare(options);
+        const { detail, expected } = yield* prepare(options);
 
         return {
-          ...evidence,
-          detail: `${evidence.detail}; truth ${JSON.stringify(expected)}`,
+          pass: true,
+          detail: `${detail}; truth ${JSON.stringify(expected)}`,
           answer: expected,
           steps: 0,
           usage: noUsage,
         };
       }),
   };
+};
+
+/** A selected frame painted before the jump, so the pictures show the move itself. */
+export const precedesJump = (
+  frames: ReadonlyArray<Frame>,
+  spikeAt: number | null,
+): string | undefined => {
+  const first = frames[0]?.timestamp;
+
+  return spikeAt !== null && first !== undefined && first < spikeAt
+    ? undefined
+    : "no captured frame precedes the jump";
+};
+
+/** No selected frame shows the jump the control must not see. */
+export const precedesAnyJump = (
+  frames: ReadonlyArray<Frame>,
+  spikeAt: number | null,
+): string | undefined => {
+  const last = frames.at(-1)?.timestamp;
+
+  return spikeAt === null || (last !== undefined && last < spikeAt)
+    ? undefined
+    : "the control's frames include the jump";
+};
+
+/** Consecutive frames closer than one phase, so no phase can fall between two pictures. */
+export const gapsWithin = (frames: ReadonlyArray<Frame>, maximumMillis: number) => {
+  const gaps = frames
+    .slice(1)
+    .map((frame, index) => frame.hostTime - (frames[index]?.hostTime ?? 0));
+
+  const widest = Math.max(0, ...gaps);
+
+  return widest < maximumMillis
+    ? undefined
+    : `a ${Math.round(widest)}ms gap between frames could hide a whole phase`;
 };
 
 const spin = (page: Page) =>
@@ -359,6 +482,8 @@ const chartSpike = understand({
   setup: waitForMarket((market) => market.spikeAt !== null, 1500),
   capture: { frames: 3, windowMillis: 4000 },
   minimumSpanMillis: () => Effect.succeed(1500),
+  covers: (frames, page) =>
+    truth(page, MarketTruth).pipe(Effect.map((market) => precedesJump(frames, market.spikeAt))),
   instructions: moveInstructions,
   answer: MoveAnswer,
   expected: () => Effect.succeed({ movedSharply: true, direction: "up" as const }),
@@ -376,6 +501,8 @@ const chartCalm = understand({
   setup: waitForMarket((market) => market.candles >= 63, 0),
   capture: { frames: 3, windowMillis: 4000 },
   minimumSpanMillis: () => Effect.succeed(500),
+  covers: (frames, page) =>
+    truth(page, MarketTruth).pipe(Effect.map((market) => precedesAnyJump(frames, market.spikeAt))),
   instructions: moveInstructions,
   answer: MoveAnswer,
   expected: () => Effect.succeed({ movedSharply: false, direction: "flat" as const }),
@@ -514,6 +641,8 @@ const tumbleWin = understand({
   capture: { frames: 12, windowMillis: 20_000 },
   minimumSpanMillis: (page) =>
     truth(page, TumbleTruth).pipe(Effect.map((game) => Math.max(0, game.durationMillis - 300))),
+  // One paying cascade lasts 1,800 ms; a wider gap could leave one out of every picture.
+  covers: (frames) => Effect.succeed(gapsWithin(frames, 1800)),
   instructions:
     "Describe this completed spin of the 6 by 5 tumble slot: how many paying tumbles occurred, the final multiplier, TOTAL WIN, BALANCE, and whether the spin is done. Count the paying cascades, not each moving frame.",
   answer: Schema.Struct({

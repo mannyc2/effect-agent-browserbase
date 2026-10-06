@@ -4,14 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref } from "effect";
+import { Deferred, Effect, Fiber, Ref, Schedule } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
-import { LanguageModel } from "effect/ai";
+import { AiError, LanguageModel } from "effect/ai";
 import type { BrowserContext } from "playwright-core";
 
+import { emptyAccounting, ledger, noTiming } from "../Budget.ts";
 import * as Quote from "../QuoteComparison.ts";
-import { isolatedTrial, ledger } from "../run.ts";
+import { isolatedTrial } from "../Trial.ts";
 import {
   compare,
   main,
@@ -26,11 +27,20 @@ import {
 const configuration = (args: ReadonlyArray<string> = []) =>
   options(["--hard-trials", "2", "--control-trials", "1", "--concurrency", "2", ...args], false);
 
+/** The answer a reader of the case's visible facts gives; the fixtures always provide one. */
+const visible = (sample: Quote.QuoteCase): Quote.Answer => {
+  const answer = Quote.answerFrom(sample.facts);
+
+  if (answer === undefined) throw new Error("the visible facts do not answer the question");
+
+  return answer;
+};
+
 const dryDescribe = (
   sample: Quote.QuoteCase,
   arm: Quote.Arm,
   account: Effect.Success<Effect.Success<ReturnType<typeof ledger>>["account"]>,
-  content = JSON.stringify(sample.facts.conclusions),
+  content = JSON.stringify(visible(sample)),
 ) =>
   Effect.gen(function* () {
     const model = yield* scriptedModel(account, content);
@@ -39,6 +49,53 @@ const dryDescribe = (
       Effect.provideService(LanguageModel.LanguageModel, model),
     );
   });
+
+// One dense pair, and a graded record for any arm of it. A wrong answer reads a neighbour's row
+// with its own ticker and its 7d change: one answer, three faults.
+const singlePair = Effect.gen(function* () {
+  const plan = manifest(
+    yield* configuration(["--hard-trials", "1", "--control-trials", "0"]),
+    "fixed",
+  );
+
+  const pair = plan.pairs[0];
+
+  if (pair === undefined) return yield* Effect.die("the manifest has one dense pair");
+
+  const right = {
+    ticker: true,
+    price: true,
+    change1h: true,
+    change24h: true,
+    column: true,
+    table: true,
+  };
+
+  const clean = { wrongTable: false, wrongRow: false, wrongPeriod: false, unsourced: false };
+
+  const record = (arm: Quote.Arm, wrong: boolean): TrialRecord => ({
+    task: pair.task,
+    trial: pair.trial,
+    seed: pair.seed,
+    arm,
+    position: pair.order.indexOf(arm),
+    mode: plan.mode,
+    status: "graded",
+    reason: "answered",
+    pass: !wrong,
+    matches: wrong ? { ...right, ticker: false, price: false, change24h: false } : right,
+    binding: wrong ? { ...clean, wrongRow: true, wrongPeriod: true } : clean,
+    answer: null,
+    diagnostic: null,
+    lastResponse: null,
+    evidence: null,
+    accounting: emptyAccounting,
+    timing: noTiming,
+    seconds: 1,
+  });
+
+  return { plan, record };
+});
 
 describe("understanding comparison", () => {
   it.effect(
@@ -71,7 +128,57 @@ describe("understanding comparison", () => {
       assert.strictEqual(plan.pairs.length, 30);
       assert.strictEqual(plan.pairs.filter((pair) => pair.dense).length, 20);
       assert.isTrue(plan.pairs.every((pair) => [...pair.order].sort().join(",") === "A,B,facts"));
-      assert.isAbove(new Set(plan.pairs.map((pair) => pair.order.join(","))).size, 1);
+      // Counterbalanced: every six consecutive pairs of a task use each order once.
+      for (const task of ["quote-dense", "quote-table"] as const) {
+        const orders = plan.pairs
+          .filter((pair) => pair.task === task)
+          .map((pair) => pair.order.join(","));
+
+        assert.strictEqual(new Set(orders.slice(0, 6)).size, 6);
+      }
+      const dense = plan.pairs.filter((pair) => pair.dense).slice(0, 18);
+
+      for (const arm of ["A", "B", "facts"] as const)
+        for (const position of [0, 1, 2])
+          assert.strictEqual(
+            dense.filter((pair) => pair.order[position] === arm).length,
+            6,
+            `${arm} at position ${position}`,
+          );
+      assert.notDeepEqual(
+        other.pairs.map((pair) => pair.order),
+        plan.pairs.map((pair) => pair.order),
+      );
+
+      // The default 20 dense pairs and 10 controls are not multiples of six: the manifest reports
+      // the realized positions rather than claiming balance.
+      for (const group of plan.orderBalance) {
+        const pairs = plan.pairs.filter((pair) => pair.task === group.task);
+
+        assert.strictEqual(group.pairs, pairs.length);
+        assert.strictEqual(group.completeBlocks, Math.floor(pairs.length / 6));
+        for (const arm of ["A", "B", "facts"] as const)
+          assert.deepStrictEqual(
+            group.positions[arm],
+            [0, 1, 2].map(
+              (position) => pairs.filter((pair) => pair.order[position] === arm).length,
+            ),
+          );
+      }
+      assert.deepStrictEqual(
+        plan.orderBalance.map((group) => group.completeBlocks),
+        [3, 1],
+      );
+
+      const whole = manifest({ ...settings, hardTrials: 12, controlTrials: 6 }, "fixed");
+
+      for (const group of whole.orderBalance)
+        for (const arm of ["A", "B", "facts"] as const)
+          assert.deepStrictEqual(group.positions[arm], [
+            group.pairs / 3,
+            group.pairs / 3,
+            group.pairs / 3,
+          ]);
       assert.strictEqual(plan.mode, "dry-run");
       assert.include(plan.interpretation, "do not measure model accuracy");
     }),
@@ -116,8 +223,8 @@ describe("understanding comparison", () => {
 
               const content = JSON.stringify(
                 !sample.dense && arm === "A"
-                  ? { ...sample.facts.conclusions, ticker: "WRONG" }
-                  : sample.facts.conclusions,
+                  ? { ...visible(sample), ticker: "WRONG" }
+                  : visible(sample),
               );
 
               return yield* dryDescribe(sample, arm, account, content).pipe(
@@ -167,7 +274,8 @@ describe("understanding comparison", () => {
 
         assert.isTrue(hard?.arms.every((arm) => arm.graded === 2 && arm.passed === 2));
         assert.strictEqual(control?.arms.find((arm) => arm.arm === "A")?.gradingFailures, 1);
-        assert.strictEqual(control?.arms.find((arm) => arm.arm === "A")?.bindingErrors, 1);
+        assert.strictEqual(control?.arms.find((arm) => arm.arm === "A")?.labelErrors, 1);
+        assert.strictEqual(control?.arms.find((arm) => arm.arm === "A")?.bindingErrors, 0);
         assert.strictEqual(
           control?.paired.find((pair) => pair.comparison === "facts vs A")?.wins,
           1,
@@ -177,8 +285,60 @@ describe("understanding comparison", () => {
       }),
   );
 
+  it.live("grades malformed model output as a wrong answer and keeps admitting other arms", () =>
+    Effect.gen(function* () {
+      const plan = manifest(yield* configuration(), "fixed");
+      const browser = Chromium.layer();
+      const first = plan.pairs[0];
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+      const prepared = yield* isolatedTrial(Quote.prepare(first), browser);
+      const budget = yield* ledger(1, 0.04);
+
+      const records = yield* compare(plan, budget, {
+        prepare: (pair) =>
+          Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
+        describe: (sample, arm, account) =>
+          sample.seed === first.seed
+            ? dryDescribe(sample, arm, account, "malformed-json")
+            : dryDescribe(sample, arm, account),
+        record: () => Effect.void,
+      });
+
+      const malformed = records.filter((record) => record.seed === first.seed);
+
+      assert.lengthOf(records, 9);
+      assert.isTrue(records.every((record) => record.status === "graded"));
+      assert.isTrue(
+        malformed.every(
+          (record) =>
+            record.reason === "invalid-output" &&
+            record.pass === false &&
+            record.diagnostic?.objectDecode === "JsonSyntax" &&
+            record.accounting.calls === 1 &&
+            record.accounting.uncertainCalls === 0,
+        ),
+      );
+      assert.strictEqual(records.filter((record) => record.pass === true).length, 6);
+      assert.isFalse(yield* budget.exhausted);
+
+      const summary = summarize(plan, records);
+
+      assert.isTrue(
+        summary.arms.every(
+          (arm) =>
+            arm.graded === 3 &&
+            arm.gradingFailures === 1 &&
+            arm.invalidOutputs === 1 &&
+            arm.infrastructureFailed === 0,
+        ),
+      );
+    }),
+  );
+
   it.live(
-    "stops future admissions on malformed model output and still accounts a dispatched peer",
+    "stops future admissions on a provider failure and still accounts a dispatched peer",
     () =>
       Effect.gen(function* () {
         const plan = manifest(yield* configuration(), "fixed");
@@ -191,27 +351,33 @@ describe("understanding comparison", () => {
         if (first === undefined || second === undefined) return;
         const prepared = yield* isolatedTrial(Quote.prepare(first), browser);
         const budget = yield* ledger(1, 0.04);
-        const both = yield* Deferred.make<void>();
+        const dispatched = yield* Deferred.make<void>();
         const failed = yield* Deferred.make<void>();
         const entered = yield* Ref.make(0);
+
+        const outage = AiError.make({
+          module: "test",
+          method: "createChatCompletion",
+          reason: new AiError.InternalProviderError({ description: "provider outage" }),
+        });
 
         const records = yield* compare(plan, budget, {
           prepare: (pair) =>
             Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
-          describe: (sample, arm, account) =>
+          describe: (sample, _arm, account) =>
             Effect.gen(function* () {
-              const count = yield* Ref.updateAndGet(entered, (current) => current + 1);
+              yield* Ref.update(entered, (current) => current + 1);
 
-              if (count === 2) yield* Deferred.succeed(both, undefined);
-              yield* Deferred.await(both);
+              // Fail only once the peer's request is dispatched, then settle the peer afterward.
+              if (sample.seed === first.seed)
+                return yield* account.run(
+                  Deferred.await(dispatched).pipe(Effect.andThen(Effect.fail(outage))),
+                  () => undefined,
+                );
 
-              if (sample.seed === first.seed) {
-                return yield* dryDescribe(sample, arm, account, "malformed-json");
-              }
-
-              // Reserve and dispatch before the peer fails, then deliver a known receipt afterward.
               yield* account.run(
-                Deferred.await(failed).pipe(
+                Deferred.succeed(dispatched, undefined).pipe(
+                  Effect.andThen(Deferred.await(failed)),
                   Effect.as({
                     prompt_tokens: 12,
                     completion_tokens: 3,
@@ -222,8 +388,8 @@ describe("understanding comparison", () => {
               );
 
               return {
-                ...Quote.grade(sample.facts.conclusions, sample.expected),
-                answer: sample.facts.conclusions,
+                ...Quote.grade(visible(sample), sample.expected),
+                answer: visible(sample),
                 steps: 1 as const,
                 usage: { inputTokens: 12, outputTokens: 3, cachedInputTokens: 0 },
               };
@@ -236,25 +402,296 @@ describe("understanding comparison", () => {
 
         assert.strictEqual(yield* Ref.get(entered), 2);
         assert.lengthOf(records, 9);
-        assert.strictEqual(
-          records.filter((record) => record.status === "infrastructure-failed").length,
-          1,
-        );
+
+        const failure = records.find((record) => record.status === "infrastructure-failed");
+
+        assert.strictEqual(failure?.reason, "provider-failed");
+        assert.strictEqual(failure?.diagnostic?.reason, "InternalProviderError");
         assert.strictEqual(records.filter((record) => record.status === "graded").length, 1);
+        assert.isTrue(
+          records
+            .filter((record) => record.status === "unrun")
+            .every((record) => record.reason === "stopped-after-infrastructure"),
+        );
         assert.strictEqual(records.filter((record) => record.status === "unrun").length, 7);
         assert.strictEqual(
           records.reduce((sum, record) => sum + record.accounting.calls, 0),
           2,
         );
         assert.closeTo((yield* budget.snapshot).knownUsd, 0.01, 1e-9);
-        assert.strictEqual((yield* budget.snapshot).reservedUsd, 0);
+        assert.strictEqual((yield* budget.snapshot).reservedUsd, 0.04);
         assert.isTrue(yield* budget.exhausted);
-        const failure = records.find((record) => record.status === "infrastructure-failed");
-
-        assert.strictEqual(failure?.diagnostic?.objectDecode, "JsonSyntax");
-        assert.strictEqual(failure?.lastResponse?.contentKind, "text");
         assert.isTrue(summarize(plan, records).paired.every((pair) => pair.completePairs === 0));
       }),
+  );
+
+  it.live("separates time queued for the budget from provider request time", () =>
+    Effect.gen(function* () {
+      const settings = yield* configuration([
+        "--hard-trials",
+        "4",
+        "--control-trials",
+        "0",
+        "--concurrency",
+        "4",
+      ]);
+
+      const plan = manifest(settings, "fixed");
+      const first = plan.pairs[0];
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+      const prepared = yield* isolatedTrial(Quote.prepare(first), Chromium.layer());
+      // Two $0.45 reservations fit in $1, so four concurrent cases queue for admission.
+      const budget = yield* ledger(1, 0.45);
+
+      const records = yield* compare(plan, budget, {
+        prepare: (pair) =>
+          Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
+        describe: (sample, _arm, account) =>
+          account
+            .run(
+              Effect.sleep("300 millis").pipe(
+                Effect.as({ prompt_tokens: 10, completion_tokens: 2, cost: 0.001 }),
+              ),
+              (value) => value,
+            )
+            .pipe(
+              Effect.as({
+                ...Quote.grade(visible(sample), sample.expected),
+                answer: visible(sample),
+                steps: 1 as const,
+                usage: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 0 },
+              }),
+            ),
+        record: () => Effect.void,
+      });
+
+      assert.lengthOf(records, 12);
+      assert.isTrue(records.every((record) => record.timing.requestSeconds >= 0.29));
+      assert.isTrue(records.some((record) => record.timing.queueSeconds >= 0.25));
+      assert.isTrue(
+        records.every(
+          (record) =>
+            Math.abs(record.seconds - record.timing.queueSeconds - record.timing.requestSeconds) <
+            0.1,
+        ),
+      );
+
+      const total = Math.max(...records.map((record) => record.seconds));
+
+      for (const arm of summarize(plan, records).arms)
+        assert.isBelow(arm.requestSeconds.p95 ?? Number.POSITIVE_INFINITY, total);
+    }),
+  );
+
+  it.live("records every scheduled arm and keeps dispatched charges when interrupted", () =>
+    Effect.gen(function* () {
+      const settings = yield* configuration([
+        "--hard-trials",
+        "2",
+        "--control-trials",
+        "0",
+        "--concurrency",
+        "2",
+      ]);
+
+      const plan = manifest(settings, "fixed");
+      const first = plan.pairs[0];
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+      const prepared = yield* isolatedTrial(Quote.prepare(first), Chromium.layer());
+      const budget = yield* ledger(1, 0.1);
+      const saved: Array<TrialRecord> = [];
+      const dispatched = yield* Ref.make(0);
+
+      const fiber = yield* compare(plan, budget, {
+        prepare: (pair) =>
+          Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
+        describe: (_sample, _arm, account) =>
+          account.run(
+            Ref.update(dispatched, (count) => count + 1).pipe(Effect.andThen(Effect.never)),
+            () => undefined,
+          ),
+        record: (record) =>
+          Effect.sync(() => {
+            saved.push(record);
+          }),
+      }).pipe(Effect.forkChild);
+
+      yield* Ref.get(dispatched).pipe(
+        Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: (count) => count === 2 }),
+      );
+      yield* Fiber.interrupt(fiber);
+
+      assert.lengthOf(saved, 6);
+      assert.isTrue(
+        saved.every((record) => record.status === "unrun" && record.reason === "interrupted"),
+      );
+      assert.strictEqual(
+        saved.reduce((sum, record) => sum + record.accounting.reservedUsd, 0),
+        0.2,
+      );
+      assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0, reservedUsd: 0.2 });
+    }),
+  );
+
+  it.live("classifies wrong-table, wrong-row and wrong-period answers as binding errors", () =>
+    Effect.gen(function* () {
+      const plan = manifest(
+        yield* configuration(["--hard-trials", "1", "--control-trials", "0", "--concurrency", "1"]),
+        "fixed",
+      );
+
+      const records = yield* compare(plan, yield* ledger(1, 0), {
+        prepare: (pair) => isolatedTrial(Quote.prepare(pair), Chromium.layer()),
+        describe: (sample, arm, account) => {
+          const { expected, rows } = sample;
+          const requested = rows.filter((row) => row.table === expected.table);
+          const index = requested.findIndex((row) => row.ticker === expected.ticker);
+          const neighbour = requested[(index + 1) % requested.length];
+
+          const futures = rows.find(
+            (row) => row.table !== expected.table && row.ticker === expected.ticker,
+          );
+
+          const focused = requested[index];
+
+          if (neighbour === undefined || futures === undefined || focused === undefined)
+            return Effect.die("the dense fixture lacks its distractors");
+
+          // Each answer copies the requested ticker, table and header, as a binding mistake does.
+          const answer = {
+            A: {
+              ...expected,
+              price: futures.price,
+              change1h: futures.c1h,
+              change24h: futures.c24h,
+            },
+            B: {
+              ...expected,
+              price: neighbour.price,
+              change1h: neighbour.c1h,
+              change24h: neighbour.c24h,
+            },
+            facts: { ...expected, change24h: focused.c7d },
+          }[arm];
+
+          return dryDescribe(sample, arm, account, JSON.stringify(answer));
+        },
+        record: () => Effect.void,
+      });
+
+      const arms = summarize(plan, records).arms;
+
+      const counts = (name: Quote.Arm) => {
+        const arm = arms.find((candidate) => candidate.arm === name);
+
+        return arm === undefined
+          ? undefined
+          : {
+              passed: arm.passed,
+              bindingErrors: arm.bindingErrors,
+              wrongTable: arm.wrongTable,
+              wrongRow: arm.wrongRow,
+              wrongPeriod: arm.wrongPeriod,
+              labelErrors: arm.labelErrors,
+            };
+      };
+
+      const none = { passed: 0, bindingErrors: 1, labelErrors: 0 };
+
+      assert.deepStrictEqual(counts("A"), { ...none, wrongTable: 1, wrongRow: 0, wrongPeriod: 0 });
+      assert.deepStrictEqual(counts("B"), { ...none, wrongTable: 0, wrongRow: 1, wrongPeriod: 0 });
+      assert.deepStrictEqual(counts("facts"), {
+        ...none,
+        wrongTable: 0,
+        wrongRow: 0,
+        wrongPeriod: 1,
+      });
+
+      const rules = summarize(plan, records).prerequisitesForConsideringFacts;
+
+      assert.deepStrictEqual(rules.baselineReproducesBindingMistakes, { observed: 1, met: true });
+      assert.deepStrictEqual(rules.wrongTickerOrPeriod, { target: 0, observed: 1, met: false });
+    }),
+  );
+
+  it.live("labels every arm after a charge above its bound with that stop", () =>
+    Effect.gen(function* () {
+      const plan = manifest(yield* configuration(["--concurrency", "1"]), "fixed");
+      const first = plan.pairs[0];
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+      const prepared = yield* isolatedTrial(Quote.prepare(first), Chromium.layer());
+      const budget = yield* ledger(1, 0.04);
+
+      const records = yield* compare(plan, budget, {
+        prepare: (pair) =>
+          Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
+        describe: (sample, _arm, account) =>
+          account
+            .run(
+              Effect.succeed({ prompt_tokens: 10, completion_tokens: 2, cost: 0.05 }),
+              (value) => value,
+            )
+            .pipe(
+              Effect.as({
+                ...Quote.grade(visible(sample), sample.expected),
+                answer: visible(sample),
+                steps: 1 as const,
+                usage: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 0 },
+              }),
+            ),
+        record: () => Effect.void,
+      });
+
+      assert.strictEqual(records[0]?.reason, "charge-exceeded-bound");
+      assert.isTrue(
+        records
+          .slice(1)
+          .every(
+            (record) => record.status === "unrun" && record.reason === "stopped-after-charge-bound",
+          ),
+      );
+    }),
+  );
+
+  it.effect("counts each answer once against the wrong-ticker-or-period target", () =>
+    Effect.gen(function* () {
+      const { plan, record } = yield* singlePair;
+
+      const rules = summarize(plan, [
+        record("A", false),
+        record("B", false),
+        record("facts", true),
+      ]).prerequisitesForConsideringFacts;
+
+      assert.deepStrictEqual(rules.wrongTickerOrPeriod, { target: 0, observed: 1, met: false });
+    }),
+  );
+
+  it.effect("reads the pre-registered targets without inventing an improvement threshold", () =>
+    Effect.gen(function* () {
+      const { plan, record } = yield* singlePair;
+
+      const rules = summarize(plan, [
+        record("A", true),
+        record("B", true),
+        record("facts", false),
+      ]).prerequisitesForConsideringFacts;
+
+      // One decisive pair is not a useful improvement by any registered rule.
+      assert.deepStrictEqual(rules.factsImprovesOverA, {
+        observed: { wins: 1, losses: 0, completePairs: 1 },
+        met: null,
+      });
+      assert.deepStrictEqual(rules.baselineReproducesBindingMistakes, { observed: 1, met: true });
+      assert.deepStrictEqual(rules.hardQuoteExact, { target: 0.95, observed: 1, met: true });
+      assert.deepStrictEqual(rules.wrongTickerOrPeriod, { target: 0, observed: 0, met: true });
+    }),
   );
 
   it.effect("wakes queued admissions without cancelling the request that already reserved", () =>
@@ -285,7 +722,7 @@ describe("understanding comparison", () => {
         .pipe(Effect.flip, Effect.forkChild);
 
       yield* Effect.yieldNow;
-      yield* budget.stop;
+      yield* budget.stop("infrastructure");
       const denied = yield* Fiber.join(second);
 
       assert.include(denied.message, "budget");
@@ -299,12 +736,19 @@ describe("understanding comparison", () => {
     }),
   );
   for (const scenario of [
-    { name: "unknown model cost", timeout: false, status: "graded", reason: "accounting-unknown" },
+    {
+      name: "unknown model cost",
+      timeout: false,
+      status: "graded",
+      reason: "answered",
+      stopped: "stopped-after-uncertain-charge",
+    },
     {
       name: "a model deadline",
       timeout: true,
       status: "infrastructure-failed",
-      reason: "model-failed",
+      reason: "timed-out",
+      stopped: "stopped-after-infrastructure",
     },
   ] as const) {
     it.live("retains unresolved charges and stops the remaining arms after " + scenario.name, () =>
@@ -337,8 +781,8 @@ describe("understanding comparison", () => {
               );
 
               return {
-                ...Quote.grade(sample.facts.conclusions, sample.expected),
-                answer: sample.facts.conclusions,
+                ...Quote.grade(visible(sample), sample.expected),
+                answer: visible(sample),
                 steps: 1 as const,
                 usage: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 0 },
               };
@@ -357,7 +801,7 @@ describe("understanding comparison", () => {
             .every(
               (record) =>
                 record.status === "unrun" &&
-                record.reason === "stopped-after-infrastructure" &&
+                record.reason === scenario.stopped &&
                 record.accounting.calls === 0,
             ),
         );
@@ -423,7 +867,8 @@ describe("understanding comparison", () => {
       assert.strictEqual(yield* Ref.get(calls), 0);
       assert.isTrue(
         records.every(
-          (record) => record.status === "unrun" && record.reason === "preparation-failed",
+          (record) =>
+            record.status === "infrastructure-failed" && record.reason === "preparation-failed",
         ),
       );
       assert.isTrue(yield* budget.exhausted);

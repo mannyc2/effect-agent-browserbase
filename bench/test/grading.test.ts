@@ -2,14 +2,17 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Exit, Layer, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
+import type { BrowserError } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 import { LanguageModel, type Prompt, type Response } from "effect/ai";
 
+import { noCalls } from "../Budget.ts";
 import {
+  type FixtureUnreadable,
   FrameTruth,
   MarketTruth,
   NavigationTruth,
@@ -18,6 +21,7 @@ import {
   truth,
 } from "../Sites.ts";
 import { tasks } from "../Tasks.ts";
+import { classify } from "../Trial.ts";
 
 /** A model that answers every call with the same parts. */
 const answering = (parts: ReadonlyArray<Response.PartEncoded>) =>
@@ -61,19 +65,25 @@ const run = (name: string, model: Layer.Layer<LanguageModel.LanguageModel>) =>
 /** Inspect the actual description request and retained frames without replacing capture. */
 const describeWith = (
   name: string,
-  answer: (page: Page) => Effect.Effect<unknown>,
+  answer: (page: Page) => Effect.Effect<unknown, BrowserError | FixtureUnreadable>,
   options: {
     readonly seed?: number;
     readonly frameDelayMillis?: number;
     readonly frameHistory?: number;
+    /** Lose every screencast frame once this many clicks begin, as a stalled screencast does. */
+    readonly dropFramesAfterClicks?: number;
   } = {},
 ) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
 
     const frameDelayMillis = options.frameDelayMillis ?? 0;
+    let clicks = 0;
 
-    if (frameDelayMillis > 0) {
+    const dropping = () =>
+      options.dropFramesAfterClicks !== undefined && clicks >= options.dropFramesAfterClicks;
+
+    if (frameDelayMillis > 0 || options.dropFramesAfterClicks !== undefined) {
       const context = browser.context;
       const createSession = context.newCDPSession.bind(context);
       const pending = new Set<ReturnType<typeof setTimeout>>();
@@ -89,6 +99,8 @@ const describeWith = (
 
         emitter.emit = (event, ...args) => {
           if (event !== "Page.screencastFrame") return emit(event, ...args);
+          if (dropping()) return true;
+          if (frameDelayMillis === 0) return emit(event, ...args);
 
           const timer = setTimeout(() => {
             pending.delete(timer);
@@ -119,6 +131,10 @@ const describeWith = (
 
     const observed: Page = {
       ...page,
+      click: (...target) =>
+        Effect.sync(() => {
+          clicks++;
+        }).pipe(Effect.andThen(page.click(...target))),
       recentFrames: page.recentFrames.pipe(
         Effect.tap((frames) => Effect.sync(() => histories.push(frames))),
       ),
@@ -129,16 +145,19 @@ const describeWith = (
 
     const model = yield* LanguageModel.make({
       generateText: (options) =>
+        // The scripted model reads the fixture it describes; a failure there is the test's own.
         Effect.gen(function* () {
           prompts.push(options.prompt);
           frameAfter = (yield* truth(page, FrameTruth)).frameAfter;
           const value = yield* answer(page);
 
-          return [
+          const parts: Array<Response.PartEncoded> = [
             { type: "text", text: JSON.stringify(value) },
             { type: "finish", reason: "stop", usage },
           ];
-        }),
+
+          return parts;
+        }).pipe(Effect.orDie),
       streamText: () => Stream.empty,
     });
 
@@ -318,7 +337,7 @@ describe("understanding evidence", () => {
           throw new Error("the selected frame sequence is incomplete");
         // One cascade lasts 1,800 ms; a larger gap could conceal an entire paying cascade.
         assert.isAbove(paintTime(later), paintTime(earlier));
-        assert.isAtMost(paintTime(later) - paintTime(earlier), 1900);
+        assert.isBelow(paintTime(later) - paintTime(earlier), 1800);
       }
       const final = selected.at(-1);
 
@@ -334,29 +353,25 @@ describe("understanding evidence", () => {
     }),
   );
 
-  it.live("does not ask a model to grade incomplete frame evidence", () =>
+  it.live("fails incomplete frame evidence as infrastructure before any model call", () =>
     Effect.gen(function* () {
       let called = false;
 
-      const { outcome, prompts, history } = yield* describeWith(
+      const failure = yield* describeWith(
         "order-filled",
         (page) =>
           Effect.sync(() => {
             called = true;
           }).pipe(Effect.andThen(order(page))),
         { frameHistory: 1 },
-      );
+      ).pipe(Effect.flip);
 
       assert.isFalse(called);
-      assert.isEmpty(prompts);
-      assert.strictEqual(history.length, 1);
-      assert.isFalse(outcome.pass, outcome.detail);
-      assert.strictEqual(outcome.steps, 0);
-      assert.isNull(outcome.answer);
-      assert.deepStrictEqual(outcome.usage, {
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
+      assert.strictEqual(failure._tag, "EvidenceIncomplete");
+      assert.deepStrictEqual(classify(Exit.fail(failure), noCalls), {
+        status: "infrastructure-failed",
+        reason: "evidence-incomplete",
+        pass: null,
       });
     }),
   );
@@ -374,10 +389,32 @@ describe("understanding evidence", () => {
       const image = pictures(prompt).at(-1);
       const final = history.findLast((frame) => isDeepStrictEqual(frame.data, image?.data));
 
-      if (final === undefined)
-        throw new Error("the final description image is not a captured frame");
       assert.isTrue(history.some((frame) => paintTime(frame) < frameAfter));
-      assert.isAtLeast(paintTime(final), frameAfter);
+      // Delayed delivery can also lose the settling repaint. Either a retained paint after the
+      // barrier is final, or, with none retained, a fresh screenshot taken after the barrier is.
+      if (final === undefined) {
+        assert.include(outcome.detail, "final frame from a fresh screenshot");
+        assert.isTrue(history.every((frame) => paintTime(frame) < frameAfter));
+      } else assert.isAtLeast(paintTime(final), frameAfter);
+    }),
+  );
+
+  it.live("describes a fresh screenshot when the screencast loses the final paint", () =>
+    Effect.gen(function* () {
+      const { outcome, prompts, history } = yield* describeWith("order-filled", order, {
+        dropFramesAfterClicks: 1,
+      });
+
+      const prompt = prompts[0];
+
+      assert.isTrue(outcome.pass, outcome.detail);
+      assert.include(outcome.detail, "final frame from a fresh screenshot");
+      if (prompt === undefined) throw new Error("the description prompt is missing");
+      const final = pictures(prompt).at(-1);
+
+      // The order row only reached the screenshot; every retained paint predates the click.
+      assert.isFalse(history.some((frame) => isDeepStrictEqual(frame.data, final?.data)));
+      assert.strictEqual(pictures(prompt).length, 2);
     }),
   );
 

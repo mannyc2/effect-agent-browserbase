@@ -1,18 +1,15 @@
 // Runs the free scripted bench by default. Paid model/provider runs need the explicit opt-ins below.
 // Each trial owns its browser, random seed and accounting; only the admission budget is shared.
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import {
   Cause,
   Clock,
-  Config,
   Console,
   DateTime,
-  Deferred,
   Duration,
   Effect,
   Exit,
@@ -20,16 +17,39 @@ import {
   Ref,
   Schema,
 } from "effect";
-import type * as Agent from "effect-browser/Agent";
-import type { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import * as Browserbase from "effect-browserbase/Browserbase";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
-import { AiError, type LanguageModel } from "effect/ai";
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { FetchHttpClient } from "effect/http";
 
+import {
+  type Accounting,
+  BenchError,
+  efforts,
+  modelRunner,
+  noCalls,
+  noTiming,
+  refuse,
+  type Timing,
+} from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import { type Task, tasks } from "./Tasks.ts";
+import {
+  type Classification,
+  classify,
+  isolatedTrial,
+  journal,
+  notAdmitted,
+  onSigint,
+  type Reason,
+  revision,
+  type RunInfo,
+  type Status,
+  tally,
+  trialSeed,
+  uncertainAllocation,
+  workDeadline,
+} from "./Trial.ts";
 
 const help = `Usage: bun run bench -- [options]
 
@@ -48,12 +68,23 @@ const help = `Usage: bun run bench -- [options]
   --humanize           Move the pointer and type at a human pace.
   --out <dir>          Results directory. Defaults to .work/bench in the repository.`;
 
-/** A problem with how the bench was asked to run. */
-class BenchError extends Schema.TaggedError<BenchError>()("BenchError", {
-  message: Schema.String,
-}) {}
+// A hosted session outlives the trial that owns it only until Browserbase's own timeout, which
+// bounds a session the bench could not release.
+export const trialTimeout = Duration.minutes(10);
+// The trial deadline excludes time queued for the budget, so a session also allows for queueing;
+// one that outlives even this fails its trial as infrastructure.
+export const hostedSessionSeconds = 30 * 60;
 
-const refuse = (message: string) => Effect.fail(new BenchError({ message }));
+/** Each hosted trial's browser: a new 1280×720 session that ends at least by its own timeout. */
+export const hostedBrowser = (humanize: boolean) =>
+  Browserbase.layer({
+    humanize,
+    frameHistory: 1200,
+    session: {
+      timeout: hostedSessionSeconds,
+      browserSettings: { viewport: { width: 1280, height: 720 } },
+    },
+  });
 
 const flags = Effect.try({
   try: () =>
@@ -80,472 +111,6 @@ const flags = Effect.try({
     }),
 });
 
-const efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-
-export type Reasoning = (typeof efforts)[number];
-
-/** USD per token, also enforced as provider routing ceilings. */
-interface Rates {
-  readonly input: number;
-  readonly output: number;
-}
-
-const Prices = Schema.Struct({
-  prompt: Schema.FiniteFromString,
-  completion: Schema.FiniteFromString,
-  input_cache_read: Schema.optional(Schema.FiniteFromString),
-  input_cache_write: Schema.optional(Schema.FiniteFromString),
-  input_cache_write_1h: Schema.optional(Schema.FiniteFromString),
-});
-
-const Endpoints = Schema.Struct({
-  data: Schema.Struct({
-    endpoints: Schema.Array(
-      Schema.Struct({
-        tag: Schema.String,
-        status: Schema.Finite,
-        context_length: Schema.Finite,
-        max_prompt_tokens: Schema.optional(Schema.NullOr(Schema.Finite)),
-        max_completion_tokens: Schema.optional(Schema.NullOr(Schema.Finite)),
-        supported_parameters: Schema.Array(Schema.String),
-        pricing: Schema.Struct({
-          ...Prices.fields,
-          overrides: Schema.optional(Schema.Array(Prices)),
-        }),
-      }),
-    ),
-  }),
-});
-
-const listedEndpoints = (model: string) =>
-  HttpClient.get(
-    `https://openrouter.ai/api/v1/models/${model.split("/").map(encodeURIComponent).join("/")}/endpoints`,
-  ).pipe(
-    Effect.flatMap(HttpClientResponse.schemaBodyJson(Endpoints)),
-    Effect.mapError(() => new BenchError({ message: "could not read OpenRouter endpoint bounds" })),
-    Effect.map(({ data }) => data.endpoints),
-    Effect.provide(FetchHttpClient.layer),
-  );
-
-const givenRates = (text: string) => {
-  const [input, output, ...rest] = text.split(",").map(Number);
-
-  return input !== undefined &&
-    output !== undefined &&
-    rest.length === 0 &&
-    Number.isFinite(input) &&
-    Number.isFinite(output) &&
-    input >= 0 &&
-    output >= 0
-    ? Effect.succeed<Rates>({ input: input / 1e6, output: output / 1e6 })
-    : refuse("--rates takes two finite non-negative numbers, such as 3,15");
-};
-
-const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
-
-interface RawUsage {
-  readonly prompt_tokens: number;
-  readonly completion_tokens: number;
-  readonly prompt_tokens_details?: { readonly cached_tokens?: number | null } | null;
-  readonly cost?: number | null;
-}
-
-/** Known charges remain distinct from upper bounds for requests whose bill is unknown. */
-export interface Accounting {
-  readonly calls: number;
-  readonly usage: Agent.Usage;
-  readonly knownUsd: number;
-  readonly reservedUsd: number;
-  readonly uncertainCalls: number;
-}
-
-const emptyAccounting: Accounting = {
-  calls: 0,
-  usage: noUsage,
-  knownUsd: 0,
-  reservedUsd: 0,
-  uncertainCalls: 0,
-};
-
-// Integer nanodollars round reservations up and the limit down. Floating subtraction must never
-// admit one extra request at the shared boundary.
-const units = 1e9;
-
-/** Admission is atomic; failed, interrupted and unpriced responses keep their reservations. */
-export const ledger = (maxUsd: number, requestUsd: number) =>
-  Effect.gen(function* () {
-    const limit = Math.floor(maxUsd * units);
-    const reservation = Math.ceil(requestUsd * units);
-
-    if (
-      !Number.isSafeInteger(limit) ||
-      !Number.isSafeInteger(reservation) ||
-      limit <= 0 ||
-      reservation < 0
-    )
-      return yield* refuse("the budget and request bounds must be finite non-negative amounts");
-
-    const changed = yield* Deferred.make<void>();
-    const state = yield* Ref.make({ known: 0, reserved: 0, active: 0, blocked: false, changed });
-
-    const settle = (charged: number | undefined) =>
-      Effect.gen(function* () {
-        const next = yield* Deferred.make<void>();
-
-        const previous = yield* Ref.modify(state, (value) => [
-          value.changed,
-          {
-            known: value.known + (charged ?? 0),
-            reserved: value.reserved - (charged === undefined ? 0 : reservation),
-            active: value.active - reservation,
-            blocked: value.blocked || (charged !== undefined && charged > reservation),
-            changed: next,
-          },
-        ]);
-
-        yield* Deferred.succeed(previous, undefined);
-      });
-
-    return {
-      // Stop only future admission; dispatched calls still own and settle their reservations.
-      stop: Effect.gen(function* () {
-        const next = yield* Deferred.make<void>();
-
-        const previous = yield* Ref.modify(state, (value) => [
-          value.changed,
-          { ...value, blocked: true, changed: next },
-        ]);
-
-        yield* Deferred.succeed(previous, undefined);
-      }),
-      snapshot: Ref.get(state).pipe(
-        Effect.map((value) => ({
-          knownUsd: value.known / units,
-          reservedUsd: value.reserved / units,
-        })),
-      ),
-      exhausted: Ref.get(state).pipe(
-        Effect.map(
-          (value) =>
-            value.blocked || value.known + value.reserved - value.active + reservation > limit,
-        ),
-      ),
-      account: Effect.gen(function* () {
-        const account = yield* Ref.make(emptyAccounting);
-        const lastResponse = yield* Ref.make<Diagnostics.LastResponse | null>(null);
-
-        return {
-          snapshot: Ref.get(account),
-          lastResponse: Ref.get(lastResponse),
-          run: <A, E, R>(
-            request: Effect.Effect<A, E, R>,
-            usageOf: (response: A) => RawUsage | undefined,
-            receiptOf?: (response: A) => Diagnostics.Receipt,
-          ): Effect.Effect<A, E | BenchError, R> =>
-            Effect.uninterruptibleMask((restore) =>
-              Effect.gen(function* () {
-                // A pending receipt may release enough capacity. Permanent uncertainty may not.
-                while (true) {
-                  const admission = yield* Ref.modify(state, (value) => {
-                    const fits =
-                      !value.blocked && value.known + value.reserved + reservation <= limit;
-
-                    return [
-                      {
-                        fits,
-                        denied:
-                          value.blocked ||
-                          value.known + value.reserved - value.active + reservation > limit,
-                        changed: value.changed,
-                      },
-                      fits
-                        ? {
-                            ...value,
-                            reserved: value.reserved + reservation,
-                            active: value.active + reservation,
-                          }
-                        : value,
-                    ];
-                  });
-
-                  if (admission.fits) break;
-                  if (admission.denied)
-                    return yield* refuse(`no call fits the remaining $${maxUsd} budget`);
-                  yield* restore(Deferred.await(admission.changed));
-                }
-
-                const dispatched = yield* Ref.updateAndGet(account, (value) => ({
-                  ...value,
-                  calls: value.calls + 1,
-                  reservedUsd: value.reservedUsd + reservation / units,
-                  uncertainCalls: value.uncertainCalls + 1,
-                }));
-
-                yield* Ref.set(lastResponse, null);
-
-                // Only the provider request is interruptible. Once a receipt arrives, account for
-                // it before any tool, answer decoder, or caller interruption can discard it.
-                const response = yield* restore(request).pipe(
-                  Effect.onExit((exit) => (Exit.isFailure(exit) ? settle(undefined) : Effect.void)),
-                );
-
-                const usage = usageOf(response);
-
-                const remember = () =>
-                  receiptOf === undefined
-                    ? Effect.void
-                    : Ref.set(lastResponse, { call: dispatched.calls, ...receiptOf(response) });
-
-                if (usage === undefined) {
-                  yield* settle(undefined);
-                  yield* remember();
-
-                  return response;
-                }
-
-                yield* Ref.update(account, (value) => ({
-                  ...value,
-                  usage: {
-                    inputTokens: value.usage.inputTokens + usage.prompt_tokens,
-                    outputTokens: value.usage.outputTokens + usage.completion_tokens,
-                    cachedInputTokens:
-                      value.usage.cachedInputTokens +
-                      (usage.prompt_tokens_details?.cached_tokens ?? 0),
-                  },
-                }));
-
-                if (
-                  usage.cost === undefined ||
-                  usage.cost === null ||
-                  !Number.isFinite(usage.cost) ||
-                  usage.cost < 0
-                ) {
-                  yield* settle(undefined);
-                  yield* remember();
-
-                  return response;
-                }
-
-                const charged = Math.ceil(usage.cost * units);
-
-                yield* settle(charged);
-                yield* Ref.update(account, (value) => ({
-                  ...value,
-                  knownUsd: value.knownUsd + charged / units,
-                  reservedUsd: Math.max(0, value.reservedUsd - reservation / units),
-                  uncertainCalls: value.uncertainCalls - 1,
-                }));
-
-                yield* remember();
-
-                if (charged > reservation)
-                  return yield* refuse(
-                    "provider charge exceeded its enforced price/token bounds; stopped",
-                  );
-
-                return response;
-              }),
-            ),
-        };
-      }),
-    };
-  });
-
-export type Budget = Effect.Success<ReturnType<typeof ledger>>;
-export type Account = Effect.Success<Budget["account"]>;
-
-/** Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding. */
-export const budgetedClient = (
-  client: OpenRouterClient.Service,
-  account: Account,
-  bounds: {
-    readonly rates: Rates;
-    readonly maxOutputTokens: number;
-    readonly outputParameter?: "max_tokens" | "max_completion_tokens";
-    readonly provider?: string;
-  },
-): OpenRouterClient.Service => ({
-  ...client,
-  createChatCompletion: (request) =>
-    account
-      .run(
-        client.createChatCompletion({
-          ...request,
-          ...(bounds.outputParameter === "max_completion_tokens"
-            ? { max_completion_tokens: bounds.maxOutputTokens }
-            : { max_tokens: bounds.maxOutputTokens }),
-          service_tier: "default",
-          modalities: ["text"],
-          // Omission inherits account defaults. Enforced account plugins still need an external
-          // policy check before live runs, because OpenRouter can prevent request overrides.
-          plugins: [
-            { id: "web", enabled: false },
-            { id: "file-parser", enabled: false },
-            { id: "response-healing", enabled: false },
-            { id: "context-compression", enabled: false },
-            { id: "auto-router", enabled: false },
-            { id: "auto-beta-router", enabled: false },
-            { id: "pareto-router", enabled: false },
-            { id: "fusion", enabled: false },
-          ],
-          provider: {
-            ...(bounds.provider === undefined ? {} : { only: [bounds.provider] }),
-            allow_fallbacks: false,
-            require_parameters: true,
-            max_price: {
-              prompt: String(bounds.rates.input * 1e6),
-              completion: String(bounds.rates.output * 1e6),
-              request: "0",
-              image: "0",
-              audio: "0",
-            },
-          },
-        }),
-        ([response]) => response.usage,
-        Diagnostics.receipt,
-      )
-      .pipe(
-        Effect.mapError((error) =>
-          error._tag === "BenchError"
-            ? AiError.make({
-                module: "bench",
-                method: "createChatCompletion",
-                reason: new AiError.InvalidRequestError({ description: error.message }),
-              })
-            : error,
-        ),
-      ),
-});
-
-export const modelRunner = (options: {
-  readonly model: string;
-  readonly rates: string | undefined;
-  readonly maxUsd: number;
-  readonly maxOutputTokens: number;
-}) =>
-  Effect.gen(function* () {
-    const endpoints = yield* listedEndpoints(options.model);
-    const supplied = options.rates === undefined ? undefined : yield* givenRates(options.rates);
-
-    const eligible = endpoints
-      .flatMap((endpoint) => {
-        const maximum = endpoint.max_completion_tokens;
-        const context = endpoint.max_prompt_tokens ?? endpoint.context_length;
-        const prices = [endpoint.pricing, ...(endpoint.pricing.overrides ?? [])];
-
-        const rates = {
-          input: Math.max(
-            ...prices.flatMap((price) => [
-              price.prompt,
-              price.input_cache_read ?? 0,
-              price.input_cache_write ?? 0,
-              price.input_cache_write_1h ?? 0,
-            ]),
-          ),
-          output: Math.max(...prices.map((price) => price.completion)),
-        };
-
-        const outputParameter = endpoint.supported_parameters.includes("max_completion_tokens")
-          ? ("max_completion_tokens" as const)
-          : endpoint.supported_parameters.includes("max_tokens")
-            ? ("max_tokens" as const)
-            : undefined;
-
-        if (
-          endpoint.status !== 0 ||
-          /\/(flex|fast|priority)$/.test(endpoint.tag) ||
-          !Number.isSafeInteger(context) ||
-          context <= 0 ||
-          rates.input < 0 ||
-          rates.output < 0 ||
-          outputParameter === undefined ||
-          (maximum !== undefined && maximum !== null && options.maxOutputTokens > maximum) ||
-          (supplied !== undefined &&
-            (supplied.input < rates.input || supplied.output < rates.output))
-        )
-          return [];
-
-        // Price tiers and cache writes can exceed base pricing. Pin one endpoint and reserve its
-        // highest published rates across the entire context, including text, tools and screenshots.
-        return [
-          {
-            provider: endpoint.tag,
-            rates,
-            outputParameter,
-            requestUsd: context * rates.input + options.maxOutputTokens * rates.output,
-          },
-        ];
-      })
-      .sort((left, right) => left.requestUsd - right.requestUsd);
-
-    const bounds = eligible[0];
-
-    if (bounds === undefined)
-      return yield* refuse("no available endpoint has supported token/price bounds within --rates");
-
-    const { requestUsd, rates } = bounds;
-    const budget = yield* ledger(options.maxUsd, requestUsd);
-
-    if (yield* budget.exhausted)
-      return yield* refuse(
-        `a call reserves $${requestUsd.toFixed(6)}, above --max-usd ${options.maxUsd}`,
-      );
-
-    const withModel = <A, E, R>(
-      effect: Effect.Effect<A, E, R | LanguageModel.LanguageModel>,
-      reasoning: Reasoning,
-      account: Account,
-    ) => {
-      const client = Layer.effect(
-        OpenRouterClient.OpenRouterClient,
-        Effect.map(OpenRouterClient.OpenRouterClient, (native) =>
-          budgetedClient(native, account, {
-            rates,
-            maxOutputTokens: options.maxOutputTokens,
-            outputParameter: bounds.outputParameter,
-            provider: bounds.provider,
-          }),
-        ),
-      ).pipe(
-        Layer.provide(
-          OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") }),
-        ),
-        Layer.provide(FetchHttpClient.layer),
-      );
-
-      const languageModel = OpenRouterLanguageModel.layer({
-        model: options.model,
-        config: { reasoning: { effort: reasoning } },
-      }).pipe(Layer.provide(client));
-
-      return effect.pipe(Effect.provide(languageModel));
-    };
-
-    return {
-      ...budget,
-      withModel,
-      run: (task: Task, seed: number, reasoning: Reasoning, account: Account) =>
-        withModel(task.withModel({ seed, onUsage: () => Effect.void }), reasoning, account),
-    };
-  });
-
-/** Derivation depends on task identity, never dispatch order or provider random draws. */
-export const trialSeed = (base: number, task: string, trial: number): number => {
-  let seed = 2166136261;
-
-  for (const character of `${base}:${task}:${trial}`) {
-    seed = Math.imul(seed ^ character.charCodeAt(0), 16777619) >>> 0;
-  }
-
-  return seed;
-};
-
-/** A local memo map prevents parallel trials from sharing a scoped browser layer. */
-export const isolatedTrial = <A, E, R, E2, R2>(
-  trial: Effect.Effect<A, E, R | Browser>,
-  browser: Layer.Layer<Browser, E2, R2>,
-) => trial.pipe(Effect.provide(browser, { local: true }));
-
 interface TrialRecord {
   readonly task: string;
   readonly kind: Task["kind"];
@@ -553,22 +118,20 @@ interface TrialRecord {
   readonly baseSeed: number;
   readonly seed: number;
   readonly startedAt: string;
-  readonly model: string | null;
+  readonly run: RunInfo;
   readonly reasoning: string | null;
-  readonly browser: string;
-  readonly status: "completed" | "failed" | "skipped";
-  readonly pass: boolean;
+  readonly status: Status;
+  readonly reason: Reason;
+  /** Null unless the trial was graded. */
+  readonly pass: boolean | null;
   readonly detail: string;
   readonly error: string | null;
   readonly diagnostic: Diagnostics.Failure | null;
   readonly lastResponse: Diagnostics.LastResponse | null;
   readonly answer: unknown;
-  readonly steps: number;
-  readonly usage: Agent.Usage | null;
-  readonly usd: number | null;
-  readonly knownUsd: number;
-  readonly reservedUsd: number;
-  readonly uncertainCalls: number;
+  readonly accounting: Accounting;
+  /** Admission queueing and provider request time within `seconds`. */
+  readonly timing: Timing;
   readonly seconds: number;
 }
 
@@ -629,64 +192,164 @@ const main = Effect.gen(function* () {
   if (options.browser === "browserbase" && process.env.EFFECT_BROWSER_BENCH_HOSTED !== "1")
     return yield* refuse("Browserbase sessions cost money: set EFFECT_BROWSER_BENCH_HOSTED=1");
 
-  const browser =
-    options.browser === "browserbase"
-      ? Browserbase.layer({
-          humanize: options.humanize,
-          frameHistory: 1200,
-          session: { browserSettings: { viewport: { width: 1280, height: 720 } } },
-        }).pipe(
-          Layer.provide(BrowserbaseClient.layerConfig()),
-          Layer.provide(FetchHttpClient.layer),
-        )
-      : Chromium.layer({ humanize: options.humanize, frameHistory: 1200 });
+  const hosted = options.browser === "browserbase";
+
+  const browser = hosted
+    ? hostedBrowser(options.humanize).pipe(
+        Layer.provide(BrowserbaseClient.layerConfig()),
+        Layer.provide(FetchHttpClient.layer),
+      )
+    : Chromium.layer({ humanize: options.humanize, frameHistory: 1200 });
+
+  // After a create whose outcome is unknown, no further hosted session is requested.
+  const hostedHalt = yield* Ref.make(false);
+
+  const selected = tasks.filter((candidate) => names.includes(candidate.name));
 
   const runner =
     model === undefined
       ? undefined
-      : yield* modelRunner({ model, rates: options.rates, maxUsd, maxOutputTokens });
+      : yield* modelRunner({
+          model,
+          rates: options.rates,
+          maxUsd,
+          maxOutputTokens,
+          needs: {
+            tools: selected.some((task) => task.kind === "operate"),
+            structuredOutput: selected.some((task) => task.kind === "understand"),
+          },
+        });
+
+  const run: RunInfo = {
+    revision: yield* revision,
+    model: model ?? null,
+    endpoint: runner?.endpoint ?? null,
+    browser: options.browser,
+    humanize: options.humanize,
+    maxOutputTokens,
+    maxUsd,
+    concurrency,
+  };
 
   const label = model?.replace(/[^\w.-]+/g, "_") ?? "scripted";
   const stamp = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-");
   const directory = options.out ?? fileURLToPath(new URL("../.work/bench/", import.meta.url));
   const file = join(directory, `${stamp}-${label}.jsonl`);
 
-  const jobs = tasks
-    .filter((candidate) => names.includes(candidate.name))
-    .flatMap((task) => Array.from({ length: trials }, (_, index) => ({ task, trial: index + 1 })));
+  const jobs = selected.flatMap((task) =>
+    Array.from({ length: trials }, (_, index) => ({ task, trial: index + 1 })),
+  );
 
   yield* write(() => mkdirSync(directory, { recursive: true }));
 
+  const units = yield* journal(jobs.map((_, index) => index));
+
+  const save = (record: TrialRecord) =>
+    write(() => appendFileSync(file, `${JSON.stringify(record)}\n`));
+
+  const ledgerSnapshot = (interrupted: boolean) =>
+    Effect.gen(function* () {
+      const accounting =
+        runner === undefined ? { knownUsd: 0, reservedUsd: 0 } : yield* runner.snapshot;
+
+      yield* write(() =>
+        writeFileSync(
+          join(directory, `${stamp}-${label}.ledger.json`),
+          `${JSON.stringify({ ...accounting, maxUsd, interrupted }, null, 2)}\n`,
+        ),
+      );
+
+      return accounting;
+    });
+
+  // An interrupted run still records every trial it scheduled, with what its calls already
+  // spent or reserved, and the ledger as it stands.
+  const interrupted = Effect.gen(function* () {
+    const at = DateTime.formatIso(yield* DateTime.now);
+
+    for (const { key, calls, timing } of yield* units.drain) {
+      const job = jobs[key];
+
+      if (job === undefined) continue;
+      yield* save({
+        task: job.task.name,
+        kind: job.task.kind,
+        trial: job.trial,
+        baseSeed,
+        seed: trialSeed(baseSeed, job.task.name, job.trial),
+        startedAt: at,
+        run,
+        reasoning: null,
+        status: "unrun",
+        reason: "interrupted",
+        pass: null,
+        detail: "Interrupted before an outcome.",
+        error: null,
+        diagnostic: null,
+        lastResponse: calls.lastResponse,
+        answer: null,
+        accounting: calls.accounting,
+        timing,
+        seconds: 0,
+      });
+    }
+    yield* ledgerSnapshot(true);
+  }).pipe(Effect.ignore({ log: "Error", message: "could not record the interrupted run" }));
+
+  yield* onSigint(interrupted);
+
+  yield* Console.log(`Running ${jobs.length} trials, ${concurrency} at a time; results in ${file}`);
+
   const records = yield* Effect.forEach(
     jobs,
-    ({ task, trial }) =>
+    ({ task, trial }, index) =>
       Effect.gen(function* () {
-        // Skips are durable results too, but must not provision another browser.
-        const skipped = runner !== undefined && (yield* runner.exhausted);
+        // A denied or unstarted trial is a durable result too, but must not provision a browser.
+        const halted = hosted && (yield* Ref.get(hostedHalt));
+        const denied = !halted && runner !== undefined && (yield* runner.exhausted);
         const seed = trialSeed(baseSeed, task.name, trial);
         const effectiveReasoning = reasoning ?? (task.kind === "operate" ? "medium" : "none");
         const started = yield* DateTime.now;
         const startedNanos = yield* Clock.monotonicTimeNanos;
-        const account = skipped || runner === undefined ? undefined : yield* runner.account;
+
+        const account =
+          halted || denied || runner === undefined ? undefined : yield* runner.account;
+
+        if (account !== undefined) yield* units.begin(index, account);
 
         const work =
           runner !== undefined && account !== undefined
-            ? runner.run(task, seed, effectiveReasoning, account)
+            ? runner.withModel(
+                task.withModel({ seed, onUsage: () => Effect.void }),
+                effectiveReasoning,
+                account,
+              )
             : task.scripted({ seed });
 
-        const exit = skipped
-          ? undefined
-          : yield* isolatedTrial(work, browser).pipe(
-              Effect.timeout(Duration.minutes(10)),
-              Effect.exit,
-            );
+        const exit =
+          halted || denied
+            ? undefined
+            : yield* isolatedTrial(work, browser).pipe(
+                Effect.raceFirst(workDeadline(trialTimeout, account?.queued ?? Effect.succeed(0))),
+                Effect.exit,
+              );
 
-        const seconds = skipped
-          ? 0
-          : Number((yield* Clock.monotonicTimeNanos) - startedNanos) / 1e9;
+        if (hosted && exit !== undefined && Exit.isFailure(exit) && uncertainAllocation(exit.cause))
+          yield* Ref.set(hostedHalt, true);
 
-        const outcome = exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
-        const accounting = account === undefined ? emptyAccounting : yield* account.snapshot;
+        const seconds =
+          exit === undefined ? 0 : Number((yield* Clock.monotonicTimeNanos) - startedNanos) / 1e9;
+
+        const calls = account === undefined ? noCalls : yield* account.calls;
+
+        const outcome: Classification =
+          exit !== undefined
+            ? classify(exit, calls)
+            : halted
+              ? { status: "unrun", reason: "stopped-after-uncertain-session", pass: null }
+              : notAdmitted(runner === undefined ? null : yield* runner.halted);
+
+        const value = exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
 
         const record: TrialRecord = {
           task: task.name,
@@ -695,53 +358,64 @@ const main = Effect.gen(function* () {
           baseSeed,
           seed,
           startedAt: DateTime.formatIso(started),
-          model: model ?? null,
+          run,
           reasoning: model === undefined ? null : effectiveReasoning,
-          browser: options.browser,
-          status: skipped ? "skipped" : outcome?.pass === true ? "completed" : "failed",
-          pass: outcome?.pass ?? false,
-          detail: skipped
-            ? "Skipped: the remaining model budget cannot reserve another call."
-            : (outcome?.detail ?? ""),
+          ...outcome,
+          detail:
+            exit !== undefined
+              ? (value?.detail ?? "")
+              : halted
+                ? "Unrun: an earlier hosted session create had an unknown outcome."
+                : outcome.status === "denied"
+                  ? "Denied: the remaining model budget cannot reserve another call."
+                  : "Unrun: model admission had stopped.",
           error: exit !== undefined && Exit.isFailure(exit) ? errorText(exit.cause) : null,
           diagnostic:
             exit !== undefined && Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,
-          lastResponse: account === undefined ? null : yield* account.lastResponse,
-          answer: outcome?.answer ?? null,
-          steps: accounting.calls,
-          usage: model === undefined ? null : accounting.usage,
-          usd: accounting.uncertainCalls === 0 ? accounting.knownUsd : null,
-          knownUsd: accounting.knownUsd,
-          reservedUsd: accounting.reservedUsd,
-          uncertainCalls: accounting.uncertainCalls,
+          lastResponse: calls.lastResponse,
+          answer: value?.answer ?? null,
+          accounting: calls.accounting,
+          timing: account === undefined ? noTiming : yield* account.timing,
           seconds,
         };
 
-        yield* write(() => appendFileSync(file, `${JSON.stringify(record)}\n`));
+        yield* units.settle(index, save(record));
         yield* Console.log(
-          `${task.name.padEnd(14)} #${trial}  ${record.status === "skipped" ? "SKIP" : record.pass ? "pass" : "FAIL"}  ${seconds.toFixed(1)}s  ${record.steps} calls  $${record.knownUsd.toFixed(4)} known + $${record.reservedUsd.toFixed(4)} unresolved  ${record.error ?? record.detail}`,
+          `${task.name.padEnd(14)} #${trial}  ${record.status === "graded" ? (record.pass === true ? "pass" : "FAIL") : record.status}  ${record.reason}  ${seconds.toFixed(1)}s  ${record.accounting.calls} calls  $${record.accounting.knownUsd.toFixed(4)} known + $${record.accounting.reservedUsd.toFixed(4)} unresolved  ${record.error ?? record.detail}`,
         );
 
         return record;
       }),
     { concurrency },
-  );
+  ).pipe(Effect.onInterrupt(() => interrupted));
 
-  const skipped = records.filter((record) => record.status === "skipped").length;
-  const passed = records.filter((record) => record.pass).length;
+  const accounting = yield* ledgerSnapshot(false);
 
-  const accounting =
-    runner === undefined ? { knownUsd: 0, reservedUsd: 0 } : yield* runner.snapshot;
+  for (const name of names) {
+    const counts = tally(records.filter((record) => record.task === name));
+
+    yield* Console.log(
+      `${name.padEnd(14)} ${counts.passed} of ${counts.graded} graded passed; ${counts.infrastructureFailed} infrastructure-failed, ${counts.denied} denied, ${counts.unrun} unrun`,
+    );
+  }
+
+  const counts = tally(records);
 
   yield* Console.log(
-    `\n${passed} of ${records.length} scheduled trials passed; ${records.length - skipped} attempted, ${skipped} skipped; $${accounting.knownUsd.toFixed(4)} known + $${accounting.reservedUsd.toFixed(4)} unresolved of $${maxUsd}; results in ${file}`,
+    `\n${counts.passed} of ${counts.graded} graded trials passed; ${counts.infrastructureFailed} infrastructure-failed, ${counts.denied} denied and ${counts.unrun} unrun of ${counts.scheduled} scheduled; $${accounting.knownUsd.toFixed(4)} known + $${accounting.reservedUsd.toFixed(4)} unresolved of $${maxUsd}; results in ${file}`,
   );
 
-  // A failing scripted solution is a broken bench; a failing model is a result.
-  return model !== undefined || passed === records.length;
-});
+  // Every trial must reach a graded result with settled charges. A failing scripted solution is
+  // a broken bench; a failing model is a result.
+  return records.every(
+    (record) =>
+      record.status === "graded" &&
+      record.accounting.uncertainCalls === 0 &&
+      (model !== undefined || record.pass === true),
+  );
+}).pipe(Effect.scoped);
 
-// Run only from the command line, so free tests can import the budget and trial boundary.
+// Run only from the command line, so free tests can import this module without running it.
 if (import.meta.main) {
   const interrupt = new AbortController();
 

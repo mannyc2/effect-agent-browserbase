@@ -11,18 +11,32 @@ import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
-import * as Diagnostics from "./Diagnostics.ts";
-import * as Quote from "./QuoteComparison.ts";
 import {
   type Account,
   type Accounting,
   type Budget,
   budgetedClient,
-  isolatedTrial,
+  emptyAccounting,
   ledger,
   modelRunner,
+  noTiming,
+  type Timing,
+} from "./Budget.ts";
+import * as Diagnostics from "./Diagnostics.ts";
+import * as Quote from "./QuoteComparison.ts";
+import {
+  classify,
+  isolatedTrial,
+  journal,
+  notAdmitted,
+  onSigint,
+  type Reason,
+  revision,
+  type Status,
+  tally,
   trialSeed,
-} from "./run.ts";
+  workDeadline,
+} from "./Trial.ts";
 
 const help = `Usage: bun run understand -- [options]
 
@@ -37,7 +51,8 @@ const help = `Usage: bun run understand -- [options]
   --help                 Show this help.
 
 Live calls require EFFECT_BROWSER_BENCH_LIVE=1. This experiment uses local Chromium only.
-Each pair shares one capture across A, B and facts, in a deterministic shuffled order.`;
+Each pair shares one capture across A, B and facts. Arm orders are balanced within each
+complete block of six pairs.`;
 
 export class RunError extends Schema.TaggedError<RunError>()("UnderstandRunError", {
   message: Schema.String,
@@ -130,9 +145,23 @@ export interface Pair {
   readonly order: ReadonlyArray<Quote.Arm>;
 }
 
-/** The ordering is independent of worker scheduling and of any provider random draw. */
-const armOrder = (seed: number): ReadonlyArray<Quote.Arm> =>
-  [...arms].sort((left, right) => trialSeed(seed, left, 0) - trialSeed(seed, right, 0));
+const permutations: ReadonlyArray<ReadonlyArray<Quote.Arm>> = [
+  ["A", "B", "facts"],
+  ["A", "facts", "B"],
+  ["B", "A", "facts"],
+  ["B", "facts", "A"],
+  ["facts", "A", "B"],
+  ["facts", "B", "A"],
+];
+
+/**
+ * Counterbalanced: each complete block of six consecutive pairs of a task uses every order once,
+ * so within it each arm runs first, second and third equally often. The base seed rotates the
+ * sequence; worker scheduling and provider draws never change it.
+ */
+const armOrder = (base: number, task: string, index: number): ReadonlyArray<Quote.Arm> =>
+  permutations[(index + (trialSeed(base, task, 0) % permutations.length)) % permutations.length] ??
+  arms;
 
 const prerequisitesForConsideringFacts = {
   baselineMustReproduceBindingMistakes: true,
@@ -145,51 +174,82 @@ const prerequisitesForConsideringFacts = {
     "Pre-registered targets only. Small samples do not establish five-point noninferiority; no automatic API decision.",
 };
 
-export const manifest = (configuration: Options, createdAt: string) => ({
-  version: 1,
-  createdAt,
-  mode: configuration.model === undefined ? ("dry-run" as const) : ("paid" as const),
-  interpretation:
-    configuration.model === undefined
-      ? "Scripted adapter validation only; these results do not measure model accuracy."
-      : "Paired observations; no automatic conclusion about adding a public facts API.",
-  model: configuration.model ?? null,
-  reasoning: "none" as const,
-  browser: "local-chromium" as const,
-  configuration,
-  arms: {
-    A: "Shipping Moment",
-    B: "640x360 JPEG plus first 4000 UTF-8 visible-text bytes",
-    facts: "Identical Moment plus visible-DOM conclusions with provenance",
-  },
-  baselineResize: "chromium-canvas-high",
-  requestTimeoutMillis: 600_000,
-  captureTimeoutMillis: 30_000,
-  prerequisitesForConsideringFacts,
-  pairs: [
+export const manifest = (configuration: Options, createdAt: string) => {
+  const pairs = [
     ...Array.from({ length: configuration.hardTrials }, (_, index): Pair => {
       const seed = trialSeed(configuration.seed, "quote-dense", index + 1);
 
-      return { task: "quote-dense", dense: true, trial: index + 1, seed, order: armOrder(seed) };
+      return {
+        task: "quote-dense",
+        dense: true,
+        trial: index + 1,
+        seed,
+        order: armOrder(configuration.seed, "quote-dense", index),
+      };
     }),
     ...Array.from({ length: configuration.controlTrials }, (_, index): Pair => {
       const seed = trialSeed(configuration.seed, "quote-table", index + 1);
 
-      return { task: "quote-table", dense: false, trial: index + 1, seed, order: armOrder(seed) };
+      return {
+        task: "quote-table",
+        dense: false,
+        trial: index + 1,
+        seed,
+        order: armOrder(configuration.seed, "quote-table", index),
+      };
     }),
-  ],
-});
+  ];
+
+  return {
+    version: 1,
+    createdAt,
+    mode: configuration.model === undefined ? ("dry-run" as const) : ("paid" as const),
+    interpretation:
+      configuration.model === undefined
+        ? "Scripted adapter validation only; these results do not measure model accuracy."
+        : "Paired observations; no automatic conclusion about adding a public facts API.",
+    model: configuration.model ?? null,
+    reasoning: "none" as const,
+    browser: "local-chromium" as const,
+    configuration,
+    arms: {
+      A: "Shipping Moment",
+      B: "640x360 JPEG plus first 4000 UTF-8 visible-text bytes",
+      facts:
+        "Identical Moment plus conclusions from every visible quote table, keyed by caption, asset and header",
+    },
+    baselineResize: "chromium-canvas-high",
+    requestTimeoutMillis: 600_000,
+    captureTimeoutMillis: 30_000,
+    prerequisitesForConsideringFacts,
+    orderBalance: orderBalance(pairs),
+    pairs,
+  };
+};
+
+/**
+ * How often each arm runs at each position, per task. Only complete blocks of six pairs are
+ * balanced; a task whose pair count is not a multiple of six has an unbalanced remainder.
+ */
+const orderBalance = (pairs: ReadonlyArray<Pair>) =>
+  (["quote-dense", "quote-table"] as const).map((task) => {
+    const orders = pairs.filter((pair) => pair.task === task).map((pair) => pair.order);
+
+    return {
+      task,
+      pairs: orders.length,
+      completeBlocks: Math.floor(orders.length / permutations.length),
+      positions: Object.fromEntries(
+        arms.map((arm) => [
+          arm,
+          [0, 1, 2].map((position) => orders.filter((order) => order[position] === arm).length),
+        ]),
+      ),
+    };
+  });
 
 export type Manifest = ReturnType<typeof manifest>;
-type Stop = "infrastructure" | "uncertain-accounting" | "output-failed";
-type Reason =
-  | "graded"
-  | "model-failed"
-  | "model-setup-failed"
-  | "preparation-failed"
-  | "budget-exhausted"
-  | "stopped-after-infrastructure"
-  | "accounting-unknown";
+
 type Matches = { readonly [Field in (typeof fields)[number]]: boolean };
 
 export interface Record {
@@ -197,12 +257,16 @@ export interface Record {
   readonly trial: number;
   readonly seed: number;
   readonly arm: Quote.Arm;
+  /** The arm's place in its case's counterbalanced order, from 0. */
+  readonly position: number;
   readonly mode: Manifest["mode"];
-  readonly status: "graded" | "infrastructure-failed" | "unrun";
+  readonly status: Status;
   readonly reason: Reason;
+  /** Null unless the arm was graded. */
   readonly pass: boolean | null;
   readonly matches: Matches | null;
-  readonly periodSwap: boolean | null;
+  /** Which table, row and period a graded answer's values came from. */
+  readonly binding: Quote.Binding | null;
   readonly answer: Quote.Answer | null;
   readonly diagnostic: Diagnostics.Failure | null;
   readonly lastResponse: Diagnostics.LastResponse | null;
@@ -213,16 +277,10 @@ export interface Record {
     readonly visibleTextBytes: number;
   } | null;
   readonly accounting: Accounting;
+  /** Admission queueing and provider request time; latency targets use the request time. */
+  readonly timing: Timing;
   readonly seconds: number;
 }
-
-const emptyAccounting: Accounting = {
-  calls: 0,
-  usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
-  knownUsd: 0,
-  reservedUsd: 0,
-  uncertainCalls: 0,
-};
 
 const matches = (answer: Quote.Answer, expected: Quote.Answer): Matches => ({
   ticker: answer.ticker === expected.ticker,
@@ -245,17 +303,23 @@ export interface Operations<E, R, E2, R2> {
   readonly record: (record: Record) => Effect.Effect<void, RunError>;
 }
 
-/** Cases run concurrently; their three arms run serially, preserving the global call bound. */
+// One journal key per scheduled arm: its pair's index and the arm's place in `arms`.
+const unitKey = (index: number, arm: Quote.Arm) => index * arms.length + arms.indexOf(arm);
+
+/**
+ * Cases run concurrently; their three arms run serially, preserving the global call bound. An
+ * infrastructure failure or an unresolved charge stops new admissions; a graded answer, including
+ * malformed model output, never does.
+ */
 export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
   plan: Manifest,
   budget: Budget,
   operations: Operations<E, R, E2, R2>,
 ) {
-  const stopped = yield* Ref.make<Stop | null>(null);
   const outputFailure = yield* Ref.make<Cause.Cause<RunError> | null>(null);
 
-  const stop = (reason: Stop) =>
-    Ref.update(stopped, (current) => current ?? reason).pipe(Effect.andThen(budget.stop));
+  // The ledger keeps the first reason to stop, so every unit refused afterwards reports it.
+  const stop = budget.stop;
 
   const save = (record: Record) =>
     operations.record(record).pipe(
@@ -267,11 +331,50 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
       Effect.as(record),
     );
 
+  const units = yield* journal(
+    plan.pairs.flatMap((_, index) => arms.map((arm) => unitKey(index, arm))),
+  );
+
+  const settle = (index: number, record: Record) =>
+    units.settle(unitKey(index, record.arm), save(record)).pipe(Effect.as(record));
+
+  // Interruption still leaves one record per scheduled arm, keeping what dispatched calls spent.
+  const interrupted = Effect.gen(function* () {
+    for (const { key, calls, timing } of yield* units.drain) {
+      const pair = plan.pairs[Math.floor(key / arms.length)];
+      const arm = arms[key % arms.length];
+
+      if (pair === undefined || arm === undefined) continue;
+      yield* save({
+        task: pair.task,
+        trial: pair.trial,
+        seed: pair.seed,
+        arm,
+        position: pair.order.indexOf(arm),
+        mode: plan.mode,
+        evidence: null,
+        status: "unrun",
+        reason: "interrupted",
+        pass: null,
+        matches: null,
+        binding: null,
+        answer: null,
+        diagnostic: null,
+        lastResponse: calls.lastResponse,
+        accounting: calls.accounting,
+        timing,
+        seconds: 0,
+      });
+    }
+  });
+
+  yield* onSigint(interrupted);
+
   const groups = yield* Effect.forEach(
     plan.pairs,
-    (pair) =>
+    (pair, index) =>
       Effect.gen(function* () {
-        const skipped = (yield* Ref.get(stopped)) !== null || (yield* budget.exhausted);
+        const skipped = yield* budget.exhausted;
         const prepared = skipped ? undefined : yield* operations.prepare(pair).pipe(Effect.exit);
 
         if (prepared !== undefined && Exit.isFailure(prepared)) yield* stop("infrastructure");
@@ -289,98 +392,84 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
                 visibleTextBytes: new TextEncoder().encode(sample.baseline.text).length,
               };
 
-        return yield* Effect.forEach(pair.order, (arm) =>
+        return yield* Effect.forEach(pair.order, (arm, position) =>
           Effect.gen(function* () {
             const base = {
               task: pair.task,
               trial: pair.trial,
               seed: pair.seed,
               arm,
+              position,
               mode: plan.mode,
               evidence,
             };
 
-            const halted = yield* Ref.get(stopped);
-            const exhausted = yield* budget.exhausted;
+            const unanswered = {
+              pass: null,
+              matches: null,
+              binding: null,
+              answer: null,
+              lastResponse: null,
+              accounting: emptyAccounting,
+              timing: noTiming,
+              seconds: 0,
+            };
 
-            if (sample === undefined || halted !== null || exhausted) {
-              return yield* save({
+            if (prepared !== undefined && Exit.isFailure(prepared))
+              return yield* settle(index, {
                 ...base,
-                status: "unrun",
-                reason:
-                  prepared !== undefined && Exit.isFailure(prepared)
-                    ? "preparation-failed"
-                    : halted !== null
-                      ? "stopped-after-infrastructure"
-                      : "budget-exhausted",
-                pass: null,
-                matches: null,
-                periodSwap: null,
-                answer: null,
-                diagnostic:
-                  prepared !== undefined && Exit.isFailure(prepared)
-                    ? Diagnostics.failure(prepared.cause)
-                    : null,
-                lastResponse: null,
-                accounting: emptyAccounting,
-                seconds: 0,
+                ...unanswered,
+                status: "infrastructure-failed",
+                reason: "preparation-failed",
+                diagnostic: Diagnostics.failure(prepared.cause),
               });
-            }
+
+            if (sample === undefined || (yield* budget.exhausted))
+              return yield* settle(index, {
+                ...base,
+                ...unanswered,
+                ...notAdmitted(yield* budget.halted),
+                diagnostic: null,
+              });
 
             const account = yield* budget.account;
+
+            yield* units.begin(unitKey(index, arm), account);
             const started = yield* Clock.monotonicTimeNanos;
 
             const exit = yield* operations
               .describe(sample, arm, account)
-              .pipe(Effect.timeout(plan.requestTimeoutMillis), Effect.exit);
+              .pipe(
+                Effect.raceFirst(workDeadline(plan.requestTimeoutMillis, account.queued)),
+                Effect.exit,
+              );
 
             const seconds = Number((yield* Clock.monotonicTimeNanos) - started) / 1e9;
-            const accounting = yield* account.snapshot;
-            const lastResponse = yield* account.lastResponse;
-            const nowStopped = yield* Ref.get(stopped);
-            const nowExhausted = yield* budget.exhausted;
+            const calls = yield* account.calls;
+            const outcome = classify(exit, calls);
 
-            const denied =
-              Exit.isFailure(exit) &&
-              accounting.calls === 0 &&
-              (nowStopped !== null || nowExhausted);
-
-            if (Exit.isFailure(exit) && !denied) yield* stop("infrastructure");
-            if (accounting.uncertainCalls > 0) yield* stop("uncertain-accounting");
+            if (outcome.status === "infrastructure-failed") yield* stop("infrastructure");
+            if (calls.accounting.uncertainCalls > 0) yield* stop("uncertain-charge");
 
             const answer = Exit.isSuccess(exit) ? exit.value.answer : null;
-            const grading = answer === null ? null : matches(answer, sample.expected);
 
-            return yield* save({
+            return yield* settle(index, {
               ...base,
-              status: denied ? "unrun" : Exit.isFailure(exit) ? "infrastructure-failed" : "graded",
-              reason: denied
-                ? nowStopped !== null
-                  ? "stopped-after-infrastructure"
-                  : "budget-exhausted"
-                : Exit.isFailure(exit)
-                  ? "model-failed"
-                  : accounting.uncertainCalls > 0
-                    ? "accounting-unknown"
-                    : "graded",
-              pass: Exit.isSuccess(exit) ? exit.value.pass : null,
-              matches: grading,
-              periodSwap:
-                answer === null
-                  ? null
-                  : answer.change24h !== sample.expected.change24h &&
-                    answer.change24h === sample.expected.change1h,
+              ...outcome,
+              matches: answer === null ? null : matches(answer, sample.expected),
+              binding: answer === null ? null : Quote.binding(answer, sample.expected, sample.rows),
               answer,
-              diagnostic: Exit.isFailure(exit) && !denied ? Diagnostics.failure(exit.cause) : null,
-              lastResponse,
-              accounting,
+              diagnostic: Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,
+              lastResponse: calls.lastResponse,
+              accounting: calls.accounting,
+              timing: yield* account.timing,
               seconds,
             });
           }),
         );
       }),
     { concurrency: plan.configuration.concurrency },
-  );
+  ).pipe(Effect.onInterrupt(() => interrupted));
 
   // A broken result sink stops admission but cannot interrupt requests that already cost money.
   const failure = yield* Ref.get(outputFailure);
@@ -388,7 +477,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
   if (failure !== null) return yield* Effect.failCause(failure);
 
   return groups.flat();
-});
+}, Effect.scoped);
 
 const percentile = (values: ReadonlyArray<number>, fraction: number): number | null => {
   const ordered = [...values].sort((left, right) => left - right);
@@ -400,38 +489,63 @@ const summarizeArms = (records: ReadonlyArray<Record>, scheduled: number) =>
   arms.map((arm) => {
     const rows = records.filter((record) => record.arm === arm);
     const graded = rows.filter((record) => record.status === "graded");
-    const times = graded.map((record) => record.seconds);
+    const times = graded.map((record) => record.timing.requestSeconds);
+    const queued = graded.map((record) => record.timing.queueSeconds);
     const knownUsd = rows.reduce((sum, record) => sum + record.accounting.knownUsd, 0);
     const uncertainCalls = rows.reduce((sum, record) => sum + record.accounting.uncertainCalls, 0);
 
+    const counts = tally(rows);
+
+    const errorsIn = (field: (typeof fields)[number]) =>
+      graded.filter((record) => record.matches?.[field] === false).length;
+
+    // Each record has exactly one status, so these counts add up to `scheduled`.
     return {
       arm,
       scheduled,
-      graded: graded.length,
-      passed: graded.filter((record) => record.pass).length,
-      gradingFailures: graded.filter((record) => !record.pass).length,
-      ungradedInfrastructure: rows.filter(
-        (record) =>
-          record.status === "infrastructure-failed" ||
-          record.reason === "preparation-failed" ||
-          record.reason === "model-setup-failed",
-      ).length,
-      unrun: rows.filter((record) => record.status === "unrun").length,
-      fieldErrors: Object.fromEntries(
-        fields.map((field) => [
-          field,
-          graded.filter((record) => record.matches?.[field] === false).length,
-        ]),
-      ),
+      graded: counts.graded,
+      passed: counts.passed,
+      gradingFailures: counts.failed,
+      infrastructureFailed: counts.infrastructureFailed,
+      denied: counts.denied,
+      unrun: counts.unrun,
+      invalidOutputs: graded.filter((record) => record.reason === "invalid-output").length,
+      fieldErrors: {
+        ticker: errorsIn("ticker"),
+        price: errorsIn("price"),
+        change1h: errorsIn("change1h"),
+        change24h: errorsIn("change24h"),
+        column: errorsIn("column"),
+        table: errorsIn("table"),
+      },
+      // Values read from the wrong table, row or period, classified from the displayed cells.
       bindingErrors: graded.filter(
+        (record) =>
+          record.binding?.wrongTable === true ||
+          record.binding?.wrongRow === true ||
+          record.binding?.wrongPeriod === true,
+      ).length,
+      wrongTable: graded.filter((record) => record.binding?.wrongTable === true).length,
+      wrongRow: graded.filter((record) => record.binding?.wrongRow === true).length,
+      wrongPeriod: graded.filter((record) => record.binding?.wrongPeriod === true).length,
+      unsourced: graded.filter((record) => record.binding?.unsourced === true).length,
+      // The requested ticker, table and header are text the answer must copy, not values it binds.
+      labelErrors: graded.filter(
         (record) =>
           record.matches?.ticker === false ||
           record.matches?.table === false ||
-          record.matches?.column === false ||
-          record.periodSwap === true,
+          record.matches?.column === false,
       ).length,
-      periodSwaps: graded.filter((record) => record.periodSwap === true).length,
-      seconds: { p50: percentile(times, 0.5), p95: percentile(times, 0.95) },
+      // Answers, each counted once, with a wrong ticker, row or period: the pre-registered rule.
+      wrongTickerOrPeriod: graded.filter(
+        (record) =>
+          record.matches?.ticker === false ||
+          record.binding?.wrongRow === true ||
+          record.binding?.wrongPeriod === true,
+      ).length,
+      // Provider latency excludes time spent waiting for budget admission.
+      requestSeconds: { p50: percentile(times, 0.5), p95: percentile(times, 0.95) },
+      queueSeconds: { p50: percentile(queued, 0.5), p95: percentile(queued, 0.95) },
       calls: rows.reduce((sum, record) => sum + record.accounting.calls, 0),
       usage: rows.reduce(
         (sum, record) => ({
@@ -483,15 +597,8 @@ const summarizePairs = (pairs: ReadonlyArray<Pair>, records: ReadonlyArray<Recor
     };
   });
 
-/** Hard fixtures and controls retain their own denominators; incomplete pairs are explicit. */
-export const summarize = (plan: Manifest, records: ReadonlyArray<Record>) => ({
-  mode: plan.mode,
-  interpretation: plan.interpretation,
-  scheduled: plan.pairs.length * 3,
-  recorded: records.length,
-  arms: summarizeArms(records, plan.pairs.length),
-  paired: summarizePairs(plan.pairs, records),
-  byTask: (["quote-dense", "quote-table"] as const).map((task) => {
+const byTask = (plan: Manifest, records: ReadonlyArray<Record>) =>
+  (["quote-dense", "quote-table"] as const).map((task) => {
     const pairs = plan.pairs.filter((pair) => pair.task === task);
     const rows = records.filter((record) => record.task === task);
 
@@ -501,9 +608,92 @@ export const summarize = (plan: Manifest, records: ReadonlyArray<Record>) => ({
       arms: summarizeArms(rows, pairs.length),
       paired: summarizePairs(pairs, rows),
     };
-  }),
-  prerequisitesForConsideringFacts: plan.prerequisitesForConsideringFacts,
-});
+  });
+
+/**
+ * The pre-registered rules read on the dense fixtures. `met` is null without graded evidence;
+ * nothing here decides on an API.
+ */
+const prerequisites = (plan: Manifest, dense: ReturnType<typeof byTask>[number] | undefined) => {
+  const targets = plan.prerequisitesForConsideringFacts;
+  const arm = (name: Quote.Arm) => dense?.arms.find((candidate) => candidate.arm === name);
+  const a = arm("A");
+  const b = arm("B");
+  const facts = arm("facts");
+  const versusA = dense?.paired.find((pair) => pair.comparison === "facts vs A");
+  const exact = facts === undefined || facts.graded === 0 ? null : facts.passed / facts.graded;
+
+  const wrongTickerOrPeriod =
+    facts === undefined || facts.graded === 0 ? null : facts.wrongTickerOrPeriod;
+
+  return {
+    baselineReproducesBindingMistakes: {
+      observed: b?.bindingErrors ?? null,
+      met: b === undefined || b.graded === 0 ? null : b.bindingErrors > 0,
+    },
+    // The plan asks for a useful improvement over A but registered no threshold, so the paired
+    // counts are reported for judgement and nothing here claims the rule is met.
+    factsImprovesOverA: {
+      observed:
+        versusA === undefined
+          ? null
+          : { wins: versusA.wins, losses: versusA.losses, completePairs: versusA.completePairs },
+      met: null,
+    },
+    hardQuoteExact: {
+      target: targets.hardQuoteExactTarget,
+      observed: exact,
+      met: exact === null ? null : exact >= targets.hardQuoteExactTarget,
+    },
+    wrongTickerOrPeriod: {
+      target: targets.wrongTickerOrPeriodTarget,
+      observed: wrongTickerOrPeriod,
+      met:
+        wrongTickerOrPeriod === null
+          ? null
+          : wrongTickerOrPeriod <= targets.wrongTickerOrPeriodTarget,
+    },
+    meanCostNoGreaterThanA: {
+      observed: { facts: facts?.meanGradedUsd ?? null, A: a?.meanGradedUsd ?? null },
+      met:
+        facts?.meanGradedUsd === null ||
+        facts?.meanGradedUsd === undefined ||
+        a?.meanGradedUsd === null ||
+        a?.meanGradedUsd === undefined
+          ? null
+          : facts.meanGradedUsd <= a.meanGradedUsd,
+    },
+    p95RequestSeconds: {
+      target: targets.p95SecondsTarget,
+      observed: facts?.requestSeconds.p95 ?? null,
+      met:
+        facts?.requestSeconds.p95 === null || facts?.requestSeconds.p95 === undefined
+          ? null
+          : facts.requestSeconds.p95 <= targets.p95SecondsTarget,
+    },
+    interpretation: targets.interpretation,
+  };
+};
+
+/** Hard fixtures and controls retain their own denominators; incomplete pairs are explicit. */
+export const summarize = (plan: Manifest, records: ReadonlyArray<Record>) => {
+  const tasks = byTask(plan, records);
+
+  return {
+    mode: plan.mode,
+    interpretation: plan.interpretation,
+    scheduled: plan.pairs.length * 3,
+    recorded: records.length,
+    arms: summarizeArms(records, plan.pairs.length),
+    paired: summarizePairs(plan.pairs, records),
+    byTask: tasks,
+    orderBalance: plan.orderBalance,
+    prerequisitesForConsideringFacts: prerequisites(
+      plan,
+      tasks.find((group) => group.task === "quote-dense"),
+    ),
+  };
+};
 
 /** The free adapter sees a scripted response from visible facts, never fixture grading truth. */
 export const scriptedModel = Effect.fnUntraced(function* (account: Account, content: string) {
@@ -630,12 +820,9 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
       new URL("../.work/understand/" + createdAt.replace(/[:.]/g, "-") + "/", import.meta.url),
     );
 
-  // Exclusive creation makes an existing paid manifest immutable and prevents accidental replay.
+  // Exclusive creation makes an existing paid run directory immutable and prevents replay.
   yield* write(() => {
     mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, "manifest.json"), JSON.stringify(plan, null, 2) + "\n", {
-      flag: "wx",
-    });
     writeFileSync(join(directory, "results.jsonl"), "", { flag: "wx" });
   });
 
@@ -647,26 +834,42 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
           rates: undefined,
           maxUsd: configuration.maxUsd,
           maxOutputTokens: configuration.maxOutputTokens,
+          needs: { tools: false, structuredOutput: true },
         }).pipe(Effect.exit);
+
+  // The pinned endpoint and the source revision are part of the plan, written before any call.
+  const recorded = {
+    ...plan,
+    revision: yield* revision,
+    endpoint: setup !== undefined && Exit.isSuccess(setup) ? setup.value.endpoint : null,
+  };
+
+  yield* write(() =>
+    writeFileSync(join(directory, "manifest.json"), JSON.stringify(recorded, null, 2) + "\n", {
+      flag: "wx",
+    }),
+  );
 
   if (setup !== undefined && Exit.isFailure(setup)) {
     const records = plan.pairs.flatMap((pair) =>
-      pair.order.map((arm): Record => ({
+      pair.order.map((arm, position): Record => ({
         task: pair.task,
         trial: pair.trial,
         seed: pair.seed,
         arm,
+        position,
         mode: plan.mode,
-        status: "unrun",
+        status: "infrastructure-failed",
         reason: "model-setup-failed",
         pass: null,
         matches: null,
-        periodSwap: null,
+        binding: null,
         answer: null,
         diagnostic: Diagnostics.failure(setup.cause),
         lastResponse: null,
         evidence: null,
         accounting: emptyAccounting,
+        timing: noTiming,
         seconds: 0,
       })),
     );
@@ -701,6 +904,36 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
   const budget = liveRunner ?? (yield* ledger(configuration.maxUsd, 0));
   const browser = Chromium.layer({ frameHistory: 1200 });
 
+  const saved = yield* Ref.make<ReadonlyArray<Record>>([]);
+
+  const summarized = yield* Ref.make(false);
+
+  // Written once: a SIGINT records it before the run's own interruption tries again.
+  const writeSummary = (records: ReadonlyArray<Record>, interrupted: boolean) =>
+    Effect.gen(function* () {
+      const summary = {
+        ...summarize(plan, records),
+        interrupted,
+        accounting: yield* budget.snapshot,
+      };
+
+      if (yield* Ref.getAndSet(summarized, true)) return summary;
+      yield* write(() =>
+        writeFileSync(join(directory, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
+          flag: "wx",
+        }),
+      );
+
+      return summary;
+    });
+
+  const interruptedSummary = Ref.get(saved).pipe(
+    Effect.flatMap((records) => writeSummary(records, true)),
+    Effect.ignore({ log: "Error", message: "could not summarize the interrupted comparison" }),
+  );
+
+  yield* onSigint(interruptedSummary);
+
   const records = yield* compare(plan, budget, {
     prepare: (pair) =>
       isolatedTrial(Quote.prepare(pair), browser).pipe(
@@ -710,7 +943,11 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
     describe: (sample, arm, account) =>
       liveRunner === undefined
         ? Effect.gen(function* () {
-            const model = yield* scriptedModel(account, JSON.stringify(sample.facts.conclusions));
+            // The rehearsal answers as a reader of the visible facts would, never from grading.
+            const model = yield* scriptedModel(
+              account,
+              JSON.stringify(Quote.answerFrom(sample.facts) ?? null),
+            );
 
             return yield* Quote.describe(sample, arm).pipe(
               Effect.provideService(LanguageModel.LanguageModel, model),
@@ -718,16 +955,13 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
           })
         : liveRunner.withModel(Quote.describe(sample, arm), "none", account),
     record: (record) =>
-      write(() => appendFileSync(join(directory, "results.jsonl"), JSON.stringify(record) + "\n")),
-  });
+      write(() =>
+        appendFileSync(join(directory, "results.jsonl"), JSON.stringify(record) + "\n"),
+      ).pipe(Effect.andThen(Ref.update(saved, (records) => [...records, record]))),
+  }).pipe(Effect.onInterrupt(() => interruptedSummary));
 
-  const summary = { ...summarize(plan, records), accounting: yield* budget.snapshot };
+  const summary = yield* writeSummary(records, false);
 
-  yield* write(() =>
-    writeFileSync(join(directory, "summary.json"), JSON.stringify(summary, null, 2) + "\n", {
-      flag: "wx",
-    }),
-  );
   yield* Console.log(plan.interpretation);
   yield* Console.log(records.length + " arm records saved in " + directory);
   yield* Console.log(
@@ -738,13 +972,14 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
       " unresolved.",
   );
 
-  return (
-    records.every(
-      (record) => record.status === "graded" && record.accounting.uncertainCalls === 0,
-    ) &&
-    (plan.mode === "paid" || records.every((record) => record.pass))
+  // The same rule as the bench: every arm graded with settled charges, and in a dry run, passed.
+  return records.every(
+    (record) =>
+      record.status === "graded" &&
+      record.accounting.uncertainCalls === 0 &&
+      (plan.mode === "paid" || record.pass === true),
   );
-});
+}, Effect.scoped);
 
 if (import.meta.main) {
   const interrupt = new AbortController();
