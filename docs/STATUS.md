@@ -64,21 +64,21 @@ paid calls.
 
 0.2 did much that 0.3 does not do yet. A capability inventory of the 0.2 code, the plans, the open
 PRs and the in-progress work marks each capability as rebuilt, left for later, or the consumer's to
-build. Until the owner has agreed it, no 0.2 PR is closed and no branch is deleted.
+build. The 0.2 PRs are closed, except #164, kept open as a reference.
 
 The larger pieces left for later:
 
 - recording to video files;
 - operator handoff, reconnecting to a kept-alive session, and uploads;
-- the paid hosted checks;
-- an install smoke test of each packed package before a release.
+- the paid hosted checks.
 
 ## Releases
 
 The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` and
 `effect-agent-browser`, published on 2 October 2026 from tag `v0.2.0-beta.9` (`976d316`) on the
-`beta` dist-tag. 0.3 is not released. [RELEASING.md](RELEASING.md), `.github/workflows/publish.yml`
-and `tools/` still describe the 0.2 release path, and the 0.3 path is undecided.
+`beta` dist-tag. 0.3 is not released. It will be released by plain npm trusted publishing from
+`.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase` and
+`effect-browser-human-strokes`; [RELEASING.md](RELEASING.md) has the steps.
 
 ## History
 

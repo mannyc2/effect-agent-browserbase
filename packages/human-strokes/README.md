@@ -3,6 +3,10 @@
 Optional recorded pointer motion for `effect-browser`. The package replaces the pointer planner
 with a bundled library of 32,130 human strokes. It does not change typing, pauses or input policy.
 
+```sh
+npm install effect-browser-human-strokes@beta effect-browser@beta effect playwright-core
+```
+
 ```ts
 import { Effect } from "effect";
 import { Browser } from "effect-browser/Browser";
