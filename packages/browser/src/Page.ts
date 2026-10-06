@@ -90,11 +90,15 @@ export interface ScreenshotOptions {
   readonly quality?: number | undefined;
 }
 
-export interface Observation {
-  readonly snapshot: Snapshot;
-  readonly image: Option.Option<Image>;
-  readonly at: number;
-}
+/** What to include in an observation of the current viewport. */
+export type ObservationMode = "outline" | "screenshot" | "both";
+
+/** One observation, suitable for passing between an agent and its consumer. */
+export class Observation extends Schema.Class<Observation>("effect-browser/Observation")({
+  snapshot: Schema.optional(Snapshot),
+  image: Schema.optional(Image),
+  at: Schema.Finite,
+}) {}
 
 /** What a guard sees before input reaches the page. */
 export interface InputRequest {
@@ -137,10 +141,11 @@ export interface Page {
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
   /** A picture of the viewport: the latest screencast frame when one is current, else a screenshot. */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
-  /** A snapshot and, optionally, a picture, taken together. */
+  /** An outline, a picture, or both (the default), taken together. */
   readonly observe: (options?: {
-    readonly image?: boolean;
+    readonly mode?: ObservationMode;
     readonly full?: boolean;
+    readonly maxChars?: number;
   }) => Effect.Effect<Observation, BrowserError>;
   readonly hasText: (text: string) => Effect.Effect<boolean, BrowserError>;
 
@@ -883,14 +888,32 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       return new Image({ data, mediaType: "image/jpeg", width: size.width, height: size.height });
     });
 
-  const observe = (observeOptions: { readonly image?: boolean; readonly full?: boolean } = {}) =>
+  const observe = (
+    observeOptions: {
+      readonly mode?: ObservationMode;
+      readonly full?: boolean;
+      readonly maxChars?: number;
+    } = {},
+  ) =>
     Effect.all(
       {
-        snapshot: snapshot({ full: observeOptions.full }),
-        image: observeOptions.image === true ? Effect.asSome(screenshot()) : Effect.succeedNone,
+        snapshot:
+          observeOptions.mode === "screenshot"
+            ? Effect.void
+            : snapshot({ full: observeOptions.full, maxChars: observeOptions.maxChars }),
+        image: observeOptions.mode === "outline" ? Effect.void : screenshot(),
       },
       { concurrency: 2 },
-    ).pipe(Effect.map(({ snapshot, image }) => ({ snapshot, image, at: now() })));
+    ).pipe(
+      Effect.map(
+        ({ snapshot, image }) =>
+          new Observation({
+            snapshot: snapshot ?? undefined,
+            image: image ?? undefined,
+            at: now(),
+          }),
+      ),
+    );
 
   const hasText = (text: string) =>
     evaluate("hasText", scriptCall("hasText", text)).pipe(

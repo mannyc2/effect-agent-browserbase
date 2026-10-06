@@ -85,7 +85,7 @@ const watch = Effect.gen(function* () {
 ## How the tools work
 
 `Tools.make` builds an `effect/ai` toolkit over the current tab: `browser_navigate`, `browser_back`,
-`browser_snapshot`, `browser_screenshot`, `browser_click`, `browser_hover`, `browser_type`,
+`browser_snapshot`, `browser_click`, `browser_hover`, `browser_type`,
 `browser_press`, `browser_scroll`, `browser_drag`, `browser_select`, `browser_wait` and
 `browser_tabs`. `Agent.run` adds `done` and `give_up`.
 
@@ -93,13 +93,20 @@ const watch = Effect.gen(function* () {
   old snapshot fails as stale rather than naming another element.
 - Anything a snapshot cannot show, such as a canvas game, a chart or a video, takes x and y in
   viewport pixels, as they appear in a screenshot.
-- Every action answers with what it did and a fresh snapshot, so most steps need no extra look.
-  When a click opens a tab, the tools follow it.
+- Actions return short receipts. `Agent.run` executes each turn's calls in order, stops at the first
+  failure or completion, and answers the remaining calls as not executed. When a click opens a tab,
+  the tools follow it.
+- The model receives one outline and screenshot at the start and after each turn, including failed
+  batches. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
+  is `"both"`. A malformed `done` answer goes back to the model to correct.
 - Pictures go to the model in a user message after the tool results. Only the latest few stay in
   the conversation, and older ones are replaced several at a time, so the prompt cache keeps working.
 - `Browser.Options.guard` sees every input before it reaches the page and can refuse it, for
   example to keep an agent from placing a bet. `humanize` moves the pointer along curves and types
   at a human pace for watched sessions.
+- `additionalTools` accepts an `effect/ai` toolkit, merged after the browser and completion tools.
+  Supply its handlers through their usual layer; on a name clash the added toolkit wins. The same
+  batch halting applies to those tools.
 - `onStep` sees each model call and its tool calls; failing stops the run with that error, which is
   how a caller enforces a budget.
 

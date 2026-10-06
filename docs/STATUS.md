@@ -7,6 +7,8 @@
 - `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
   `Frame`, `BrowserEvent` and `BrowserError`; `Tools`, `Agent` and `Moment`.
 - `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`.
+- `Agent.run` batches tool calls with halt-on-failure, one outline and screenshot per turn,
+  configurable observations and caller toolkits.
 - `bench` (private): seven tasks over canvas games, live charts and forms, graded against the
   pages' own truth. Paid runs are opt-in and capped.
 
