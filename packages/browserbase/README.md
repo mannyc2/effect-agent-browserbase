@@ -10,8 +10,8 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 - `Browserbase`: `open` and `layer` create a session and release it when their scope closes, so
   billing stops then rather than at the session's timeout. `attach` connects to a running session
   without taking ownership of it.
-- `BrowserbaseClient`: sessions, Live View, stored contexts, extensions, Search and Fetch.
-  `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
+- `BrowserbaseClient`: sessions and their logs, Live View, stored contexts, extensions, Search and
+  Fetch. `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
 - `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
   `Transport`, `Decode` or `InvalidRequest`.
 
@@ -21,6 +21,12 @@ refuses redirects so the key never follows one. Each request attempt has a deadl
 and its caller can stop. Only `GET` requests are retried, twice, after a transient failure; a
 create that fails in transit is not resent, because it may have created the session. Connect URLs and the Live View debugger URL are `Redacted`: keep them away from
 models and logs. A failed connect names only the connect URL's scheme, host and port.
+
+`open` and `attach` record the session's id and region on their spans, so a trace finds its
+session in Browserbase's dashboard (`https://browserbase.com/sessions/<id>`). `sessionLogs` returns
+the DevTools messages Browserbase logged in a session, each by method with a command's request and
+response times; it leaves out their parameters and results, which can carry typed text, page
+content and screenshots.
 
 ## Session settings
 
@@ -33,6 +39,8 @@ Browserbase.layer({
   session: { browserSettings: { recordSession: false, logSession: false, solveCaptchas: false } },
 });
 ```
+
+A session made with `logSession: false` has no logs for `sessionLogs` to return.
 
 ## Stored contexts
 

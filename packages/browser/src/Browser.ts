@@ -168,7 +168,18 @@ export const make = Effect.fn("Browser.make")(function* (
   const startup =
     info.contextOrigin === "fresh"
       ? yield* Startup.owned(context, clock).pipe(
-          Effect.tap((measured) => Effect.annotateCurrentSpan("measured", Option.isSome(measured))),
+          Effect.tap((measured) =>
+            Effect.annotateCurrentSpan({
+              measured: Option.isSome(measured),
+              ...Option.match(measured, {
+                onNone: () => ({}),
+                // The fastest clock probe's: the transport's round trip, plus a trivial script.
+                onSome: ({ clock }) => ({
+                  roundTripMillis: Math.round(clock.roundTripMillis * 10) / 10,
+                }),
+              }),
+            }),
+          ),
           // Round trips to a private page: what this costs over a remote connection shows here.
           Effect.withSpan("Browser.calibrate", {}, { captureStackTrace: false }),
           Effect.mapError(

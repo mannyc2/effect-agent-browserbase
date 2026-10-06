@@ -344,9 +344,12 @@ records except text: the target, the subject's role, name and tag, whether input
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
 `Page.observe`, `Page.snapshot`, `Page.screenshot` (its `source` a reused screencast frame or a new
 capture), `Page.zoom` and the waits are spans, and so is each round trip to the page's script
-(`Page.evaluate`). `Chromium.launch`, `Cdp.connect`, `Browser.calibrate` and `Browser.newPage` cover
-opening a browser, and `Browserbase.holdContext` and `Browserbase.release` the waits around a session
-that saves to a stored context.
+(`Page.evaluate`). `Chromium.launch`, `Cdp.connect`, `Browser.calibrate` and `Browser.newPage`
+cover opening a browser; `Browserbase.open` records its session's id and region, and
+`Browserbase.holdContext` and `Browserbase.release` the waits around a session that saves to a
+stored context. `Browser.calibrate` and `Page.calibrateClock` map the browser's clock onto the
+host's with three probes, each a `Page.evaluate` of `clock`, and record the fastest probe's
+`roundTripMillis`: the round trip to the browser.
 
 Spans never carry typed text. A tool span keeps a browser tool's parameters with `text` replaced by
 `redacted`, and only the names of any other tool's parameters, which may hold anything; a script

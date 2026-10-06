@@ -489,6 +489,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           }),
         ),
     }),
+    // The fastest probe's round trip: the transport's, plus a trivial script.
+    Effect.tap((estimate) =>
+      Effect.annotateCurrentSpan("roundTripMillis", Math.round(estimate.roundTripMillis * 10) / 10),
+    ),
     span("Page.calibrateClock", {}, "Debug"),
     Effect.provideService(Clock.Clock, clock),
   );

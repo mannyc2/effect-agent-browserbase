@@ -130,6 +130,8 @@ export const open = Effect.fn("Browserbase.open")(function* (options: Options = 
       release(client, session.id, settle),
     );
 
+    yield* Effect.annotateCurrentSpan({ session: session.id, region: session.region });
+
     return yield* connect("open", session, options, "fresh");
   }).pipe(
     Scope.provide(local),
@@ -147,6 +149,8 @@ export const attach = Effect.fn("Browserbase.attach")(function* (
 ) {
   const client = yield* BrowserbaseClient;
   const session = yield* client.getSession(sessionId);
+
+  yield* Effect.annotateCurrentSpan({ session: session.id, region: session.region });
 
   return yield* connect("attach", session, options, "borrowed");
 });

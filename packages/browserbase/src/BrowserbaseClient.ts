@@ -1,6 +1,6 @@
 /**
- * A small client for the Browserbase REST API: sessions, stored contexts, extensions, web search
- * and page fetch.
+ * A small client for the Browserbase REST API: sessions and their logs, stored contexts,
+ * extensions, web search and page fetch.
  *
  * It runs on the `HttpClient` the application provides, such as `FetchHttpClient.layer`. The API
  * key travels only in the `X-BB-API-Key` header and is redacted from logs and traces. Redirects
@@ -78,6 +78,21 @@ export class LiveView extends Schema.Class<LiveView>("effect-browserbase/LiveVie
       debuggerFullscreenUrl: Schema.RedactedFromValue(Schema.String),
     }),
   ),
+}) {}
+
+/**
+ * One DevTools message Browserbase logged in a session, by method and time alone. Browserbase also
+ * logs each message's parameters and result, which can carry typed text, page content and
+ * screenshots; they are left out.
+ */
+export class SessionLog extends Schema.Class<SessionLog>("effect-browserbase/SessionLog")({
+  method: Schema.String,
+  pageId: Schema.optional(Schema.Finite),
+  /** Epoch milliseconds on Browserbase's clock. */
+  timestamp: Schema.optional(Schema.Finite),
+  /** A command's request and response times, in epoch milliseconds; events have neither. */
+  request: Schema.optional(Schema.Struct({ timestamp: Schema.optional(Schema.Finite) })),
+  response: Schema.optional(Schema.Struct({ timestamp: Schema.optional(Schema.Finite) })),
 }) {}
 
 /** Browser state (cookies, storage, cache) kept by Browserbase for sessions to load and save. */
@@ -195,6 +210,8 @@ export interface Service {
   }) => Effect.Effect<ReadonlyArray<Session>, BrowserbaseError>;
   /** End the session now, which stops its billing. Ending an ended session succeeds. */
   readonly releaseSession: (id: string) => Effect.Effect<void, BrowserbaseError>;
+  /** The DevTools messages Browserbase logged in the session, by method and time. */
+  readonly sessionLogs: (id: string) => Effect.Effect<ReadonlyArray<SessionLog>, BrowserbaseError>;
   /** Live view links. They last `expiresInSeconds`, or as long as the session. */
   readonly liveView: (
     id: string,
@@ -436,6 +453,16 @@ export const make = Effect.fnUntraced(function* (options: Options) {
         json("listSessions", Schema.Array(Session)),
       ),
     releaseSession,
+    sessionLogs: (id) =>
+      checkId("sessionLogs", id).pipe(
+        Effect.flatMap(() =>
+          send(
+            "sessionLogs",
+            HttpClientRequest.get(`/v1/sessions/${id}/logs`),
+            json("sessionLogs", Schema.Array(SessionLog)),
+          ),
+        ),
+      ),
     liveView: (id, options = {}) =>
       checkId("liveView", id).pipe(
         Effect.flatMap(() =>
