@@ -333,34 +333,42 @@ test("coordinated package versions and Effect peer contracts are checked before 
   assert.throws(() => readPackageSet(tree), /Effect peer/);
 });
 
-test("the Effect peer names the tested prerelease exactly; a range is for stable Effect", () => {
+test("the Effect peer names the tested version exactly, stable or prerelease", () => {
   const withEffect = (peer, development = "4.0.0-rc.117") => ({
     ...source(1),
     peerDependencies: { ...source(1).peerDependencies, effect: peer },
     devDependencies: { ...source(1).devDependencies, effect: development },
   });
 
-  // rc.118 removed `effect/unstable/*`, which a range from rc.117 would still admit.
-  for (const peer of ["^4.0.0-rc.117", "~4.0.0-rc.117"])
+  // rc.118 removed `effect/unstable/*`, which a range from rc.117 would still admit, and a stable
+  // Effect still versions those modules outside semver.
+  for (const [peer, development] of [
+    ["^4.0.0-rc.117", "4.0.0-rc.117"],
+    ["~4.0.0-rc.117", "4.0.0-rc.117"],
+    ["^4.0.0", "4.0.0"],
+    ["~4.0.0", "4.0.0"],
+  ])
     assert.throws(
-      () => publicationManifest(withEffect(peer), versions),
-      /Effect prerelease peer must be exact/,
+      () => publicationManifest(withEffect(peer, development), versions),
+      /Effect peer must be exact/,
     );
   assert.throws(
     () => publicationManifest(withEffect("4.0.0-rc.116"), versions),
     /developed against/,
   );
   assert.equal(
-    publicationManifest(withEffect("^4.0.0", "4.0.0"), versions).peerDependencies.effect,
-    "^4.0.0",
+    publicationManifest(withEffect("4.0.0", "4.0.0"), versions).peerDependencies.effect,
+    "4.0.0",
   );
   const built = manifest(1);
 
-  built.peerDependencies.effect = "^4.0.0-rc.117";
-  assert.throws(
-    () => checkManifest(built, { built: true, browserVersion: version, frameworkVersion }),
-    /Effect prerelease peer must be exact/,
-  );
+  for (const peer of ["^4.0.0-rc.117", "^4.0.0"]) {
+    built.peerDependencies.effect = peer;
+    assert.throws(
+      () => checkManifest(built, { built: true, browserVersion: version, frameworkVersion }),
+      /Effect peer must be exact/,
+    );
+  }
 });
 
 test("release channels and tags reject ambiguous or shell-like input", () => {

@@ -158,20 +158,16 @@ export function checkDependencyBoundary(
     "Unexpected peer dependency edge",
   );
   assert.match(manifest.peerDependencies.effect, regularVersion);
-  // Effect prereleases move modules (rc.118 removed every `effect/unstable/*` path), so a range
-  // from a prerelease admits versions that cannot load these packages. Peer on the tested one.
-  if (manifest.peerDependencies.effect.includes("-"))
-    assert.doesNotMatch(
-      manifest.peerDependencies.effect,
-      /^[~^]/,
-      "An Effect prerelease peer must be exact",
-    );
+  // `effect-browserbase` and `effect-agent-browser` import `effect/unstable/*`, which Effect
+  // versions outside semver (rc.118 removed every such path), and the three packages share one
+  // Effect peer. A range, even from a stable release, admits versions that cannot load them, so
+  // every package peers on the version it was tested with until those imports are gone.
+  assert.doesNotMatch(manifest.peerDependencies.effect, /^[~^]/, "The Effect peer must be exact");
   if (!built)
-    assert.ok(
-      [manifest.devDependencies?.effect, `^${manifest.devDependencies?.effect}`].includes(
-        manifest.peerDependencies.effect,
-      ),
-      "The Effect peer must admit the version it is developed against",
+    assert.equal(
+      manifest.peerDependencies.effect,
+      manifest.devDependencies?.effect,
+      "The Effect peer must be the version it is developed against",
     );
   if (item === browser) {
     assert.match(
