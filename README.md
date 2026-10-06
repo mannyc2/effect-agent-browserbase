@@ -122,8 +122,10 @@ const watch = Effect.gen(function* () {
 - Pictures go to the model in a user message after the tool results. Only the latest few stay in
   the conversation, and older ones are replaced several at a time, so the prompt cache keeps working.
 - `Browser.Options.guard` checks input and navigation, including hover, scroll and a new tab's URL.
-  It receives inferred classifications for form submissions, purchases, deletion, confirmation,
-  external-origin destinations, downloads and uploads. Its effect succeeds to allow, fails with
+  It receives the facts the page's structure establishes (form submissions, other-origin
+  destinations, downloads, uploads, secret fields, script-only controls and unnamed targets) and
+  the page text around the target as evidence, never a field's value; no fact comes from an
+  element's words, and typed secrets are redacted. Its effect succeeds to allow, fails with
   `PolicyDenied` to deny, or waits for an external signal to hold. Holds have a separate
   `policyTimeout` (five minutes by default) and leave the page unlocked. Changed targets fail before
   input when a hold resumes. With no guard, every action is allowed.
