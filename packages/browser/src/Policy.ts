@@ -242,7 +242,7 @@ const unsure = (value: number) => value > 0.2 && value < 0.8;
 
 /**
  * `first`'s judgement, or `second`'s when `first` is unsure: a risk between 0.2 and 0.8, or a
- * likely risk whose request is. For example, Jev on every input and a reviewer on the hard ones.
+ * likely risk whose request is. A confident mistake by `first` stands.
  */
 export const escalate =
   (first: Judge, second: Judge): Judge =>
