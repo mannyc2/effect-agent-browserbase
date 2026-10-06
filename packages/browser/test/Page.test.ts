@@ -134,6 +134,28 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("names an editable secret field without the text typed into it", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<div contenteditable="true" role="textbox" autocomplete="one-time-code" title="Code">482913</div>',
+        ),
+      );
+      const snapshot = yield* page.snapshot();
+
+      assert.notInclude(snapshot.text, "482913");
+      yield* page.click(refOf(snapshot, "textbox", "Code"));
+
+      const clicked = (yield* page.recentEvents).findLast(
+        (event) => event._tag === "Action" && event.name === "click",
+      );
+
+      assert.strictEqual(clicked?._tag === "Action" ? clicked.subject?.name : undefined, "Code");
+    }),
+  );
+
   it.effect("refuses to type where a space or letter could activate the focused control", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");

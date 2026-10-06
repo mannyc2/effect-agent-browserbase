@@ -171,6 +171,13 @@ it("names what each action acted on, never by a ref", () => {
           dispatched: false,
           error: "e1 is not on the page any more",
         }),
+        action(9500, {
+          name: "navigate",
+          target: "https://shop.example/item-e2",
+          ok: false,
+          dispatched: false,
+          error: "timed out",
+        }),
       ],
     }),
   );
@@ -184,6 +191,7 @@ it("names what each action acted on, never by a ref", () => {
       '-2.0s drag slider "Level" to main at (380, 40)',
       "-1.5s press Enter",
       "-1.0s click (failed: e1 is not on the page any more)",
+      "-0.5s navigate https://shop.example/item-e2 (failed: timed out)",
     ].join("\n"),
   );
 });

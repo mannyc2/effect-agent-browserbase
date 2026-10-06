@@ -158,7 +158,7 @@ const acted = (event: Action): string => {
   const point = pointOf(event.x, event.y);
 
   if (event.subject === undefined)
-    return event.target === undefined || /\be\d+\b/.test(event.target)
+    return event.target === undefined || /^e\d+$|"e\d+"/.test(event.target)
       ? (point ?? "")
       : event.target;
   // A drag's point is where it ended.
