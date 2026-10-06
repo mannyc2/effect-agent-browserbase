@@ -1,0 +1,29 @@
+{
+  "name": "demos",
+  "private": true,
+  "description": "Recorded effect-browser runs, replayed with the pointer, keys, agent turns and grades.",
+  "type": "module",
+  "scripts": {
+    "build": "vp build",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "dev": "vp dev",
+    "pack": "node --conditions=@effect-browser/source pack.ts",
+    "test": "vp test --run"
+  },
+  "dependencies": {
+    "effect": "4.0.0",
+    "effect-browser": "workspace:*",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0",
+    "@types/node": "26.1.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "bench": "workspace:*",
+    "typescript": "7.0.2",
+    "vite-plus": "0.3.2"
+  }
+}

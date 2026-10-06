@@ -10,6 +10,7 @@ what a page showed, and what happened on it, over a window of time, ready for a 
 | [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
 | [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, supplied as one layer            |
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
+| [`demos`](demos) (private)                               | A site that replays recorded bench runs, graded                    |
 
 ## An agent in a local Chromium
 
