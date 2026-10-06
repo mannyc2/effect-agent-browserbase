@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { assert, expectTypeOf, layer } from "@effect/vitest";
-import { Context, Duration, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect";
+import { Context, Duration, Effect, Exit, Layer, Schedule, Schema, Stream, Tracer } from "effect";
 import { AiError, LanguageModel, Prompt, type Response, Tool, Toolkit } from "effect/ai";
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput";
 import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput";
@@ -1587,6 +1587,53 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.include(
         yield* tools.handlers.browser_click({ ref: "e99999" }).pipe(Effect.flip),
         "take a new snapshot",
+      );
+    }),
+  );
+
+  // effect/ai annotates the span around a tool call with its raw parameters, so a password typed
+  // by the last call of a turn reached the model call's span, and any exporter, in plain text.
+  it.effect("keeps typed text out of every span it records", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/form");
+      const secret = "correct-horse-battery";
+      const spans: Array<Tracer.NativeSpan> = [];
+
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+
+          spans.push(span);
+
+          return span;
+        },
+      });
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<label>Password <input type="password" autocomplete="current-password"></label>',
+        ),
+      );
+
+      const model = scripted([
+        (prompt) => [
+          call("browser_type", { ref: refIn(prompt, "textbox", "Password"), text: secret }),
+          finish,
+        ],
+        () => [call("done", { answer: "Signed in" }), finish],
+      ]);
+
+      yield* Agent.run("Sign in.").pipe(
+        Effect.provide(model.layer),
+        Effect.provideService(Tracer.Tracer, tracer),
+      );
+
+      assert.strictEqual(yield* valueOf(page, "input"), secret);
+      for (const span of spans)
+        assert.notInclude(JSON.stringify([...span.attributes]), secret, span.name);
+      assert.isTrue(
+        spans.some((span) => span.attributes.get("gen_ai.tool.name") === "browser_type"),
+        "the call has a span of its own",
       );
     }),
   );
