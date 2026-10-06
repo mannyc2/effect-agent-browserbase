@@ -166,8 +166,9 @@ const watch = Effect.gen(function* () {
 The [bench](bench) has seeded operate and understand tasks, including a dense quote table and
 multi-frame changes. Trials have separate browsers, bounded concurrency, per-trial metrics and one
 shared model budget. A paired quote comparison reuses one capture across the shipping description,
-the historical on-air representation and visible-DOM facts. Scripted runs remain free; model and
-hosted runs require explicit opt-in.
+the historical on-air representation and visible-DOM facts. A judges runner grades the input
+policy's judges against the labelled corpus of consequential controls. Scripted runs remain free;
+model and hosted runs require explicit opt-in.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). `bun run ready` formats, lints, typechecks, tests against a
 real local Chromium and builds. No test calls a model or a hosted browser.
