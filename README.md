@@ -85,20 +85,24 @@ const watch = Effect.gen(function* () {
 ## How the tools work
 
 `Tools.make` builds an `effect/ai` toolkit over the current tab: `browser_navigate`, `browser_back`,
-`browser_snapshot`, `browser_click`, `browser_hover`, `browser_type`,
+`browser_snapshot`, `browser_zoom`, `browser_click`, `browser_hover`, `browser_type`,
 `browser_press`, `browser_scroll`, `browser_drag`, `browser_select`, `browser_wait` and
 `browser_tabs`. `Agent.run` adds `done` and `give_up`.
 
 - A snapshot is a compact outline of the viewport. Controls carry refs such as `e12`; a ref from an
   old snapshot fails as stale rather than naming another element.
 - Anything a snapshot cannot show, such as a canvas game, a chart or a video, takes x and y in
-  viewport pixels, as they appear in a screenshot.
+  viewport CSS pixels, as they appear in a full screenshot. Pixel click receipts name the element
+  under that exact point, with its role and accessible name when available.
 - Actions return short receipts. `Agent.run` executes each turn's calls in order, stops at the first
   failure or completion, and answers the remaining calls as not executed. When a click opens a tab,
   the tools follow it.
 - The model receives one outline and screenshot at the start and after each turn, including failed
   batches. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
   is `"both"`. A malformed `done` answer goes back to the model to correct.
+- `browser_zoom` takes a viewport region (`x`, `y`, `width`, `height`) and returns its crop beside
+  the next observation, including in outline mode. Captions give the source page and viewport
+  origin; clicks still use viewport coordinates. A batch can request at most eight crops.
 - Pictures go to the model in a user message after the tool results. Only the latest few stay in
   the conversation, and older ones are replaced several at a time, so the prompt cache keeps working.
 - `Browser.Options.guard` sees every input before it reaches the page and can refuse it, for

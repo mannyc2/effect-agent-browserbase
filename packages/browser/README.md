@@ -30,7 +30,17 @@ be corrected on the next turn.
 The model gets one outline and screenshot at the start and after each turn. `observation` selects
 `"outline"`, `"screenshot"`, or `"both"` (the default). `Page.observe` returns that observation as
 a schema value. `Tools.make` returns receipts; a caller writing its own loop observes the current
-`tools.page` after the batch.
+`tools.page` after the batch and drains `tools.takeZooms` into that same observation message.
+
+`browser_zoom` captures a region in viewport CSS pixels when the tool runs. Requested crops arrive
+with the next observation even in outline mode, labeled with their source page and viewport origin.
+At most eight crops may await an observation. `Page.zoom` exposes the same capture as a `Zoom`
+schema value with `region` and `image`; crop pixel coordinates need the region's origin added before
+using them as click coordinates.
+
+`Page.click` returns a `ResolvedTarget` captured before input: the requested point, element label,
+role, accessible name, cursor and link target. Pixel targeting resolves through the page script and
+keeps the original point; the receipt names the control even when a nested child received the hit.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged last, so the caller's tool wins a name clash, and its calls share the batch's halt behavior.

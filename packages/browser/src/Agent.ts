@@ -14,7 +14,7 @@ import { Context, Effect, Option, Ref, Schema, Stream } from "effect";
 import { Chat, Prompt, Tool, Toolkit } from "effect/ai";
 
 import * as Usage from "./internal/usage.ts";
-import type { Observation, ObservationMode } from "./Page.ts";
+import type { Observation, ObservationMode, Zoom } from "./Page.ts";
 import * as Tools from "./Tools.ts";
 
 export type { Usage } from "./internal/usage.ts";
@@ -92,7 +92,8 @@ const system = (instructions: string | undefined) =>
     "",
     "Seeing the page:",
     "- browser_snapshot gives a text outline of the viewport. Controls carry refs such as e12 for the other tools. Refs from an old snapshot can be stale.",
-    "- The observation after each turn shows the viewport as an outline, a picture, or both. Picture coordinates are viewport coordinates: use x and y for anything without a ref, such as a canvas game, a chart or a video.",
+    "- The observation after each turn shows the viewport as an outline, a picture, or both. The full screenshot uses viewport coordinates: use x and y for anything without a ref, such as a canvas game, a chart or a video.",
+    "- browser_zoom shows a small viewport region at full resolution after the batch. Its caption gives the viewport origin; keep using viewport coordinates for clicks.",
     "- Tool calls return receipts. One fresh observation follows the whole batch.",
     "",
     "Acting:",
@@ -107,7 +108,7 @@ const system = (instructions: string | undefined) =>
 const isPicture = (part: Prompt.UserMessagePart) =>
   part.type === "file" && part.mediaType.startsWith("image/");
 
-/** Replace all but the latest `keep` pictures with a note, once there are twice that many. */
+/** Prune older pictures in groups while keeping every picture in the current observation. */
 const prunePictures = (prompt: Prompt.Prompt, keep: number): Prompt.Prompt => {
   const total = prompt.content.reduce(
     (count, message) =>
@@ -115,8 +116,14 @@ const prunePictures = (prompt: Prompt.Prompt, keep: number): Prompt.Prompt => {
     0,
   );
 
-  if (total <= Math.max(keep * 2, 1)) return prompt;
-  let remove = total - keep;
+  const current = prompt.content.at(-1);
+  const latest = current?.role === "user" ? current.content.filter(isPicture).length : 0;
+
+  // All pictures from this observation must reach the model at least once, including requested crops.
+  const retain = Math.max(keep, latest);
+
+  if (total <= Math.max(retain * 2, 1)) return prompt;
+  let remove = total - retain;
 
   return Prompt.fromMessages(
     prompt.content.map((message) => {
@@ -135,14 +142,17 @@ const prunePictures = (prompt: Prompt.Prompt, keep: number): Prompt.Prompt => {
   );
 };
 
-const observationMessage = (observation: Observation) => {
+const observationMessage = (observation: Observation | undefined, zooms: ReadonlyArray<Zoom>) => {
   const content: Array<Prompt.UserMessagePart> = [
     Prompt.makePart("text", {
-      text: observation.snapshot?.rendered ?? "Observation of the current viewport.",
+      text:
+        observation === undefined
+          ? "(the page could not be observed)"
+          : (observation.snapshot?.rendered ?? "Observation of the current viewport."),
     }),
   ];
 
-  if (observation.image !== undefined) {
+  if (observation?.image !== undefined) {
     content.push(
       Prompt.makePart("text", {
         text: `Screenshot: ${observation.image.width}x${observation.image.height}. Its pixel coordinates are viewport coordinates.`,
@@ -151,6 +161,15 @@ const observationMessage = (observation: Observation) => {
         mediaType: observation.image.mediaType,
         data: observation.image.data,
       }),
+    );
+  }
+
+  for (const zoom of zooms) {
+    content.push(
+      Prompt.makePart("text", {
+        text: `Zoom from page ${zoom.page}: viewport origin (${zoom.region.x}, ${zoom.region.y}), ${zoom.region.width}x${zoom.region.height} CSS pixels. Captured when browser_zoom ran. Add this origin to image coordinates for viewport clicks.`,
+      }),
+      Prompt.makePart("file", { mediaType: zoom.image.mediaType, data: zoom.image.data }),
     );
   }
 
@@ -266,20 +285,21 @@ const loop = <E, Extra extends ExtraTools>(
       Effect.provideContext(Context.merge(supplied, Context.omit(...overrides)(defaults))),
     );
 
-    const observe = tools.page.pipe(
-      Effect.flatMap((page) =>
-        page.observe({
-          mode: options.observation ?? "both",
-          maxChars: options.tools?.snapshotChars ?? 8000,
-        }),
-      ),
-      Effect.map(observationMessage),
-      Effect.orElseSucceed(() =>
-        Prompt.makeMessage("user", {
-          content: [Prompt.makePart("text", { text: "(the page could not be observed)" })],
-        }),
-      ),
-    );
+    const observe = Effect.gen(function* () {
+      const zooms = yield* tools.takeZooms;
+
+      const observation = yield* tools.page.pipe(
+        Effect.flatMap((page) =>
+          page.observe({
+            mode: options.observation ?? "both",
+            maxChars: options.tools?.snapshotChars ?? 8000,
+          }),
+        ),
+        Effect.option,
+      );
+
+      return observationMessage(Option.getOrUndefined(observation), zooms);
+    });
 
     const opening = yield* observe;
 

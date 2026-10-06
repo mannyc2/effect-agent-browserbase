@@ -21,7 +21,9 @@ Chromium and a hosted browser load them the same way, with no tunnel. Each page 
 An operate task gives a model the browser tools (`Agent.run`). An understand task brings the page to
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call
 (`Moment.describe`). Operate tasks receive an outline and screenshot once per turn; calls within a
-turn halt on the first failure. Runs without a model still use the free scripted solutions.
+turn halt on the first failure. `browser_zoom` adds requested viewport crops to that observation;
+pixel clicks return the element under the requested point. Runs without a model still use the free
+scripted solutions.
 
 ## Running
 
