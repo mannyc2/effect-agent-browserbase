@@ -198,7 +198,8 @@ prompt.
   handlers through their usual layer; on a name clash with a browser tool the added toolkit wins.
   `done` and `give_up` stay the agent's own. The same batch halting applies to those tools.
 - `onStep` sees each model call and its tool calls; failing stops the run with that error, which is
-  how a caller enforces a budget. Services it uses become requirements of the run.
+  how a caller enforces a budget. Services it uses become requirements of the run. A run fails
+  with `AgentError | AiError | BrowserError`, plus `onStep`'s error.
 
 ## Development
 
