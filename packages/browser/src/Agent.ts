@@ -11,8 +11,10 @@
  * @since 0.3.0
  */
 import { Context, Effect, Exit, Option, Ref, Schema } from "effect";
-import { AiError, Chat, Prompt, Tool, Toolkit } from "effect/ai";
+import { AiError, Chat, type LanguageModel, Prompt, Tool, Toolkit } from "effect/ai";
 
+import type { Browser } from "./Browser.ts";
+import type { BrowserError } from "./BrowserError.ts";
 import * as Usage from "./internal/usage.ts";
 import type { Observation, ObservationMode, Zoom } from "./Page.ts";
 import * as Policy from "./Policy.ts";
@@ -87,7 +89,7 @@ export interface Result<A> {
 /** Tools a caller adds. `done` and `give_up` end the run, so they remain the agent's own. */
 type ExtraTools = Record<string, Tool.Any> & { readonly done?: never; readonly give_up?: never };
 
-export interface Options<E = never, R = never, Extra extends ExtraTools = {}> {
+export interface Options<E = never, Extra extends ExtraTools = {}, R = never> {
   /** Model calls before stopping with `StepLimit`. Defaults to 30. */
   readonly maxSteps?: number | undefined;
   /** More guidance for the system prompt, such as a site's rules or what matters in the task. */
@@ -232,10 +234,10 @@ const observationMessage = (observed: Observation | string, zooms: ReadonlyArray
   return Prompt.makeMessage("user", { content });
 };
 
-const loop = <E, R, Extra extends ExtraTools>(
+const loop = <E, Extra extends ExtraTools, R>(
   answerSchema: Schema.Codec<unknown, unknown>,
   task: string,
-  options: Options<E, R, Extra>,
+  options: Options<E, Extra, R>,
 ) =>
   Effect.gen(function* () {
     const tools = yield* Tools.make(options.tools);
@@ -411,29 +413,46 @@ const loop = <E, R, Extra extends ExtraTools>(
     return yield* new AgentError({ reason: new StepLimit({ steps: maxSteps }), steps: maxSteps });
   });
 
-/** Run a task to its end. The answer is a string. */
-export function run<E = never, R = never, Extra extends ExtraTools = {}>(
+/**
+ * What the additional tools need: their handlers, and the services their schemas and handlers use.
+ * A toolkit whose types were bypassed leaves `Extra` as `ExtraTools` itself, and adds nothing.
+ */
+type ToolServices<Extra extends ExtraTools> = string extends keyof Extra
+  ? never
+  :
+      | Tool.HandlersFor<Extra>
+      | Tool.HandlerServices<Extra[keyof Extra]>
+      | Tool.ParametersEncodingServices<Extra[keyof Extra]>
+      | Tool.ResultDecodingServices<Extra[keyof Extra]>;
+
+/**
+ * Run a task to its end. The answer is a string.
+ *
+ * It fails with how the agent ended (`AgentError`), the model's provider, the browser, or
+ * `onStep`; an additional tool's failure goes back to the model as a result.
+ */
+export function run<E = never, Extra extends ExtraTools = {}, R = never>(
   task: string,
-  options?: Options<E, R, Extra>,
+  options?: Options<E, Extra, R>,
 ): Effect.Effect<
   Result<string>,
-  Effect.Error<ReturnType<typeof loop<E, R, Extra>>>,
-  Effect.Services<ReturnType<typeof loop<E, R, Extra>>>
+  AgentError | AiError.AiError | BrowserError | E,
+  Browser | LanguageModel.LanguageModel | ToolServices<Extra> | R
 >;
 
 /** Run a task to its end, with an answer of the given shape. */
-export function run<A, I, E = never, R = never, Extra extends ExtraTools = {}>(
+export function run<A, I, E = never, Extra extends ExtraTools = {}, R = never>(
   task: string,
-  options: Options<E, R, Extra> & { readonly answer: Schema.Codec<A, I> },
+  options: Options<E, Extra, R> & { readonly answer: Schema.Codec<A, I> },
 ): Effect.Effect<
   Result<A>,
-  Effect.Error<ReturnType<typeof loop<E, R, Extra>>>,
-  Effect.Services<ReturnType<typeof loop<E, R, Extra>>>
+  AgentError | AiError.AiError | BrowserError | E,
+  Browser | LanguageModel.LanguageModel | ToolServices<Extra> | R
 >;
 
-export function run<E, R, Extra extends ExtraTools>(
+export function run<E, Extra extends ExtraTools, R>(
   task: string,
-  options: Options<E, R, Extra> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
+  options: Options<E, Extra, R> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
 ) {
   return loop(options.answer ?? Schema.String, task, options).pipe(
     Effect.provideService(Policy.Task, task),
