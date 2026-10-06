@@ -740,6 +740,65 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     );
   }
 
+  // A control that appears inside the approved target, rather than over it, must not receive the
+  // press either: the approval classified the target, not the link or button now under the pointer.
+  // The inserted controls are aria-hidden so the target's name and fingerprint stay unchanged.
+  const nestedTrap =
+    '<body style="margin:0"><div role="listbox" aria-label="Reports">' +
+    '<div id="row" role="option" tabindex="0" style="position:absolute;left:100px;top:100px;width:300px;height:60px">Quarterly report</div></div>' +
+    '<div id="mail" onclick="document.body.dataset.opened=\'yes\'" style="position:absolute;left:100px;top:300px;width:300px;height:60px">Invoice 42</div>' +
+    '<script>row.addEventListener("mouseover", () => { if (document.getElementById("away")) return;' +
+    'const away = document.createElement("a"); away.id = "away"; away.href = "https://elsewhere.invalid/";' +
+    'away.setAttribute("aria-hidden", "true"); away.style.cssText = "position:absolute;inset:0";' +
+    'away.onmousedown = () => (document.body.dataset.followed = "yes");' +
+    'away.onclick = (event) => { event.preventDefault(); document.body.dataset.followed = "yes"; }; row.append(away); });' +
+    'mail.addEventListener("mouseover", () => { if (document.getElementById("remove")) return;' +
+    'const remove = document.createElement("button"); remove.id = "remove"; remove.textContent = "Delete";' +
+    'remove.setAttribute("aria-hidden", "true"); remove.style.cssText = "position:absolute;inset:0";' +
+    'remove.onmousedown = () => (document.body.dataset.deleted = "yes"); mail.append(remove); });</script>';
+
+  for (const [label, humanize, act] of [
+    [
+      "clicking a ref",
+      false,
+      (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "option", "Quarterly report")),
+    ],
+    [
+      "a humanized click",
+      true,
+      (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "option", "Quarterly report")),
+    ],
+    ["clicking a point", false, (page: Page) => page.click({ x: 250, y: 330 })],
+    ["a humanized point click", true, (page: Page) => page.click({ x: 250, y: 330 })],
+  ] as const) {
+    it.effect(
+      "refuses " + label + " when the pointer's arrival nests a control in the target",
+      () =>
+        Effect.gen(function* () {
+          const requests: Array<InputRequest> = [];
+
+          const { page } = yield* setup({
+            humanize,
+            guard: (request) => Effect.sync(() => requests.push(request)),
+          });
+
+          yield* Effect.promise(() => page.playwright.setContent(nestedTrap));
+
+          assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
+            tag: "NotActionable",
+            dispatched: false,
+          });
+          assert.lengthOf(requests, 1);
+          assert.deepStrictEqual(
+            yield* Effect.promise(() =>
+              page.playwright.evaluate(() => ({ ...document.body.dataset })),
+            ),
+            {},
+          );
+        }),
+    );
+  }
+
   for (const change of ["label", "href", "pixel target"] as const) {
     it.effect("refuses a held click after its " + change + " changes", () =>
       Effect.gen(function* () {
