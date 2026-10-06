@@ -7,10 +7,12 @@
     "bench": "node --conditions=@effect-browser/source run.ts",
     "understand": "node --conditions=@effect-browser/source understand.ts",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test --run"
+    "test": "vp test --run",
+    "judges": "node --conditions=@effect-browser/source judges.ts"
   },
   "devDependencies": {
     "@effect/ai-openrouter": "4.0.0",
+    "@effect/ai-typesafe": "4.0.0",
     "@effect/vitest": "4.0.0",
     "@types/node": "26.1.2",
     "effect": "4.0.0",

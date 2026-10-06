@@ -703,9 +703,11 @@ export const modelRunner = (options: {
         Layer.provide(FetchHttpClient.layer),
       );
 
+      // @effect/ai-openrouter 4.0.0 sends `strict: null` unless this is set, and OpenRouter then
+      // drops the response format: the model answers in prose and every structured call fails.
       const languageModel = OpenRouterLanguageModel.layer({
         model: options.model,
-        config: { reasoning: { effort: reasoning } },
+        config: { reasoning: { effort: reasoning }, strictJsonSchema: true },
       }).pipe(Layer.provide(client));
 
       return effect.pipe(Effect.provide(languageModel));

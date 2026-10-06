@@ -26,8 +26,8 @@
   `Policy` adds judges over `effect/ai` (`reviewer` on a `LanguageModel`, `decider` on a
   `DecisionModel` such as Jev) and `make`, a guard that denies a risk the task does not ask for and
   fails closed on input with facts when its judge fails; `Agent.run` provides the task and ends
-  after three refusals in a row. The judges are tested with scripted models; grading them against
-  the corpus is a paid bench run.
+  after three refusals in a row. The judges are tested with scripted models; `bun run judges` in
+  the bench grades them against the corpus, with paid arms only on opt-in.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
