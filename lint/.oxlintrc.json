@@ -148,10 +148,15 @@
       "rules": { "exports/public-entrypoint": "error" }
     },
     {
-      // Tests and the bench drive the platform itself: they serve pages, launch Chromium, read
-      // their environment and write records. They may also unwrap, cast and use `any`-typed test
-      // utilities; a wrong guess fails the run.
-      "files": ["**/packages/*/test/**/*.ts", "**/bench/**/*.ts"],
+      // Tests, the bench and the demo site drive the platform itself: they serve pages, launch
+      // Chromium, read their environment, write records and fetch replays. They may also unwrap,
+      // cast and use `any`-typed test utilities; a wrong guess fails the run.
+      "files": [
+        "**/packages/*/test/**/*.ts",
+        "**/bench/**/*.ts",
+        "**/demos/**/*.ts",
+        "**/demos/**/*.tsx"
+      ],
       "rules": {
         "effecttsgo/async-function": "off",
         "effecttsgo/crypto-random-uuid": "off",

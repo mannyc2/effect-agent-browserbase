@@ -50,6 +50,11 @@
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
   and a shared model admission budget. Every trial is graded, an infrastructure failure, denied
   or unrun, and summaries keep those denominators apart. Paid runs remain opt-in.
+- `demos` (private): a static site that replays bench runs recorded with `--record`: the
+  screencast as video, the planned pointer path, agent turns, a narrator's captions (`--narrate`)
+  and the pictures a model was shown, with each run's grade against the page's truth. Agent runs,
+  human-versus-raw input and scripted understanding replays are recorded; model comparisons and a
+  policy demo are not yet.
 
 `effect-agent-browser` and the Effect Agent dependency are gone: the agent loop is `effect/ai`'s
 `Chat` with the browser toolkit. The tests run against real local Chromium, a fake Browserbase API
