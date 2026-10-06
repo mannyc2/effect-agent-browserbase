@@ -51,6 +51,11 @@
   calibration for newly owned sessions, and per-page capture counters for filtering, paint gaps
   and observed subscriber loss. Screenshot timing has its own provenance; a reused screencast
   frame must postdate the latest input and be recent; borrowed pages receive no probe input.
+- Tracing: agent steps, tool calls, page operations with their phases, captures, page script round
+  trips and opening a browser are Effect spans, with OpenTelemetry's GenAI attributes on the agent
+  and its tool calls. No span carries typed text, and the application chooses the exporter. The
+  bench exports over OTLP on request, records where each trial's time went (`phases`) and can add
+  latency to a local browser's DevTools connection (`--latency`) to measure hosted round trips free.
 - `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics

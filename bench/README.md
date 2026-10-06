@@ -103,13 +103,23 @@ streaming, decisions and raw generated requests before sending them.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
 the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
-model, pinned endpoint with its rates and per-call reservation, browser, humanize, output-token
-limit, budget and concurrency), effective reasoning, status and reason, the answer, model turns
+model, pinned endpoint with its rates and per-call reservation, browser, added latency, humanize,
+output-token limit, budget, concurrency, recording and narration), effective reasoning, status and
+reason, the answer, model turns
 (`steps`) and tool calls (`actions`) once a trial has an outcome, any
 error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
 reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
-provider requests) and elapsed seconds including browser setup and cleanup. The ISO
+provider requests), `phases` (seconds opening the browser, in the model's tool calls, and looking
+at the page outside them: the agent's observations, an arm's own pictures and outlines, a moment's
+capture), the trial's `traceId` and elapsed seconds including browser setup and cleanup. The ISO
 start time is a calendar date; elapsed time uses a monotonic clock.
+
+The run ends by saying where graded trials' time went, as means that add up to the mean total:
+model requests, the budget queue, those phases and the rest (the fixture, grading, closing the
+browser and the bench itself). Recording and narration each run a screencast, which lets an
+observation reuse a frame instead of capturing one, recording adds 500 ms to each trial, and
+narration's caption calls overlap the agent's in `requestSeconds`: compare timings only between
+runs made the same way, which `run` records.
 
 `--record` also records each trial for replay, in a directory named after the results file with one
 subdirectory per trial (`checkout-1/`, or `checkout-arm2-1/` with `--arm`). Each page's screencast
@@ -127,6 +137,29 @@ reasoning off. Captions go to the recording; they neither steer nor grade the ag
 share the trial's budget, so a caption call with an unknown charge stops the trial's admission as
 any call does. A malformed caption is skipped. When the agent answers, the narrator finishes the
 caption it is writing and starts no other.
+
+### Traces
+
+The bench and the judges runner export traces over OTLP/HTTP to any collector or backend, such as a
+local Jaeger, when asked; otherwise they export nothing:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_TRACES_EXPORTER=otlp bun run bench
+```
+
+Each trial is a trace of its own, rooted at a `bench.trial` span with its task, arm, seed, browser
+and model and, once it ends, its status, reason and grade; its `traceId` finds it. Each judged case
+is a `bench.judge` trace. `effect-browser`'s README lists the spans inside. `--record` also keeps
+the trial's spans in `recording.json`, on the recording's host clock.
+
+### Latency
+
+`--latency <ms>` runs the local Chromium over the DevTools protocol through a proxy that adds that
+many milliseconds to each round trip, half each way, with a fresh 1280×720 context calibrated as a
+new hosted session's is. It costs nothing, so hosted round trips can be measured before paying for
+sessions; it reproduces neither a hosted browser's network nor its machine. At 80 ms, opening the
+browser took about 3.4 seconds and an observation with an outline and a screenshot about 0.7
+seconds, nearly all of it the screenshot's eight protocol commands in a row.
 
 ## Arms
 
