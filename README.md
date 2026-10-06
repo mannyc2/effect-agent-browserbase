@@ -4,11 +4,12 @@ Browser automation for [Effect](https://effect.website) agents: page control, a 
 outline for models, screencast frames, browser tools for `effect/ai`, an agent loop, and moments, a
 picture-and-timeline account of what a page showed at one point in time.
 
-| Package                                      | What it is                                                         |
-| -------------------------------------------- | ------------------------------------------------------------------ |
-| [`effect-browser`](packages/browser)         | The browser, its pages, tools, agent and moments, over Playwright  |
-| [`effect-browserbase`](packages/browserbase) | Browserbase sessions as a `Browser`, and a client for its REST API |
-| [`bench`](bench) (private)                   | Graded tasks over canvas games, live charts, quotes and forms      |
+| Package                                                  | What it is                                                         |
+| -------------------------------------------------------- | ------------------------------------------------------------------ |
+| [`effect-browser`](packages/browser)                     | The browser, its pages, tools, agent and moments, over Playwright  |
+| [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
+| [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, supplied as one layer            |
+| [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
 
 ## An agent in a local Chromium
 
@@ -115,10 +116,13 @@ const watch = Effect.gen(function* () {
   `PolicyDenied` to deny, or waits for an external signal to hold. Holds have a separate
   `policyTimeout` (five minutes by default) and leave the page unlocked. Changed targets fail before
   input when a hold resumes. With no guard, every action is allowed.
-- `humanize` moves the pointer along curves and scrolls off-screen targets into view with visible
+- `humanize` uses a tuned two-stroke sigma-lognormal pointer planner and scrolls off-screen targets into view with visible
   wheel input, using bounded attempts and an instant fallback. It rechecks the approved target
   before activation. Typing aims for about 75 WPM, with overlapping key holds and slower word
   starts; bounded pending replies keep connection latency out of the intended schedule.
+  The optional `effect-browser-human-strokes` layer supplies 32,130 recorded strokes, preserving
+  their original samples and timing; the core package contains no data. `Motion.Motion` is captured
+  when the browser is built, and each full glide is validated and admitted before its clock starts.
 - `Page.type(text, { prose: true })` and the `browser_type` tool's `prose` flag allow occasional
   corrected slips when replacing an explicitly targeted prose field while humanized. Final text
   is checked before submit; numbers, URLs, credentials and payment/order fields stay exact.
@@ -151,6 +155,7 @@ real local Chromium and builds. No test calls a model or a hosted browser.
 
 ## License
 
-MIT. Parts of the build configuration are adapted from
+The core packages and code are MIT. The optional `effect-browser-human-strokes` data is CC BY 4.0;
+its [README](packages/human-strokes/README.md) carries attribution. Parts of the build configuration are adapted from
 [effect-agent](https://github.com/danieljvdm/effect-agent) under the MIT License; see
 [LICENSE-effect-agent](LICENSE-effect-agent).

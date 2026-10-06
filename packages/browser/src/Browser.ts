@@ -34,6 +34,7 @@ import {
 import { CaptureCalibration } from "./Frame.ts";
 import * as Startup from "./internal/calibration.ts";
 import * as Timeline from "./internal/timeline.ts";
+import * as Motion from "./Motion.ts";
 import * as Page from "./Page.ts";
 
 export interface Options {
@@ -100,6 +101,7 @@ export const make = Effect.fn("Browser.make")(function* (
   options: Options = {},
 ) {
   const clock = yield* Clock.Clock;
+  const motion = yield* Motion.Motion;
   const ownerScope = yield* Scope.Scope;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   const policyTimeout = Duration.fromInput(options.policyTimeout ?? Duration.minutes(5));
@@ -207,6 +209,7 @@ export const make = Effect.fn("Browser.make")(function* (
           playwright,
           cdp,
           settings,
+          motion,
           clock,
           publish,
           pointer,

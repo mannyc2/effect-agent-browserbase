@@ -2,11 +2,15 @@
 
 ## 0.3, unreleased
 
-0.3 is a rewrite of the 0.2 set as two packages on stable Effect 4.0.0 and `effect/ai`:
+0.3 is a rewrite of the 0.2 set on stable Effect 4.0.0 and `effect/ai`:
 
 - `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
   `Frame`, `BrowserEvent` and `BrowserError`; `Tools`, `Agent` and `Moment`.
 - `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`.
+- `effect-browser-human-strokes`: an optional layer with 32,130 recorded, attributed CC BY 4.0
+  pointer strokes, retaining their original sample coordinates and times. The core pointer planner
+  uses the tuned two-stroke sigma-lognormal model; browsers capture the motion service once.
+  Complete bounded plans are validated and admitted before publication and input.
 - `Agent.run` batches tool calls with halt-on-failure, one outline and screenshot per turn,
   configurable observations and caller toolkits.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on

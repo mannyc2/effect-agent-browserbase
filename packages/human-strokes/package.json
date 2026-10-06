@@ -1,0 +1,51 @@
+{
+  "name": "effect-browser-human-strokes",
+  "version": "0.3.0-beta.0",
+  "description": "Optional recorded human pointer motion for effect-browser.",
+  "license": "(MIT AND CC-BY-4.0)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
+    "directory": "packages/human-strokes"
+  },
+  "files": [
+    "dist",
+    "src",
+    "data",
+    "LICENSE",
+    "LICENSE-data"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": {
+      "@effect-browser/source": "./src/index.ts",
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --run"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0",
+    "@types/node": "26.1.2",
+    "effect": "4.0.0",
+    "effect-browser": "workspace:*",
+    "playwright-core": "1.63.0",
+    "typescript": "7.0.2",
+    "vite-plus": "0.3.2"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0",
+    "effect-browser": "^0.3.0-beta.0"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  }
+}

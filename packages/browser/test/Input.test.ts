@@ -7,6 +7,7 @@ import type { CDPSession } from "playwright-core";
 import { Browser } from "../src/Browser.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
+import * as Motion from "../src/Motion.ts";
 import * as Page from "../src/Page.ts";
 
 interface RecordedKey {
@@ -208,6 +209,7 @@ const setup = Effect.fnUntraced(function* (
     playwright,
     cdp,
     clock: yield* Clock.Clock,
+    motion: yield* Motion.Motion,
     pointer: yield* Ref.make(Option.none<Page.Point>()),
     inputLock: yield* Semaphore.make(1),
     publish: (event) => {

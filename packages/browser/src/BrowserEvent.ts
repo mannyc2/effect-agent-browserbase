@@ -9,6 +9,8 @@
  */
 import { Schema } from "effect";
 
+import * as Motion from "./Motion.ts";
+
 export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
   at: Schema.Finite,
   page: Schema.String,
@@ -42,7 +44,6 @@ export class Action extends Schema.TaggedClass<Action>()("Action", {
   error: Schema.optional(Schema.String),
 }) {}
 
-const Point = Schema.Struct({ x: Schema.Finite, y: Schema.Finite });
 const Sequence = Schema.Int.check(Schema.isGreaterThan(0));
 const Button = Schema.Literals(["left", "right", "middle"]);
 
@@ -50,14 +51,8 @@ const Button = Schema.Literals(["left", "right", "middle"]);
 export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlanned", {
   at: Schema.Finite,
   page: Schema.String,
-  from: Point,
-  samples: Schema.Array(
-    Schema.Struct({
-      afterMillis: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-      x: Schema.Finite,
-      y: Schema.Finite,
-    }),
-  ),
+  from: Motion.Point,
+  samples: Schema.Array(Motion.Sample),
 }) {}
 
 /**
