@@ -588,3 +588,61 @@ it("a performed run is charged by stroke size, refusing a shifted stroke a slow 
   for (const reply of distant.held.splice(0)) reply.resolve();
   await expect(typed).resolves.toBe("completed");
 });
+
+it("one stalled stroke does not refuse the strokes after it while the run still has time", async () => {
+  // The first stroke's replies stall for 300 ms, as a busy runner or a cold renderer can; every
+  // later stroke answers at once. Twenty strokes 50 ms apart still finish by about 970 ms.
+  const sent: Array<string> = [];
+  const stalled: Array<ReturnType<typeof gate<void>>> = [];
+  const clock = { at: 0n };
+
+  const keyboard = scriptedKeyboard(async () => {}, {
+    keys: (command, key) => {
+      sent.push(`${command}:${key}`);
+      if (stalled.length >= 4) return Promise.resolve();
+      const reply = gate<void>();
+
+      stalled.push(reply);
+
+      return reply.promise;
+    },
+  });
+
+  const typed = keyboard
+    .type("A".repeat(20), undefined, performedTicket(clock, millis(2000)), undefined, target)
+    .then(
+      () => "completed",
+      (cause: unknown) => cause,
+    );
+
+  await nativeTurn();
+  expect(sent).toEqual(["down:Shift", "down:A", "up:A", "up:Shift"]);
+  clock.at = millis(300);
+  for (const reply of stalled) reply.resolve();
+  await expect(typed).resolves.toBe("completed");
+  expect(sent).toHaveLength(80);
+  expect(clock.at).toBeLessThan(millis(1000));
+});
+
+it("a measured stroke's hold is not charged again as latency", async () => {
+  // "a" is held 20 ms and its replies arrive 70 ms after its release. "A" has twice its
+  // commands, so it is charged its own 20 ms hold and twice that 70 ms drain: 160 ms from 90 ms.
+  const slow = heldKeys();
+  const clock = { at: 0n };
+
+  const typed = slow.keyboard
+    .type("aA", undefined, performedTicket(clock, millis(260)), undefined, target)
+    .then(
+      () => "completed",
+      (cause: unknown) => cause,
+    );
+
+  await nativeTurn();
+  expect(slow.sent).toEqual(["down:a", "up:a"]);
+  clock.at = millis(90);
+  for (const reply of slow.held.splice(0)) reply.resolve();
+  await nativeTurn();
+  expect(slow.sent.slice(2)).toEqual(["down:Shift", "down:A", "up:A", "up:Shift"]);
+  for (const reply of slow.held.splice(0)) reply.resolve();
+  await expect(typed).resolves.toBe("completed");
+});

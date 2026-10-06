@@ -587,12 +587,12 @@ postconditions together, capped by owner lifetime and each action deadline. Miss
 reports `ScheduleMissed` without inventing an attempt; an insufficient pacing budget reports
 `TimingBudgetExceeded` before new input. Performed strokes start at their absolute schedule
 offsets, so a slow reply delays one stroke rather than every later one. Before each stroke's
-first key, the rest of the schedule must still fit the deadline at the round trips the browser
-has actually taken; a stroke that could not finish is refused whole, and strokes already
-acknowledged stay `performed`. A performed click is held to the same rule. Playwright's click
-checks the node again before its first input event, and a deadline inside those checks would
-report `unknown` for input never sent, so a click the deadline cannot fit at the press's
-measured round trip is refused `TimingBudgetExceeded`, undispatched, and its Page stays open.
+first key, the rest of the schedule must still fit the deadline at the pace the browser has
+kept; a stroke that could not finish is refused whole, and strokes already acknowledged stay
+`performed`. A performed click is held to the same rule. Playwright's click checks the node
+again before its first input event, and a deadline inside those checks would report `unknown`
+for input never sent, so a click the deadline cannot fit at the Page's typical measured round
+trip is refused `TimingBudgetExceeded`, undispatched, and its Page stays open.
 Receipts retain requested/intended/actual start, deadline
 and lateness. Cancellation stops future submissions and keeps readable attempt history with the
 original Effect Cause. Known preparatory work followed by refusal is rejected with its subphase
@@ -912,9 +912,16 @@ on the way to a remote browser is not controlled. The owner is still checked bef
 command, nothing more is sent once a reply has failed, and the stroke drains all of its at most ten
 replies before it resolves. Each stroke therefore still costs its releases' round trip, and its
 focus check's when it names an element: against a remote browser, a stroke whose planned interval
-is shorter than those starts late. A slow renderer still handles a stroke's events one at a time,
-so the deadline check charges each stroke what strokes with as many commands have taken, scaled up
-from smaller strokes until one of its size has drained.
+is shorter than those starts late. Once a stroke's key went down, its releases are fenced by the
+owner alone, so an Enter that submits a form and replaces the document still releases its key.
+
+A slow renderer still handles a stroke's events one at a time, so the deadline check charges a
+stroke its hold and the drain of strokes with as many commands, scaled up from smaller strokes
+until one of its size has drained. The next stroke is charged their mean drain. Later strokes are
+charged their fastest once two have drained, and the Page's fastest round trip before that: a
+renderer that is slow for every stroke refuses the run early, while one stalled reply does not
+refuse a run that still has time. The round trips are the Page's own recent single-call reads,
+its focus checks and pointer reads, kept across operations on that Page.
 
 A press waits for native input acknowledgement, without waiting for resulting navigation. If Enter submits a form, wait for what the next document shows with `waitFor`. A receipt carries the same target, pointer position and interval as any other input, and never says which key was pressed or what was typed. Typing a secret is still more observable than one `fill`, because the page sees every stroke; prefer `fill` for one unless the page requires keys. Both operations are available in the model-facing toolkit in `effect-agent-browser`.
 

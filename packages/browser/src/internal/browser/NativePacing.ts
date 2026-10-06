@@ -44,6 +44,75 @@ export const grantedPacing = (owner: {
   },
 });
 
+/** The most recent single-call round trips a Page keeps, newest last. */
+const keptRoundTrips = 16;
+
+const roundTrips = new WeakMap<object, Array<bigint>>();
+
+/**
+ * Times one protocol call that costs a single round trip to the Page's browser, and keeps the
+ * sample for every later performed charge on that Page. Only calls known to take one round
+ * trip belong here: a read in a child frame can take several, which would inflate every charge.
+ */
+export const timedRoundTrip = async <A>(
+  page: object,
+  now: () => bigint,
+  call: () => Promise<A>,
+): Promise<A> => {
+  const started = now();
+  const result = await call();
+  const samples = roundTrips.get(page) ?? [];
+
+  samples.push(now() - started);
+  if (samples.length > keptRoundTrips) samples.shift();
+  roundTrips.set(page, samples);
+
+  return result;
+};
+
+/**
+ * What a Page's recent round trips say, in milliseconds, or 0 before any was measured. `typical`
+ * (the median) charges work about to be dispatched, which one fast or slow sample cannot move;
+ * `fastest` bounds work further ahead, which must not be refused for one stalled reply.
+ */
+export const roundTripOf = (
+  page: object,
+): { readonly typical: number; readonly fastest: number } => {
+  const samples = [...(roundTrips.get(page) ?? [])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const [fastest] = samples;
+  // The upper median: with an even count, work about to be dispatched takes the slower middle.
+  const typical = samples[Math.floor(samples.length / 2)];
+
+  return {
+    typical: typical === undefined ? 0 : Number(typical) / 1e6,
+    fastest: fastest === undefined ? 0 : Number(fastest) / 1e6,
+  };
+};
+
+/**
+ * The round trips a performed click is charged before dispatch. Over relays adding 18 to 70 ms
+ * each way, Playwright 1.63's positioned click took 17 to 23 round trips in all, 14 to 19 of them
+ * checking the node before its first input event, counted in median round trips. A deadline
+ * inside those checks closes the Page over input never sent, while a refusal leaves it open, so
+ * the charge covers the most checking measured, at the cost of refusing a click that had a few
+ * round trips to spare.
+ */
+const performedClickRoundTrips = 20;
+
+/**
+ * What a performed click is charged besides its round trips. Playwright's stability check waits
+ * for the node across animation frames, which no round trip measures: without a relay, a whole
+ * click took 57 ms.
+ */
+const performedClickFloorMillis = 100;
+
+/**
+ * What a performed click on `page` must still have before its dispatch is marked: its fixed
+ * floor and its round trips at the Page's typical one, the statistic they were counted in.
+ */
+export const performedClickMillis = (page: object) =>
+  performedClickFloorMillis + performedClickRoundTrips * roundTripOf(page).typical;
+
 /** A performed admission's ticket: the owner's pacing is always present on it. */
 export type PerformedTicket = Ticket & { readonly performance: Performance };
 

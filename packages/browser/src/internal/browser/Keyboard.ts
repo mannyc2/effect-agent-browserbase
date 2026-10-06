@@ -1,12 +1,18 @@
 import { Result } from "effect";
-import type { CDPSession, ElementHandle, Keyboard, Page } from "playwright-core";
+import type { CDPSession, ElementHandle, Page } from "playwright-core";
 
 import type { KeyModifier } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { DriverTarget, ElementTarget } from "./Driver.ts";
 import type { ElementAccess } from "./ElementAccess.ts";
 import { failure, sanitize } from "./NativeCalls.ts";
-import { isPerformed, ownerPacing, type PerformedTicket } from "./NativePacing.ts";
+import {
+  isPerformed,
+  ownerPacing,
+  type PerformedTicket,
+  roundTripOf,
+  timedRoundTrip,
+} from "./NativePacing.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
 import { keys as keySchedule, type KeySchedule, type Stroke } from "./Performance.ts";
@@ -95,31 +101,31 @@ const commandsOf = (stroke: Stroke, modifiers: ReadonlyArray<KeyModifier>, typed
 /**
  * The measured pace of one performed key run. Strokes start at their absolute schedule offsets,
  * and each key is held from its key-down's submission. Before a stroke's first command, the rest
- * of the schedule must still fit the original deadline at the round trips the browser has
- * actually taken, so a stroke that could not finish is refused whole, never cut between a key and
- * its release.
+ * of the schedule must still fit the original deadline at the pace the browser has kept, so a
+ * stroke that could not finish is refused whole, never cut between a key and its release.
  *
- * A stroke's commands share their round trip, but a renderer handles them one at a time. So each
- * stroke is measured from its first submission (its span) and from its last (its drain) until its
- * last reply, and charged as strokes of its own command count were. More commands never finish
- * sooner: a larger stroke's measures bound a smaller one's, and a smaller one's are scaled up by
- * command count, which overcharges latency only until a stroke of this size has drained.
+ * A stroke's commands share their round trip, but a renderer handles them one at a time. So a
+ * stroke is charged its hold and the drain, from its last submission to its last reply, of
+ * strokes with as many commands. More commands never finish sooner: a larger stroke's drain
+ * bounds a smaller one's, and a smaller one's is scaled up by command count, which overcharges
+ * latency only until a stroke of this size has drained. The next stroke is charged their mean
+ * drain. Every later one is charged their fastest once two have drained, and the Page's fastest
+ * round trip before that, so a renderer that is slow for every stroke refuses the run early,
+ * while one stalled reply cannot refuse the strokes after it when the run still has time.
  */
 const makePace = (
   pacing: ReturnType<typeof ownerPacing>,
+  page: object,
   strokes: ReadonlyArray<Stroke>,
   started: bigint,
   focus: boolean,
   modifiers: ReadonlyArray<KeyModifier>,
   typed: boolean,
 ) => {
-  const focused = { nanos: 0n, count: 0 };
-  const drained = new Map<number, { span: bigint; drain: bigint; count: number }>();
+  const drained = new Map<number, { total: bigint; fastest: bigint; count: number }>();
 
-  const mean = (total: bigint, count: number) =>
-    count === 0 ? 0 : Number(total / BigInt(count)) / 1e6;
-
-  const expected = (commands: number, check: number) => {
+  /** The nearest measured stroke size's drains, scaled to `commands`, in milliseconds. */
+  const measured = (commands: number) => {
     let bound: number | undefined;
     let below: number | undefined;
 
@@ -128,58 +134,71 @@ const makePace = (
       if (size < commands && (below === undefined || size > below)) below = size;
     }
     const size = bound ?? below;
-    const measured = size === undefined ? undefined : drained.get(size);
+    const drains = size === undefined ? undefined : drained.get(size);
 
-    // Before any stroke has drained, a focus check's round trip is the best estimate there is.
-    if (size === undefined || measured === undefined)
-      return { span: 0, drain: check * Math.max(1, commands / 2) };
-    const scale = size < commands ? commands / size : 1;
+    if (size === undefined || drains === undefined) return undefined;
+    const scale = (size < commands ? commands / size : 1) / 1e6;
 
     return {
-      span: mean(measured.span, measured.count) * scale,
-      drain: mean(measured.drain, measured.count) * scale,
+      mean: Number(drains.total / BigInt(drains.count)) * scale,
+      fastest: Number(drains.fastest) * scale,
+      count: drains.count,
     };
   };
 
   return {
-    observeFocus: (elapsed: bigint) => {
-      focused.nanos += elapsed;
-      focused.count++;
-    },
-    observeDrain: (commands: number, span: bigint, drain: bigint) => {
-      const measured = drained.get(commands) ?? { span: 0n, drain: 0n, count: 0 };
+    observeDrain: (commands: number, nanos: bigint) => {
+      const drains = drained.get(commands);
 
-      measured.span += span;
-      measured.drain += drain;
-      measured.count++;
-      drained.set(commands, measured);
+      if (drains === undefined) drained.set(commands, { total: nanos, fastest: nanos, count: 1 });
+      else {
+        drains.total += nanos;
+        if (nanos < drains.fastest) drains.fastest = nanos;
+        drains.count++;
+      }
     },
     /** Called after stroke `from`'s focus check, before its first command. */
     require: (from: number) => {
-      const check = focus ? mean(focused.nanos, focused.count) : 0;
+      const roundTrip = roundTripOf(page);
       let at = Number(pacing.now() - started) / 1e6;
 
       for (let index = from; index < strokes.length; index++) {
         const stroke = strokes[index];
 
         if (stroke === undefined) break;
-        // This stroke has already paid for its focus check.
-        const down = Math.max(at, stroke.offsetMillis) + (index === from ? 0 : check);
-        const { span, drain } = expected(commandsOf(stroke, modifiers, typed), check);
+        const commands = commandsOf(stroke, modifiers, typed);
+        const drains = measured(commands);
+
+        // This stroke has already paid for its focus check; a later one pays at least a round trip.
+        const down =
+          Math.max(at, stroke.offsetMillis) + (index === from || !focus ? 0 : roundTrip.fastest);
+
+        // Before any stroke has drained, the Page's round trips are the best estimate there is.
+        const drain =
+          index === from
+            ? (drains?.mean ?? roundTrip.typical * Math.max(1, commands / 2))
+            : drains !== undefined && drains.count >= 2
+              ? drains.fastest
+              : roundTrip.fastest;
 
         // A key's releases are submitted once it has been held; inserted text holds after it lands.
         at =
           keyDescription(stroke.key) === undefined
             ? down + Math.max(drain, stroke.holdMillis)
-            : down + Math.max(stroke.holdMillis + drain, span);
+            : down + stroke.holdMillis + drain;
       }
       pacing.requireBy(started + nanos(at));
     },
   };
 };
 
-/** At most sixteen complete strokes / thirty-two replies live at once. */
-const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, ticket: Ticket) => {
+/**
+ * Native commands submitted in order without awaiting each reply, as one burst the caller drains.
+ * Every reply is observed as it arrives, including a rejection after a refusal. Once a command or
+ * a fence has failed, nothing more is sent and nothing is repaired; draining waits for every
+ * command already submitted and then fails with the first failure.
+ */
+const makeBurst = (ticket: Ticket) => {
   const pending: Array<Promise<void>> = [];
   let failed = false;
   let firstFailure: unknown;
@@ -191,22 +210,40 @@ const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, t
     }
   };
 
-  const submit = (command: () => Promise<unknown>) => {
-    ticket.check();
-    ticket.dispatch();
-    // Observe every reply immediately, including a rejection arriving after caller cancellation.
-    pending.push(command().then(() => {}, reject));
+  return {
+    /** `fence` decides whether this command may still be sent; the ticket's own check always runs. */
+    submit: (fence: () => void, command: () => Promise<unknown>) => {
+      if (failed) throw firstFailure;
+      fence();
+      ticket.dispatch();
+      pending.push(command().then(() => {}, reject));
+    },
+    reject,
+    /** Resolves with the number of replies once every one arrived, or fails with the first failure. */
+    drain: async () => {
+      await Promise.all(pending);
+      if (failed) throw firstFailure;
+
+      return pending.length;
+    },
   };
+};
+
+/** At most sixteen complete strokes / thirty-two replies live at once. */
+const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, ticket: Ticket) => {
+  const burst = makeBurst(ticket);
+  const fence = () => ticket.check();
 
   try {
     for (const key of characters) {
       const description = keyDescription(key);
 
-      if (description === undefined) submit(() => port.send("Input.insertText", { text: key }));
+      if (description === undefined)
+        burst.submit(fence, () => port.send("Input.insertText", { text: key }));
       else {
         const { code, keyCode } = description;
 
-        submit(() =>
+        burst.submit(fence, () =>
           port.send("Input.dispatchKeyEvent", {
             type: "keyDown",
             modifiers: 0,
@@ -222,7 +259,7 @@ const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, t
           }),
         );
         // An authority loss during keydown leaves this unsent; cleanup never repairs input.
-        submit(() =>
+        burst.submit(fence, () =>
           port.send("Input.dispatchKeyEvent", {
             type: "keyUp",
             modifiers: 0,
@@ -235,10 +272,9 @@ const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, t
       }
     }
   } catch (error) {
-    reject(error);
+    burst.reject(error);
   }
-  await Promise.all(pending);
-  if (failed) throw firstFailure;
+  await burst.drain();
   ticket.acknowledge?.();
 };
 
@@ -392,7 +428,7 @@ export const makeKeyboard = (
    * them all before it resolves.
    */
   const pacedStroke = async (
-    keyboard: Keyboard,
+    page: Page,
     stroke: Stroke,
     ticket: PerformedTicket,
     check: () => void,
@@ -403,56 +439,39 @@ export const makeKeyboard = (
     typed = true,
   ) => {
     const pacing = ownerPacing(ticket);
+    const { keyboard } = page;
 
     pacing.requireDuration(stroke.holdMillis);
     // Focus is required once, before the stroke's first command. The key's own default action
-    // may move it (Tab, an Enter that submits, an auto-advancing field), and the releases still
-    // belong to this stroke: like plain typing's, they are fenced by the ticket alone.
+    // may move it, or replace the document (Tab, an Enter that submits, an auto-advancing
+    // field), and the releases still belong to this stroke: like plain typing's, they are fenced
+    // by the ticket alone, never by the element or the document the key was sent to.
     check();
-    if (element !== undefined) {
-      const before = pacing.now();
-
-      await requireFocus(element);
-      pace.observeFocus(pacing.now() - before);
-    }
+    if (element !== undefined) await timedRoundTrip(page, pacing.now, () => requireFocus(element));
     check();
     pace.require(index);
 
-    const pending: Array<Promise<void>> = [];
-    let failed = false;
-    let firstFailure: unknown;
-    const first = pacing.now();
-    let submitted = first;
+    const burst = makeBurst(ticket);
+    const release = () => ticket.check();
+    let submitted = pacing.now();
 
-    const reject = (error: unknown) => {
-      if (!failed) {
-        failed = true;
-        firstFailure = error;
-      }
-    };
-
-    const submit = (command: () => Promise<unknown>) => {
-      // A refused reply ends the stroke: nothing after it is sent, and nothing is repaired.
-      if (failed) throw firstFailure;
-      check();
-      ticket.dispatch();
+    const submit = (fence: () => void, command: () => Promise<unknown>) => {
+      burst.submit(fence, command);
       submitted = pacing.now();
-      // Observe every reply immediately, including a rejection arriving after a refusal.
-      pending.push(command().then(() => {}, reject));
     };
 
     const drain = async () => {
-      await Promise.all(pending);
-      if (failed) throw firstFailure;
-      const replied = pacing.now();
+      const commands = await burst.drain();
 
-      pace.observeDrain(pending.length, replied - first, replied - submitted);
+      pace.observeDrain(commands, pacing.now() - submitted);
       ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
     };
 
     // A character the US layout cannot produce is committed as text, as plain typing does.
     if (keyDescription(stroke.key) === undefined) {
-      submit(() => keyboard.insertText(stroke.key));
+      const first = pacing.now();
+
+      submit(check, () => keyboard.insertText(stroke.key));
       await drain();
       await pacing.pauseUntil(first + nanos(stroke.holdMillis));
 
@@ -461,22 +480,22 @@ export const makeKeyboard = (
     const held = heldModifiers(stroke.key, modifiers, typed);
 
     try {
-      for (const modifier of held) submit(() => keyboard.down(modifier));
+      for (const modifier of held) submit(check, () => keyboard.down(modifier));
       const down = pacing.now();
 
-      submit(() => keyboard.down(stroke.key));
+      submit(check, () => keyboard.down(stroke.key));
       // The hold runs from the key-down's submission, whether or not its reply has arrived.
       await pacing.pauseUntil(down + nanos(stroke.holdMillis));
-      submit(() => keyboard.up(stroke.key));
-      for (const modifier of held.toReversed()) submit(() => keyboard.up(modifier));
+      submit(release, () => keyboard.up(stroke.key));
+      for (const modifier of held.toReversed()) submit(release, () => keyboard.up(modifier));
     } catch (error) {
-      reject(error);
+      burst.reject(error);
     }
     await drain();
   };
 
   const pacedKeys = async (
-    keyboard: Keyboard,
+    page: Page,
     schedule: KeySchedule,
     ticket: PerformedTicket,
     check: () => void,
@@ -486,13 +505,13 @@ export const makeKeyboard = (
 
     pacing.requireDuration(schedule.durationMillis);
     const started = pacing.now();
-    const pace = makePace(pacing, schedule.strokes, started, element !== undefined, [], true);
+    const pace = makePace(pacing, page, schedule.strokes, started, element !== undefined, [], true);
 
     for (const [index, stroke] of schedule.strokes.entries()) {
       check();
       // Absolute offsets: a slow reply delays the stroke after it, never every later one.
       await pacing.pauseUntil(started + nanos(stroke.offsetMillis));
-      await pacedStroke(keyboard, stroke, ticket, check, pace, index, element);
+      await pacedStroke(page, stroke, ticket, check, pace, index, element);
     }
   };
 
@@ -515,30 +534,20 @@ export const makeKeyboard = (
       ticket.acknowledge?.({ subphase: "focus", logicalComplete: false });
       await readmit?.();
       check();
-      const before = pacing.now();
+      await timedRoundTrip(page, pacing.now, () => requireFocus(element));
 
-      await requireFocus(element);
-      const roundTrip = pacing.now() - before;
+      // The erase is a plain press, a key-down and a key-up each awaited, and every stroke must
+      // fit before the old value goes.
+      const erase = nanos(2 * roundTripOf(page).typical);
 
-      // The erase (a key-down and key-up) and every stroke must fit before the old value goes.
-      const pace = makePace(
-        pacing,
-        schedule.strokes,
-        pacing.now() + 2n * roundTrip,
-        true,
-        [],
-        true,
-      );
-
-      pace.observeFocus(roundTrip);
-      pace.require(0);
+      makePace(pacing, page, schedule.strokes, pacing.now() + erase, true, [], true).require(0);
       check();
       ticket.dispatch();
       await page.keyboard.press("Backspace");
       ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
       if (schedule.strokes.length > 0) await readmit?.();
       check();
-      await pacedKeys(page.keyboard, schedule, ticket, check, element);
+      await pacedKeys(page, schedule, ticket, check, element);
     });
 
   /** Sends under one dispatch, either to whatever has focus or to the one element that must. */
@@ -602,11 +611,19 @@ export const makeKeyboard = (
               const pacing = ownerPacing(performed);
 
               return pacedStroke(
-                page.keyboard,
+                page,
                 stroke,
                 performed,
                 check ?? (() => performed.check()),
-                makePace(pacing, [stroke], pacing.now(), element !== undefined, modifiers, false),
+                makePace(
+                  pacing,
+                  page,
+                  [stroke],
+                  pacing.now(),
+                  element !== undefined,
+                  modifiers,
+                  false,
+                ),
                 0,
                 element,
                 modifiers,
@@ -654,7 +671,7 @@ export const makeKeyboard = (
           async (_page, element, check) => {
             if (performed !== undefined) {
               await pacedKeys(
-                page.keyboard,
+                page,
                 performed.schedule,
                 performed.ticket,
                 check ?? (() => ticket.check()),

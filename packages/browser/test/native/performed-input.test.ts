@@ -53,6 +53,12 @@ slow.addEventListener("keydown", busy);
 slow.addEventListener("keyup", busy);
 slow.addEventListener("input", () => { mirror.textContent = String(slow.value.length); });
 </script>`,
+  // Enter leaves for another document while the key is still held.
+  "/submit": `<input aria-label="Query" id="query">
+<script>
+query.addEventListener("keydown", (event) => { if (event.key === "Enter") location.href = "/landed"; });
+</script>`,
+  "/landed": `<p id="landed">landed</p>`,
   "/shift": `<input aria-label="Text" id="text"><p id="mirror"></p>
 <script>
 text.addEventListener("input", () => { mirror.textContent = text.value; });
@@ -577,6 +583,39 @@ it.live("real CDP: a performed Press with modifiers sends the same key events as
         });
 
       expect(yield* pressed({ seed: 17 })).toEqual(yield* pressed(undefined));
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: a performed Enter that replaces its document still releases its key", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* open("/submit");
+      const page = session.initialPage;
+
+      // Held long enough for the next document to commit before the key-up is due.
+      const held = {
+        ...DefaultMotionProfile,
+        keys: {
+          interval: { minMillis: 0, maxMillis: 0 },
+          hold: { minMillis: 400, maxMillis: 400 },
+        },
+      };
+
+      const ran = yield* page.run(
+        {
+          version: 1,
+          steps: [
+            { id: "focus", action: { _tag: "Click", target: input("Query") } },
+            { id: "submit", action: { _tag: "Press", target: input("Query"), key: "Enter" } },
+          ],
+        },
+        { style: { seed: 29, motion: held }, within: "30 seconds" },
+      );
+
+      expect(ran.steps.map((step) => step.attempt.outcome)).toEqual(["performed", "performed"]);
+      // The Page was not closed over the release: it reads the document Enter led to.
+      expect((yield* page.readText({ selector: "#landed" })).text).toBe("landed");
     }).pipe(Effect.provide(layer)),
   ),
 );
