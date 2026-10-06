@@ -139,8 +139,10 @@ EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
 The first paired run, on 2026-10-06, used `openai/gpt-6-luna` (medium reasoning for operate tasks,
 none for understand tasks) with seed 1: 20 trials of each operate task per arm in local Chromium,
 5 on Browserbase, and 10 of each understand task in arms 2 and 5, for $0.91 in all. Every trial
-was graded. "On the page" also counts answers whose page state was right but whose answer field
-held a sentence around the confirmation number, which the grader fails.
+was graded. The operate pages do not vary with the seed, so a task's trials repeat one page and
+are not independent observations. The graders match exactly: "On the page" also counts the
+`checkout` trials that left the right order and gave the issued number inside a sentence
+("Order placed successfully. Confirmation number: CONF-48213."), which the grader fails.
 
 | Arm | Operate, local | On the page | Median s | $ per trial | Operate, Browserbase | Median s | Understand |
 | --- | -------------- | ----------- | -------- | ----------- | -------------------- | -------- | ---------- |
@@ -148,12 +150,14 @@ held a sentence around the confirmation number, which the grader fails.
 | 2   | 46/60          | 50/60       | 41.9     | 0.0035      | 12/15                | 79.9     | 69/90      |
 | 5   | 33/60          | 48/60       | 23.4     | 0.0056      | 9/15                 | 39.2     | 64/90      |
 
-- **Canvas:** `casino-play` passed 3, 16 and 8 of 20 locally in arms 1, 2 and 5. Arm 2 against
-  arm 5 over all operate pairs: 17 pairs only arm 2 passed, 4 only arm 5 (McNemar p ≈ 0.007).
-- **Forms:** every `checkout` trial in arms 1 and 5 left the right order on the page; the failures
-  were the answer's wording. Arm 2 ran out of steps in 6 of 20.
+- **Canvas:** `casino-play` passed 3, 16 and 8 of 20 locally in arms 1, 2 and 5.
+- **Forms:** every `checkout` trial in arms 1 and 5 left the right order; arm 2 did in 14 of 20
+  and ran out of steps in the other 6. Counted on the page, arm 2's lead over the other arms comes
+  from `casino-play` alone. `chart-trade` passed 20 of 20 in every arm.
 - **Speed:** arm 5 was not faster than arm 1: a paired median of 1.46 times arm 1's time locally,
   where model calls were 95% of it, and 1.03 times on Browserbase.
+- **Prompts:** the arms' system prompts differ beyond what they show: only arm 2 has the
+  drop-down hint, only arm 5 the input-policy lines, and arm 1 no batching hint.
 
 ## Outcomes
 
