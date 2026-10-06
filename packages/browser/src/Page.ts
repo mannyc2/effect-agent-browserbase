@@ -1,8 +1,8 @@
 /**
  * One browser tab: navigation, snapshots, pictures and input.
  *
- * Input dispatch is serialized per page. A policy can hold an action outside that lock while
- * other actions continue; its target is revalidated before dispatch. Element targets are refs from
+ * Input dispatch is serialized across the browser's pages. A policy holds outside the input
+ * locks while other actions continue; its target is revalidated before dispatch. Element targets are refs from
  * a snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
  * screenshot's pixels. Mouse and keyboard input share a bounded pipeline, so pacing does not
  * wait for each protocol reply. Target lookup happens before the input is sent.
@@ -15,6 +15,7 @@ import {
   Duration,
   Effect,
   Exit,
+  MutableRef,
   Option,
   PubSub,
   Ref,
@@ -39,7 +40,18 @@ import {
   StaleRef,
   Timeout,
 } from "./BrowserError.ts";
-import { Action, type BrowserEvent, PointerMoved } from "./BrowserEvent.ts";
+import {
+  Action,
+  type BrowserEvent,
+  CursorChanged,
+  KeyChanged,
+  PointerPressed,
+  PointerReleased,
+  TextInserted,
+  TrackPerformed,
+  TrackPlanned,
+  WheelScrolled,
+} from "./BrowserEvent.ts";
 import { Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import * as Human from "./internal/human.ts";
 import * as Input from "./internal/input.ts";
@@ -281,7 +293,9 @@ export interface MakeOptions {
   readonly cdp: CDPSession;
   readonly settings: Settings;
   readonly clock: Clock.Clock;
-  readonly publish: (event: BrowserEvent) => void;
+  readonly pointer: Ref.Ref<Option.Option<Point>>;
+  readonly inputLock: Semaphore.Semaphore;
+  readonly publish: (event: BrowserEvent) => number;
 }
 
 type MouseEvent = {
@@ -298,11 +312,10 @@ type MouseEvent = {
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
 
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
-  const { id, playwright, cdp, settings, clock, publish } = options;
+  const { id, playwright, cdp, settings, clock, pointer, inputLock, publish } = options;
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
-  const pointer = yield* Ref.make<Point>({ x: 0, y: 0 });
   const lastInputAt = yield* Ref.make(0);
   const frames = yield* PubSub.sliding<Frame>(16);
   // Written from Playwright's frame callback, outside any fiber.
@@ -337,12 +350,88 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       ),
     );
 
-  const sendMouse = (operation: string, run: Input.Run, event: MouseEvent) =>
-    run
-      .reserve(1)
-      .pipe(Effect.andThen(run.send(() => cdp.send("Input.dispatchMouseEvent", event))), (effect) =>
-        inputCall(operation, effect),
-      );
+  const dispatchMouse = (event: MouseEvent, submitted?: () => void) => {
+    const point = { x: event.x, y: event.y };
+    const button = event.button ?? "left";
+
+    // Construct boundary data before dispatch: validation must never abandon the native reply.
+    const track =
+      event.type === "mousePressed" && button !== "none"
+        ? new PointerPressed({
+            at: now(),
+            page: id,
+            ...point,
+            button,
+            clickCount: event.clickCount ?? 1,
+          })
+        : event.type === "mouseReleased" && button !== "none"
+          ? new PointerReleased({
+              at: now(),
+              page: id,
+              ...point,
+              button,
+              clickCount: event.clickCount ?? 1,
+            })
+          : event.type === "mouseWheel"
+            ? new WheelScrolled({
+                at: now(),
+                page: id,
+                ...point,
+                dx: event.deltaX ?? 0,
+                dy: event.deltaY ?? 0,
+              })
+            : undefined;
+
+    const response = cdp.send("Input.dispatchMouseEvent", event);
+
+    if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
+    if (track !== undefined) publish(track);
+    submitted?.();
+
+    return response;
+  };
+
+  const sendMouse = (
+    operation: string,
+    run: Input.Run,
+    event: MouseEvent,
+    submitted?: () => void,
+  ) =>
+    inputCall(
+      operation,
+      Effect.gen(function* () {
+        const held = `mouse:${event.button ?? "left"}`;
+
+        if (event.type === "mouseReleased") return yield* run.up(held);
+        if (event.type === "mousePressed") {
+          yield* run.reserve(2);
+          yield* run.down(
+            held,
+            () => dispatchMouse(event, submitted),
+            () =>
+              dispatchMouse({
+                type: "mouseReleased",
+                ...Option.getOrElse(Ref.getUnsafe(pointer), () => ({ x: event.x, y: event.y })),
+                button: event.button ?? "left",
+                buttons: 0,
+                clickCount: event.clickCount ?? 1,
+              }),
+          );
+        } else {
+          yield* run.reserve(1);
+          yield* run.send(() => dispatchMouse(event, submitted));
+        }
+      }),
+    );
+
+  const dispatchKey = (key: string, phase: "down" | "up", command: () => Promise<unknown>) => {
+    const event = new KeyChanged({ at: now(), page: id, key, phase });
+    const response = command();
+
+    publish(event);
+
+    return response;
+  };
 
   const flush = (operation: string, run: Input.Run) => inputCall(operation, run.drain);
 
@@ -506,16 +595,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           ),
         );
 
+      const dispatch = <Value>(action: Effect.Effect<Value, BrowserError>) =>
+        inputLock.withPermits(1)(lock.withPermits(1)(bounded(action, timeout)));
+
       const guard = settings.guard;
 
       const run =
         guard === undefined
-          ? lock.withPermits(1)(
-              bounded(
-                useInput((run) => body({ ...marks, input: run }, undefined)),
-                timeout,
-              ),
-            )
+          ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
               const plan = yield* lock.withPermits(1)(bounded(prepare, settings.actionTimeout));
 
@@ -538,14 +625,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 }),
               );
 
-              return yield* lock.withPermits(1)(
-                bounded(
-                  useInput((run) =>
-                    plan.validate.pipe(
-                      Effect.flatMap((approval) => body({ ...marks, input: run }, approval)),
-                    ),
+              return yield* dispatch(
+                useInput((run) =>
+                  plan.validate.pipe(
+                    Effect.flatMap((approval) => body({ ...marks, input: run }, approval)),
                   ),
-                  timeout,
                 ),
               );
             });
@@ -760,28 +844,88 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       : Effect.succeed(ready);
   };
 
-  const moveTo = (operation: string, run: Input.Run, to: Point) =>
+  const moveTo = (
+    operation: string,
+    run: Input.Run,
+    to: Point,
+    cursor?: string,
+    dragging = false,
+  ) =>
     Effect.gen(function* () {
-      if (!settings.humanize) {
-        yield* sendMouse(operation, run, { type: "mouseMoved", x: to.x, y: to.y, button: "none" });
-        yield* Ref.set(pointer, to);
+      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
 
-        return;
-      }
-      const from = yield* Ref.get(pointer);
-      const steps = yield* Human.path(from, to);
+      const previous = Option.getOrElse(yield* Ref.get(pointer), () => ({
+        x: Math.round(viewport.width / 2),
+        y: Math.round(viewport.height / 2),
+      }));
 
-      for (const step of steps) {
-        yield* Effect.sleep(Duration.millis(step.delay));
-        yield* sendMouse(operation, run, {
-          type: "mouseMoved",
-          x: step.x,
-          y: step.y,
-          button: "none",
-        });
-        publish(new PointerMoved({ at: now(), page: id, x: step.x, y: step.y }));
-      }
-      yield* Ref.set(pointer, to);
+      const from = {
+        x: Math.max(0, Math.min(viewport.width - 1, previous.x)),
+        y: Math.max(0, Math.min(viewport.height - 1, previous.y)),
+      };
+
+      yield* Ref.set(pointer, Option.some(from));
+
+      const steps = settings.humanize
+        ? yield* Human.path(from, to)
+        : dragging
+          ? (yield* Human.path(from, to)).map((step) => ({ ...step, delay: 8 }))
+          : [{ ...to, delay: 0 }];
+
+      let offset = 0;
+
+      const samples = steps.map((step, index) => {
+        offset += step.delay;
+        const point = index === steps.length - 1 ? to : step;
+
+        return { afterMillis: offset, x: point.x, y: point.y };
+      });
+
+      const at = now();
+      let dispatched = 0;
+      let last = from;
+
+      // The complete plan exists before its first move. A canceled performer always clips
+      // that future to the prefix it actually submitted, including interruption during sleep.
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => publish(new TrackPlanned({ at, page: id, from, samples }))),
+        () =>
+          Effect.gen(function* () {
+            for (const sample of samples) {
+              yield* Effect.sleep(Duration.millis(Math.max(0, at + sample.afterMillis - now())));
+              yield* sendMouse(
+                operation,
+                run,
+                {
+                  type: "mouseMoved",
+                  x: sample.x,
+                  y: sample.y,
+                  button: dragging ? "left" : "none",
+                  ...(dragging ? { buttons: 1 } : {}),
+                },
+                () => {
+                  dispatched++;
+                  last = { x: sample.x, y: sample.y };
+                  if (dispatched === samples.length && cursor !== undefined)
+                    publish(new CursorChanged({ at: now(), page: id, cursor }));
+                },
+              );
+            }
+          }),
+        (plan) =>
+          Effect.sync(() =>
+            publish(
+              new TrackPerformed({
+                at: now(),
+                page: id,
+                plan,
+                dispatched,
+                ...last,
+                complete: dispatched === samples.length,
+              }),
+            ),
+          ),
+      );
     });
 
   // Give a navigation the input started a moment to begin, then wait for its document.
@@ -798,9 +942,20 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       "click",
       { target: typeof target === "string" ? target : `${target.x},${target.y}` },
       settings.actionTimeout,
-      preparePolicy("click", { target: typeof target === "string" ? target : undefined }, [target]),
+      Effect.suspend(() =>
+        Number.isFinite(clickOptions.clickCount ?? 1)
+          ? preparePolicy("click", { target: typeof target === "string" ? target : undefined }, [
+              target,
+            ])
+          : failWith("click", new InvalidRequest({ detail: "clickCount must be finite" })),
+      ),
       (marks, approval) =>
         Effect.gen(function* () {
+          if (!Number.isFinite(clickOptions.clickCount ?? 1))
+            return yield* failWith(
+              "click",
+              new InvalidRequest({ detail: "clickCount must be finite" }),
+            );
           const resolved = yield* targetFor("click", target, approval);
           const { point } = resolved;
           const button = clickOptions.button ?? "left";
@@ -808,7 +963,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(point);
           yield* marks.sent;
-          yield* moveTo("click", marks.input, point);
+          yield* moveTo("click", marks.input, point, resolved.cursor);
           for (let index = 1; index <= count; index++) {
             yield* sendMouse("click", marks.input, {
               type: "mousePressed",
@@ -845,11 +1000,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       preparePolicy("hover", { target: typeof target === "string" ? target : undefined }, [target]),
       (marks, approval) =>
         Effect.gen(function* () {
-          const { point } = yield* targetFor("hover", target, approval);
+          const resolved = yield* targetFor("hover", target, approval);
+          const { point } = resolved;
 
           yield* marks.at(point);
           yield* marks.sent;
-          yield* moveTo("hover", marks.input, point);
+          yield* moveTo("hover", marks.input, point, resolved.cursor);
           yield* flush("hover", marks.input);
         }),
     );
@@ -867,7 +1023,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(end.point);
           yield* marks.sent;
-          yield* moveTo("drag", marks.input, start.point);
+          yield* moveTo("drag", marks.input, start.point, start.cursor);
           yield* sendMouse("drag", marks.input, {
             type: "mousePressed",
             ...start.point,
@@ -875,18 +1031,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             buttons: 1,
             clickCount: 1,
           });
-          const steps = yield* Human.path(start.point, end.point);
-
-          for (const step of steps) {
-            yield* Effect.sleep(Duration.millis(settings.humanize ? step.delay : 8));
-            yield* sendMouse("drag", marks.input, {
-              type: "mouseMoved",
-              x: step.x,
-              y: step.y,
-              button: "left",
-              buttons: 1,
-            });
-          }
+          yield* moveTo("drag", marks.input, end.point, end.cursor, true);
           yield* sendMouse("drag", marks.input, {
             type: "mouseReleased",
             ...end.point,
@@ -894,7 +1039,6 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             buttons: 0,
             clickCount: 1,
           });
-          yield* Ref.set(pointer, end.point);
           yield* flush("drag", marks.input);
         }),
     );
@@ -912,8 +1056,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           operation,
           run.down(
             `playwright:${part}`,
-            () => playwright.keyboard.down(part),
-            () => playwright.keyboard.up(part),
+            () => dispatchKey(part, "down", () => playwright.keyboard.down(part)),
+            () => dispatchKey(part, "up", () => playwright.keyboard.up(part)),
           ),
         );
       if (holdMillis > 0) yield* Effect.sleep(Duration.millis(holdMillis));
@@ -929,7 +1073,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
         if (description === undefined) {
           yield* run.reserve(1);
-          yield* run.send(() => cdp.send("Input.insertText", { text: character }));
+          yield* run.send(() => {
+            const event = new TextInserted({ at: now(), page: id, text: character });
+            const response = cdp.send("Input.insertText", { text: character });
+
+            publish(event);
+
+            return response;
+          });
 
           return;
         }
@@ -940,28 +1091,32 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         yield* run.down(
           held,
           () =>
-            cdp.send("Input.dispatchKeyEvent", {
-              type: "keyDown",
-              modifiers: 0,
-              windowsVirtualKeyCode: keyCode,
-              code,
-              commands: [],
-              key,
-              text,
-              unmodifiedText: text,
-              autoRepeat: false,
-              location: 0,
-              isKeypad: false,
-            }),
+            dispatchKey(key, "down", () =>
+              cdp.send("Input.dispatchKeyEvent", {
+                type: "keyDown",
+                modifiers: 0,
+                windowsVirtualKeyCode: keyCode,
+                code,
+                commands: [],
+                key,
+                text,
+                unmodifiedText: text,
+                autoRepeat: false,
+                location: 0,
+                isKeypad: false,
+              }),
+            ),
           () =>
-            cdp.send("Input.dispatchKeyEvent", {
-              type: "keyUp",
-              modifiers: 0,
-              windowsVirtualKeyCode: keyCode,
-              code,
-              key,
-              location: 0,
-            }),
+            dispatchKey(key, "up", () =>
+              cdp.send("Input.dispatchKeyEvent", {
+                type: "keyUp",
+                modifiers: 0,
+                windowsVirtualKeyCode: keyCode,
+                code,
+                key,
+                location: 0,
+              }),
+            ),
         );
         yield* run.up(held);
       }),
@@ -995,7 +1150,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             yield* marks.at(target.point);
             if (settings.humanize) {
               yield* marks.sent;
-              yield* moveTo("type", marks.input, target.point);
+              yield* moveTo("type", marks.input, target.point, target.cursor);
               yield* sendMouse("type", marks.input, {
                 type: "mousePressed",
                 ...target.point,
@@ -1056,6 +1211,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       { target: keys },
       settings.actionTimeout,
       Effect.suspend(() => {
+        if (!Number.isFinite(pressOptions.times ?? 1))
+          return failWith("press", new InvalidRequest({ detail: "times must be finite" }));
         const combination = Keys.normalize(keys);
 
         return combination === undefined
@@ -1069,6 +1226,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       }),
       (marks) =>
         Effect.gen(function* () {
+          if (!Number.isFinite(pressOptions.times ?? 1))
+            return yield* failWith("press", new InvalidRequest({ detail: "times must be finite" }));
           const parts = Keys.parts(keys);
 
           if (parts === undefined)
@@ -1112,6 +1271,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         scrollOptions.dy ??
         (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
 
+      const valid =
+        Number.isFinite(dx) && Number.isFinite(dy)
+          ? Effect.void
+          : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
+
       return perform(
         "scroll",
         {
@@ -1123,19 +1287,27 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 : `${scrollOptions.at.x},${scrollOptions.at.y}`,
         },
         settings.actionTimeout,
-        preparePolicy("scroll", { target: typeof target === "string" ? target : undefined }, [
-          target,
-        ]),
+        valid.pipe(
+          Effect.andThen(
+            preparePolicy("scroll", { target: typeof target === "string" ? target : undefined }, [
+              target,
+            ]),
+          ),
+        ),
         (marks, approval) =>
           Effect.gen(function* () {
-            const point =
+            yield* valid;
+
+            const resolved =
               approval === undefined && scrollOptions.at === undefined
-                ? middle
-                : (yield* targetFor("scroll", target, approval)).point;
+                ? undefined
+                : yield* targetFor("scroll", target, approval);
+
+            const point = resolved?.point ?? middle;
 
             yield* marks.at(point);
             yield* marks.sent;
-            yield* moveTo("scroll", marks.input, point);
+            yield* moveTo("scroll", marks.input, point, resolved?.cursor);
 
             const steps = settings.humanize
               ? Math.max(1, Math.min(8, Math.round(Math.hypot(dx, dy) / 120)))

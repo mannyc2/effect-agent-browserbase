@@ -15,11 +15,13 @@ import { type AiError, LanguageModel, Prompt } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
-import { BrowserEvent } from "./BrowserEvent.ts";
+import { BrowserEvent, TrackEvent } from "./BrowserEvent.ts";
 import { Frame } from "./Frame.ts";
 import * as Usage from "./internal/usage.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot } from "./Snapshot.ts";
+
+const isTrackEvent = Schema.is(TrackEvent);
 
 export class Moment extends Schema.Class<Moment>("effect-browser/Moment")({
   /** Host monotonic milliseconds on the owning browser’s clock. */
@@ -28,20 +30,22 @@ export class Moment extends Schema.Class<Moment>("effect-browser/Moment")({
   /** Oldest first; the last frame is the page as it was at `at`. */
   frames: Schema.Array(Frame),
   snapshot: Snapshot,
-  /** The page's events in the window, oldest first, without pointer motion. */
+  /** The page’s events in the window, oldest first, without the input presentation track. */
   events: Schema.Array(BrowserEvent),
 }) {
   /** The events as lines of text, timed relative to `at`. */
   get timeline(): string {
     // A navigation that worked also appears as `Navigated`, which covers redirects and in-page moves.
-    const shown = this.events.filter(
-      (event) =>
-        !(
-          event._tag === "Action" &&
-          event.ok &&
-          ["navigate", "back", "reload"].includes(event.name)
-        ),
-    );
+    const shown = this.events
+      .filter((event) => !isTrackEvent(event))
+      .filter(
+        (event) =>
+          !(
+            event._tag === "Action" &&
+            event.ok &&
+            ["navigate", "back", "reload"].includes(event.name)
+          ),
+      );
 
     const lines = shown.map((event) => {
       const when = `${((event.at - this.at) / 1000).toFixed(1)}s`;
@@ -67,8 +71,6 @@ export class Moment extends Schema.Class<Moment>("effect-browser/Moment")({
           return `${when} the tab closed`;
         case "DialogShown":
           return `${when} a ${event.kind} dialog said ${JSON.stringify(event.message)}`;
-        case "PointerMoved":
-          return `${when} the pointer moved`;
       }
     });
 
@@ -125,10 +127,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
 
   const events = (yield* browser.recentEvents).filter(
     (event) =>
-      event.at >= since &&
-      event._tag !== "PointerMoved" &&
-      "page" in event &&
-      event.page === page.id,
+      event.at >= since && !isTrackEvent(event) && "page" in event && event.page === page.id,
   );
 
   return new Moment({ at, page: page.id, frames, snapshot, events });

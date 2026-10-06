@@ -26,7 +26,9 @@ pixel clicks return the element under the requested point. Runs without a model 
 scripted solutions. Runs allow input by default; a caller's `Browser.Options.guard` can deny or
 hold classified input and navigation without a user-facing confirmation prompt. Typing keeps its
 pacing over delayed connections. Events, frame arrivals and moment windows use the browser’s host
-monotonic clock; these stamps are relative timings, not calendar dates.
+monotonic clock; these stamps are relative timings, not calendar dates. `Browser.events()` also
+exposes the presentation track with sequence cursors for bounded replay. The bench’s descriptions
+continue to use narrative action events, without the cursor-rendering track.
 
 ## Running
 

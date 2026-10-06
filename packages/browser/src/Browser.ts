@@ -14,11 +14,11 @@ import {
   Effect,
   Layer,
   Option,
-  PubSub,
   Queue,
+  Ref,
   type Scope,
   Semaphore,
-  Stream,
+  type Stream,
 } from "effect";
 import type { BrowserContext, Page as PlaywrightPage } from "playwright-core";
 
@@ -29,7 +29,9 @@ import {
   Navigated,
   PageClosed,
   PageOpened,
+  type RecordedEvent,
 } from "./BrowserEvent.ts";
+import * as Timeline from "./internal/timeline.ts";
 import * as Page from "./Page.ts";
 
 export interface Options {
@@ -41,7 +43,7 @@ export interface Options {
   readonly navigationTimeout?: Duration.Input | undefined;
   /** Screencast frames each page keeps for `recentFrames`. Defaults to 60. */
   readonly frameHistory?: number | undefined;
-  /** Events kept for `recentEvents`. Defaults to 512. */
+  /** Events retained for replay and `recentEvents`. A positive safe integer, defaulting to 4,096. */
   readonly eventHistory?: number | undefined;
   /** Allow, deny or hold each input or navigation before it reaches the page. Defaults to allow. */
   readonly guard?: Page.InputGuard | undefined;
@@ -49,6 +51,11 @@ export interface Options {
   readonly policyTimeout?: Duration.Input | undefined;
   /** Scripts every new document runs before its own, such as a consent-banner remover. */
   readonly initScripts?: ReadonlyArray<string> | undefined;
+}
+
+export interface EventOptions {
+  /** Resume after this sequence; 0 replays from the beginning if it is still retained. */
+  readonly after?: number | undefined;
 }
 
 export interface Service {
@@ -64,8 +71,8 @@ export interface Service {
   /** The first open page, opening one when there is none. */
   readonly page: Effect.Effect<Page.Page, BrowserError>;
   readonly newPage: (url?: string) => Effect.Effect<Page.Page, BrowserError>;
-  /** Events from the moment of subscription. */
-  readonly events: Stream.Stream<BrowserEvent>;
+  /** Live events, or replay after a cursor. A reader that falls behind fails with EventHistoryExpired. */
+  readonly events: (options?: EventOptions) => Stream.Stream<RecordedEvent, BrowserError>;
   /** The latest `eventHistory` events, oldest first. */
   readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
 }
@@ -105,14 +112,22 @@ export const make = Effect.fn("Browser.make")(function* (
     policyTimeout: policyTimeout.value,
   };
 
-  const eventHistory = options.eventHistory ?? 512;
-  const hub = yield* PubSub.sliding<BrowserEvent>(1024);
-  let recent: ReadonlyArray<BrowserEvent> = [];
+  const eventHistory = options.eventHistory ?? 4096;
 
-  const publish = (event: BrowserEvent) => {
-    recent = recent.length >= eventHistory ? [...recent.slice(1), event] : [...recent, event];
-    PubSub.publishUnsafe(hub, event);
-  };
+  if (!Number.isSafeInteger(eventHistory) || eventHistory < 1)
+    return yield* new BrowserError({
+      operation: "make",
+      reason: new InvalidRequest({ detail: "eventHistory must be a positive safe integer" }),
+      dispatched: false,
+    });
+
+  const timeline = Timeline.make(eventHistory);
+
+  yield* Effect.addFinalizer(() => timeline.close);
+  const publish = timeline.publish;
+  // One visible pointer belongs to the browser, including when input changes tabs.
+  const pointer = yield* Ref.make(Option.none<Page.Point>());
+  const inputLock = yield* Semaphore.make(1);
 
   const registry = new Map<PlaywrightPage, Page.Page>();
   const registering = yield* Semaphore.make(1);
@@ -139,7 +154,17 @@ export const make = Effect.fn("Browser.make")(function* (
           });
         const cdp = yield* native("newPage", () => context.newCDPSession(playwright));
         const id = `p${++counter}`;
-        const page = yield* Page.make({ id, playwright, cdp, settings, clock, publish });
+
+        const page = yield* Page.make({
+          id,
+          playwright,
+          cdp,
+          settings,
+          clock,
+          publish,
+          pointer,
+          inputLock,
+        });
 
         registry.set(playwright, page);
         playwright.on("framenavigated", (frame) => {
@@ -215,8 +240,10 @@ export const make = Effect.fn("Browser.make")(function* (
       Effect.flatMap(Option.match({ onNone: () => newPage(), onSome: Effect.succeed })),
     ),
     newPage,
-    events: Stream.fromPubSub(hub),
-    recentEvents: Effect.sync(() => recent),
+    events: (eventOptions = {}) => timeline.stream(eventOptions.after),
+    recentEvents: timeline.recent.pipe(
+      Effect.map((records) => records.map((record) => record.event)),
+    ),
   };
 
   return Browser.of(service);

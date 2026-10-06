@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { assert, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber, Random } from "effect";
+import { Clock, Duration, Effect, Fiber, Option, Random, Ref, Semaphore } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
@@ -95,6 +95,7 @@ const setup = Effect.fnUntraced(function* (
   let outstanding = 0;
   let maximumOutstanding = 0;
   let rejectNextKeyDown = false;
+  let sequence = 0;
 
   const invoke = async <A>(
     method: string,
@@ -152,7 +153,9 @@ const setup = Effect.fnUntraced(function* (
     playwright,
     cdp,
     clock: yield* Clock.Clock,
-    publish: () => undefined,
+    pointer: yield* Ref.make(Option.none<Page.Point>()),
+    inputLock: yield* Semaphore.make(1),
+    publish: () => ++sequence,
     settings: {
       humanize: options.humanize ?? true,
       actionTimeout: Duration.seconds(30),

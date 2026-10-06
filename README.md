@@ -116,6 +116,10 @@ const watch = Effect.gen(function* () {
   also sends key events for printable US characters; other text uses Unicode insertion.
 - Events, frame arrivals and moments share the owning browser’s host monotonic clock in milliseconds.
   `Browser.now` reads that clock. These stamps measure elapsed time, not calendar dates.
+- `Browser.events()` carries the timed input track for the consumer’s cursor rendering: complete
+  glide plans, submission receipts, button and key phases, wheel input and cursor shape. Pointer
+  position is shared across tabs. Events have sequence cursors for bounded replay; a lagging reader
+  gets an explicit history-expired error instead of missing events silently.
 - `additionalTools` accepts an `effect/ai` toolkit, merged after the browser and completion tools.
   Supply its handlers through their usual layer; on a name clash the added toolkit wins. The same
   batch halting applies to those tools.

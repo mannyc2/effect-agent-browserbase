@@ -89,6 +89,20 @@ export class PolicyTimeout extends Schema.TaggedError<PolicyTimeout>()("PolicyTi
   }
 }
 
+/** The requested event cursor fell behind the browser's bounded replay history. */
+export class EventHistoryExpired extends Schema.TaggedError<EventHistoryExpired>()(
+  "EventHistoryExpired",
+  {
+    after: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    oldest: Schema.Int.check(Schema.isGreaterThan(0)),
+    latest: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  },
+) {
+  override get message() {
+    return `event history after ${this.after} expired; retained sequences are ${this.oldest}–${this.latest}`;
+  }
+}
+
 /** The browser, the connection or the provider failed in a way the other reasons do not cover. */
 export class Failed extends Schema.TaggedError<Failed>()("Failed", {
   detail: Schema.String,
@@ -108,6 +122,7 @@ export const Reason = Schema.Union([
   InvalidRequest,
   PolicyDenied,
   PolicyTimeout,
+  EventHistoryExpired,
   Failed,
 ]);
 

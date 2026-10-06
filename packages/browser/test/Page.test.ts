@@ -484,10 +484,11 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(yield* text(page, "#outcome"), "Ordered 10 btc");
 
         const moves = (yield* browser.recentEvents).filter(
-          (event) => event._tag === "PointerMoved",
+          (event) => event._tag === "TrackPlanned",
         );
 
-        assert.isAbove(moves.length, 5);
+        assert.strictEqual(moves.length, 1);
+        assert.isAbove(moves[0]?.samples.length ?? 0, 5);
       }).pipe(Effect.provide(Chromium.layer({ humanize: true })));
     }),
   );
