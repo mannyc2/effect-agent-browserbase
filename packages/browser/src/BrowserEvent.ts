@@ -30,8 +30,22 @@ export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
 }) {}
 
 /**
+ * What an input acted on, as the page named it when the input was sent: its role (null when it
+ * has none), its accessible name (empty when it has none) and its lowercase tag. For a point, it
+ * is the control under the point, or else the element painted there. Unlike a ref, it keeps its
+ * meaning after the page changes.
+ */
+export class Subject extends Schema.Class<Subject>("effect-browser/Subject")({
+  role: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  tag: Schema.String,
+}) {}
+
+/**
  * One page operation ended, including one its caller interrupted (`error: "interrupted"`).
- * Point actions carry the viewport point they used.
+ * `target` is what the caller asked for: a ref, a point, a URL or keys. `subject` is what an
+ * element or point action found there, and `to` where a drag ended; an action that failed before
+ * finding its target has neither. Point actions carry the viewport point they used.
  */
 export class Action extends Schema.TaggedClass<Action>()("Action", {
   at: Schema.Finite,
@@ -39,6 +53,8 @@ export class Action extends Schema.TaggedClass<Action>()("Action", {
   page: Schema.String,
   name: Schema.String,
   target: Schema.optional(Schema.String),
+  subject: Schema.optional(Subject),
+  to: Schema.optional(Subject),
   text: Schema.optional(Schema.String),
   x: Schema.optional(Schema.Finite),
   y: Schema.optional(Schema.Finite),

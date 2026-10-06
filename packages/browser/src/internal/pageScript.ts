@@ -32,6 +32,7 @@ export interface ResolvedPoint {
   readonly x: number;
   readonly y: number;
   readonly element: string;
+  readonly tag: string;
   readonly role: string | null;
   readonly name: string;
   readonly cursor: string;
@@ -373,7 +374,8 @@ export const install = (): PageApi => {
     if (role === "iframe")
       return clean(element.getAttribute("title") ?? element.getAttribute("name"));
     if (role === null || interactiveRoles.has(role) || role === "heading") {
-      const text = clean(textOf(element), 120);
+      // An editable secret field's text is what was typed into it.
+      const text = isSecret(element) ? "" : clean(textOf(element), 120);
 
       if (text !== "") return text;
       const titled = element.querySelector("[title],img[alt],svg title");
@@ -900,6 +902,7 @@ export const install = (): PageApi => {
       x,
       y,
       element: describe(element),
+      tag: element.tagName.toLowerCase(),
       role,
       name: nameOf(element, role),
       cursor: view.getComputedStyle(hit).cursor,
@@ -1830,6 +1833,7 @@ const ResolvedPointSchema = Schema.Struct({
   x: Schema.Finite,
   y: Schema.Finite,
   element: Schema.String,
+  tag: Schema.String,
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   cursor: Schema.String,

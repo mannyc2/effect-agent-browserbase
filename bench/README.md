@@ -135,11 +135,11 @@ every selected arm on the same seeds, so trials pair by task and trial number. T
 each arm's tallies, its median seconds, model turns and tool calls per graded trial, and for each
 two arms the pairs graded in both, split by which arm passed.
 
-| Arm | Operate tasks                                                                                                                                             | Understand tasks                                    |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| 1   | Per-action outline: every action's receipt carries a fresh outline; pictures come only from `browser_screenshot`; no batching hint and no `browser_zoom`  | As arm 5                                            |
-| 2   | Vision first: a screenshot after each batch and no outline; pixel targets and `browser_zoom`; no `browser_snapshot`, `browser_select` or waiting for text | The moment without its outline: frames and timeline |
-| 5   | `Agent.run`, the default: an outline and a screenshot after each batch                                                                                    | `Moment.toPrompt` as it is                          |
+| Arm | Operate tasks                                                                                                                                             | Understand tasks                               |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | Per-action outline: every action's receipt carries a fresh outline; pictures come only from `browser_screenshot`; no batching hint and no `browser_zoom`  | The moment with its outline                    |
+| 2   | Vision first: a screenshot after each batch and no outline; pixel targets and `browser_zoom`; no `browser_snapshot`, `browser_select` or waiting for text | As arm 5                                       |
+| 5   | `Agent.run`, the default: an outline and a screenshot after each batch                                                                                    | `Moment.capture` as it is: frames and timeline |
 
 Arm 5 is the default. Arms 1 and 2 run in the bench's own loop over the public `Tools`
 (`Arms.ts`), because `Agent.run` cannot replace its observation, its tools or its system prompt.
@@ -157,7 +157,9 @@ The first paired run, on 2026-10-06, used `openai/gpt-6-luna` (medium reasoning 
 none for understand tasks) with seed 1: 20 trials of each operate task per arm in local Chromium,
 5 on Browserbase, and 10 of each understand task in arms 2 and 5, for $0.91 in all. Every trial
 was graded. The operate pages do not vary with the seed, so a task's trials repeat one page and
-are not independent observations. The graders match exactly: "On the page" also counts the
+are not independent observations. In that run, arm 5's moments carried the outline and named an
+action's target by its ref, and arm 2's moments left the outline out; moments now name what an
+action acted on and leave the outline out by default, and arm 1 adds it. The graders match exactly: "On the page" also counts the
 `checkout` trials that left the right order and gave the issued number inside a sentence
 ("Order placed successfully. Confirmation number: CONF-48213."), which the grader fails.
 

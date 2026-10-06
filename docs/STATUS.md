@@ -6,7 +6,9 @@
 
 - `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
   `Frame`, `BrowserEvent` and `BrowserError`; `Tools`, `Agent` and `Moment`.
-- `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`.
+- `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`. Stored contexts
+  and uploaded extensions are managed through the client; `Browserbase.open` lets one persisting
+  session at a time write to each context in a process and holds it until the save settles.
 - `effect-browser-human-strokes`: an optional layer with 32,130 recorded, attributed CC BY 4.0
   pointer strokes, retaining their original sample coordinates and times. The core pointer planner
   uses the tuned two-stroke sigma-lognormal model; browsers capture the motion service once.
@@ -28,11 +30,15 @@
   fails closed on input with facts when its judge fails; `Agent.run` provides the task and ends
   after three refusals in a row. The judges are tested with scripted models; `bun run judges` in
   the bench grades them against the corpus, with paid arms only on opt-in.
-- Moments: `Moment.capture` gathers a page's frames, outline and events over a window that can
-  start where the previous moment ended, so consecutive moments neither repeat nor miss an event,
-  and needs only the page. `Moment.toPrompt` lays a moment out as one message for any `effect/ai`
-  call; describing it is the caller's own `generateObject`, `generateText` or `Chat` turn. Pages
-  keep the screencast frames of the last 5 seconds (`frameHistory`), a moment's default window.
+- Moments: `Moment.capture` gathers a page's frames and events over a window that can start where
+  the previous moment ended, so consecutive moments neither repeat nor miss an event, and needs
+  only the page. Its timeline names what each action acted on by role and name, from the
+  `Action`'s `subject`, never by ref. The outline is opt-in (`snapshot: true`): in the first
+  paired run, moments with and without it scored 61/80 each on every task but `navigated`, where
+  the outline's reused refs misled the model, and it doubled the tokens on `quote-dense`.
+  `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call; describing it is
+  the caller's own `generateObject`, `generateText` or `Chat` turn. Pages keep the screencast
+  frames of the last 5 seconds (`frameHistory`), a moment's default window.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
@@ -67,21 +73,21 @@ paid calls.
 
 0.2 did much that 0.3 does not do yet. A capability inventory of the 0.2 code, the plans, the open
 PRs and the in-progress work marks each capability as rebuilt, left for later, or the consumer's to
-build. Until the owner has agreed it, no 0.2 PR is closed and no branch is deleted.
+build. The 0.2 PRs are closed, except #164, kept open as a reference.
 
 The larger pieces left for later:
 
 - recording to video files;
-- operator handoff, reconnecting to a kept-alive session, extensions and uploads;
-- the paid hosted checks;
-- an install smoke test of each packed package before a release.
+- operator handoff, reconnecting to a kept-alive session, and uploads;
+- the paid hosted checks.
 
 ## Releases
 
 The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` and
 `effect-agent-browser`, published on 2 October 2026 from tag `v0.2.0-beta.9` (`976d316`) on the
-`beta` dist-tag. 0.3 is not released. [RELEASING.md](RELEASING.md), `.github/workflows/publish.yml`
-and `tools/` still describe the 0.2 release path, and the 0.3 path is undecided.
+`beta` dist-tag. 0.3 is not released. It will be released by plain npm trusted publishing from
+`.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase` and
+`effect-browser-human-strokes`; [RELEASING.md](RELEASING.md) has the steps.
 
 ## History
 

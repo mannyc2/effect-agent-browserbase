@@ -1,6 +1,6 @@
 /**
- * A small client for the Browserbase REST API: sessions, stored contexts, web search and page
- * fetch.
+ * A small client for the Browserbase REST API: sessions, stored contexts, extensions, web search
+ * and page fetch.
  *
  * It runs on the `HttpClient` the application provides, such as `FetchHttpClient.layer`. The API
  * key travels only in the `X-BB-API-Key` header and is redacted from logs and traces. Redirects
@@ -84,6 +84,17 @@ export class LiveView extends Schema.Class<LiveView>("effect-browserbase/LiveVie
 export class StoredContext extends Schema.Class<StoredContext>("effect-browserbase/StoredContext")({
   id: Schema.String,
   name: Schema.optional(Schema.String),
+  /** `getContext` returns the timestamps; `createContext` does not. */
+  createdAt: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+}) {}
+
+/** A Chrome extension uploaded to the project, which sessions load when created with its id. */
+export class Extension extends Schema.Class<Extension>("effect-browserbase/Extension")({
+  id: Schema.String,
+  fileName: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
 }) {}
 
 export class SearchResult extends Schema.Class<SearchResult>("effect-browserbase/SearchResult")({
@@ -106,6 +117,7 @@ export class FetchedPage extends Schema.Class<FetchedPage>("effect-browserbase/F
 export interface SessionOptions {
   /** Defaults to the API key's project. */
   readonly projectId?: string | undefined;
+  /** An uploaded extension for the browser to load. It makes the session slower to start. */
   readonly extensionId?: string | undefined;
   /** Seconds until Browserbase ends the session, from 60 to 21,600. Defaults to the project's. */
   readonly timeout?: number | undefined;
@@ -119,16 +131,20 @@ export interface SessionOptions {
   readonly browserSettings?: BrowserSettings | undefined;
 }
 
+/** Browser settings. Left unset, each takes Browserbase's default. */
 export interface BrowserSettings {
-  /** Load a stored context, and save the session's changes back to it when `persist` is set. */
+  /**
+   * Load a stored context. With `persist`, Browserbase saves the session's changes back to it once
+   * the session ends; `Browserbase.open` lets one such session at a time write to each context.
+   */
   readonly context?: { readonly id: string; readonly persist?: boolean | undefined } | undefined;
   readonly viewport?: { readonly width: number; readonly height: number } | undefined;
   readonly blockAds?: boolean | undefined;
-  /** Defaults to true. */
+  /** Browserbase solves captchas unless this is false. */
   readonly solveCaptchas?: boolean | undefined;
-  /** Defaults to true. */
+  /** Browserbase records the session for replay unless this is false. */
   readonly recordSession?: boolean | undefined;
-  /** Defaults to true. */
+  /** Browserbase keeps the session's logs unless this is false. */
   readonly logSession?: boolean | undefined;
   /** Verified browser mode, on plans that include it. */
   readonly verified?: boolean | undefined;
@@ -188,7 +204,18 @@ export interface Service {
     readonly name?: string | undefined;
   }) => Effect.Effect<StoredContext, BrowserbaseError>;
   readonly getContext: (id: string) => Effect.Effect<StoredContext, BrowserbaseError>;
+  /** Delete a stored context for good. Sessions can no longer load it. */
   readonly deleteContext: (id: string) => Effect.Effect<void, BrowserbaseError>;
+  /**
+   * Upload a Chrome extension: a zip of at most 100 MB with `manifest.json` at its root. Create a
+   * session with the returned id as `extensionId` to load it.
+   */
+  readonly uploadExtension: (
+    archive: Uint8Array,
+    options?: { readonly fileName?: string | undefined },
+  ) => Effect.Effect<Extension, BrowserbaseError>;
+  readonly getExtension: (id: string) => Effect.Effect<Extension, BrowserbaseError>;
+  readonly deleteExtension: (id: string) => Effect.Effect<void, BrowserbaseError>;
   /** Search the web for up to `results` hits, from 1 to 25. Defaults to 10. */
   readonly search: (
     query: string,
@@ -213,6 +240,7 @@ export interface Options {
 }
 
 const ids = /^[A-Za-z0-9_-]{1,128}$/;
+const maxExtensionBytes = 100 * 1024 * 1024;
 const ErrorBody = Schema.fromJsonString(Schema.Struct({ message: Schema.String }));
 const SearchResponse = Schema.Struct({ results: Schema.Array(SearchResult) });
 const CreatedId = Schema.Struct({ id: Schema.String.check(Schema.isPattern(ids)) });
@@ -443,6 +471,47 @@ export const make = Effect.fnUntraced(function* (options: Options) {
       checkId("deleteContext", id).pipe(
         Effect.flatMap(() =>
           send("deleteContext", HttpClientRequest.delete(`/v1/contexts/${id}`), ignoreBody),
+        ),
+      ),
+    uploadExtension: (archive, options = {}) =>
+      archive.byteLength === 0 || archive.byteLength > maxExtensionBytes
+        ? Effect.fail(
+            failure(
+              "uploadExtension",
+              new InvalidRequest({
+                detail: `the archive has ${archive.byteLength} bytes; Browserbase takes 1 byte to 100 MB`,
+              }),
+            ),
+          )
+        : Effect.suspend(() => {
+            const form = new FormData();
+
+            form.append(
+              "file",
+              new Blob([new Uint8Array(archive)], { type: "application/zip" }),
+              options.fileName ?? "extension.zip",
+            );
+
+            return send(
+              "uploadExtension",
+              HttpClientRequest.post("/v1/extensions").pipe(HttpClientRequest.bodyFormData(form)),
+              json("uploadExtension", Extension),
+            );
+          }),
+    getExtension: (id) =>
+      checkId("getExtension", id).pipe(
+        Effect.flatMap(() =>
+          send(
+            "getExtension",
+            HttpClientRequest.get(`/v1/extensions/${id}`),
+            json("getExtension", Extension),
+          ),
+        ),
+      ),
+    deleteExtension: (id) =>
+      checkId("deleteExtension", id).pipe(
+        Effect.flatMap(() =>
+          send("deleteExtension", HttpClientRequest.delete(`/v1/extensions/${id}`), ignoreBody),
         ),
       ),
     search: (query, options = {}) =>

@@ -39,6 +39,7 @@ import {
   KeyChanged,
   PointerPressed,
   PointerReleased,
+  Subject,
   TextInserted,
   TrackPerformed,
   TrackPlanned,
@@ -72,6 +73,9 @@ import * as Input from "./input.ts";
 import * as Keys from "./keys.ts";
 import * as Script from "./pageScript.ts";
 import * as Url from "./url.ts";
+
+const subjectOf = (target: ResolvedTarget) =>
+  new Subject({ role: target.role, name: target.name, tag: target.tag });
 
 const messageOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "unknown error";
@@ -535,6 +539,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     /** Preparatory input, such as the pointer travelling to a target, has reached the page. */
     readonly touched: Effect.Effect<void>;
     readonly at: (point: Point) => Effect.Effect<void>;
+    /** What the input acts on, and for a drag where it ends, as the page names them now. */
+    readonly on: (subject: ResolvedTarget, to?: ResolvedTarget) => Effect.Effect<void>;
     /** The action's text is not bound for a secret field, so its record may keep it. */
     readonly reveal: Effect.Effect<void>;
     readonly input: Input.Run;
@@ -566,6 +572,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const sendsInput = info.input ?? true;
       const sent = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
+      const acted = yield* Ref.make<{ readonly subject?: Subject; readonly to?: Subject }>({});
 
       // The page may react to preparatory input, so no cached paint is current while the action
       // runs, but only the action's own input can have given it effect. `touched` covers both and
@@ -585,6 +592,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         sent: Ref.set(sent, true).pipe(Effect.andThen(touch)),
         touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
+        on: (subject: ResolvedTarget, to?: ResolvedTarget) =>
+          Ref.set(acted, {
+            subject: subjectOf(subject),
+            ...(to === undefined ? {} : { to: subjectOf(to) }),
+          }),
         reveal: Effect.sync(() => {
           revealed = true;
         }),
@@ -724,6 +736,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const exit = yield* Effect.exit(restore(run));
           const dispatched = yield* Ref.get(sent);
           const point = yield* Ref.get(at);
+          const { subject, to } = yield* Ref.get(acted);
 
           if (touched) changing -= 1;
           const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
@@ -735,6 +748,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               page: id,
               name,
               target: info.target,
+              subject,
+              to,
               text:
                 info.text === undefined ? undefined : revealed ? info.text.slice(0, 200) : redacted,
               x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
@@ -845,6 +860,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     new ResolvedTarget({
       point: { x: result.x, y: result.y },
       element: result.element,
+      tag: result.tag,
       role: result.role,
       name: result.name,
       cursor: result.cursor,
@@ -1199,6 +1215,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const count = Math.max(1, Math.min(3, clickOptions.clickCount ?? 1));
 
           yield* marks.at(point);
+          yield* marks.on(resolved);
           yield* moveTo("click", marks, point, resolved.cursor);
           if (approval !== undefined) yield* approval.check({ presses: [{ index: 0, ...point }] });
           yield* marks.sent;
@@ -1260,6 +1277,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const { point } = resolved;
 
           yield* marks.at(point);
+          yield* marks.on(resolved);
           yield* moveTo("hover", marks, point, resolved.cursor, "hover");
           yield* flush("hover", marks.input);
         }),
@@ -1281,6 +1299,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const end = yield* resolve("drag", to, approval, false);
 
           yield* marks.at(end.point);
+          yield* marks.on(start, end);
           yield* moveTo("drag", marks, start.point, start.cursor);
           // Both ends are checked before the button goes down: once it is down, a release cannot
           // be withheld, and a dragged element under the pointer would hide the drop target.
@@ -1452,6 +1471,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             const target = yield* targetFor("type", ref, approval, marks);
 
             yield* marks.at(target.point);
+            yield* marks.on(target);
             if (settings.humanize) {
               yield* moveTo("type", marks, target.point, target.cursor);
               if (approval !== undefined)
@@ -1680,6 +1700,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const point = resolved?.point ?? middle;
 
           yield* marks.at(point);
+          if (target !== undefined && resolved !== undefined) yield* marks.on(resolved);
           yield* moveTo("scroll", marks, point, resolved?.cursor);
           yield* marks.sent;
           yield* wheel("scroll", marks.input, point, dx, dy);
@@ -1698,7 +1719,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       preparePolicy("select", { target: ref, text: values.join(", ") }, [ref]),
       (marks, approval) =>
         Effect.gen(function* () {
-          yield* targetFor("select", ref, approval, marks);
+          yield* marks.on(yield* targetFor("select", ref, approval, marks));
 
           // The script refuses before it changes anything. Only a choice it made, or a script
           // that may have run without an intact answer, may have reached the page.

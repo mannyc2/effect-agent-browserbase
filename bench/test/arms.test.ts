@@ -200,12 +200,12 @@ describe("understand arms", () => {
     table: "Spot markets",
   };
 
-  it.live("leave the outline out of arm 2's moment and keep it in arm 5's", () =>
+  it.live("add the outline to arm 1's moment and leave it out of arm 5's", () =>
     Effect.gen(function* () {
-      const vision = yield* trial("quote-table", 2, [() => answer(quote)]);
+      const outlined = yield* trial("quote-table", 1, [() => answer(quote)]);
       const batched = yield* trial("quote-table", 5, [() => answer(quote)]);
-      const [shown] = vision.seen;
-      const [control] = batched.seen;
+      const [control] = outlined.seen;
+      const [shown] = batched.seen;
 
       assert.isDefined(shown);
       assert.isDefined(control);
@@ -214,7 +214,7 @@ describe("understand arms", () => {
       assert.match(textOf(control.prompt), /\[ref=e\d+\]/);
       assert.notMatch(textOf(shown.prompt), /\[ref=e\d+\]/);
       assert.strictEqual(pictures(shown.prompt), pictures(control.prompt));
-      assert.strictEqual(vision.outcome.status, "graded");
+      assert.strictEqual(batched.outcome.status, "graded");
     }),
   );
 });

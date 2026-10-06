@@ -33,5 +33,5 @@ current state.
 - `docs/RELEASING.md` describes a manual, tag-scoped npm workflow. Preparing or testing it does
   not authorize publishing, registering a package, changing account permissions or creating tags.
 - Preserve history: normal commits, never force-push or rewrite accepted history. Keep the
-  `ts-release-prepared/*` and `ts-release-journal/*` branches; they are release recovery storage.
+  `ts-release-prepared/*` and `ts-release-journal/*` branches; they record the 0.2 releases.
 - Retarget PRs stacked on a branch before deleting it.
