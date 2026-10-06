@@ -3,7 +3,7 @@
 // grades against the page's own truth, and has a scripted solution that uses the library alone, to
 // show the task can be done and graded without a model.
 import { Duration, Effect, Schedule, Schema, Stream } from "effect";
-import * as Agent from "effect-browser/Agent";
+import type * as Agent from "effect-browser/Agent";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import { Frame, Screenshot } from "effect-browser/Frame";
@@ -12,6 +12,8 @@ import type { Page } from "effect-browser/Page";
 import type { Snapshot } from "effect-browser/Snapshot";
 import { type AiError, LanguageModel, Prompt, type Response } from "effect/ai";
 
+import * as Arms from "./Arms.ts";
+import type { Arm } from "./Arms.ts";
 import {
   CheckoutTruth,
   type FixtureUnreadable,
@@ -37,6 +39,8 @@ export interface Outcome extends Grade {
   readonly answer: unknown;
   /** Model calls; 0 for a scripted solution. */
   readonly steps: number;
+  /** Tool calls the model made, `done` and `give_up` included; 0 for an understand task. */
+  readonly actions: number;
   readonly usage: Agent.Usage;
 }
 
@@ -46,6 +50,8 @@ export interface TrialOptions {
 }
 
 export interface ModelOptions<E> extends TrialOptions {
+  /** How the model sees the page and acts on it. Defaults to arm 5, the library's default. */
+  readonly arm?: Arm | undefined;
   /** Runs after every model call with that call's usage. Failing stops the task, as a spent budget does. */
   readonly onUsage: (usage: Agent.Usage) => Effect.Effect<void, E>;
 }
@@ -137,18 +143,29 @@ const operate = <A, I>(spec: {
   withModel: (options) =>
     Effect.gen(function* () {
       const page = yield* open(spec.start, options.seed);
+      let actions = 0;
 
-      const result = yield* Agent.run(spec.prompt, {
+      const result = yield* Arms.operate(options.arm ?? 5, spec.prompt, {
         answer: spec.answer,
         maxSteps: spec.maxSteps,
-        onStep: (step) => options.onUsage(step.usage),
+        onStep: (step) => {
+          actions += step.calls.length;
+
+          return options.onUsage(step.usage);
+        },
       });
 
       const grade = yield* spec
         .grade(result.answer, page)
         .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
-      return { ...grade, answer: result.answer, steps: result.steps, usage: result.usage };
+      return {
+        ...grade,
+        answer: result.answer,
+        steps: result.steps,
+        actions,
+        usage: result.usage,
+      };
     }).pipe(Effect.scoped),
   scripted: (options = {}) =>
     Effect.gen(function* () {
@@ -159,7 +176,7 @@ const operate = <A, I>(spec: {
         .grade(answer, page)
         .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
-      return { ...grade, answer, steps: 0, usage: noUsage };
+      return { ...grade, answer, steps: 0, actions: 0, usage: noUsage };
     }).pipe(Effect.scoped),
 });
 
@@ -320,7 +337,10 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
         const { moment, detail, expected } = yield* prepare(options);
 
         const { value, usage: used } = yield* LanguageModel.generateObject({
-          prompt: Prompt.setSystem(Moment.toPrompt(moment), spec.instructions),
+          prompt: Prompt.setSystem(
+            Moment.toPrompt(Arms.moment(options.arm ?? 5, moment)),
+            spec.instructions,
+          ),
           schema: spec.answer,
           objectName: "moment",
         });
@@ -335,6 +355,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
           detail: `${grade.detail}; ${detail}`,
           answer: value,
           steps: 1,
+          actions: 0,
           usage,
         };
       }),
@@ -347,6 +368,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
           detail: `${detail}; truth ${JSON.stringify(expected)}`,
           answer: expected,
           steps: 0,
+          actions: 0,
           usage: noUsage,
         };
       }),

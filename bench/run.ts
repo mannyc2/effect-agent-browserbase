@@ -22,6 +22,7 @@ import * as Browserbase from "effect-browserbase/Browserbase";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
 import { FetchHttpClient } from "effect/http";
 
+import { type Arm, armNames, arms, median, pairs } from "./Arms.ts";
 import {
   type Accounting,
   BenchError,
@@ -59,6 +60,9 @@ const help = `Usage: bun run bench -- [options]
   --concurrency <n>     Independent trials in flight. Defaults to 4.
   --seed <integer>      Base seed for reproducible page data. Defaults to 1.
   --model <id>          OpenRouter model; omit for the free scripted solutions.
+  --arm <n>             With a model, how it sees and acts on the page; repeat to
+                        compare arms on the same seeds. Defaults to 5.
+                        ${arms.map((arm) => `${arm}: ${armNames[arm]}`).join("; ")}
   --reasoning <effort>  none, minimal, low, medium, high, xhigh or max.
                         Defaults to medium for operate and none for understand.
   --max-usd <amount>    Shared token/provider admission budget. Defaults to 2.
@@ -95,6 +99,7 @@ const flags = Effect.try({
         concurrency: { type: "string", default: "4" },
         seed: { type: "string", default: "1" },
         model: { type: "string" },
+        arm: { type: "string", multiple: true },
         reasoning: { type: "string" },
         "max-usd": { type: "string", default: "2" },
         "max-output-tokens": { type: "string", default: "4096" },
@@ -114,6 +119,8 @@ const flags = Effect.try({
 interface TrialRecord {
   readonly task: string;
   readonly kind: Task["kind"];
+  /** Null for a scripted solution. */
+  readonly arm: Arm | null;
   readonly trial: number;
   readonly baseSeed: number;
   readonly seed: number;
@@ -129,6 +136,9 @@ interface TrialRecord {
   readonly diagnostic: Diagnostics.Failure | null;
   readonly lastResponse: Diagnostics.LastResponse | null;
   readonly answer: unknown;
+  /** Model turns and tool calls of a trial that reached an outcome; null otherwise. */
+  readonly steps: number | null;
+  readonly actions: number | null;
   readonly accounting: Accounting;
   /** Admission queueing and provider request time within `seconds`. */
   readonly timing: Timing;
@@ -172,6 +182,8 @@ const main = Effect.gen(function* () {
   const unknown = names.filter((name) => !tasks.some((task) => task.name === name));
   const reasoning = efforts.find((effort) => effort === options.reasoning);
   const model = options.model;
+  const chosen = (options.arm ?? []).map(Number);
+  const selectedArms = arms.filter((arm) => chosen.includes(arm));
 
   if (unknown.length > 0) return yield* refuse(`no task named ${unknown.join(", ")}\n\n${help}`);
   if (!Number.isSafeInteger(trials) || trials < 1)
@@ -183,6 +195,10 @@ const main = Effect.gen(function* () {
     return yield* refuse("--max-usd must be finite and positive");
   if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 16)
     return yield* refuse("--max-output-tokens must be an integer of at least 16");
+  if (chosen.some((arm) => !arms.some((known) => known === arm)))
+    return yield* refuse(`--arm must be one of ${arms.join(", ")}`);
+  if (chosen.length > 0 && model === undefined)
+    return yield* refuse("--arm needs --model: the scripted solutions have no arms");
   if (options.reasoning !== undefined && reasoning === undefined)
     return yield* refuse(`--reasoning must be one of ${efforts.join(", ")}`);
   if (options.browser !== "chromium" && options.browser !== "browserbase")
@@ -236,8 +252,14 @@ const main = Effect.gen(function* () {
   const directory = options.out ?? fileURLToPath(new URL("../.work/bench/", import.meta.url));
   const file = join(directory, `${stamp}-${label}.jsonl`);
 
+  // Every arm runs the same seeds, so its trials pair with the other arms' by task and number.
+  const jobArms: ReadonlyArray<Arm | null> =
+    model === undefined ? [null] : selectedArms.length === 0 ? [5] : selectedArms;
+
   const jobs = selected.flatMap((task) =>
-    Array.from({ length: trials }, (_, index) => ({ task, trial: index + 1 })),
+    Array.from({ length: trials }, (_, index) =>
+      jobArms.map((arm) => ({ task, arm, trial: index + 1 })),
+    ).flat(),
   );
 
   yield* write(() => mkdirSync(directory, { recursive: true }));
@@ -274,6 +296,7 @@ const main = Effect.gen(function* () {
       yield* save({
         task: job.task.name,
         kind: job.task.kind,
+        arm: job.arm,
         trial: job.trial,
         baseSeed,
         seed: trialSeed(baseSeed, job.task.name, job.trial),
@@ -288,6 +311,8 @@ const main = Effect.gen(function* () {
         diagnostic: null,
         lastResponse: calls.lastResponse,
         answer: null,
+        steps: null,
+        actions: null,
         accounting: calls.accounting,
         timing,
         seconds: 0,
@@ -302,7 +327,7 @@ const main = Effect.gen(function* () {
 
   const records = yield* Effect.forEach(
     jobs,
-    ({ task, trial }, index) =>
+    ({ task, arm, trial }, index) =>
       Effect.gen(function* () {
         // A denied or unstarted trial is a durable result too, but must not provision a browser.
         const halted = hosted && (yield* Ref.get(hostedHalt));
@@ -320,7 +345,7 @@ const main = Effect.gen(function* () {
         const work =
           runner !== undefined && account !== undefined
             ? runner.withModel(
-                task.withModel({ seed, onUsage: () => Effect.void }),
+                task.withModel({ seed, arm: arm ?? undefined, onUsage: () => Effect.void }),
                 effectiveReasoning,
                 account,
               )
@@ -354,6 +379,7 @@ const main = Effect.gen(function* () {
         const record: TrialRecord = {
           task: task.name,
           kind: task.kind,
+          arm,
           trial,
           baseSeed,
           seed,
@@ -374,6 +400,8 @@ const main = Effect.gen(function* () {
             exit !== undefined && Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,
           lastResponse: calls.lastResponse,
           answer: value?.answer ?? null,
+          steps: value?.steps ?? null,
+          actions: value?.actions ?? null,
           accounting: calls.accounting,
           timing: account === undefined ? noTiming : yield* account.timing,
           seconds,
@@ -381,7 +409,7 @@ const main = Effect.gen(function* () {
 
         yield* units.settle(index, save(record));
         yield* Console.log(
-          `${task.name.padEnd(14)} #${trial}  ${record.status === "graded" ? (record.pass === true ? "pass" : "FAIL") : record.status}  ${record.reason}  ${seconds.toFixed(1)}s  ${record.accounting.calls} calls  $${record.accounting.knownUsd.toFixed(4)} known + $${record.accounting.reservedUsd.toFixed(4)} unresolved  ${record.error ?? record.detail}`,
+          `${task.name.padEnd(14)}${arm === null ? "" : ` arm ${arm}`} #${trial}  ${record.status === "graded" ? (record.pass === true ? "pass" : "FAIL") : record.status}  ${record.reason}  ${seconds.toFixed(1)}s  ${record.accounting.calls} calls  $${record.accounting.knownUsd.toFixed(4)} known + $${record.accounting.reservedUsd.toFixed(4)} unresolved  ${record.error ?? record.detail}`,
         );
 
         return record;
@@ -391,12 +419,42 @@ const main = Effect.gen(function* () {
 
   const accounting = yield* ledgerSnapshot(false);
 
-  for (const name of names) {
-    const counts = tally(records.filter((record) => record.task === name));
+  const line = (label: string, subset: ReadonlyArray<TrialRecord>) => {
+    const counts = tally(subset);
 
-    yield* Console.log(
-      `${name.padEnd(14)} ${counts.passed} of ${counts.graded} graded passed; ${counts.infrastructureFailed} infrastructure-failed, ${counts.denied} denied, ${counts.unrun} unrun`,
-    );
+    return `${label} ${counts.passed} of ${counts.graded} graded passed; ${counts.infrastructureFailed} infrastructure-failed, ${counts.denied} denied, ${counts.unrun} unrun`;
+  };
+
+  for (const name of names)
+    for (const arm of jobArms)
+      yield* Console.log(
+        line(
+          `${name.padEnd(14)}${arm === null ? "" : ` arm ${arm}`}`,
+          records.filter((record) => record.task === name && record.arm === arm),
+        ),
+      );
+
+  if (model !== undefined) {
+    yield* Console.log("");
+    for (const arm of jobArms) {
+      const subset = records.filter((record) => record.arm === arm);
+      const graded = subset.filter((record) => record.status === "graded");
+      const spent = subset.reduce((total, record) => total + record.accounting.knownUsd, 0);
+
+      yield* Console.log(
+        `${line(`arm ${arm} (${arm === null ? "" : armNames[arm]}):`, subset)}; median ${median(graded.map((record) => record.seconds)).toFixed(1)}s, ${median(graded.map((record) => record.steps ?? 0))} turns and ${median(graded.map((record) => record.actions ?? 0))} tool calls per graded trial; $${spent.toFixed(4)} known`,
+      );
+    }
+
+    for (const [index, arm] of jobArms.entries())
+      for (const other of jobArms.slice(index + 1)) {
+        if (arm === null || other === null) continue;
+        const paired = pairs(records, arm, other);
+
+        yield* Console.log(
+          `arm ${arm} vs arm ${other}: ${paired.pairs} pairs graded in both; both passed ${paired.both}, only arm ${arm} ${paired.onlyFirst}, only arm ${other} ${paired.onlySecond}, neither ${paired.neither}`,
+        );
+      }
   }
 
   const counts = tally(records);
