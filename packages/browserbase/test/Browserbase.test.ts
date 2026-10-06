@@ -17,7 +17,9 @@ interface Received {
   readonly method: string;
   readonly url: string;
   readonly key: string | undefined;
+  /** Parsed JSON, or the raw text of any other body. */
   readonly body: unknown;
+  readonly at: number;
 }
 
 type Route = (request: Received) => {
@@ -57,7 +59,13 @@ const fakeApi = (route: Route) =>
           method: request.method ?? "",
           url: request.url ?? "",
           key: typeof key === "string" ? key : undefined,
-          body: raw === "" ? undefined : (JSON.parse(raw) as unknown),
+          body:
+            raw === ""
+              ? undefined
+              : request.headers["content-type"]?.startsWith("application/json") === true
+                ? (JSON.parse(raw) as unknown)
+                : raw,
+          at: performance.now(),
         };
 
         received.push(entry);
@@ -308,6 +316,66 @@ describe("BrowserbaseClient", () => {
       assert.strictEqual(api.received[2]?.url, "/v1/sessions/s1/debug?expiresIn=600");
     }),
   );
+
+  it.live(
+    "uploads, reads and deletes extensions, refusing an empty or oversized archive unsent",
+    () =>
+      Effect.gen(function* () {
+        const extension = {
+          id: "e1",
+          fileName: "marker.zip",
+          createdAt: "2026-10-06T12:00:00.000Z",
+          updatedAt: "2026-10-06T12:00:00.000Z",
+          projectId: "project",
+        };
+
+        const api = yield* fakeApi((request) => {
+          switch (`${request.method} ${request.url}`) {
+            case "POST /v1/extensions":
+            case "GET /v1/extensions/e1":
+              return { status: 200, body: extension };
+            case "DELETE /v1/extensions/e1":
+              return { status: 204 };
+            default:
+              return { status: 404, body: { message: "Extension not found" } };
+          }
+        });
+
+        yield* Effect.gen(function* () {
+          const client = yield* BrowserbaseClient;
+          const archive = new TextEncoder().encode("PK-archive-bytes");
+          const uploaded = yield* client.uploadExtension(archive, { fileName: "marker.zip" });
+
+          assert.deepStrictEqual([uploaded.id, uploaded.fileName], ["e1", "marker.zip"]);
+          assert.strictEqual((yield* client.getExtension("e1")).id, "e1");
+          yield* client.deleteExtension("e1");
+          assert.strictEqual(yield* reasonOf(client.getExtension("gone")), "NotFound");
+          assert.strictEqual(
+            yield* reasonOf(client.uploadExtension(new Uint8Array())),
+            "InvalidRequest",
+          );
+          assert.strictEqual(
+            yield* reasonOf(client.uploadExtension(new Uint8Array(100 * 1024 * 1024 + 1))),
+            "InvalidRequest",
+          );
+        }).pipe(Effect.provide(api.client));
+
+        const [upload, ...rest] = api.received;
+        const body = String(upload?.body);
+
+        assert.include(body, 'name="file"; filename="marker.zip"');
+        assert.include(body, "Content-Type: application/zip");
+        assert.include(body, "PK-archive-bytes");
+        assert.deepStrictEqual(
+          rest.map((request) => [request.method, request.url]),
+          [
+            ["GET", "/v1/extensions/e1"],
+            ["DELETE", "/v1/extensions/e1"],
+            ["GET", "/v1/extensions/gone"],
+          ],
+        );
+      }),
+  );
 });
 
 describe("Browserbase", () => {
@@ -436,6 +504,63 @@ describe("Browserbase", () => {
         [
           ["POST", "/v1/sessions", { timeout: 300 }],
           ["POST", "/v1/sessions/s1", { status: "REQUEST_RELEASE" }],
+        ],
+      );
+    }),
+  );
+
+  it.live("lets one persisting session at a time write to a context, until its save settles", () =>
+    Effect.gen(function* () {
+      // A port with nothing listening, so each connect fails at once and its session is released.
+      const closed = yield* listen(() => undefined).pipe(
+        Effect.map(({ origin }) => origin),
+        Effect.scoped,
+      );
+
+      let created = 0;
+
+      const api = yield* fakeApi((request) => {
+        if (request.method === "POST" && request.url === "/v1/sessions") {
+          created += 1;
+
+          return { status: 201, body: session(`s${created}`, closed) };
+        }
+
+        return {
+          status: 200,
+          body: { ...session(request.url.split("/")[3] ?? ""), status: "COMPLETED" },
+        };
+      });
+
+      const open = (persist: boolean) =>
+        Browserbase.open({
+          session: { browserSettings: { context: { id: "c1", persist } } },
+          contextSettle: "300 millis",
+        }).pipe(Effect.scoped, Effect.flip, Effect.provide(api.client));
+
+      yield* Effect.all([open(true), open(true)], { concurrency: "unbounded" });
+
+      assert.deepStrictEqual(
+        api.received.map((request) => [request.method, request.url]),
+        [
+          ["POST", "/v1/sessions"],
+          ["POST", "/v1/sessions/s1"],
+          ["GET", "/v1/sessions/s1"],
+          ["POST", "/v1/sessions"],
+          ["POST", "/v1/sessions/s2"],
+          ["GET", "/v1/sessions/s2"],
+        ],
+      );
+      assert.isAtLeast((api.received[3]?.at ?? 0) - (api.received[2]?.at ?? 0), 290);
+
+      // A session that only reads the context neither waits nor holds it.
+      api.received.length = 0;
+      yield* Effect.all([open(false), open(false)], { concurrency: "unbounded" });
+      assert.deepStrictEqual(
+        api.received.slice(0, 2).map((request) => [request.method, request.url]),
+        [
+          ["POST", "/v1/sessions"],
+          ["POST", "/v1/sessions"],
         ],
       );
     }),
