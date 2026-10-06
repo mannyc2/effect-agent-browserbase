@@ -98,7 +98,7 @@ it.effect("a settled navigation records what it asked for as one Navigate step",
       ).toBe("browser_navigate");
       expect(
         yield* Plan.recordedNavigation(operation, { id: "not an id" }).pipe(Effect.flip),
-      ).toMatchObject({ stepId: "not an id", reason: "IncompleteCapture" });
+      ).toMatchObject({ stepId: "not an id", reason: "InvalidId" });
 
       const ran = yield* page.run(recorded);
 
@@ -106,6 +106,30 @@ it.effect("a settled navigation records what it asked for as one Navigate step",
       expect(
         (yield* browser.control.calls).filter((call) => call.operation === "navigate"),
       ).toHaveLength(2);
+    }),
+  ),
+);
+
+it.effect("an id that is not a step identifier is refused before the navigation settles", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Testing.open(script);
+      const gate = yield* browser.control.gate;
+
+      yield* browser.control.next("navigate", { _tag: "Hold", gate, dispatched: true });
+
+      const operation = yield* browser.initialPage.startNavigation({ url: `${origin}/` });
+
+      yield* gate.reached;
+
+      // The navigation is still held: a caller's mistake is not reported as missing evidence.
+      expect(
+        yield* Plan.recordedNavigation(operation, { id: "call:1" }).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "RecordingIncomplete", stepId: "call:1", reason: "InvalidId" });
+      yield* gate.open;
+      expect((yield* Plan.recordedNavigation(operation, { id: "call-1" })).steps[0]?.id).toBe(
+        "call-1",
+      );
     }),
   ),
 );

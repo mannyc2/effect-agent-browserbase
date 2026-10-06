@@ -208,13 +208,17 @@ it.effect("a navigate call's receipt records as a plan, and the model's result i
 
       if (record?._tag !== "Navigation")
         return yield* Effect.die("Expected the original navigation");
-      const recorded = yield* Plan.recordedNavigation(record.operation, { id: record.toolName });
+
+      // The host-unique invocation ID names the step, so several recordings never share one.
+      const recorded = yield* Plan.recordedNavigation(record.operation, {
+        id: record.invocationId,
+      });
 
       expect(recorded).toEqual({
         version: 1,
         steps: [
           {
-            id: "browser_navigate",
+            id: "call-1",
             action: { _tag: "Navigate", url: `${origin}/` },
             resolution: { _tag: "Strict" },
           },

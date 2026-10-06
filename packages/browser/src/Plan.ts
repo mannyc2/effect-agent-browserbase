@@ -17,6 +17,7 @@ import {
   type Ran,
   type RanStep,
   type StepAttempt,
+  StepId,
 } from "./PlanData.ts";
 
 /** All execution stays on the issued Page/Frame and its original scoped owner. */
@@ -71,7 +72,12 @@ export class StepFailed extends Data.TaggedError("StepFailed")<
 
 export class RecordingIncomplete extends Data.TaggedError("RecordingIncomplete")<{
   readonly stepId?: string;
-  readonly reason: "InvalidThrough" | "NoCompletedSteps" | "IncompleteCapture" | "Unacknowledged";
+  readonly reason:
+    | "InvalidId"
+    | "InvalidThrough"
+    | "NoCompletedSteps"
+    | "IncompleteCapture"
+    | "Unacknowledged";
 }> {}
 
 /** A retained value keeps its evidence after interruption; joining never submits another walk. */
@@ -182,7 +188,8 @@ export const recorded = (
  * stops nothing: only a navigation that reached DOMContentLoaded is acknowledged, and one that
  * failed, was stopped or interrupted, or whose outcome is unknown is refused `Unacknowledged`.
  * The step repeats the request, not the address a redirect reached, as a recorded run's
- * Navigate step does. An `id` that is not a step identifier fails `IncompleteCapture`.
+ * Navigate step does, query string included: a URL that carries a secret puts it in the plan.
+ * An `id` that is not a step identifier fails `InvalidId` at once, before anything is joined.
  */
 export const recordedNavigation = (
   operation: NavigationOperation,
@@ -190,6 +197,9 @@ export const recordedNavigation = (
 ): Effect.Effect<Plan, RecordingIncomplete> =>
   Effect.gen(function* () {
     const id = options?.id ?? "navigate";
+
+    if (!Schema.is(StepId)(id))
+      return yield* new RecordingIncomplete({ stepId: id, reason: "InvalidId" });
     const { url, timeoutMillis } = operation.request;
 
     yield* operation.completed.pipe(
