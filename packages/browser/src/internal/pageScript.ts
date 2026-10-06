@@ -771,6 +771,37 @@ export const install = (): PageApi => {
     return undefined;
   };
 
+  /**
+   * A control between a press's hit and the approved target that is not the target's own
+   * activation, such as a link or button a hover handler nested into it. The approval classified
+   * the target, so that control would act unapproved.
+   */
+  const nestedControl = (element: Element, hit: Element): Element | undefined => {
+    // A container of the target is covered by the target's own classification.
+    if (!within(element, hit)) return undefined;
+    const own = activationTarget(element);
+
+    for (
+      let node: Element | null = hit;
+      node !== null && node !== element;
+      node = parentOf(node) ?? node.ownerDocument.defaultView?.frameElement ?? null
+    )
+      if (
+        node !== own &&
+        (hrefAttribute(node) !== null ||
+          node.tagName === "BUTTON" ||
+          node.tagName === "SUMMARY" ||
+          (isInput(node) && node.type !== "hidden") ||
+          isSelect(node) ||
+          isTextArea(node) ||
+          (isLabel(node) && node.control !== null && node.control !== own) ||
+          activatingRoles.has(roleOf(node) ?? ""))
+      )
+        return node;
+
+    return undefined;
+  };
+
   const textEntry = (element: Element): boolean =>
     (isInput(element) &&
       ![
@@ -1372,6 +1403,14 @@ export const install = (): PageApi => {
         return {
           error: "changed",
           detail: `the approved target is no longer under the pointer at (${press.x}, ${press.y})`,
+        };
+
+      const nested = nestedControl(element, hit);
+
+      if (nested !== undefined)
+        return {
+          error: "changed",
+          detail: `${describe(nested)} inside the approved target would receive the press at (${press.x}, ${press.y})`,
         };
     }
 
