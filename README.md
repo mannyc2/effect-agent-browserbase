@@ -4,11 +4,11 @@ Browser automation for [Effect](https://effect.website) agents: page control, a 
 outline for models, screencast frames, browser tools for `effect/ai`, an agent loop, and moments, a
 picture-and-timeline account of what a page showed at one point in time.
 
-| Package                                         | What it is                                                         |
-| ----------------------------------------------- | ------------------------------------------------------------------ |
-| [`effect-browser`](packages/browser)            | The browser, its pages, tools, agent and moments, over Playwright  |
-| [`effect-browserbase`](packages/browserbase)    | Browserbase sessions as a `Browser`, and a client for its REST API |
-| [`bench`](bench) (private)                      | Graded tasks over canvas games, live charts and forms              |
+| Package                                      | What it is                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| [`effect-browser`](packages/browser)         | The browser, its pages, tools, agent and moments, over Playwright  |
+| [`effect-browserbase`](packages/browserbase) | Browserbase sessions as a `Browser`, and a client for its REST API |
+| [`bench`](bench) (private)                   | Graded tasks over canvas games, live charts, quotes and forms      |
 
 ## An agent in a local Chromium
 
@@ -63,7 +63,11 @@ the browser's events over the same window. `Moment.describe` gives all of it to 
 one call, and returns a `Description` or any schema you pass:
 
 ```ts
-const VideoPrompt = Schema.Struct({ scene: Schema.String, motion: Schema.String, prompt: Schema.String });
+const VideoPrompt = Schema.Struct({
+  scene: Schema.String,
+  motion: Schema.String,
+  prompt: Schema.String,
+});
 
 const watch = Effect.gen(function* () {
   const page = yield* (yield* Browser.Browser).page;
@@ -127,6 +131,10 @@ const watch = Effect.gen(function* () {
   how a caller enforces a budget.
 
 ## Development
+
+The [bench](bench) has seeded operate and understand tasks, including a dense quote table and
+multi-frame changes. Trials have separate browsers, bounded concurrency, per-trial metrics and one
+shared model budget. Scripted runs remain free; model and hosted runs require explicit opt-in.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). `bun run ready` formats, lints, typechecks, tests against a
 real local Chromium and builds. No test calls a model or a hosted browser.

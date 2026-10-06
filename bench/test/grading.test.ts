@@ -1,9 +1,22 @@
 // Grading, against models scripted to be wrong or blindly sure: no model is called.
+import { isDeepStrictEqual } from "node:util";
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Stream } from "effect";
+import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
-import { LanguageModel, type Response } from "effect/ai";
+import type { Frame } from "effect-browser/Frame";
+import type { Page } from "effect-browser/Page";
+import { LanguageModel, type Prompt, type Response } from "effect/ai";
 
+import {
+  FrameTruth,
+  MarketTruth,
+  NavigationTruth,
+  QuoteTruth,
+  TumbleTruth,
+  truth,
+} from "../Sites.ts";
 import { tasks } from "../Tasks.ts";
 
 /** A model that answers every call with the same parts. */
@@ -32,15 +45,122 @@ const reports = (answer: unknown) =>
     { type: "finish", reason: "tool-calls", usage },
   ]);
 
-const run = (name: string, model: Layer.Layer<LanguageModel.LanguageModel>) => {
+const taskNamed = (name: string) => {
   const task = tasks.find((candidate) => candidate.name === name);
 
   if (task === undefined) throw new Error(`no task ${name}`);
 
-  return task
-    .withModel({ onUsage: () => Effect.void })
-    .pipe(Effect.provide(Layer.merge(Chromium.layer(), model)));
+  return task;
 };
+
+const run = (name: string, model: Layer.Layer<LanguageModel.LanguageModel>) =>
+  taskNamed(name)
+    .withModel({ seed: 23, onUsage: () => Effect.void })
+    .pipe(Effect.provide(Layer.merge(Chromium.layer({ frameHistory: 1200 }), model)));
+
+/** Inspect the actual description request and retained frames without replacing capture. */
+const describeWith = (
+  name: string,
+  answer: (page: Page) => Effect.Effect<unknown>,
+  options: {
+    readonly seed?: number;
+    readonly frameDelayMillis?: number;
+    readonly frameHistory?: number;
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const browser = yield* Browser;
+    const page = yield* browser.page;
+
+    const frameDelayMillis = options.frameDelayMillis ?? 0;
+
+    if (frameDelayMillis > 0) {
+      const screencast = page.playwright.screencast;
+      const start = screencast.start.bind(screencast);
+      const pending = new Set<ReturnType<typeof setTimeout>>();
+
+      screencast.start = (options) =>
+        start({
+          ...options,
+          onFrame: (frame) => {
+            const timer = setTimeout(() => {
+              pending.delete(timer);
+              options?.onFrame?.(frame);
+            }, frameDelayMillis);
+
+            pending.add(timer);
+          },
+        });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          screencast.start = start;
+          for (const timer of pending) clearTimeout(timer);
+        }),
+      );
+    }
+
+    const prompts: Array<Prompt.Prompt> = [];
+    const histories: Array<ReadonlyArray<Frame>> = [];
+    let frameAfter = 0;
+
+    const observed: Page = {
+      ...page,
+      recentFrames: page.recentFrames.pipe(
+        Effect.tap((frames) => Effect.sync(() => histories.push(frames))),
+      ),
+    };
+
+    const model = yield* LanguageModel.make({
+      generateText: (options) =>
+        Effect.gen(function* () {
+          prompts.push(options.prompt);
+          frameAfter = (yield* truth(page, FrameTruth)).frameAfter;
+          const value = yield* answer(page);
+
+          return [
+            { type: "text", text: JSON.stringify(value) },
+            { type: "finish", reason: "stop", usage },
+          ];
+        }),
+      streamText: () => Stream.empty,
+    });
+
+    const outcome = yield* taskNamed(name)
+      .withModel({ seed: options.seed ?? 23, onUsage: () => Effect.void })
+      .pipe(
+        Effect.provideService(Browser, Browser.of({ ...browser, page: Effect.succeed(observed) })),
+        Effect.provideService(LanguageModel.LanguageModel, model),
+      );
+
+    return {
+      outcome,
+      prompts,
+      history: histories.at(-1) ?? [],
+      frameAfter,
+      events: yield* browser.recentEvents,
+    };
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(Chromium.layer({ frameHistory: options.frameHistory ?? 1200 })),
+  );
+
+const pictures = (prompt: Prompt.Prompt) =>
+  prompt.content.flatMap((message) =>
+    message.role === "user"
+      ? message.content.flatMap((part) =>
+          part.type === "file" && part.mediaType.startsWith("image/") ? [part] : [],
+        )
+      : [],
+  );
+
+const textOf = (prompt: Prompt.Prompt) =>
+  prompt.content
+    .flatMap((message) =>
+      message.role === "system"
+        ? [message.content]
+        : message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])),
+    )
+    .join("\n");
 
 describe("grading", () => {
   it.live("a made-up confirmation number fails checkout", () =>
@@ -68,5 +188,316 @@ describe("grading", () => {
       assert.isTrue(spike.pass, spike.detail);
       assert.isFalse(calm.pass, calm.detail);
     }),
+  );
+});
+
+const quoteAnswer = (quote: typeof QuoteTruth.Type) => ({
+  ticker: quote.focus,
+  price: quote.price,
+  change1h: quote.c1h,
+  change24h: quote.c24h,
+  column: quote.header,
+  table: quote.table,
+});
+
+const quote = (page: Page) => truth(page, QuoteTruth).pipe(Effect.map(quoteAnswer));
+
+const order = (page: Page) =>
+  truth(page, MarketTruth).pipe(
+    Effect.map((market) => {
+      const filled = market.orders[0];
+
+      if (filled === undefined) throw new Error("the fixture did not place its order");
+
+      return filled;
+    }),
+  );
+
+const tumble = (page: Page) =>
+  truth(page, TumbleTruth).pipe(
+    Effect.map((state) => ({
+      tumbles: state.tumbles,
+      multiplier: state.multiplier,
+      totalWin: state.totalWin,
+      balance: state.balance,
+      done: state.done,
+    })),
+  );
+
+describe("understanding evidence", () => {
+  for (const name of ["quote-table", "quote-dense"]) {
+    it.live(`${name} sends one current picture and grades the requested table`, () =>
+      Effect.gen(function* () {
+        const { outcome, prompts } = yield* describeWith(name, quote);
+
+        assert.isTrue(outcome.pass, outcome.detail);
+        assert.strictEqual(prompts.length, 1);
+        const prompt = prompts[0];
+
+        if (prompt === undefined) throw new Error("the description prompt is missing");
+        assert.strictEqual(pictures(prompt).length, 1);
+        assert.include(textOf(prompt), "Spot markets");
+        assert.include(textOf(prompt), "24h");
+        assert.notInclude(textOf(prompt), "__bench");
+      }),
+    );
+  }
+
+  it.live("keeps the full tumble interval, not only enough recent frames", () =>
+    Effect.gen(function* () {
+      let durationMillis = 0;
+
+      const { outcome, prompts, history, events, frameAfter } = yield* describeWith(
+        "tumble-win",
+        (page) =>
+          truth(page, TumbleTruth).pipe(
+            Effect.tap((state) =>
+              Effect.sync(() => {
+                durationMillis = state.durationMillis;
+                assert.strictEqual(state.tumbles, 4);
+                assert.strictEqual(state.multiplier, 10);
+              }),
+            ),
+            Effect.andThen(tumble(page)),
+          ),
+        { seed: 15 },
+      );
+
+      assert.isTrue(outcome.pass, outcome.detail);
+      const first = history[0];
+      const last = history.at(-1);
+      const prompt = prompts[0];
+      const click = events.find((event) => event._tag === "Action" && event.name === "click");
+
+      if (first === undefined || last === undefined || prompt === undefined || click === undefined)
+        throw new Error("the tumble did not retain its frames, prompt and input event");
+      assert.isAtLeast(last.receivedAt - first.receivedAt, durationMillis - 300);
+      if (click._tag !== "Action") throw new Error("the input event is not an action");
+      assert.isBelow(first.receivedAt, click.startedAt);
+
+      const selected = pictures(prompt).map((image) => {
+        const frame = history.find((candidate) => candidate.data === image.data);
+
+        if (frame === undefined)
+          throw new Error("the description image is not one of the retained frames");
+
+        return frame;
+      });
+
+      assert.strictEqual(selected.length, 12);
+      for (let index = 1; index < selected.length; index++) {
+        const earlier = selected[index - 1];
+        const later = selected[index];
+
+        if (earlier === undefined || later === undefined)
+          throw new Error("the selected frame sequence is incomplete");
+        // One cascade lasts 1,800 ms; a larger gap could conceal an entire paying cascade.
+        assert.isAbove(later.timestamp, earlier.timestamp);
+        assert.isAtMost(later.timestamp - earlier.timestamp, 1900);
+      }
+      const final = selected.at(-1);
+
+      if (final === undefined) throw new Error("the final description image is missing");
+      assert.isAtLeast(final.timestamp, frameAfter);
+
+      // Timestamp labels come from the selected Moment frames, not the whole retained history.
+      const ages = [...textOf(prompt).matchAll(/^(-[\d.]+)s:$/gm)].map(
+        (match) => Math.abs(Number(match[1])) * 1000,
+      );
+
+      assert.isAtLeast(Math.max(...ages), durationMillis - 400);
+    }),
+  );
+
+  it.live("does not ask a model to grade incomplete frame evidence", () =>
+    Effect.gen(function* () {
+      let called = false;
+
+      const { outcome, prompts, history } = yield* describeWith(
+        "order-filled",
+        (page) =>
+          Effect.sync(() => {
+            called = true;
+          }).pipe(Effect.andThen(order(page))),
+        { frameHistory: 1 },
+      );
+
+      assert.isFalse(called);
+      assert.isEmpty(prompts);
+      assert.strictEqual(history.length, 1);
+      assert.isFalse(outcome.pass, outcome.detail);
+      assert.strictEqual(outcome.steps, 0);
+      assert.isNull(outcome.answer);
+      assert.deepStrictEqual(outcome.usage, {
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+      });
+    }),
+  );
+
+  it.live("waits for the final browser paint when frame delivery is delayed", () =>
+    Effect.gen(function* () {
+      const { outcome, prompts, history, frameAfter } = yield* describeWith("order-filled", order, {
+        frameDelayMillis: 500,
+      });
+
+      const prompt = prompts[0];
+
+      assert.isTrue(outcome.pass, outcome.detail);
+      if (prompt === undefined) throw new Error("the description prompt is missing");
+      const image = pictures(prompt).at(-1);
+      const final = history.findLast((frame) => isDeepStrictEqual(frame.data, image?.data));
+
+      if (final === undefined)
+        throw new Error("the final description image is not a captured frame");
+      assert.isTrue(history.some((frame) => frame.timestamp < frameAfter));
+      assert.isAtLeast(final.timestamp, frameAfter);
+    }),
+  );
+
+  for (const [name, answer] of [
+    ["order-filled", order],
+    ["navigated", (page: Page) => truth(page, NavigationTruth)],
+  ] as const) {
+    it.live(`${name} describes frames from before and after its trigger`, () =>
+      Effect.gen(function* () {
+        const { outcome, prompts, history, events, frameAfter } = yield* describeWith(name, answer);
+        const prompt = prompts[0];
+
+        assert.isTrue(outcome.pass, outcome.detail);
+        if (prompt === undefined) throw new Error("the description prompt is missing");
+        const selected = pictures(prompt);
+
+        assert.isAtLeast(selected.length, 2);
+        assert.notDeepEqual(selected[0]?.data, selected.at(-1)?.data);
+
+        const final = history.findLast((frame) =>
+          isDeepStrictEqual(frame.data, selected.at(-1)?.data),
+        );
+
+        if (final === undefined)
+          throw new Error("the final description image is not a captured frame");
+        assert.isAtLeast(final.timestamp, frameAfter);
+        assert.include(textOf(prompt), "click");
+
+        const lastClick = events.findLast(
+          (event) => event._tag === "Action" && event.name === "click",
+        );
+
+        const first = history[0];
+        const last = history.at(-1);
+
+        if (lastClick === undefined || first === undefined || last === undefined)
+          throw new Error("the action did not retain its before and after evidence");
+        if (lastClick._tag !== "Action") throw new Error("the input event is not an action");
+        assert.isBelow(first.receivedAt, lastClick.startedAt);
+        assert.isAtLeast(last.receivedAt - first.receivedAt, 500);
+        if (name === "navigated") {
+          assert.include(textOf(prompt), "navigated to");
+
+          const priorClick = events
+            .filter((event) => event._tag === "Action" && event.name === "click")
+            .at(-2);
+
+          const before = history.find((frame) => isDeepStrictEqual(frame.data, selected[0]?.data));
+
+          if (priorClick === undefined || before === undefined)
+            throw new Error("the navigation's initial picture or preceding gate action is missing");
+          // A cookie-banner frame cannot show the Play control that actually navigated.
+          assert.isAbove(before.receivedAt, priorClick.at);
+          assert.isBelow(before.receivedAt, lastClick.startedAt);
+        }
+      }),
+    );
+  }
+});
+
+describe("specific misreads", () => {
+  it.live("rejects a quote from the wrong row", () =>
+    describeWith("quote-dense", (page) =>
+      truth(page, QuoteTruth).pipe(
+        Effect.map((state) => {
+          const wrong = state.rows.find(
+            (row) => row.table === state.table && row.ticker !== state.focus,
+          );
+
+          if (wrong === undefined) throw new Error("the quote fixture has no distractor row");
+
+          return {
+            ...quoteAnswer(state),
+            price: wrong.price,
+            change1h: wrong.c1h,
+            change24h: wrong.c24h,
+          };
+        }),
+      ),
+    ).pipe(Effect.map(({ outcome }) => assert.isFalse(outcome.pass, outcome.detail))),
+  );
+
+  for (const [field, otherPeriod] of [
+    ["change24h", "c1h"],
+    ["change1h", "c24h"],
+  ] as const) {
+    it.live(`rejects ${field} borrowed from the other percentage column`, () =>
+      describeWith("quote-table", (page) =>
+        truth(page, QuoteTruth).pipe(
+          Effect.map((state) => ({ ...quoteAnswer(state), [field]: state[otherPeriod] })),
+        ),
+      ).pipe(Effect.map(({ outcome }) => assert.isFalse(outcome.pass, outcome.detail))),
+    );
+  }
+
+  it.live("rejects the same asset's quote from another table", () =>
+    describeWith("quote-dense", (page) =>
+      truth(page, QuoteTruth).pipe(
+        Effect.map((state) => {
+          const wrong = state.rows.find(
+            (row) => row.table !== state.table && row.ticker === state.focus,
+          );
+
+          if (wrong === undefined) throw new Error("the quote fixture has no distractor table");
+
+          return {
+            ...quoteAnswer(state),
+            price: wrong.price,
+            change1h: wrong.c1h,
+            change24h: wrong.c24h,
+          };
+        }),
+      ),
+    ).pipe(Effect.map(({ outcome }) => assert.isFalse(outcome.pass, outcome.detail))),
+  );
+
+  for (const changed of [
+    { ticker: "WRONG-USD" },
+    { column: "1h %" },
+    { table: "Perpetual futures" },
+  ]) {
+    it.live(`rejects correct quote values with the wrong ${Object.keys(changed)[0]}`, () =>
+      describeWith("quote-dense", (page) =>
+        quote(page).pipe(Effect.map((answer) => ({ ...answer, ...changed }))),
+      ).pipe(Effect.map(({ outcome }) => assert.isFalse(outcome.pass, outcome.detail))),
+    );
+  }
+
+  it.live("rejects an extra tumble inferred from unrelated motion", () =>
+    describeWith("tumble-win", (page) =>
+      tumble(page).pipe(Effect.map((answer) => ({ ...answer, tumbles: answer.tumbles + 1 }))),
+    ).pipe(Effect.map(({ outcome }) => assert.isFalse(outcome.pass, outcome.detail))),
+  );
+
+  it.live("rejects a filled order described as still pending", () =>
+    describeWith("order-filled", (page) =>
+      order(page).pipe(Effect.map((answer) => ({ ...answer, status: "pending" }))),
+    ).pipe(Effect.map(({ outcome }) => assert.isFalse(outcome.pass, outcome.detail))),
+  );
+
+  it.live("rejects navigation assigned to the earlier cookie action", () =>
+    describeWith("navigated", (page) =>
+      truth(page, NavigationTruth).pipe(
+        Effect.map((answer) => ({ ...answer, trigger: "Accept all" })),
+      ),
+    ).pipe(Effect.map(({ outcome }) => assert.isFalse(outcome.pass, outcome.detail))),
   );
 });

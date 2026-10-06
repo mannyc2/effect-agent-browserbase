@@ -11,7 +11,19 @@ import type { Page } from "effect-browser/Page";
 import type { Snapshot } from "effect-browser/Snapshot";
 import type { AiError, LanguageModel } from "effect/ai";
 
-import { CheckoutTruth, MarketTruth, origin, ReelsTruth, serve, truth } from "./Sites.ts";
+import {
+  CheckoutTruth,
+  FrameTruth,
+  MarketTruth,
+  NavigationTruth,
+  origin,
+  QuoteTruth,
+  ReelsTruth,
+  routes,
+  serve,
+  truth,
+  TumbleTruth,
+} from "./Sites.ts";
 
 export interface Grade {
   readonly pass: boolean;
@@ -25,7 +37,12 @@ export interface Outcome extends Grade {
   readonly usage: Agent.Usage;
 }
 
-export interface ModelOptions<E> {
+export interface TrialOptions {
+  /** The fixture seed, recorded by the runner so a failed trial can be reproduced. */
+  readonly seed?: number;
+}
+
+export interface ModelOptions<E> extends TrialOptions {
   /** Runs after every model call with that call's usage. Failing stops the task, as a spent budget does. */
   readonly onUsage: (usage: Agent.Usage) => Effect.Effect<void, E>;
 }
@@ -41,17 +58,17 @@ export interface Task {
     AiError.AiError | BrowserError | Agent.AgentError | E,
     Browser | LanguageModel.LanguageModel
   >;
-  readonly scripted: Effect.Effect<Outcome, BrowserError, Browser>;
+  readonly scripted: (options?: TrialOptions) => Effect.Effect<Outcome, BrowserError, Browser>;
 }
 
 const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
 
 /** Serve the bench pages for the rest of the scope, and open `path` in the first tab. */
-const open = (path: string) =>
+const open = (path: string, seed = 0) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
 
-    yield* serve(browser);
+    yield* serve(browser, seed);
     const page = yield* browser.page;
 
     yield* page.goto(`${origin}${path}`);
@@ -97,7 +114,7 @@ const operate = <A, I>(spec: {
   summary: spec.summary,
   withModel: (options) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start);
+      const page = yield* open(spec.start, options.seed);
 
       const result = yield* Agent.run(spec.prompt, {
         answer: spec.answer,
@@ -109,38 +126,81 @@ const operate = <A, I>(spec: {
 
       return { ...grade, answer: result.answer, steps: result.steps, usage: result.usage };
     }).pipe(Effect.scoped),
-  scripted: Effect.gen(function* () {
-    const page = yield* open(spec.start);
-    const answer = yield* spec.solve(page);
-    const grade = yield* spec.grade(answer, page);
+  scripted: (options = {}) =>
+    Effect.gen(function* () {
+      const page = yield* open(spec.start, options.seed);
+      const answer = yield* spec.solve(page);
+      const grade = yield* spec.grade(answer, page);
 
-    return { ...grade, answer, steps: 0, usage: noUsage };
-  }).pipe(Effect.scoped),
+      return { ...grade, answer, steps: 0, usage: noUsage };
+    }).pipe(Effect.scoped),
 });
 
 const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly name: string;
   readonly summary: string;
   readonly start: string;
+  /** Put incidental gates behind us before selecting the earlier evidence frame. */
+  readonly beforeCapture?: (page: Page) => Effect.Effect<void, BrowserError>;
   /** Bring the page to the moment, without a model. */
   readonly setup: (page: Page) => Effect.Effect<void, BrowserError>;
   readonly capture: Moment.CaptureOptions;
-  readonly instructions: string;
+  /** A count alone cannot show whether the retained frames cover an earlier state. */
+  readonly minimumSpanMillis?: (page: Page) => Effect.Effect<number>;
+  readonly instructions: string | ((expected: A) => string);
   readonly answer: Schema.Codec<A, I>;
   /** What the moment shows, read from the page's truth as it is captured. */
   readonly expected: (page: Page) => Effect.Effect<A>;
   readonly grade: (answer: A, expected: A) => Grade;
 }): Task => {
-  const prepare = Effect.gen(function* () {
-    const page = yield* open(spec.start);
+  const prepare = (options: TrialOptions) =>
+    Effect.gen(function* () {
+      const page = yield* open(spec.start, options.seed);
 
-    // A running screencast gives the moment frames from before it, not just one screenshot.
-    yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
-    yield* spec.setup(page);
-    const moment = yield* Moment.capture(page, spec.capture);
+      if (spec.beforeCapture !== undefined) yield* spec.beforeCapture(page);
 
-    return { moment, expected: yield* spec.expected(page) };
-  }).pipe(Effect.scoped);
+      // Subscribe before the action and await its first frame, so a fast action cannot erase
+      // the initial state. Bench providers retain enough history for the longest fixture.
+      yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+      yield* page.recentFrames.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced("25 millis"),
+          until: (frames) => frames.length > 0,
+        }),
+        Effect.timeout("5 seconds"),
+        Effect.orDie,
+      );
+      yield* spec.setup(page);
+      const { frameAfter } = yield* truth(page, FrameTruth);
+
+      // A quiet host-side stream can still have the final paint in flight. The fixture records
+      // the last visual change on the browser's wall clock, which its frame timestamps share.
+      yield* page.recentFrames.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced("25 millis"),
+          until: (frames) => frames.some((frame) => frame.timestamp >= frameAfter),
+        }),
+        Effect.timeout("5 seconds"),
+        Effect.orDie,
+      );
+      const moment = yield* Moment.capture(page, spec.capture);
+      const wanted = spec.capture.frames ?? 2;
+      const first = moment.frames[0];
+      const last = moment.frames.at(-1);
+
+      const span =
+        first === undefined || last === undefined ? 0 : last.receivedAt - first.receivedAt;
+
+      const minimum =
+        spec.minimumSpanMillis === undefined ? 0 : yield* spec.minimumSpanMillis(page);
+
+      const evidence = {
+        pass: moment.frames.length === wanted && span >= minimum,
+        detail: `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events`,
+      };
+
+      return { moment, evidence, expected: yield* spec.expected(page) };
+    }).pipe(Effect.scoped);
 
   return {
     name: spec.name,
@@ -148,30 +208,46 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
     summary: spec.summary,
     withModel: (options) =>
       Effect.gen(function* () {
-        const { moment, expected } = yield* prepare;
+        const { moment, evidence, expected } = yield* prepare(options);
+
+        if (!evidence.pass)
+          return {
+            pass: false,
+            detail: `capture incomplete: ${evidence.detail}`,
+            answer: null,
+            steps: 0,
+            usage: noUsage,
+          };
 
         const { value, usage } = yield* Moment.describe(moment, {
           schema: spec.answer,
-          instructions: spec.instructions,
+          instructions:
+            typeof spec.instructions === "string" ? spec.instructions : spec.instructions(expected),
         });
 
         yield* options.onUsage(usage);
+        const grade = spec.grade(value, expected);
 
-        return { ...spec.grade(value, expected), answer: value, steps: 1, usage };
+        return {
+          pass: evidence.pass && grade.pass,
+          detail: `${grade.detail}; ${evidence.detail}`,
+          answer: value,
+          steps: 1,
+          usage,
+        };
       }),
-    // Without a model, check that the moment holds the frames asked for and the truth reads.
-    scripted: Effect.gen(function* () {
-      const { moment, expected } = yield* prepare;
-      const wanted = spec.capture.frames ?? 2;
+    scripted: (options = {}) =>
+      Effect.gen(function* () {
+        const { evidence, expected } = yield* prepare(options);
 
-      return {
-        pass: moment.frames.length === wanted,
-        detail: `${moment.frames.length} of ${wanted} frames, ${moment.events.length} events; truth ${JSON.stringify(expected)}`,
-        answer: expected,
-        steps: 0,
-        usage: noUsage,
-      };
-    }),
+        return {
+          ...evidence,
+          detail: `${evidence.detail}; truth ${JSON.stringify(expected)}`,
+          answer: expected,
+          steps: 0,
+          usage: noUsage,
+        };
+      }),
   };
 };
 
@@ -282,6 +358,7 @@ const chartSpike = understand({
   start: "/markets/btc?live=1",
   setup: waitForMarket((market) => market.spikeAt !== null, 1500),
   capture: { frames: 3, windowMillis: 4000 },
+  minimumSpanMillis: () => Effect.succeed(1500),
   instructions: moveInstructions,
   answer: MoveAnswer,
   expected: () => Effect.succeed({ movedSharply: true, direction: "up" as const }),
@@ -298,11 +375,12 @@ const chartCalm = understand({
   start: "/markets/btc?live=1",
   setup: waitForMarket((market) => market.candles >= 63, 0),
   capture: { frames: 3, windowMillis: 4000 },
+  minimumSpanMillis: () => Effect.succeed(500),
   instructions: moveInstructions,
   answer: MoveAnswer,
   expected: () => Effect.succeed({ movedSharply: false, direction: "flat" as const }),
   grade: (answer) => ({
-    pass: !answer.movedSharply,
+    pass: !answer.movedSharply && answer.direction === "flat",
     detail: `answered ${JSON.stringify(answer)}, expected no sharp move`,
   }),
 });
@@ -393,6 +471,178 @@ const checkout = operate({
     ),
 });
 
+const QuoteAnswer = Schema.Struct({
+  ticker: Schema.String,
+  price: Schema.Finite,
+  change1h: Schema.Finite,
+  change24h: Schema.Finite,
+  column: Schema.String,
+  table: Schema.String,
+});
+
+const quoteTask = (dense: boolean) =>
+  understand({
+    name: dense ? "quote-dense" : "quote-table",
+    summary: dense
+      ? "Bind a quote to the requested row, period and table among similar market panels"
+      : "Read a quote's price and 24-hour change without borrowing another row or period",
+    start: dense ? routes.denseQuotes : routes.quotes,
+    setup: () => Effect.void,
+    capture: { frames: 1 },
+    instructions: (expected) =>
+      `In the ${expected.table} table, read the ${expected.ticker} row. Report its ticker, price, 1-hour and 24-hour percentage changes as displayed, the exact header of the 24-hour percentage column, and the table name. Do not use another period or another table with the same ticker.`,
+    answer: QuoteAnswer,
+    expected: (page) =>
+      truth(page, QuoteTruth).pipe(
+        Effect.map((quotes) => ({
+          ticker: quotes.focus,
+          price: quotes.price,
+          change1h: quotes.c1h,
+          change24h: quotes.c24h,
+          column: quotes.header,
+          table: quotes.table,
+        })),
+      ),
+    grade: (answer, expected) => ({
+      pass:
+        answer.ticker === expected.ticker &&
+        answer.price === expected.price &&
+        answer.change1h === expected.change1h &&
+        answer.change24h === expected.change24h &&
+        answer.column === expected.column &&
+        answer.table === expected.table,
+      detail: `answered ${JSON.stringify(answer)}, expected ${JSON.stringify(expected)}`,
+    }),
+  });
+
+const tumbleWin = understand({
+  name: "tumble-win",
+  summary: "Count cascades on a 6 by 5 canvas slot and read its final multiplier, win and balance",
+  start: routes.tumble,
+  setup: (page) =>
+    Effect.gen(function* () {
+      yield* page.click({ x: 500, y: 648 });
+      yield* truth(page, TumbleTruth).pipe(
+        Effect.repeat({ schedule: Schedule.spaced("100 millis"), until: (game) => game.done }),
+        Effect.timeout("20 seconds"),
+        Effect.orDie,
+      );
+      yield* page.waitForStill({ quietMillis: 150, timeout: Duration.seconds(3) });
+    }),
+  // Three frames can omit an entire paying cascade; give the describer its visual evidence.
+  capture: { frames: 12, windowMillis: 20_000 },
+  minimumSpanMillis: (page) =>
+    truth(page, TumbleTruth).pipe(Effect.map((game) => Math.max(0, game.durationMillis - 300))),
+  instructions:
+    "Describe this completed spin of the 6 by 5 tumble slot: how many paying tumbles occurred, the final multiplier, TOTAL WIN, BALANCE, and whether the spin is done. Count the paying cascades, not each moving frame.",
+  answer: Schema.Struct({
+    tumbles: Schema.Int,
+    multiplier: Schema.Finite,
+    totalWin: Schema.Finite,
+    balance: Schema.Finite,
+    done: Schema.Boolean,
+  }),
+  expected: (page) =>
+    truth(page, TumbleTruth).pipe(
+      Effect.map((game) => ({
+        tumbles: game.tumbles,
+        multiplier: game.multiplier,
+        totalWin: game.totalWin,
+        balance: game.balance,
+        done: game.done,
+      })),
+    ),
+  grade: (answer, expected) => ({
+    pass:
+      answer.tumbles === expected.tumbles &&
+      answer.multiplier === expected.multiplier &&
+      answer.totalWin === expected.totalWin &&
+      answer.balance === expected.balance &&
+      answer.done === expected.done,
+    detail: `answered ${JSON.stringify(answer)}, expected ${JSON.stringify(expected)}`,
+  }),
+});
+
+const orderFilled = understand({
+  name: "order-filled",
+  summary: "Read the filled order after a market buy, including its quantity, price and status",
+  start: routes.order,
+  setup: (page) =>
+    Effect.gen(function* () {
+      // Keep an earlier no-order frame distinct from the final filled row.
+      yield* Effect.sleep("700 millis");
+      yield* fill(page, "Quantity (BTC)", "0.25");
+      yield* press(page, "button", "Place order");
+      yield* page.waitForStill({ quietMillis: 150, timeout: Duration.seconds(3) });
+    }),
+  capture: { frames: 2, windowMillis: 5000 },
+  minimumSpanMillis: () => Effect.succeed(500),
+  instructions:
+    "What order was just filled? Read its id, side, quantity, fill price and status from the orders table. Copy the side and status exactly as displayed.",
+  answer: Schema.Struct({
+    id: Schema.String,
+    side: Schema.String,
+    qty: Schema.Finite,
+    price: Schema.Finite,
+    status: Schema.String,
+  }),
+  expected: (page) =>
+    truth(page, MarketTruth).pipe(
+      Effect.map((market) => {
+        const order = market.orders[0];
+
+        if (order === undefined) throw new Error("order-filled fixture did not create an order");
+
+        return {
+          id: order.id,
+          side: order.side,
+          qty: order.qty,
+          price: order.price,
+          status: order.status,
+        };
+      }),
+    ),
+  grade: (answer, expected) => ({
+    pass:
+      answer.id === expected.id &&
+      answer.side === expected.side &&
+      answer.qty === expected.qty &&
+      answer.price === expected.price &&
+      answer.status === expected.status,
+    detail: `answered ${JSON.stringify(answer)}, expected ${JSON.stringify(expected)}`,
+  }),
+});
+
+const navigated = understand({
+  name: "navigated",
+  summary: "Identify the new page and the control that opened it from frames and navigation events",
+  start: routes.navigation,
+  beforeCapture: (page) =>
+    Effect.gen(function* () {
+      yield* press(page, "button", "Accept all");
+      yield* press(page, "button", "Yes, I am 18 or older");
+    }),
+  setup: (page) =>
+    Effect.gen(function* () {
+      yield* Effect.sleep("700 millis");
+      yield* press(page, "button", "Play");
+      yield* page.waitForStill({ quietMillis: 150, timeout: Duration.seconds(3) });
+    }),
+  capture: { frames: 2, windowMillis: 5000 },
+  minimumSpanMillis: () => Effect.succeed(500),
+  instructions:
+    "What page did the browser just navigate to, and which control triggered it? Report the final full URL, page title, and the visible label of the control that was clicked.",
+  answer: Schema.Struct({ url: Schema.String, title: Schema.String, trigger: Schema.String }),
+  expected: (page) => truth(page, NavigationTruth),
+  grade: (answer, expected) => ({
+    pass:
+      answer.url === expected.url &&
+      answer.title === expected.title &&
+      answer.trigger === expected.trigger,
+    detail: `answered ${JSON.stringify(answer)}, expected ${JSON.stringify(expected)}`,
+  }),
+});
+
 export const tasks: ReadonlyArray<Task> = [
   casinoPlay,
   casinoMoment,
@@ -401,4 +651,9 @@ export const tasks: ReadonlyArray<Task> = [
   chartCalm,
   chartTrade,
   checkout,
+  quoteTask(false),
+  quoteTask(true),
+  tumbleWin,
+  orderFilled,
+  navigated,
 ];
