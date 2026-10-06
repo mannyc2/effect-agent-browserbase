@@ -4,7 +4,7 @@
 `Browser` layer, and an Effect client for the Browserbase REST API.
 
 ```sh
-npm install effect-browserbase effect-browser effect playwright-core
+npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 ```
 
 - `Browserbase`: `open` and `layer` create a session and release it when their scope closes, so
