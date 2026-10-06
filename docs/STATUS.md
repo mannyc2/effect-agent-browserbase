@@ -49,7 +49,9 @@
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
   and a shared model admission budget. Every trial is graded, an infrastructure failure, denied
-  or unrun, and summaries keep those denominators apart. Paid runs remain opt-in.
+  or unrun, and summaries keep those denominators apart. `--arm` runs the paired experiment's
+  arms 1 (an outline with every action), 2 (vision first) and 5 (`Agent.run`) on the same
+  seeds; arms 1 and 2 use a bench loop over the public `Tools`. Paid runs remain opt-in.
 
 `effect-agent-browser` and the Effect Agent dependency are gone: the agent loop is `effect/ai`'s
 `Chat` with the browser toolkit. The tests run against real local Chromium, a fake Browserbase API
