@@ -302,6 +302,48 @@
         "typescript/no-unsafe-return": "off",
         "typescript/no-unsafe-type-assertion": "off"
       }
+    },
+    {
+      // The bench's own program runs on Effect's platform: its configuration, files, child
+      // processes, clock, randomness and console come from Effect's services.
+      "files": ["**/bench/*.ts"],
+      "rules": {
+        "effecttsgo/async-function": "error",
+        "effecttsgo/crypto-random-uuid": "error",
+        "effecttsgo/crypto-random-uuid-in-effect": "error",
+        "effecttsgo/global-console": "error",
+        "effecttsgo/global-console-in-effect": "error",
+        "effecttsgo/global-date": "error",
+        "effecttsgo/global-fetch": "error",
+        "effecttsgo/global-fetch-in-effect": "error",
+        "effecttsgo/global-random": "error",
+        "effecttsgo/global-timers": "error",
+        "effecttsgo/new-promise": "error",
+        "effecttsgo/node-builtin-import": "error",
+        "effecttsgo/process-env": "error",
+        "effecttsgo/process-env-in-effect": "error"
+      }
+    },
+    {
+      // The latency proxy and the hosted relay speak WebSocket over Node's sockets on host
+      // timers, until a shared testing wire replaces them.
+      "files": ["**/bench/Latency.ts", "**/bench/Relay.ts"],
+      "rules": {
+        "effecttsgo/async-function": "off",
+        "effecttsgo/crypto-random-uuid": "off",
+        "effecttsgo/crypto-random-uuid-in-effect": "off",
+        "effecttsgo/global-console": "off",
+        "effecttsgo/global-console-in-effect": "off",
+        "effecttsgo/global-date": "off",
+        "effecttsgo/global-fetch": "off",
+        "effecttsgo/global-fetch-in-effect": "off",
+        "effecttsgo/global-random": "off",
+        "effecttsgo/global-timers": "off",
+        "effecttsgo/new-promise": "off",
+        "effecttsgo/node-builtin-import": "off",
+        "effecttsgo/process-env": "off",
+        "effecttsgo/process-env-in-effect": "off"
+      }
     }
   ]
 }

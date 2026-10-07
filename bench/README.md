@@ -7,7 +7,22 @@ can be done and graded without a model.
 The pages (`Sites.ts`) are served at `https://bench.test` by request interception, so a local
 Chromium and a hosted browser load them the same way, with no tunnel. Each page keeps its truth in
 `window.__bench` for grading; models never see it. Each trial derives its fixture seed from the base seed, task and trial number,
-so changing concurrency does not change its page data.
+so changing concurrency does not change its page data. The same seed seeds the trial's Effect
+`Random`, which humanized pointer paths and typing draw from.
+
+Operate pages vary with the seed too, so a task's trials sample a family of pages rather than
+repeat one, and every graded answer is the page's own:
+
+- the casino lobby words its cookie banner and age check, and orders their buttons, differently,
+  and moves the game's card among the others; the reels start from different credits and a
+  different default bet, with their controls elsewhere on the canvas;
+- the trading ticket words its fields differently, starts on the buy or the sell side, and
+  numbers its orders from a different id; a limit order rests on the book, open;
+- the checkout words and orders its fields differently, shuffles its countries and shipping
+  choices, names its button differently and issues a different confirmation number.
+
+Prompts stay the same. `run --split eval` draws a held-out family of seeds: work on prompts and
+tools against `dev`, the default, and compare arms on `eval`.
 
 | Task            | Kind       | What the model must do                                                                    |
 | --------------- | ---------- | ----------------------------------------------------------------------------------------- |
@@ -23,6 +38,9 @@ so changing concurrency does not change its page data.
 | `tumble-win`    | understand | Count paying cascades on a 6×5 canvas slot and read the final multiplier, win and balance |
 | `order-filled`  | understand | Identify the filled order, its quantity, price and status                                 |
 | `navigated`     | understand | Identify the destination URL, title and control that triggered navigation                 |
+| `board-move`    | operate    | Drag a card to the top of a board's Done column and report how many cards Done holds      |
+| `policy-find`   | operate    | Find the returns policy behind header menus that open on hover and report its reference   |
+| `catalog-buy`   | operate    | Add the cheapest tent for two in stock, from a catalogue across three pages, to the cart  |
 
 An operate task gives a model the browser tools (`Agent.run`). An understand task brings the page to
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call:
@@ -61,15 +79,19 @@ native filtering, paint gaps and observed subscriber loss.
 From this directory:
 
 ```sh
-bun run bench                       # scripted solutions in local Chromium, at no cost
-bun run bench -- --help
+bun run bench run                   # scripted solutions in local Chromium, at no cost
+bun run bench run --help
+bun run bench report ../.work/bench/<results>.jsonl
 
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
-  bun run bench -- --model <openrouter-model-id> --trials 3 --concurrency 4 --seed 23
+  bun run bench run --model <openrouter-model-id> --trials 3 --concurrency 4 --seed 23
 
 EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... \
-  bun run bench -- --browser browserbase
+  bun run bench run --browser browserbase
 ```
+
+The command line is `effect/cli` (`bench.ts`), run by `NodeRuntime.runMain`. Its opt-ins are read
+through `Config`, and its files written through `FileSystem`.
 
 Model calls and Browserbase sessions cost money, so each needs its environment variable. Trials run
 with bounded concurrency (`--concurrency`, default 4) and separate browsers. Every Browserbase trial gets a
@@ -103,8 +125,8 @@ can add fees outside this token budget; a receipt whose charge exceeds its reser
 all further admission. Only non-streaming chat completions are budgeted: the client refuses
 streaming, decisions and raw generated requests before sending them.
 
-Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
-the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
+Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git),
+a `TrialRecord` (`Results.ts`, `version` 1) that `report` decodes again: the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
 model, pinned endpoint with its rates and per-call reservation, browser, added latency, humanize,
 output-token limit, budget, concurrency, recording and narration), effective reasoning, status and
 reason, the answer, model turns
@@ -148,7 +170,7 @@ The bench and the judges runner export traces over OTLP/HTTP to any collector or
 local Jaeger, when asked; otherwise they export nothing:
 
 ```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_TRACES_EXPORTER=otlp bun run bench
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_TRACES_EXPORTER=otlp bun run bench run
 ```
 
 Each trial is a trace of its own, rooted at a `bench.trial` span with its task, arm, seed, browser
@@ -205,9 +227,21 @@ after the session ended, and a session whose page never navigated had none.
 ## Arms
 
 `--arm` sets how a model sees a page and acts on it, for the paired experiment. Repeated, it runs
-every selected arm on the same seeds, so trials pair by task and trial number. The summary gives
-each arm's tallies, its median seconds, model turns and tool calls per graded trial, and for each
-two arms the pairs graded in both, split by which arm passed.
+every selected arm on the same seeds, so trials pair by task and seed. A model run's summary, and
+`report` over any results files (`Report.ts`, `Stats.ts`), states its estimand: whether one arm
+passes more often than another on these tasks' pages. The tasks are fixed, not sampled, so a
+difference speaks to these pages only. It then gives:
+
+- each arm's tallies, and its median seconds, model turns and tool calls per graded trial;
+- per task and arm, the pass rate with Wilson's 95% interval; pass^3, the chance that three
+  trials all pass, estimated as τ-bench does; and the dollars and seconds per pass;
+- for each two arms, on the pages both were graded on, McNemar's exact test per task, with
+  Holm's correction across the tasks, and the test stratified by task, which pools the
+  discordant pairs, with Holm's correction across the pairs of arms;
+- infrastructure failures per backend: local Chromium, Chromium with added latency, or
+  Browserbase.
+
+A wrong answer counts against its arm; an infrastructure failure leaves its pair out of the test.
 
 | Arm | Operate tasks                                                                                                                                             | Understand tasks                               |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
@@ -224,14 +258,14 @@ the model. Arm 1 keeps the halt too, although the tools ran every call before ba
 
 ```sh
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
-  bun run bench -- --model openai/gpt-6-luna --task checkout --arm 1 --arm 2 --arm 5 --trials 20
+  bun run bench run --model openai/gpt-6-luna --task checkout --arm 1 --arm 2 --arm 5 --trials 20
 ```
 
 The first paired run, on 2026-10-06, used `openai/gpt-6-luna` (medium reasoning for operate tasks,
 none for understand tasks) with seed 1: 20 trials of each operate task per arm in local Chromium,
 5 on Browserbase, and 10 of each understand task in arms 2 and 5, for $0.91 in all. Every trial
-was graded. The operate pages do not vary with the seed, so a task's trials repeat one page and
-are not independent observations. In that run, arm 5's moments carried the outline and named an
+was graded. The operate pages did not vary with the seed then, so a task's trials repeated one
+page. In that run, arm 5's moments carried the outline and named an
 action's target by its ref, and arm 2's moments left the outline out; moments now name what an
 action acted on and leave the outline out by default, and arm 1 adds it. The graders match exactly: "On the page" also counts the
 `checkout` trials that left the right order and gave the issued number inside a sentence
@@ -277,14 +311,16 @@ status:
   the ledger stops admitting calls, after a charge above its bound, it keeps the first reason,
   and every later unit is `unrun` with that reason, never `denied`.
 
-An interrupted run (SIGINT, or an interrupted fiber) still records every unit it scheduled: those
-without an outcome are `unrun` with reason `interrupted` and keep what their dispatched calls
-spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside the trials.
-SIGINT interrupts the run: each trial's browser closes with it, and then these records are written.
+An interrupted run (SIGINT or SIGTERM, or an interrupted fiber) still records every unit it
+scheduled: those without an outcome are `unrun` with reason `interrupted` and keep what their
+dispatched calls spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside
+the trials. A signal interrupts the run: each trial's browser closes with it, these records are
+written, and the bench exits with code 130.
 
 `pass` is null except for graded units. Summaries report passes over graded units separately from
 infrastructure failures, denials and unrun units. A run exits successfully only when every unit was
-graded with settled charges; a free run also needs every answer to pass.
+graded with settled charges; a free run also needs every answer to pass. `report` prints the same
+summary for any results files, from their records alone.
 
 The runner retains only closed failure categories and safe response-shape counts for provider
 errors. They omit response text, arbitrary descriptions and provider identifiers. These categories
@@ -293,7 +329,7 @@ preserving charges that arrived before a failure.
 
 ## Input judges
 
-`bun run judges` grades the input judges of `effect-browser/Policy` against the 77-control corpus
+`bun run bench judges` grades the input judges of `effect-browser/Policy` against the 77-control corpus
 in `packages/browser/test/consequence-corpus.ts`. Each case's input is prepared on local Chromium
 and refused before it reaches the page, so a judge sees exactly what a guard would. Every case is
 judged without a task: the run grades recognising risk, not whether a task asks for it. A risk
@@ -315,8 +351,8 @@ are `cases.jsonl` and `summary.json`: per arm, consequential and benign cases fl
 false alarms per risk, and recall by kind. Without `--out` they go to `.work/judges/`.
 
 ```sh
-bun run judges                          # free: the structure arm
-EFFECT_BROWSER_BENCH_LIVE=1 bun run judges -- --arm decider --arm reviewer \
+bun run bench judges                    # free: the structure arm
+EFFECT_BROWSER_BENCH_LIVE=1 bun run bench judges --arm decider --arm reviewer \
   --arm escalate --model openai/gpt-6-luna --max-usd 0.5
 ```
 
@@ -341,6 +377,10 @@ and Jev `jev-1.13.0`, for $0.018 in all:
 
 `bun run test` runs every scripted solution, grades answers from models scripted to be wrong or
 blindly sure, verifies seeded fixture data and captured evidence, and checks concurrent browser
-ownership and budget admission. No model or hosted browser is called.
+ownership and budget admission. Two gates hold every operate task: its page varies with the seed,
+and an agent that reports the right answer without doing the work fails. No model or hosted
+browser is called.
 
-A new task is an `operate` or `understand` entry in `Tasks.ts`; the tests pick it up.
+A new task is an `operate` or `understand` entry in `Tasks.ts`, or an errand in `Errands.ts`, an
+operate task on an everyday page of its own; `Catalog.ts` lists every task, and the tests pick it
+up.

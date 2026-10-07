@@ -1,36 +1,63 @@
-// Free checks of the judges bench: its opt-in, and Jev's admission and charge.
+// Free checks of the judges command: its opt-in, and Jev's admission and charge.
 import { TypeSafeClient } from "@effect/ai-typesafe";
+import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { ConfigProvider, Effect, Layer, Result } from "effect";
+import { Command } from "effect/cli";
 import { HttpClient } from "effect/http";
 
 import { ledger } from "../Budget.ts";
-import { budgetedTypeSafe, jevReservation, options } from "../judges.ts";
+import { admit, budgetedTypeSafe, command, jevReservation, type Options } from "../judges.ts";
 
-const refusal = (args: ReadonlyArray<string>, live: boolean) =>
-  options(args, live).pipe(
+const refusal = (fields: Partial<Options>, live: boolean) =>
+  admit({
+    arms: ["structure"],
+    model: undefined,
+    jev: "jev-1.13.0",
+    threshold: 0.5,
+    maxUsd: 0.5,
+    concurrency: 4,
+    out: undefined,
+    ...fields,
+  }).pipe(
     Effect.match({ onFailure: (error) => error.message, onSuccess: () => "accepted" }),
+    Effect.provide(
+      ConfigProvider.layer(
+        ConfigProvider.fromUnknown(live ? { EFFECT_BROWSER_BENCH_LIVE: "1" } : {}),
+      ),
+    ),
   );
 
 describe("judges", () => {
   it.effect("runs only the free arm unless paid arms are opted into", () =>
     Effect.gen(function* () {
-      assert.deepStrictEqual((yield* options([], false)).arms, ["structure"]);
       assert.deepStrictEqual(
         yield* Effect.all([
-          refusal(["--arm", "decider"], false),
-          refusal(["--arm", "reviewer"], true),
-          refusal(["--arm", "reviewer", "--model", "openai/gpt-6-luna"], true),
-          refusal(["--arm", "oracle"], true),
-          refusal(["--arm", "decider", "--arm", "decider"], true),
+          refusal({}, false),
+          refusal({ arms: ["decider"] }, false),
+          refusal({ arms: ["reviewer"] }, true),
+          refusal({ arms: ["reviewer"], model: "openai/gpt-6-luna" }, true),
+          refusal({ arms: ["decider", "decider"] }, true),
         ]),
         [
+          "accepted",
           "Model calls cost money: set EFFECT_BROWSER_BENCH_LIVE=1 to make them.",
           "The reviewer needs --model, an OpenRouter model.",
           "accepted",
           "--arm takes structure, reviewer, decider, escalate, each once.",
-          "--arm takes structure, reviewer, decider, escalate, each once.",
         ],
+      );
+
+      const unknown = yield* Command.runWith(command, { version: "test" })([
+        "--arm",
+        "oracle",
+      ]).pipe(Effect.provide(NodeServices.layer), Effect.result);
+
+      // A flag the command line rejects shows the help, with the reason.
+      assert.isTrue(
+        Result.isFailure(unknown) &&
+          unknown.failure._tag === "ShowHelp" &&
+          unknown.failure.errors.some((error) => error._tag === "InvalidValue"),
       );
     }),
   );

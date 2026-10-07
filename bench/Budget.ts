@@ -2,7 +2,6 @@
 // pinned endpoint whose bounds every reservation uses.
 import { Generated, OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Cause, Clock, Config, Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
-import type * as Agent from "effect-browser/Agent";
 import { AiError, type LanguageModel } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
@@ -14,6 +13,13 @@ export class BenchError extends Schema.TaggedError<BenchError>()("BenchError", {
 }) {}
 
 export const refuse = (message: string) => Effect.fail(new BenchError({ message }));
+
+/** A paid opt-in, such as `EFFECT_BROWSER_BENCH_LIVE`: on only when its variable is exactly 1. */
+export const optedIn = (name: string) =>
+  Config.String(name).pipe(
+    Config.map((value) => value === "1"),
+    Config.withDefault(false),
+  );
 
 export const efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -112,14 +118,18 @@ export const chargeOf = (usage: RawUsage): number | undefined =>
     ),
   );
 
+const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
 /** Known charges remain distinct from upper bounds for requests whose bill is unknown. */
-export interface Accounting {
-  readonly calls: number;
-  readonly usage: Agent.Usage;
-  readonly knownUsd: number;
-  readonly reservedUsd: number;
-  readonly uncertainCalls: number;
-}
+export const Accounting = Schema.Struct({
+  calls: Count,
+  usage: Schema.Struct({ inputTokens: Count, outputTokens: Count, cachedInputTokens: Count }),
+  knownUsd: Charge,
+  reservedUsd: Charge,
+  uncertainCalls: Count,
+});
+
+export type Accounting = typeof Accounting.Type;
 
 export const emptyAccounting: Accounting = {
   calls: 0,
@@ -130,10 +140,9 @@ export const emptyAccounting: Accounting = {
 };
 
 /** Wall time an account's calls spent queued for admission and in their provider requests. */
-export interface Timing {
-  readonly queueSeconds: number;
-  readonly requestSeconds: number;
-}
+export const Timing = Schema.Struct({ queueSeconds: Schema.Finite, requestSeconds: Schema.Finite });
+
+export type Timing = typeof Timing.Type;
 
 export const noTiming: Timing = { queueSeconds: 0, requestSeconds: 0 };
 
@@ -554,15 +563,17 @@ export interface Needs {
 }
 
 /** The pinned endpoint and the bounds each call reserves, recorded with every result. */
-export interface Endpoint {
-  readonly tag: string;
-  readonly contextTokens: number;
-  readonly outputParameter: "max_tokens" | "max_completion_tokens";
+export const Endpoint = Schema.Struct({
+  tag: Schema.String,
+  contextTokens: Count,
+  outputParameter: Schema.Literals(["max_tokens", "max_completion_tokens"]),
   /** USD per million tokens: the reservation's rates and the request's price ceilings. */
-  readonly inputPerMillion: number;
-  readonly outputPerMillion: number;
-  readonly requestUsd: number;
-}
+  inputPerMillion: Charge,
+  outputPerMillion: Charge,
+  requestUsd: Charge,
+});
+
+export type Endpoint = typeof Endpoint.Type;
 
 /**
  * Endpoints that can serve every parameter a request sends, under its price ceilings, cheapest

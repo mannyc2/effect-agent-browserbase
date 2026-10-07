@@ -51,7 +51,7 @@
   `Policy` adds judges over `effect/ai` (`reviewer` on a `LanguageModel`, `decider` on a
   `DecisionModel` such as Jev) and `make`, a guard that denies a risk the task does not ask for and
   fails closed on input with facts when its judge fails; `Agent.run` provides the task and ends
-  after three refusals in a row. The judges are tested with scripted models; `bun run judges` in
+  after three refusals in a row. The judges are tested with scripted models; `bun run bench judges` in
   the bench grades them against the corpus, with paid arms only on opt-in.
 - Moments: `Moment.capture` gathers a page's frames and events over a window that can start where
   the previous moment ended, so consecutive moments neither repeat nor miss an event, and needs
@@ -88,13 +88,17 @@
   there it also traces each DevTools command under the span that was open when it was sent. Hosted
   sessions carry their trial in Browserbase's user metadata, and connect through a relay in the
   bench that traces their commands the same way.
-- `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,
-  navigation and forms, graded against seeded page truth and captured evidence. Trials run with
-  separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
-  and a shared model admission budget. Every trial is graded, an infrastructure failure, denied
-  or unrun, and summaries keep those denominators apart. `--arm` runs the paired experiment's
-  arms 1 (an outline with every action), 2 (vision first) and 5 (`Agent.run`) on the same
-  seeds; arms 1 and 2 use a bench loop over the public `Tools`. Paid runs remain opt-in.
+- `bench` (private): fifteen tasks over canvas games, live charts, dense quote tables, orders,
+  navigation, forms, a board, menus and a catalogue, graded against seeded page truth and captured
+  evidence. The six operate tasks' pages vary with the seed, and `--split eval` holds a family of
+  seeds out for comparing arms. Trials run with separate browsers and bounded concurrency,
+  task-specific reasoning defaults, elapsed-time metrics and a shared model admission budget. Every
+  trial is graded, an infrastructure failure, denied or unrun, and summaries keep those
+  denominators apart. `--arm` runs the paired experiment's arms 1 (an outline with every action),
+  2 (vision first) and 5 (`Agent.run`) on the same seeds; arms 1 and 2 use a bench loop over the
+  public `Tools`. The bench is an `effect/cli` program (`run`, `report`, `judges`) on `Config` and
+  `FileSystem`; its results are versioned Schema records, and a report states its estimand and
+  tests arms with exact paired tests. Paid runs remain opt-in.
 - `demos` (private): a static site that replays bench runs recorded with `--record`: the
   screencast as video, the planned pointer path, agent turns, a narrator's captions (`--narrate`)
   and the pictures a model was shown, with each run's grade against the page's truth. Agent runs,

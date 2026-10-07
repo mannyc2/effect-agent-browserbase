@@ -16,16 +16,20 @@ import * as Arms from "./Arms.ts";
 import type { Arm } from "./Arms.ts";
 import type { Trace } from "./Recording.ts";
 import {
+  CheckoutLayout,
   CheckoutTruth,
   type FixtureUnreadable,
   FrameTruth,
+  LobbyLayout,
   MarketTruth,
   NavigationTruth,
   origin,
   QuoteTruth,
+  ReelsLayout,
   ReelsTruth,
   routes,
   serve,
+  TicketLayout,
   truth,
   TumbleTruth,
 } from "./Sites.ts";
@@ -166,11 +170,11 @@ const usageOf = (usage: Response.Usage): Agent.Usage => ({
 });
 
 /** Serve the bench pages for the rest of the scope, and open `path` in the first tab. */
-const open = (path: string, seed = 0) =>
+const open = (path: string, seed = 0, pages: Readonly<Record<string, string>> = {}) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
 
-    yield* serve(browser, seed);
+    yield* serve(browser, seed, pages);
     const page = yield* browser.page;
 
     yield* page.goto(`${origin}${path}`);
@@ -189,26 +193,59 @@ export const refOf = (snapshot: Snapshot, role: string, name: string): string =>
   return ref;
 };
 
-const press = (page: Page, role: string, name: string) =>
+export const press = (page: Page, role: string, name: string) =>
   page
     .snapshot({ full: true })
     .pipe(Effect.flatMap((snapshot) => page.click(refOf(snapshot, role, name))));
 
-const fill = (page: Page, name: string, text: string) =>
+export const fill = (page: Page, name: string, text: string) =>
   page
     .snapshot({ full: true })
     .pipe(
       Effect.flatMap((snapshot) => page.type(text, { into: refOf(snapshot, "textbox", name) })),
     );
 
+// The lobby's banner and age check, as this seed words them.
+const enterLobby = (page: Page) =>
+  Effect.gen(function* () {
+    const { layout } = yield* truth(page, LobbyLayout);
+
+    yield* press(page, "button", layout.accept);
+    yield* press(page, "button", layout.adult);
+  });
+
+// Every card has a Play button; only the game's own opens it.
+const playReels = (page: Page) =>
+  page
+    .find({ role: "button", name: "Play", near: "Temple Reels" })
+    .pipe(
+      Effect.flatMap(([found]) =>
+        found === undefined
+          ? Effect.die("the lobby shows no Temple Reels card")
+          : page.click(found.ref),
+      ),
+    );
+
+// An order ticket filled in as this seed words it, on the buy side.
+const buy = (page: Page, quantity: string) =>
+  Effect.gen(function* () {
+    const { layout } = yield* truth(page, TicketLayout);
+
+    yield* press(page, "radio", "Buy");
+    yield* fill(page, layout.quantity, quantity);
+    yield* press(page, "button", layout.place);
+  });
+
 // A model that leaves the fixture, for another page or another tab's game, has not done the task.
 const unreadable = (error: FixtureUnreadable): Effect.Effect<Grade> =>
   Effect.succeed({ pass: false, detail: error.message });
 
-const operate = <A, I>(spec: {
+export const operate = <A, I>(spec: {
   readonly name: string;
   readonly summary: string;
   readonly start: string;
+  /** Pages of the task's own, served beside the bench's. */
+  readonly pages?: Readonly<Record<string, string>>;
   readonly prompt: string;
   readonly answer: Schema.Codec<A, I>;
   readonly maxSteps: number;
@@ -222,7 +259,7 @@ const operate = <A, I>(spec: {
   prompt: spec.prompt,
   withModel: (options) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed);
+      const page = yield* open(spec.start, options.seed, spec.pages);
       let actions = 0;
 
       const stopNarrating = yield* Deferred.make<void>();
@@ -262,7 +299,7 @@ const operate = <A, I>(spec: {
     }).pipe(Effect.scoped),
   scripted: (options = {}) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed);
+      const page = yield* open(spec.start, options.seed, spec.pages);
       const answer = yield* spec.solve(page);
 
       const grade = yield* spec
@@ -302,9 +339,9 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly summary: string;
   readonly start: string;
   /** Put incidental gates behind us before selecting the earlier evidence frame. */
-  readonly beforeCapture?: (page: Page) => Effect.Effect<void, BrowserError>;
+  readonly beforeCapture?: (page: Page) => Effect.Effect<void, BrowserError | FixtureUnreadable>;
   /** Bring the page to the moment, without a model. */
-  readonly setup: (page: Page) => Effect.Effect<void, BrowserError>;
+  readonly setup: (page: Page) => Effect.Effect<void, BrowserError | FixtureUnreadable>;
   /** Frames to describe, and the window they span. Defaults to 2 frames over 5 seconds. */
   readonly capture: { readonly frames?: number; readonly windowMillis?: number };
   /** A count alone cannot show whether the retained frames cover an earlier state. */
@@ -510,9 +547,10 @@ export const gapsWithin = (frames: ReadonlyArray<Frame>, maximumMillis: number) 
 };
 
 const spin = (page: Page) =>
-  page
-    .click({ x: 480, y: 561 })
-    .pipe(Effect.andThen(page.ready({ quietMillis: 400, timeout: Duration.seconds(10) })));
+  truth(page, ReelsLayout).pipe(
+    Effect.flatMap(({ spinAt }) => page.click(spinAt)),
+    Effect.andThen(page.ready({ quietMillis: 400, timeout: Duration.seconds(10) })),
+  );
 
 const casinoPlay = operate({
   name: "casino-play",
@@ -524,9 +562,8 @@ const casinoPlay = operate({
   maxSteps: 40,
   solve: (page) =>
     Effect.gen(function* () {
-      yield* press(page, "button", "Accept all");
-      yield* press(page, "button", "Yes, I am 18 or older");
-      yield* press(page, "button", "Play");
+      yield* enterLobby(page);
+      yield* playReels(page);
       for (let count = 0; count < 5; count++) yield* spin(page);
 
       return { credits: (yield* truth(page, ReelsTruth)).credits };
@@ -656,8 +693,7 @@ const chartTrade = operate({
   maxSteps: 20,
   solve: (page) =>
     Effect.gen(function* () {
-      yield* fill(page, "Quantity (BTC)", "0.25");
-      yield* press(page, "button", "Place order");
+      yield* buy(page, "0.25");
       const snapshot = yield* page.snapshot({ full: true });
 
       return { orderId: /ORD-\d+/.exec(snapshot.text)?.[0] ?? "" };
@@ -699,16 +735,18 @@ const checkout = operate({
   maxSteps: 25,
   solve: (page) =>
     Effect.gen(function* () {
-      yield* fill(page, "Full name", customer.name);
-      yield* fill(page, "Email", customer.email);
-      yield* fill(page, "Street address", customer.street);
-      yield* fill(page, "City", customer.city);
-      yield* fill(page, "Postal code", customer.postal);
+      const { layout } = yield* truth(page, CheckoutLayout);
+
+      yield* fill(page, layout.labels.name, customer.name);
+      yield* fill(page, layout.labels.email, customer.email);
+      yield* fill(page, layout.labels.street, customer.street);
+      yield* fill(page, layout.labels.city, customer.city);
+      yield* fill(page, layout.labels.postal, customer.postal);
       const form = yield* page.snapshot({ full: true });
 
       yield* page.select(refOf(form, "combobox", "Country"), ["United States"]);
-      yield* page.click(refOf(form, "radio", "Express (1-2 days, +$15)"));
-      yield* page.click(refOf(form, "button", "Place order"));
+      yield* page.click(refOf(form, "radio", layout.express));
+      yield* page.click(refOf(form, "button", layout.submit));
       const done = yield* page.snapshot();
 
       return { confirmation: /CONF-\d+/.exec(done.text)?.[0] ?? "" };
@@ -837,8 +875,7 @@ const orderFilled = understand({
     Effect.gen(function* () {
       // Keep an earlier no-order frame distinct from the final filled row.
       yield* Effect.sleep("700 millis");
-      yield* fill(page, "Quantity (BTC)", "0.25");
-      yield* press(page, "button", "Place order");
+      yield* buy(page, "0.25");
       yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
@@ -883,15 +920,11 @@ const navigated = understand({
   name: "navigated",
   summary: "Identify the new page and the control that opened it from frames and navigation events",
   start: routes.navigation,
-  beforeCapture: (page) =>
-    Effect.gen(function* () {
-      yield* press(page, "button", "Accept all");
-      yield* press(page, "button", "Yes, I am 18 or older");
-    }),
+  beforeCapture: enterLobby,
   setup: (page) =>
     Effect.gen(function* () {
       yield* Effect.sleep("700 millis");
-      yield* press(page, "button", "Play");
+      yield* playReels(page);
       yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },

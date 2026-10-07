@@ -17,7 +17,7 @@ export const routes = {
   navigationDestination: "/casino/reels",
 } as const;
 
-const style = `body{margin:0;font-family:system-ui,sans-serif}button{font:inherit;cursor:pointer}`;
+export const style = `body{margin:0;font-family:system-ui,sans-serif}button{font:inherit;cursor:pointer}`;
 
 // A lobby behind a cookie wall and an age check, as real casino sites are.
 const lobby = `<!doctype html><html><head><title>Lucky Harbor Casino</title><style>${style}
@@ -49,8 +49,17 @@ header{display:flex;justify-content:space-between;padding:16px 24px;background:#
   <button id="adult">Yes, I am 18 or older</button> <button id="minor">No</button>
 </div></div>
 <script>
-  window.__bench = { cookies: null, adult: null };
+  // The banner's and the check's wording and button order, and where the game's card sits, vary
+  // with the seed.
+  const random = __benchStream(0xca51), pick = (list) => list[Math.floor(random() * list.length)];
+  const layout = { accept: pick(["Accept all", "Allow all cookies", "I agree"]), reject: pick(["Reject all", "Only necessary", "Decline"]), adult: pick(["Yes, I am 18 or older", "I am 18 or older", "Enter (18+)"]), card: Math.floor(random() * 3) };
+  window.__bench = { cookies: null, adult: null, layout };
   const $ = (id) => document.getElementById(id);
+  $("accept").textContent = layout.accept; $("reject").textContent = layout.reject; $("adult").textContent = layout.adult;
+  if (random() < 0.5) $("accept").after($("reject"));
+  if (random() < 0.5) $("adult").before($("minor"));
+  const games = document.querySelector(".games"), card = $("play").closest(".card");
+  card.remove(); games.insertBefore(card, games.children[layout.card] ?? null);
   const decide = (choice) => { __bench.cookies = choice; $("cookies").remove(); $("gate").style.display = "flex"; };
   $("accept").onclick = () => decide("accepted");
   $("reject").onclick = () => decide("rejected");
@@ -74,7 +83,10 @@ const reels = `<!doctype html><html><head><title>Temple Reels</title><style>${st
   const bets = [1, 2, 5, 10, 20, 50];
   let seed = 7 + window.__benchSeed, grid = [[0, 1, 2], [3, 4, 5], [6, 0, 1], [2, 3, 4], [5, 6, 0]].map((c) => c.map((i) => symbols[i]));
   const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
-  window.__bench = { credits: 1000, bet: 10, spins: 0, spinning: false, lastWin: 0, results: [] };
+  // The starting credits, the default bet and where the controls sit vary with the seed.
+  const dealt = __benchStream(0x7e11), deal = (list) => list[Math.floor(dealt() * list.length)];
+  const controls = deal([{ spin: 400, minus: 250, plus: 320 }, { spin: 760, minus: 620, plus: 690 }, { spin: 40, minus: 230, plus: 300 }]);
+  window.__bench = { credits: deal([500, 750, 1000, 1500, 2000]), bet: deal([2, 5, 10]), spins: 0, spinning: false, lastWin: 0, results: [], spinAt: { x: controls.spin + 80, y: 561 } };
   const state = window.__bench;
   let started = 0, stops = [];
   const money = (n) => n.toLocaleString("en-US");
@@ -106,10 +118,10 @@ const reels = `<!doctype html><html><head><title>Temple Reels</title><style>${st
         g.fillText(symbol, x + 80 - g.measureText(symbol).width / 2, y + 90);
       }
     }
-    g.fillStyle = state.spinning ? "#555" : "#c1121f"; g.fillRect(400, 535, 160, 52);
-    g.fillStyle = "#fff"; g.font = "bold 28px sans-serif"; g.fillText("SPIN", 446, 572);
-    g.fillStyle = "#333"; g.fillRect(250, 535, 52, 52); g.fillRect(320, 535, 52, 52);
-    g.fillStyle = "#fff"; g.fillText("-", 268, 570); g.fillText("+", 336, 572);
+    g.fillStyle = state.spinning ? "#555" : "#c1121f"; g.fillRect(controls.spin, 535, 160, 52);
+    g.fillStyle = "#fff"; g.font = "bold 28px sans-serif"; g.fillText("SPIN", controls.spin + 46, 572);
+    g.fillStyle = "#333"; g.fillRect(controls.minus, 535, 52, 52); g.fillRect(controls.plus, 535, 52, 52);
+    g.fillStyle = "#fff"; g.fillText("-", controls.minus + 18, 570); g.fillText("+", controls.plus + 16, 572);
   }
   function draw(now) {
     paint(now);
@@ -137,9 +149,9 @@ const reels = `<!doctype html><html><head><title>Temple Reels</title><style>${st
   }
   document.getElementById("game").addEventListener("click", (event) => {
     const box = event.target.getBoundingClientRect(), x = event.clientX - box.left, y = event.clientY - box.top;
-    if (y >= 535 && y <= 587 && x >= 400 && x <= 560) spin();
-    if (y >= 535 && y <= 587 && x >= 250 && x <= 302) bet(-1);
-    if (y >= 535 && y <= 587 && x >= 320 && x <= 372) bet(1);
+    if (y >= 535 && y <= 587 && x >= controls.spin && x <= controls.spin + 160) spin();
+    if (y >= 535 && y <= 587 && x >= controls.minus && x <= controls.minus + 52) bet(-1);
+    if (y >= 535 && y <= 587 && x >= controls.plus && x <= controls.plus + 52) bet(1);
   });
   document.addEventListener("keydown", (event) => { if (event.code === "Space") { event.preventDefault(); spin(); } });
   draw(0);
@@ -156,11 +168,11 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
 <section><h1 style="margin:0 0 8px">BTC-USD <small style="color:#8a93a6">Bitcoin / US Dollar</small></h1>
 <canvas id="chart" width="960" height="420"></canvas></section>
 <aside><form id="ticket" onsubmit="return false"><h2 style="margin:0">Order</h2>
-  <label><input type="radio" name="side" value="buy" checked> Buy</label>
+  <label><input type="radio" name="side" value="buy"> Buy</label>
   <label><input type="radio" name="side" value="sell"> Sell</label>
-  <label>Quantity (BTC) <input id="qty" name="qty" inputmode="decimal" value=""></label>
+  <label><span id="quantity"></span> <input id="qty" name="qty" inputmode="decimal" value=""></label>
   <label>Type <select id="type"><option value="market">Market</option><option value="limit">Limit</option></select></label>
-  <button id="place" type="button">Place order</button><p id="note" role="status"></p></form>
+  <button id="place" type="button"></button><p id="note" role="status"></p></form>
   <h2>Orders</h2><table><thead><tr><th>Id</th><th>Side</th><th>Qty</th><th>Price</th><th>Status</th></tr></thead><tbody id="orders"></tbody></table>
 </aside><script>
   const params = new URLSearchParams(location.search), live = params.get("live") === "1";
@@ -176,7 +188,14 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
     price = close; candles.push({ open, high, low, close });
   };
   for (let i = 0; i < 60; i++) next(false);
-  window.__bench = { last: price, first: candles[0].open, trend: "up", spikeAt: null, candles: 60, orders: [] };
+  // The ticket's wording, its side already chosen, and the order ids vary with the seed too.
+  const ticket = __benchStream(0x0b7c), pick = (list) => list[Math.floor(ticket() * list.length)];
+  const layout = { quantity: pick(["Quantity (BTC)", "Amount (BTC)", "Size (BTC)"]), place: pick(["Place order", "Submit order", "Send order"]), side: pick(["buy", "sell"]) };
+  const firstId = 1000 + Math.floor(ticket() * 9000);
+  document.getElementById("quantity").textContent = layout.quantity;
+  document.getElementById("place").textContent = layout.place;
+  document.querySelector("input[name=side][value=" + layout.side + "]").checked = true;
+  window.__bench = { last: price, first: candles[0].open, trend: "up", spikeAt: null, candles: 60, orders: [], layout };
   const state = window.__bench;
   const g = document.getElementById("chart").getContext("2d");
   function paint() {
@@ -212,39 +231,55 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
     const qty = Number(document.getElementById("qty").value), side = document.querySelector("input[name=side]:checked").value;
     const note = document.getElementById("note");
     if (!(qty > 0)) { note.textContent = "Enter a quantity."; return; }
-    const order = { id: "ORD-" + (1001 + state.orders.length), side, qty, type: document.getElementById("type").value, price: state.last, status: "Filled" };
+    // A limit order rests on the book at the last price; only a market order fills at once.
+    const type = document.getElementById("type").value, status = type === "market" ? "Filled" : "Open";
+    const order = { id: "ORD-" + (firstId + state.orders.length), side, qty, type, price: state.last, status };
     state.orders.push(order);
-    document.getElementById("orders").insertAdjacentHTML("beforeend", "<tr><td>" + order.id + "</td><td>" + side + "</td><td>" + qty + "</td><td>" + order.price.toFixed(2) + "</td><td>Filled</td></tr>");
-    note.textContent = "Order " + order.id + " filled.";
+    document.getElementById("orders").insertAdjacentHTML("beforeend", "<tr><td>" + order.id + "</td><td>" + side + "</td><td>" + qty + "</td><td>" + order.price.toFixed(2) + "</td><td>" + status + "</td></tr>");
+    note.textContent = "Order " + order.id + (status === "Filled" ? " filled." : " is open.");
     __benchSettled(paint);
   };
 </script></body></html>`;
 
+// A shipping form whose labels, field order, shipping choices and button vary with the seed, as
+// shops' forms do, and whose confirmation number the seed sets.
 const checkout = `<!doctype html><html><head><title>Checkout | Harbor Goods</title><style>${style}
 body{background:#fafafa;color:#222;padding:24px}form{display:grid;gap:12px;max-width:520px}
 input,select{font:inherit;padding:8px}fieldset{border:1px solid #ccc;border-radius:8px}
 </style></head><body><h1>Checkout</h1><p>1 x Harbor Lantern, $49.00</p>
-<form id="form" onsubmit="return false">
-  <label>Full name <input id="name" autocomplete="name" required></label>
-  <label>Email <input id="email" type="email" required></label>
-  <label>Street address <input id="street" required></label>
-  <label>City <input id="city" required></label>
-  <label>Postal code <input id="postal" required></label>
-  <label>Country <select id="country"><option value="">Choose a country</option><option value="US">United States</option><option value="CA">Canada</option><option value="DE">Germany</option><option value="JP">Japan</option></select></label>
-  <fieldset><legend>Shipping</legend>
-    <label><input type="radio" name="ship" value="standard" checked> Standard (5-7 days)</label>
-    <label><input type="radio" name="ship" value="express"> Express (1-2 days, +$15)</label></fieldset>
-  <button id="submit" type="button">Place order</button><p id="message" role="status"></p>
-</form><script>
-  window.__bench = { submitted: null, confirmation: null };
+<form id="form" onsubmit="return false"></form><script>
+  const random = __benchStream(0x5e1f), pick = (list) => list[Math.floor(random() * list.length)];
+  const shuffle = (list) => list.map((item) => [random(), item]).sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+  const labels = {
+    name: pick(["Full name", "Name", "Recipient name"]),
+    email: pick(["Email", "Email address", "E-mail"]),
+    street: pick(["Street address", "Address", "Address line 1"]),
+    city: pick(["City", "Town or city", "City or town"]),
+    postal: pick(["Postal code", "ZIP code", "Postcode"]),
+  };
+  const contact = ["name", "email"], address = shuffle(["street", "city", "postal"]);
+  const shipping = shuffle([
+    ["standard", pick(["Standard (5-7 days)", "Standard shipping, 5-7 business days", "Standard, free"])],
+    ["express", pick(["Express (1-2 days, +$15)", "Express shipping, 1-2 business days, +$15.00", "Express, $15"])],
+  ]);
+  const countries = shuffle([["US", "United States"], ["CA", "Canada"], ["DE", "Germany"], ["JP", "Japan"]]);
+  const submit = pick(["Place order", "Complete purchase", "Pay $49.00"]);
+  const confirmation = "CONF-" + (10000 + Math.floor(random() * 90000));
+  const form = document.getElementById("form");
+  form.innerHTML = (random() < 0.5 ? [...contact, ...address] : [...address, ...contact])
+    .map((id) => '<label>' + labels[id] + ' <input id="' + id + '"' + (id === "email" ? ' type="email"' : id === "name" ? ' autocomplete="name"' : "") + ' required></label>').join("")
+    + '<label>Country <select id="country"><option value="">Choose a country</option>' + countries.map(([code, name]) => '<option value="' + code + '">' + name + '</option>').join("") + '</select></label>'
+    + '<fieldset><legend>Shipping</legend>' + shipping.map(([value, text], index) => '<label><input type="radio" name="ship" value="' + value + '"' + (index === 0 ? " checked" : "") + '> ' + text + '</label>').join("") + '</fieldset>'
+    + '<button id="submit" type="button">' + submit + '</button><p id="message" role="status"></p>';
+  window.__bench = { submitted: null, confirmation: null, layout: { labels, express: shipping.find(([value]) => value === "express")[1], submit } };
   document.getElementById("submit").onclick = () => {
     const value = (id) => document.getElementById(id).value.trim();
     const fields = { name: value("name"), email: value("email"), street: value("street"), city: value("city"), postal: value("postal"), country: value("country"), shipping: document.querySelector("input[name=ship]:checked").value };
     const missing = Object.entries(fields).filter(([, v]) => v === "").map(([k]) => k);
     const message = document.getElementById("message");
     if (missing.length > 0) { message.textContent = "Please fill in: " + missing.join(", "); return; }
-    __bench.submitted = fields; __bench.confirmation = "CONF-48213";
-    document.getElementById("form").innerHTML = "<h2>Thank you!</h2><p>Your confirmation number is <strong>CONF-48213</strong>.</p>";
+    __bench.submitted = fields; __bench.confirmation = confirmation;
+    form.innerHTML = "<h2>Thank you!</h2><p>Your confirmation number is <strong>" + confirmation + "</strong>.</p>";
   };
 </script></body></html>`;
 
@@ -413,12 +448,24 @@ const pages: Readonly<Record<string, string>> = {
 // fixture records its last change for the capture barrier, then paints the same state once more.
 const settled = `window.__benchSettled = (repaint) => { window.__bench.frameAfter = performance.timeOrigin + performance.now(); setTimeout(() => requestAnimationFrame(repaint), 150); };`;
 
-/** Serve the bench pages to every page of `browser` while the scope is open. */
-export const serve = (browser: Browser.Service, seed = 0) =>
+// Seeded draws in [0, 1) (mulberry32). Each use takes a stream of its own salt, so a page that
+// draws more leaves every other stream, and the data an understand task reads, as it was.
+const streams = `window.__benchStream = (salt) => { let state = (window.__benchSeed ^ salt) >>> 0; return () => { state = (state + 0x6d2b79f5) >>> 0; let t = Math.imul(state ^ (state >>> 15), state | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };`;
+
+/**
+ * Serve the bench pages, and any `more` a task brings, to every page of `browser` while the scope
+ * is open.
+ */
+export const serve = (
+  browser: Browser.Service,
+  seed = 0,
+  more: Readonly<Record<string, string>> = {},
+) =>
   Effect.acquireRelease(
     Effect.promise(() =>
       browser.context.route(`${origin}/**`, (route) => {
-        const page = pages[new URL(route.request().url()).pathname];
+        const path = new URL(route.request().url()).pathname;
+        const page = more[path] ?? pages[path];
 
         return route.fulfill(
           page === undefined
@@ -430,7 +477,7 @@ export const serve = (browser: Browser.Service, seed = 0) =>
                 body: page
                   .replace(
                     "<head>",
-                    `<head><script>window.__benchSeed = ${seed};${settled}</script>`,
+                    `<head><script>window.__benchSeed = ${seed};${settled}${streams}</script>`,
                   )
                   .replace(
                     "</body>",
@@ -513,6 +560,34 @@ export const MarketTruth = Schema.Struct({
 export const CheckoutTruth = Schema.Struct({
   submitted: Schema.NullOr(Schema.Record(Schema.String, Schema.String)),
   confirmation: Schema.NullOr(Schema.String),
+});
+
+// What an operate page varies with the seed, for its scripted solution; models never see it.
+
+export const LobbyLayout = Schema.Struct({
+  layout: Schema.Struct({ accept: Schema.String, adult: Schema.String }),
+});
+
+export const ReelsLayout = Schema.Struct({
+  spinAt: Schema.Struct({ x: Schema.Finite, y: Schema.Finite }),
+});
+
+export const TicketLayout = Schema.Struct({
+  layout: Schema.Struct({ quantity: Schema.String, place: Schema.String }),
+});
+
+export const CheckoutLayout = Schema.Struct({
+  layout: Schema.Struct({
+    labels: Schema.Struct({
+      name: Schema.String,
+      email: Schema.String,
+      street: Schema.String,
+      city: Schema.String,
+      postal: Schema.String,
+    }),
+    express: Schema.String,
+    submit: Schema.String,
+  }),
 });
 
 const QuoteRow = Schema.Struct({
