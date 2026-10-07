@@ -15,6 +15,7 @@ import {
   Schedule,
   Schema,
   Semaphore,
+  Sink,
   Stream,
 } from "effect";
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
@@ -2147,9 +2148,21 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   ) => {
     const quiet = stillOptions.quietMillis ?? 600;
 
-    return screencast().pipe(
-      Stream.timeout(Duration.millis(quiet)),
-      Stream.runDrain,
+    const still = <E>(frames: Stream.Stream<Frame, E>) =>
+      frames.pipe(Stream.timeout(Duration.millis(quiet)), Stream.runDrain);
+
+    // A running capture's silence already means the page is still. A new capture's first frame
+    // can take longer than `quiet`, over half a second from a hosted browser, so the quiet counts
+    // from that frame; Chrome sends one as a capture starts, even of a still page.
+    return capture.active.pipe(
+      Effect.flatMap((running) =>
+        running
+          ? still(screencast())
+          : Stream.peel(screencast(), Sink.take(1)).pipe(
+              Effect.flatMap(([, rest]) => still(rest)),
+              Effect.scoped,
+            ),
+      ),
       Effect.timeoutOrElse({
         duration: stillOptions.timeout ?? Duration.seconds(15),
         orElse: () =>
