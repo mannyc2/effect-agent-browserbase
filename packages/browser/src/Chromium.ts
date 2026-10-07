@@ -4,6 +4,9 @@
  * It uses the Chromium build that `playwright-core` installs
  * (`npx playwright-core install chromium`), unless `executablePath` names another.
  *
+ * Signals are the program's to handle: run it with `NodeRuntime.runMain`, which interrupts it on
+ * SIGINT and SIGTERM, so the browser closes with its scope.
+ *
  * @since 0.3.0
  */
 import { Effect, Layer } from "effect";
@@ -62,6 +65,11 @@ export const open = Effect.fn("Chromium.open")(function* (options: Options = {})
           headless: options.headless ?? true,
           chromiumSandbox: options.sandbox ?? false,
           timeout: launchTimeoutMillis,
+          // The program owns its signals. Playwright's handlers close every browser on any of
+          // these, and on SIGINT then exit the process, so no finalizer would run.
+          handleSIGINT: false,
+          handleSIGTERM: false,
+          handleSIGHUP: false,
           ...(options.executablePath === undefined
             ? {}
             : { executablePath: options.executablePath }),

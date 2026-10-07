@@ -48,3 +48,15 @@ it.live("runs Chromium's sandbox when asked, or refuses to start without it", ()
     assert.oneOf(asked, ["sandboxed", "refused"]);
   }),
 );
+
+it.live("leaves the process's signals to the program", () =>
+  Effect.gen(function* () {
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const listeners = () => signals.map((signal) => process.listenerCount(signal));
+    const before = listeners();
+
+    yield* Chromium.open();
+
+    assert.deepStrictEqual(listeners(), before);
+  }).pipe(Effect.scoped),
+);

@@ -40,6 +40,9 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   screencast, crops with the viewport's own proportions included.
 - Each page's own session holds focus emulation, so a tab behind another keeps painting whatever
   else is attached. A capture starts once the browser has confirmed it.
+- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
+  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
+  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
 
 ### Breaking
 
