@@ -5,7 +5,7 @@
  */
 import { Schema } from "effect";
 
-import { SubjectContext } from "../../BrowserEvent.ts";
+import { Box, SubjectContext } from "../../BrowserEvent.ts";
 import type { Context, ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Walk } from "../reading/walk.inpage.ts";
@@ -18,6 +18,12 @@ export interface ResolvedPoint {
   readonly role: string | null;
   readonly name: string;
   readonly context: Context;
+  readonly box?: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
   readonly cursor: string;
   readonly href?: string | undefined;
 }
@@ -30,27 +36,9 @@ export type PointResult =
     };
 
 export const targets = (names: Names, walked: Walk, placing: ContextReader) => {
-  const { describe, interactiveRoles, isDisabled, lookup, nameOf, parentOf, roleOf } = names;
-  const { hitAt } = walked;
+  const { describe, isDisabled, lookup, nameOf, parentOf, roleOf } = names;
+  const { boxOf, controlOf, hitAt } = walked;
   const { contextOf } = placing;
-
-  // A painted child of a control still activates the control; keep its name without moving the point.
-  const controlOf = (hit: Element): Element => {
-    let element: Element | null = hit;
-
-    while (element !== null) {
-      const role = roleOf(element);
-
-      if (
-        (role !== null && (interactiveRoles.has(role) || role === "canvas" || role === "iframe")) ||
-        element.hasAttribute("onclick")
-      )
-        return element;
-      element = parentOf(element);
-    }
-
-    return hit;
-  };
 
   /** Whether `node` is `ancestor` or inside it, across shadow roots and same-origin frames. */
   const within = (ancestor: Element, node: Element): boolean => {
@@ -133,7 +121,7 @@ export const targets = (names: Names, walked: Walk, placing: ContextReader) => {
       if (hit === null) return { error: "offscreen", detail: `nothing is painted at (${x}, ${y})` };
       const control = controlOf(hit);
 
-      return { ...details(control, hit, x, y), context: contextOf(control) };
+      return { ...details(control, hit, x, y), context: contextOf(control), box: boxOf(control) };
     }
     const ref = target;
     const element = lookup(ref);
@@ -304,6 +292,7 @@ const ResolvedPointSchema = Schema.Struct({
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   context: SubjectContext,
+  box: Schema.optional(Box),
   cursor: Schema.String,
   href: Schema.optional(Schema.String),
 });

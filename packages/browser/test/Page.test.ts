@@ -412,7 +412,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       yield* page.click({ x: 300, y: 320 });
       assert.isTrue((yield* slotState(page)).spinning);
-      yield* page.waitForStill({ timeout: Duration.seconds(10) });
+      yield* page.ready({ quietMillis: 600, timeout: Duration.seconds(10) });
       assert.deepInclude(yield* slotState(page), { spins: 1, spinning: false });
       assert.deepStrictEqual(yield* reason(page.click({ x: 5000, y: 5 })), {
         tag: "InvalidRequest",
