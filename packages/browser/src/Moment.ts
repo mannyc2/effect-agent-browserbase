@@ -122,7 +122,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
                 isMoment(options.since) && options.since.changes !== undefined
                   ? options.since.changes
                   : start(current.hostTime),
-              until: current.hostTime,
+              until: current,
             })
             .pipe(
               Effect.option,
@@ -213,6 +213,13 @@ const step = (event: Action): string => {
 /** Navigations are told by the `Navigated` event that follows them, which covers redirects. */
 const navigating = (event: Action) => ["navigate", "back", "reload"].includes(event.name);
 
+/** What is drawn rather than written, whose changes only the screenshots show. */
+const drawn = new Set(["canvas", "iframe", "video", "embed", "object", "svg"]);
+
+/** An action on something drawn, which no record of changes can tell, so it is told as a step. */
+const onDrawn = (event: Action) =>
+  event.ok && event.subject !== undefined && drawn.has(event.subject.role ?? event.subject.tag);
+
 const quoted = (value: string | undefined) => JSON.stringify(value ?? "");
 
 /** A change's context in words: `row "Ether", column "1h"` or `beside "Price", under "Bitcoin"`. */
@@ -273,8 +280,9 @@ const inFlux = (change: Change) => change.count > 1 || change.earlier !== undefi
 
 export interface PromptOptions {
   /**
-   * How actions appear. By default only those that the record of changes does not cover, such as
-   * every action when the moment has none, are listed, as steps. `"all"` lists every action, and
+   * How actions appear. By default only those that the record of changes does not cover are
+   * listed, as steps: every action when the moment has no record, those before it began, and those
+   * on something drawn, such as a click on a canvas. `"all"` lists every action, and
    * then tells the whole moment in order of time, so a model can see what followed each one.
    */
   readonly actions?: "uncovered" | "all" | undefined;
@@ -350,7 +358,7 @@ const account = (moment: Moment, options: PromptOptions) => {
         if (
           event.page === moment.page &&
           !(event.ok && navigating(event)) &&
-          (all || record === undefined || event.at <= record.from)
+          (all || record === undefined || event.at <= record.from || onDrawn(event))
         )
           lines.push({ at: event.at, rank: 4, text: step(event) });
     }
@@ -365,11 +373,15 @@ const account = (moment: Moment, options: PromptOptions) => {
   const changed = (record?.changes ?? []).map((change) => change.at);
   const begins = record === undefined ? moment.from : Math.max(moment.from, record.from);
 
+  const drawing = events.some(
+    (event) => event._tag === "Action" && event.page === moment.page && onDrawn(event),
+  );
+
   const stillness =
     record === undefined
       ? "What changed on the page was not recorded; the screenshots show it."
       : changed.length === 0
-        ? `No text in view changed${begins > moment.from ? ` after ${seconds(moment, begins)}` : " in the window"}.`
+        ? `No text in view changed${begins > moment.from ? ` after ${seconds(moment, begins)}` : " in the window"}${drawing ? "; what is drawn, such as a canvas, shows only in the screenshots" : ""}.`
         : `The text in view last changed at ${seconds(moment, Math.max(...changed))}.`;
 
   return [

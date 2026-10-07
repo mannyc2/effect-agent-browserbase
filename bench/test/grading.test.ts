@@ -559,6 +559,17 @@ describe("specific misreads", () => {
     );
   }
 
+  it.live("tells a canvas game's clicks, which no record of text can show", () =>
+    describeWith("tumble-win", tumble).pipe(
+      Effect.map(({ prompts }) => {
+        const text = prompts[0] === undefined ? "" : textOf(prompts[0]);
+
+        assert.match(text, /click canvas/);
+        assert.include(text, "what is drawn, such as a canvas, shows only in the screenshots");
+      }),
+    ),
+  );
+
   it.live("rejects an extra tumble inferred from unrelated motion", () =>
     describeWith("tumble-win", (page) =>
       tumble(page).pipe(Effect.map((answer) => ({ ...answer, tumbles: answer.tumbles + 1 }))),

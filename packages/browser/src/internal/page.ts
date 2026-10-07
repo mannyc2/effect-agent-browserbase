@@ -88,6 +88,8 @@ const closedPattern =
 /** A call to the page script, its arguments quoted as JavaScript literals. */
 const isChanges = Schema.is(Changes);
 
+const isFrame = Schema.is(Frame);
+
 const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
@@ -2062,7 +2064,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   // so a window that ends at a frame's capture time ends where the picture does.
   const changes = (options: ChangesOptions = {}) =>
     Effect.gen(function* () {
-      const { until } = options;
+      const frame = isFrame(options.until) ? options.until : undefined;
+      const until = isFrame(options.until) ? options.until.hostTime : options.until;
       // The changes a previous read returned give its window's end on the page's own clock.
       const previous = isChanges(options.since) ? options.since : undefined;
       const since = isChanges(options.since) ? options.since.at : options.since;
@@ -2079,7 +2082,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       const result = yield* evaluate(
         "changes",
-        scriptCall("changes", previous?.cursor ?? toPage(since), toPage(until)),
+        scriptCall(
+          "changes",
+          previous?.cursor ?? toPage(since),
+          // A screencast frame's paint time is on the page's clock already, whatever the mapping.
+          frame?.timing._tag === "BrowserPaint" ? frame.timing.timestamp : toPage(until),
+        ),
       ).pipe(Effect.flatMap(decodeWith("changes", Script.ChangesResultSchema)));
 
       const host = (pageTime: number) => BrowserClock.toHostTime(estimate, pageTime);

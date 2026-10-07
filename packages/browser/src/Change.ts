@@ -7,8 +7,10 @@
  * asked for changes, so `Changes.from` says where the record is whole. It keeps up to 256 elements
  * and each one's last 32 changes for a minute; on a page busier than that, an element that keeps
  * changing gives way to news, and `Changes.truncated` counts what was not kept. A change counts as
- * visible when what changed was in the viewport as the page rendered it, so a change scrolled away
- * later is still told and one made out of view is not. What the script cannot read is not seen:
+ * visible when what changed was in the viewport as the page rendered it, and neither transparent
+ * nor hidden by `visibility`, so a change scrolled away later is still told and one made out of
+ * view is not. A removal the record had not watched is judged by what moves into its place, so
+ * one out of the flow, or with nothing after it, is not told. What the script cannot read is not seen:
  * pictures, a canvas, frames, shadow roots, SVG, and anything shown or hidden by CSS alone, such as
  * a class that reveals a toast.
  *

@@ -1870,8 +1870,8 @@ export const install = (): PageApi => {
   const busy = new Set<Track>();
   const blind = new Set<Track>();
   const gone = new Set<Track>();
-  const refused = new WeakSet<Node>();
-  const leaves = new WeakSet<Element>();
+  let refused = new WeakSet<Node>();
+  let leaves = new WeakSet<Element>();
   const lost: Array<number> = [];
   let losses = 0;
   let started: number | undefined;
@@ -1901,7 +1901,9 @@ export const install = (): PageApi => {
   const sight = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       visible.set(entry.target, entry.isIntersecting);
-      for (const sample of waiting.get(entry.target) ?? []) settle(sample, entry.isIntersecting);
+      const seen = entry.isIntersecting && shown(entry.target);
+
+      for (const sample of waiting.get(entry.target) ?? []) settle(sample, seen);
       waiting.delete(entry.target);
       if (!tracks.has(entry.target)) unobserve(entry.target);
     }
@@ -1911,8 +1913,9 @@ export const install = (): PageApi => {
   const look = (element: Element, sample: Sample) => {
     const known = visible.get(element);
 
+    // In view means in the viewport, and neither transparent nor hidden by `visibility`.
     if (known !== undefined && tracks.has(element)) {
-      settle(sample, known);
+      settle(sample, known && shown(element));
 
       return;
     }
@@ -1965,7 +1968,9 @@ export const install = (): PageApi => {
 
     if (state !== null) look(node, next);
     else if (before !== undefined) settle(next, before);
-    else look(near ?? track.place ?? node, next);
+    else if (near !== null) look(near, next);
+    else if (node.isConnected && track.place !== null) look(track.place, next);
+    else settle(next, false);
   };
 
   /**
@@ -2249,14 +2254,23 @@ export const install = (): PageApi => {
     return clean(element.value);
   };
 
-  /** The nearest element beside a removed node, which takes its place on the page. */
-  const neighbour = (node: Node | null, forward: boolean): Element | null =>
+  /** Whether an element takes up room in the flow, judged by its inline style once removed. */
+  const inFlow = (element: Element): boolean => {
+    const position = element.isConnected
+      ? getComputedStyle(element).position
+      : isHtml(element)
+        ? element.style.position
+        : "";
+
+    return position !== "absolute" && position !== "fixed";
+  };
+
+  /** The first element from `node` on, the sibling that follows a removed node. */
+  const neighbour = (node: Node | null): Element | null =>
     node === null || isElement(node)
       ? node
       : node instanceof CharacterData
-        ? forward
-          ? node.nextElementSibling
-          : node.previousElementSibling
+        ? node.nextElementSibling
         : null;
 
   const noElements: ReadonlyArray<Element> = [];
@@ -2391,12 +2405,13 @@ export const install = (): PageApi => {
 
       for (const node of left.slice(replaced)) {
         const words = wordsNow(node);
-
-        const near =
-          neighbour(mutation.nextSibling, true) ?? neighbour(mutation.previousSibling, false);
+        const next = neighbour(mutation.nextSibling);
+        // What moves up into a removed element's place in the flow shows where it was. Out of the
+        // flow, or with nothing after it, its place is unknown, and it is not told.
+        const near = next !== null && inFlow(node) && inFlow(next) ? next : null;
 
         if (words !== "" || tracks.has(node))
-          record(node, "content", at, null, () => words, target, near ?? target);
+          record(node, "content", at, null, () => words, target, near);
       }
     }
 
@@ -2458,7 +2473,12 @@ export const install = (): PageApi => {
   const stop = () => {
     observer.disconnect();
     sight.disconnect();
+    // A new record starts afresh: it owes nothing to what the last one could not keep.
     visible = new WeakMap();
+    refused = new WeakSet();
+    leaves = new WeakSet();
+    lost.length = 0;
+    losses = 0;
     document.removeEventListener("focusin", onFocus, true);
     document.removeEventListener("input", onValue, true);
     document.removeEventListener("change", onValue, true);

@@ -206,8 +206,11 @@ export interface ChangesOptions {
    * exactly, or a time. Defaults to all the record keeps, up to a minute.
    */
   readonly since?: Changes | number | undefined;
-  /** Where it ends, such as a frame's capture time; defaults to now. */
-  readonly until?: number | undefined;
+  /**
+   * Where it ends: a frame, which ends it where the frame's paint did on the page's own clock, or
+   * a time. Defaults to now.
+   */
+  readonly until?: Frame | number | undefined;
 }
 
 export interface Page {

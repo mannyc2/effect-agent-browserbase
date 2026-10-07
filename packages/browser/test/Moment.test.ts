@@ -332,7 +332,7 @@ describe("a moment's account of what changed", () => {
       .slice(1, -2);
   };
 
-  it("leads with news, then what keeps changing, and leaves the steps out", () => {
+  it("leads with news, then what keeps changing, and tells only steps the record cannot", () => {
     assert.deepStrictEqual(account(Moment.toPrompt(moment)), [
       '-4.0s "$61,240" became "$62,010" (beside "Price", under "Bitcoin")',
       '-4.0s the title "Quote" became "Quote, refreshed"',
@@ -340,8 +340,32 @@ describe("a moment's account of what changed", () => {
       '-1.8s textbox "Search" now reads "bitcoin"',
       '-0.8s "Copied" appeared and went away again (beside "Price", under "Bitcoin")',
       '-3.0s "+0.3%" became "-0.1%" (beside "24h", under "Bitcoin") (it changed 3 times)',
+      // A click on a canvas can change only its pixels, which no record of changes shows.
+      "-0.5s click canvas at (300, 320)",
       "The text in view last changed at -0.8s.",
     ]);
+  });
+
+  it("tells the clicks of a canvas game, whose spins no text shows", () => {
+    const spins = [6200, 8400].map((at) =>
+      action(at - 100, at, {
+        target: "480,561",
+        subject: new Subject({ role: null, name: "", tag: "canvas" }),
+        x: 480,
+        y: 561,
+      }),
+    );
+
+    assert.deepStrictEqual(
+      account(
+        Moment.toPrompt(new Moment.Moment({ ...moment, events: spins, changes: recorded([]) })),
+      ),
+      [
+        "-3.8s click canvas at (480, 561)",
+        "-1.6s click canvas at (480, 561)",
+        "No text in view changed in the window; what is drawn, such as a canvas, shows only in the screenshots.",
+      ],
+    );
   });
 
   it("tells every step on request, with the changes in order of time", () => {
@@ -790,6 +814,18 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     () =>
       Effect.gen(function* () {
         const page = yield* start("/quote");
+
+        // Text in the viewport that no one can see, and an element far off it out of the flow.
+        yield* Effect.promise(() =>
+          page.playwright.evaluate(() => {
+            const box = document.createElement("div");
+
+            box.style.position = "relative";
+            box.innerHTML =
+              '<p>Ghost <span id="ghost" style="opacity:0">$1</span> <span id="hid" style="visibility:hidden">A1</span></p><p id="far" style="position:absolute;top:5000px">Far away</p><p>Another line</p>';
+            document.body.prepend(box);
+          }),
+        );
         const first = yield* Moment.capture(page);
 
         const run = (change: () => void) =>
@@ -805,6 +841,20 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           document.body.prepend(toast);
         });
         yield* run(() => document.querySelector("#toast")?.remove());
+        // None of these was in view: invisible text, an element far below in the flow's stead, and
+        // the page's last element, below the fold beside a tall spacer.
+        yield* run(() => {
+          for (const [id, text] of [
+            ["#ghost", "$2"],
+            ["#hid", "B2"],
+          ] as const) {
+            const element = document.querySelector(id);
+
+            if (element !== null) element.textContent = text;
+          }
+          document.querySelector("#far")?.remove();
+          document.querySelector("#below")?.remove();
+        });
         yield* run(() => {
           const price = document.querySelector("#price");
 
