@@ -38,6 +38,11 @@ import { EvidenceIncomplete } from "./Trial.ts";
 export interface Grade {
   readonly pass: boolean;
   readonly detail: string;
+  /**
+   * An operate task's work as its page shows it, whatever the answer said: whether the page holds
+   * what the task asked for. Absent from understand tasks, whose answer is the work.
+   */
+  readonly onPage?: boolean;
 }
 
 export interface Outcome extends Grade {
@@ -238,7 +243,7 @@ const buy = (page: Page, quantity: string) =>
 
 // A model that leaves the fixture, for another page or another tab's game, has not done the task.
 const unreadable = (error: FixtureUnreadable): Effect.Effect<Grade> =>
-  Effect.succeed({ pass: false, detail: error.message });
+  Effect.succeed({ pass: false, detail: error.message, onPage: false });
 
 export const operate = <A, I>(spec: {
   readonly name: string;
@@ -572,6 +577,7 @@ const casinoPlay = operate({
     truth(page, ReelsTruth).pipe(
       Effect.map((game) => ({
         pass: game.spins === 5 && !game.spinning && answer.credits === game.credits,
+        onPage: game.spins === 5 && !game.spinning,
         detail: `The game counted ${game.spins} ${game.spins === 1 ? "spin" : "spins"} of the 5 asked${game.spinning ? ", one still running" : ""}. The answer reported ${answer.credits} credits; the game shows ${game.credits}.`,
       })),
     ),
@@ -703,13 +709,15 @@ const chartTrade = operate({
       Effect.map((market) => {
         const order = market.orders[0];
 
+        const placed =
+          market.orders.length === 1 &&
+          order?.side === "buy" &&
+          order.qty === 0.25 &&
+          order.type === "market";
+
         return {
-          pass:
-            market.orders.length === 1 &&
-            order?.side === "buy" &&
-            order.qty === 0.25 &&
-            order.type === "market" &&
-            order.id === answer.orderId,
+          pass: placed && order.id === answer.orderId,
+          onPage: placed,
           detail: `The page holds ${market.orders.length === 0 ? "no orders" : market.orders.map((placed) => `${placed.id}, a ${placed.type} ${placed.side} of ${placed.qty} BTC (${placed.status})`).join("; ")}. The answer reported ${answer.orderId === "" ? "no order id" : answer.orderId}.`,
         };
       }),
@@ -762,6 +770,7 @@ const checkout = operate({
             shop.confirmation !== null &&
             answer.confirmation === shop.confirmation &&
             wrong.length === 0,
+          onPage: shop.confirmation !== null && wrong.length === 0,
           detail:
             wrong.length === 0
               ? `The shop issued ${shop.confirmation ?? "no confirmation"}; the answer reported ${answer.confirmation === "" ? "none" : answer.confirmation}.`

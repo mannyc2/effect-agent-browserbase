@@ -9,7 +9,7 @@ import { Phases, Protocol } from "./Trace.ts";
 import { Reason, RunInfo, Status } from "./Trial.ts";
 
 export class TrialRecord extends Schema.Class<TrialRecord>("bench/TrialRecord")({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   task: Schema.String,
   kind: Schema.Literals(["operate", "understand"]),
   /** Null for a scripted solution. */
@@ -25,6 +25,11 @@ export class TrialRecord extends Schema.Class<TrialRecord>("bench/TrialRecord")(
   reason: Reason,
   /** Null unless the trial was graded. */
   pass: Schema.NullOr(Schema.Boolean),
+  /**
+   * Whether a graded operate trial's page holds the work the task asked for, whatever the answer
+   * said; null for understand tasks and ungraded trials.
+   */
+  onPage: Schema.NullOr(Schema.Boolean),
   detail: Schema.String,
   error: Schema.NullOr(Schema.String),
   diagnostic: Schema.NullOr(Diagnostics.Failure),

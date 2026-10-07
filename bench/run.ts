@@ -319,7 +319,7 @@ export const command = Command.make(
         yield* Results.append(
           file,
           new Results.TrialRecord({
-            version: 1,
+            version: 2,
             task: job.task.name,
             kind: job.task.kind,
             arm: job.arm,
@@ -332,6 +332,7 @@ export const command = Command.make(
             status: "unrun",
             reason: "interrupted",
             pass: null,
+            onPage: null,
             detail: "Interrupted before an outcome.",
             error: null,
             diagnostic: null,
@@ -498,7 +499,7 @@ export const command = Command.make(
           const value = exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
 
           const record = new Results.TrialRecord({
-            version: 1,
+            version: 2,
             task: task.name,
             kind: task.kind,
             arm,
@@ -509,6 +510,7 @@ export const command = Command.make(
             run,
             reasoning: model === undefined ? null : effectiveReasoning,
             ...outcome,
+            onPage: outcome.status === "graded" ? (value?.onPage ?? null) : null,
             detail:
               exit !== undefined
                 ? (value?.detail ?? "")
