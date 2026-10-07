@@ -8,7 +8,8 @@
  * It keeps sessions and stored contexts and nothing else: any other endpoint fails the test with a
  * defect. It doesn't model regions, quotas or billing, and a context is only a record, with no
  * browser state. Every session hands out the script's `connectUrl`, such as the DevTools address
- * of a local Chromium.
+ * of a local Chromium. Its ids are UUIDs, as Browserbase's are, and as Browserbase does, it refuses
+ * a session id of any other shape as invalid, where it answers an unknown one as not found.
  *
  * @category testing
  * @since 0.3.0
@@ -147,10 +148,16 @@ interface Fake {
   readonly sessions: Map<string, Row>;
   readonly contexts: Map<string, number>;
   /** How many sessions and contexts it has made, for their ids. */
-  readonly made: { sessions: number; contexts: number };
+  readonly made: { count: number };
 }
 
 const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
+
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The next id, a UUID as Browserbase's are, counted so that every run hands out the same. */
+const nextId = (fake: Fake) =>
+  `00000000-0000-4000-8000-${(++fake.made.count).toString(16).padStart(12, "0")}`;
 
 /** How the session ended by now, or undefined while it runs. */
 const endOf = (fake: Fake, row: Row) => {
