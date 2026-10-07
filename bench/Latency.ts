@@ -354,9 +354,8 @@ export const chromiumEndpoint = Effect.gen(function* () {
 
 /**
  * Open a `Browser` on a new 1280×720 context of a local Chromium whose DevTools connection takes
- * `roundTripMillis` more per round trip, half each way. The context is fresh, as a new hosted
- * session's is, so it is calibrated the same way. Each command sent over the connection is passed
- * to `record` once answered.
+ * `roundTripMillis` more per round trip, half each way, as a new hosted session's is. Each command
+ * sent over the connection is passed to `record` once answered.
  */
 export const open = Effect.fn("Latency.open")(function* (
   roundTripMillis: number,
@@ -395,7 +394,7 @@ export const open = Effect.fn("Latency.open")(function* (
 
   return yield* Browser.make(
     context,
-    { id: `chromium-${connected.version()}`, provider: "chromium", contextOrigin: "fresh" },
+    { id: `chromium-${connected.version()}`, provider: "chromium" },
     options,
   );
 });

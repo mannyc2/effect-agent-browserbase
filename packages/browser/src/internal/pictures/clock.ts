@@ -56,52 +56,80 @@ export const estimate = (probes: ReadonlyArray<Probe>): Option.Option<Estimate> 
   return Option.fromUndefinedOr(best);
 };
 
-/** The browser's one epoch mapping, shared by its pages, input runs and capture generations. */
+// Two machines' clocks drift apart by up to about 100 parts per million, so an estimate says this
+// much less about the offset for each millisecond of its age.
+const driftPerMillis = 1e-4;
+
+/** An estimate's uncertainty at `hostTime`, wider the further that is from when it was sampled. */
+export const uncertaintyAt = (estimate: Estimate, hostTime: number): number =>
+  estimate.uncertaintyMillis + Math.abs(hostTime - estimate.sampledAt) * driftPerMillis;
+
+// Ten seconds widen an estimate by a millisecond, far less than a remote round trip, so it is
+// measured again no more often than this.
+const renewAfter = Duration.seconds(10);
+
+/**
+ * The browser's one epoch mapping, shared by its pages, input runs and capture generations. It is
+ * measured on first need, by the first capture, never ahead of it.
+ */
 export interface Mapping {
+  /** The latest estimate, without measuring: input uses it, and never waits for one. */
+  readonly latest: () => Estimate | undefined;
   /** The latest estimate, measured through `measure` only while the browser has none. */
   readonly current: <E>(measure: Effect.Effect<Estimate, E>) => Effect.Effect<Estimate, E>;
   /**
-   * Measure again and return the browser's estimate afterwards; a failed measurement keeps the
-   * previous estimate when there is one.
+   * Measure again once ten seconds have passed since the latest measurement began. A failed
+   * measurement keeps the estimate, which keeps widening with its age.
    */
-  readonly refresh: <E>(measure: Effect.Effect<Estimate, E>) => Effect.Effect<Estimate, E>;
+  readonly renew: <E>(measure: Effect.Effect<Estimate, E>) => Effect.Effect<void>;
 }
 
 /**
  * Whether a new measurement should replace the current estimate. Each interval contains the true
- * offset, so overlapping intervals agree and the narrower one is kept: a probe delayed behind a
- * busy page cannot widen every tab's stamps. A disjoint measurement means the clocks moved (a wall
- * clock step, or drift between a remote browser and this host), so the newer evidence wins.
+ * offset, so overlapping intervals agree and the narrower one is kept, the current one widened by
+ * its age: a probe delayed behind a busy page cannot widen every tab's stamps. A disjoint
+ * measurement means the clocks moved (a wall clock step, or drift between a remote browser and
+ * this host), so the newer evidence wins.
  */
-export const supersedes = (next: Estimate, current: Estimate): boolean =>
-  next.uncertaintyMillis <= current.uncertaintyMillis ||
-  Math.abs(next.offsetMillis - current.offsetMillis) >
-    next.uncertaintyMillis + current.uncertaintyMillis;
+export const supersedes = (next: Estimate, current: Estimate): boolean => {
+  const aged = uncertaintyAt(current, next.sampledAt);
+
+  return (
+    next.uncertaintyMillis <= aged ||
+    Math.abs(next.offsetMillis - current.offsetMillis) > next.uncertaintyMillis + aged
+  );
+};
 
 /**
  * Every renderer of a browser reads the same host wall clock, so the offset belongs to the
  * browser rather than a page. A busy page cannot fail work that an earlier estimate can serve.
  */
-export const mapping = (seed: Option.Option<Estimate>): Mapping => {
-  let latest = Option.getOrUndefined(seed);
+export const mapping = (now: () => number): Mapping => {
+  let latest: Estimate | undefined;
+  let measuredAt = Number.NEGATIVE_INFINITY;
 
-  const adopt = <E>(measure: Effect.Effect<Estimate, E>) =>
-    measure.pipe(
+  // Called where a measurement is decided, so no other can be decided before this one begins.
+  const adopt = <E>(measure: Effect.Effect<Estimate, E>) => {
+    measuredAt = now();
+
+    return measure.pipe(
       Effect.map((estimate) => {
         if (latest === undefined || supersedes(estimate, latest)) latest = estimate;
 
         return latest;
       }),
     );
+  };
 
   return {
+    latest: () => latest,
     current: (measure) =>
       Effect.suspend(() => (latest === undefined ? adopt(measure) : Effect.succeed(latest))),
-    refresh: (measure) =>
-      adopt(measure).pipe(
-        Effect.catch((error) =>
-          latest === undefined ? Effect.fail(error) : Effect.succeed(latest),
-        ),
+    renew: (measure) =>
+      Effect.suspend(() =>
+        latest === undefined || now() - measuredAt < Duration.toMillis(renewAfter)
+          ? Effect.void
+          : Effect.ignore(adopt(measure)),
       ),
   };
 };
@@ -120,14 +148,14 @@ const command = <A>(run: () => Promise<A>): Effect.Effect<A, ClockCalibrationFai
   });
 
 /**
- * Reads only in a private JavaScript world: no DOM markers, input, navigation or extra tabs.
- * The owning clock supplies both stamps and the deadline even if a caller overrides Clock later.
+ * Reads only in the given world, one without the page script: no DOM markers, input, navigation or
+ * extra tabs. The owning clock supplies both stamps and the deadline even if a caller overrides
+ * Clock later.
  */
 export const calibrate = (
   send: CDPSession["send"],
   clock: Clock.Clock,
-  // The page's main world when absent.
-  contextId?: number,
+  contextId: number,
 ): Effect.Effect<Estimate, ClockCalibrationFailure> =>
   Effect.gen(function* () {
     const probes: Array<Probe> = [];
@@ -138,7 +166,7 @@ export const calibrate = (
       // A round trip to the page's script like any other, so traced as one.
       const response = yield* command(() =>
         send("Runtime.evaluate", {
-          ...(contextId === undefined ? {} : { contextId }),
+          contextId,
           expression: "performance.timeOrigin + performance.now()",
           returnByValue: true,
         }),

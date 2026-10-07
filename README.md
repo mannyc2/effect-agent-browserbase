@@ -190,8 +190,8 @@ prompt.
 - Events, frame arrivals and moments share the owning browser’s host monotonic clock in milliseconds.
   `Browser.now` reads that clock. These stamps measure elapsed time, not calendar dates.
   Native frames map browser paint to `hostTime` with explicit uncertainty; screenshot timing has
-  separate provenance. New owned sessions expose startup capture calibration for the consumer's
-  compositor, and `Page.captureStats` reports frame gaps, filtering and observed subscriber loss.
+  separate provenance. `Page.captureStats` reports frame gaps, filtering, late frames apart from
+  lost ones and the acknowledgement backlog, over a page's life or a window of the latest minute.
 - `Browser.events()` carries the timed input track for the consumer’s cursor rendering: complete
   glide plans, submission receipts, button and key phases, wheel input and cursor shape. Pointer
   position is shared across tabs. Events have sequence cursors for bounded replay; a lagging reader

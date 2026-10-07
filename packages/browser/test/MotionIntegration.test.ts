@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { assert, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber, Random } from "effect";
+import { Clock, Duration, Effect, Fiber, Random, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
@@ -389,6 +389,8 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
             const page = yield* fixture.open;
 
+            // A capture maps the browser's clock, so each sample carries the time it was meant for.
+            yield* page.screencast().pipe(Stream.take(1), Stream.runDrain);
             yield* page.hover({ x: 670, y: 490 });
             const events = yield* fixture.browser.recentEvents;
             const plan = events.find((event) => event._tag === "TrackPlanned");

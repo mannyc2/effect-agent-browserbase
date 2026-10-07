@@ -111,7 +111,10 @@ export interface FrameOptions {
   readonly after?: "input" | undefined;
 }
 
-export interface ScreenshotOptions extends FrameOptions {
+/** A screenshot reuses only a frame painted after the page's latest input, as `after: "input"`. */
+export interface ScreenshotOptions {
+  /** The oldest a reused frame may be, as for `frame`. Defaults to 250 milliseconds. */
+  readonly maxAge?: Duration.Input | undefined;
   /** A region of the viewport, captured in CSS pixels at the viewport's own scale; always new. */
   readonly clip?:
     | { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
@@ -312,7 +315,10 @@ export interface Page {
   readonly close: Effect.Effect<void>;
 
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
-  /** A picture of the viewport, in CSS pixels: a screencast frame that qualifies, or a new one. */
+  /**
+   * A picture of the viewport, in CSS pixels: a screencast frame painted since the page's latest
+   * input, if one qualifies, or a new one. A caller that has just acted sees what its action did.
+   */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
   /**
    * The viewport with its timing: the newest screencast frame if it qualifies, else a new
@@ -392,8 +398,13 @@ export interface Page {
    * its settings; explicit options that differ from a running screencast's fail with InvalidRequest.
    */
   readonly screencast: (options?: ScreencastOptions) => Stream.Stream<Frame, BrowserError>;
-  /** Native delivery, filtering and observed subscriber loss across capture generations. */
-  readonly captureStats: Effect.Effect<CaptureStats>;
+  /**
+   * What this page's captures received, delivered and dropped, over its life or the latest
+   * `window`, which reaches back at most a minute; a longer one is an `InvalidRequest`.
+   */
+  readonly captureStats: (options?: {
+    readonly window?: Duration.Input | undefined;
+  }) => Effect.Effect<CaptureStats, BrowserError>;
   readonly latestFrame: Effect.Effect<Option.Option<Frame>>;
   /** Screencast frames painted within `frameHistory` of the newest, oldest first. */
   readonly recentFrames: Effect.Effect<ReadonlyArray<Frame>>;

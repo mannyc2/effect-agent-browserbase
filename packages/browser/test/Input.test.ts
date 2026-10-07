@@ -1,7 +1,18 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { assert, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber, Option, Random, Ref, Semaphore, Stream } from "effect";
+import {
+  Clock,
+  Duration,
+  Effect,
+  Fiber,
+  Option,
+  Random,
+  Ref,
+  Schedule,
+  Semaphore,
+  Stream,
+} from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
@@ -206,12 +217,20 @@ const setup = Effect.fnUntraced(function* (
   playwright.keyboard.up = (key) => invoke("keyboard.up", "keyUp", key, () => originalUp(key));
   yield* Effect.addFinalizer(() => Effect.sync(() => gate?.resolve()));
 
+  const clock = yield* Clock.Clock;
+  // How far ahead of the owner's clock the mapping reads, so a test can age its estimate.
+  let ahead = 0;
+
+  const mapping = BrowserClock.mapping(
+    () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6 + ahead,
+  );
+
   const page = yield* PageImpl.make({
     id: "input-test",
     playwright,
     cdp,
-    clock: yield* Clock.Clock,
-    mapping: BrowserClock.mapping(Option.none()),
+    clock,
+    mapping,
     motion: yield* Motion.Motion,
     pointer: yield* Ref.make(Option.none<Page.Point>()),
     inputLock: yield* Semaphore.make(1),
@@ -239,6 +258,19 @@ const setup = Effect.fnUntraced(function* (
     page,
     dispatches,
     track,
+    mapping,
+    /** A capture maps the browser's clock, as on any watched page; input never measures it. */
+    mapClock: page
+      .screencast()
+      .pipe(
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.timeout("10 seconds"),
+        Effect.andThen(Effect.sync(() => dispatches.splice(0))),
+      ),
+    age: (millis: number) => {
+      ahead += millis;
+    },
     shiftClock: () => {
       clockBias = 500;
     },
@@ -271,6 +303,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         for (const oneWayMillis of [35, 160]) {
           const relay = yield* setup(oneWayMillis);
 
+          yield* relay.mapClock;
           yield* relay.page.type(text).pipe(Random.withSeed("remote-input"));
           const events = yield* keys(relay.page);
           const downs = events.filter((event) => event.type === "keydown");
@@ -339,12 +372,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             relay.dispatches.filter((dispatch) => dispatch.method.startsWith("Input.")).length,
             raw.length,
           );
-          // Typing never evaluates per key: it checks its target once. A page's first input
-          // also maps its clock once: a world check and three probes, which registration no
-          // longer waits for.
-          assert.isAtMost(
+          // Typing never evaluates per key: it checks its target once.
+          assert.strictEqual(
             relay.dispatches.filter((dispatch) => dispatch.method === "Runtime.evaluate").length,
-            1 + 4,
+            1,
           );
           assert.isAtMost(relay.maximumOutstanding(), 64);
 
@@ -380,6 +411,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         for (const oneWayMillis of [35, 160]) {
           const relay = yield* setup(oneWayMillis);
 
+          yield* relay.mapClock;
           yield* relay.page.hover({ x: 500, y: 300 });
           yield* relay.page.click({ x: 500, y: 300 });
           yield* relay.page.scroll({ at: { x: 500, y: 300 }, dy: 50 });
@@ -431,10 +463,38 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("freezes a typing run's clock mapping across capture recalibration and cleanup", () =>
+    it.effect("keeps Chromium's receipt time for input until a capture has mapped the clock", () =>
+      Effect.gen(function* () {
+        const relay = yield* setup(35, { humanize: false });
+
+        yield* relay.page.click({ x: 500, y: 300 });
+        yield* relay.page.type("ab");
+        const sent = relay.dispatches.filter((command) => command.method.startsWith("Input."));
+
+        assert.isNotEmpty(sent);
+        assert.isTrue(sent.every((command) => command.timestamp === undefined));
+        // Input never measures the clock, which would make a world for its probes first.
+        assert.isFalse(
+          relay.dispatches.some((command) => command.method === "Page.createIsolatedWorld"),
+        );
+        yield* relay.mapClock;
+        yield* relay.page.type("c");
+
+        const keys = relay.dispatches.filter(
+          (command) => command.method === "Input.dispatchKeyEvent",
+        );
+
+        assert.isNotEmpty(keys);
+        assert.isTrue(keys.every((command) => command.timestamp !== undefined));
+      }),
+    );
+
+    it.effect("freezes a typing run's clock mapping while the browser measures it again", () =>
       Effect.gen(function* () {
         for (const interrupt of [false, true]) {
           const relay = yield* setup(35);
+
+          yield* relay.mapClock;
           const firstDown = relay.watchNextDown();
 
           const typing = yield* relay.page
@@ -443,6 +503,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
           yield* Effect.promise(() => firstDown);
           relay.shiftClock();
+          const before = relay.mapping.latest()?.offsetMillis ?? Number.NaN;
+
+          // Ten seconds on, a capture starts with the estimate there is and measures again
+          // alongside, which finds the clock moved.
+          relay.age(10_000);
 
           const frames = yield* relay.page
             .screencast()
@@ -451,7 +516,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           const frame = frames[0];
 
           if (frame === undefined) return yield* Effect.die("capture produced no paint evidence");
-          assert.isAbove(frame.receivedAt - frame.hostTime, 400);
+          assert.isBelow(frame.receivedAt - frame.hostTime, 400);
+          yield* Effect.sync(() => relay.mapping.latest()?.offsetMillis ?? before).pipe(
+            Effect.repeat({
+              until: (offset) => offset > before + 400,
+              schedule: Schedule.spaced("10 millis"),
+            }),
+            Effect.timeout("5 seconds"),
+          );
 
           if (interrupt) {
             const held = relay.watchNextDown();

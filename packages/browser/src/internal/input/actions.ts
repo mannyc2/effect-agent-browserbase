@@ -4,12 +4,11 @@
  */
 import { Duration, Effect } from "effect";
 
-import { type BrowserError, InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
+import { InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
 import type { ClickOptions, PressOptions, ScrollOptions, Target, TypeOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
-import type * as BrowserClock from "../pictures/clock.ts";
 import * as Dispatch from "./dispatch.ts";
 import * as Script from "./edit.inpage.ts";
 import * as Guard from "./guard.ts";
@@ -47,12 +46,7 @@ const settle = (page: PageContext) =>
     page.span("Page.settle", {}, "Debug"),
   );
 
-const partsOf = (
-  page: PageContext,
-  bridge: Bridge,
-  viewport: Viewport,
-  calibrateClock: Effect.Effect<BrowserClock.Estimate, BrowserError>,
-) => {
+const partsOf = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
   const dispatch = Dispatch.make(page);
   const pointer = Pointer.make(page, dispatch, viewport);
   const guard = Guard.make(page, bridge);
@@ -61,7 +55,7 @@ const partsOf = (
     page,
     evaluate: bridge.evaluate,
     viewportFor: viewport.viewportFor,
-    perform: Perform.make(page, dispatch, calibrateClock),
+    perform: Perform.make(page, dispatch),
     ...guard,
     ...Targets.make(page, bridge, viewport, guard, pointer, dispatch),
     ...pointer,
@@ -607,13 +601,8 @@ const select = (input: Parts) => {
     );
 };
 
-export const make = (
-  page: PageContext,
-  bridge: Bridge,
-  viewport: Viewport,
-  calibrateClock: Effect.Effect<BrowserClock.Estimate, BrowserError>,
-) => {
-  const parts = partsOf(page, bridge, viewport, calibrateClock);
+export const make = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
+  const parts = partsOf(page, bridge, viewport);
 
   return {
     perform: parts.perform,

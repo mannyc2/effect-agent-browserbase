@@ -172,12 +172,7 @@ const labelled = (session: SessionOptions | undefined, context: string | undefin
     ? session
     : { ...session, userMetadata: { ...session?.userMetadata, [contextLabel]: context } };
 
-const connect = (
-  operation: string,
-  session: Session,
-  options: Options,
-  contextOrigin: Browser.ContextOrigin,
-) =>
+const connect = (operation: string, session: Session, options: Options) =>
   session.connectUrl === undefined
     ? Effect.fail(
         new BrowserbaseError({
@@ -185,15 +180,12 @@ const connect = (
           reason: new Decode({ detail: `session ${session.id} has no connectUrl` }),
         }),
       )
-    : Cdp.open(
-        {
-          ...options,
-          endpoint: session.connectUrl,
-          id: session.id,
-          provider: "browserbase",
-        },
-        { contextOrigin },
-      );
+    : Cdp.open({
+        ...options,
+        endpoint: session.connectUrl,
+        id: session.id,
+        provider: "browserbase",
+      });
 
 /**
  * Create a session and open a `Browser` on it, for as long as the scope is open. If opening
@@ -230,7 +222,7 @@ export const open = Effect.fn("Browserbase.open")(function* (options: Options = 
 
     yield* Effect.annotateCurrentSpan({ session: session.id, region: session.region });
 
-    const browser = yield* connect("open", session, options, "fresh");
+    const browser = yield* connect("open", session, options);
 
     return { browser, session, release } satisfies Hosted;
   }).pipe(
@@ -252,7 +244,7 @@ export const attach = Effect.fn("Browserbase.attach")(function* (
 
   yield* Effect.annotateCurrentSpan({ session: session.id, region: session.region });
 
-  const browser = yield* connect("attach", session, options, "borrowed");
+  const browser = yield* connect("attach", session, options);
   const release = yield* Effect.cached(confirm(client, session.id, undefined));
 
   return { browser, session, release } satisfies Hosted;

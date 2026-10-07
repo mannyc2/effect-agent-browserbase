@@ -7,7 +7,7 @@ import type { CDPSession } from "playwright-core";
 
 import { BrowserError, InvalidRequest } from "../../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../../Frame.ts";
-import { type Estimate, toHostTime } from "./clock.ts";
+import { type Estimate, toHostTime, uncertaintyAt } from "./clock.ts";
 
 interface Size {
   readonly width: number;
@@ -75,7 +75,8 @@ export interface Controller {
   readonly stream: (options?: ScreencastOptions) => Stream.Stream<Frame, BrowserError>;
   readonly latest: Effect.Effect<Option.Option<Frame>>;
   readonly recent: Effect.Effect<ReadonlyArray<Frame>>;
-  readonly stats: Effect.Effect<CaptureStats>;
+  /** Lifetime counts, or those of the latest `windowMillis`, at most `countsKept`. */
+  readonly stats: (windowMillis?: number) => Effect.Effect<CaptureStats>;
   readonly active: Effect.Effect<boolean>;
   /** Run a clipped or scaled picture of the page, keeping what it draws out of the capture. */
   readonly excluding: <A, E, R>(picture: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
@@ -117,6 +118,76 @@ const paintGaps = () => {
       lastMillis = gap;
     },
     snapshot: () => ({ count, totalMillis, minMillis, maxMillis, lastMillis }),
+  };
+};
+
+const none = () => ({
+  received: 0,
+  accepted: 0,
+  late: 0,
+  missingTimestamp: 0,
+  foreignSize: 0,
+  duringPictures: 0,
+  lost: 0,
+});
+
+type Counted = keyof ReturnType<typeof none>;
+
+/** How far back a window of capture counts can reach. */
+export const countsKept = Duration.minutes(1);
+
+/**
+ * A capture's counts and paint gaps over its page's life, and each with when it happened on the
+ * owner's clock for the latest minute, so a window of them can be read.
+ */
+const tally = (now: () => number) => {
+  const totals = none();
+  const gaps = paintGaps();
+
+  let recent: Array<{
+    readonly at: number;
+    readonly counted: Counted | "gap";
+    readonly n: number;
+  }> = [];
+
+  let oldest = 0;
+
+  const note = (counted: Counted | "gap", n: number) => {
+    const at = now();
+
+    recent.push({ at, counted, n });
+    while ((recent[oldest]?.at ?? at) < at - Duration.toMillis(countsKept)) oldest++;
+    // Shed what is out of reach once it is half the log.
+    if (oldest > recent.length / 2) {
+      recent = recent.slice(oldest);
+      oldest = 0;
+    }
+  };
+
+  return {
+    count: (counted: Counted, n = 1) => {
+      totals[counted] += n;
+      note(counted, n);
+    },
+    gap: (millis: number) => {
+      gaps.add(millis);
+      note("gap", millis);
+    },
+    /** Lifetime counts, or those of the latest `windowMillis`, at most a minute. */
+    read: (windowMillis?: number) => {
+      if (windowMillis === undefined) return { ...totals, gaps: gaps.snapshot() };
+      const counts = none();
+      const windowed = paintGaps();
+      const since = now() - windowMillis;
+
+      for (const { at, counted, n } of recent.slice(oldest)) {
+        if (at < since) continue;
+        if (counted === "gap") windowed.add(n);
+        else counts[counted] += n;
+      }
+
+      return { ...counts, gaps: windowed.snapshot() };
+    },
   };
 };
 
@@ -192,18 +263,21 @@ const readViewport = (options: Options) =>
  * readers and its size is expected. The page's report only shortens the wait, so a page too busy
  * to answer, or one measuring in other units as under browser zoom, never stalls the stream.
  */
-const sizeFilter = (options: Options, deliver: (frame: Frame, timestamp: number) => void) =>
+const sizeFilter = (
+  options: Options,
+  deliver: (frame: Frame, timestamp: number) => void,
+  drop: (frames: number) => void,
+) =>
   Effect.gen(function* () {
     // Until a capture reads its viewport or delivers a frame, its first frame stands in.
     let expected: Size | null = null;
     let run: Run | undefined;
-    let dropped = 0;
     // Wakes the decider for a new run or an ended one; wakes while it is busy coalesce.
     const wake = yield* Queue.sliding<void>(1);
 
     const end = () => {
       if (run === undefined) return;
-      dropped += run.frames.length;
+      drop(run.frames.length);
       run = undefined;
       Queue.offerUnsafe(wake, undefined);
     };
@@ -250,7 +324,6 @@ const sizeFilter = (options: Options, deliver: (frame: Frame, timestamp: number)
     yield* Queue.take(wake).pipe(Effect.andThen(decide), Effect.forever, Effect.forkScoped);
 
     return {
-      dropped: () => dropped,
       /** Drops the frames still waiting; their capture has stopped. */
       end,
       /** A new capture expects the viewport it read, if any. */
@@ -260,7 +333,7 @@ const sizeFilter = (options: Options, deliver: (frame: Frame, timestamp: number)
       },
       offer: (frame: Frame, timestamp: number, image: Size | undefined, device: Size) => {
         if (image !== undefined && !sameShape(image, device)) {
-          dropped++;
+          drop(1);
 
           return;
         }
@@ -279,7 +352,7 @@ const sizeFilter = (options: Options, deliver: (frame: Frame, timestamp: number)
         run.frames.push({ frame, timestamp });
         if (run.frames.length > subscriberCapacity) {
           run.frames.shift();
-          dropped++;
+          drop(1);
         }
       },
     };
@@ -297,36 +370,33 @@ export const make = (options: Options) =>
     let latest = Option.none<Frame>();
     let history: ReadonlyArray<Frame> = [];
     const keepMillis = Duration.toMillis(options.frameHistory);
-    let received = 0;
-    let accepted = 0;
-    let outOfOrder = 0;
-    let missingTimestamp = 0;
-    let subscriberMissed = 0;
-    let duringPictures = 0;
-    const gaps = paintGaps();
-
     const now = () => Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6;
+    const counts = tally(now);
+    // Frames delivered, which number them so that a reader can tell what it missed.
+    let delivered = 0;
     const pictures = pictureWindows(now);
 
     // Frames that show the page go to the running capture's readers.
-    const sizes = yield* sizeFilter(options, (frame, timestamp) => {
+    const deliver = (frame: Frame, timestamp: number) => {
       const current = generation;
 
       if (current === undefined) return;
       // Held frames are checked again: frames encoded out of order are dropped, never reordered.
-      if (current.predecessor !== undefined && timestamp <= current.predecessor) {
-        outOfOrder++;
-
-        return;
-      }
-      if (current.predecessor !== undefined) gaps.add(timestamp - current.predecessor);
+      if (current.predecessor !== undefined && timestamp <= current.predecessor)
+        return counts.count("late");
+      if (current.predecessor !== undefined) counts.gap(timestamp - current.predecessor);
       current.predecessor = timestamp;
-      accepted++;
+      delivered++;
+      counts.count("accepted");
       latest = Option.some(frame);
       history = [...history.filter((kept) => kept.hostTime >= frame.hostTime - keepMillis), frame];
       for (const subscriber of current.subscribers)
-        Queue.offerUnsafe(subscriber, { _tag: "Frame", sequence: accepted, frame });
-    });
+        Queue.offerUnsafe(subscriber, { _tag: "Frame", sequence: delivered, frame });
+    };
+
+    const sizes = yield* sizeFilter(options, deliver, (frames) =>
+      counts.count("foreignSize", frames),
+    );
 
     const notifyFailure = (current: Generation, failure: BrowserError) => {
       if (current.failure !== undefined) return;
@@ -447,7 +517,7 @@ export const make = (options: Options) =>
               stopReply: undefined,
               onFrame: (native) => {
                 if (!created.accepting) return;
-                received++;
+                counts.count("received");
                 if (replies.size >= replyCapacity) {
                   fail(
                     created,
@@ -482,16 +552,9 @@ export const make = (options: Options) =>
                 const browserSeconds = native.metadata.timestamp;
                 const timestamp = browserSeconds === undefined ? Number.NaN : browserSeconds * 1000;
 
-                if (!Number.isFinite(timestamp)) {
-                  missingTimestamp++;
-
-                  return;
-                }
-                if (created.predecessor !== undefined && timestamp <= created.predecessor) {
-                  outOfOrder++;
-
-                  return;
-                }
+                if (!Number.isFinite(timestamp)) return counts.count("missingTimestamp");
+                if (created.predecessor !== undefined && timestamp <= created.predecessor)
+                  return counts.count("late");
                 const receivedAt = now();
                 const data = Buffer.from(native.data, "base64");
                 const image = options.imageSize(data);
@@ -499,24 +562,23 @@ export const make = (options: Options) =>
                 const device = { width: deviceWidth, height: deviceHeight };
                 const size = image ?? created.size ?? device;
 
+                const hostTime = toHostTime(created.calibration, timestamp);
+
+                // The estimate may be older than the capture, and says less about later paint.
                 const frame = new Frame({
                   page: options.id,
                   data,
                   timing: new BrowserPaint({
                     timestamp,
-                    hostTime: toHostTime(created.calibration, timestamp),
-                    uncertaintyMillis: created.calibration.uncertaintyMillis,
+                    hostTime,
+                    uncertaintyMillis: uncertaintyAt(created.calibration, hostTime),
                   }),
                   receivedAt,
                   width: size.width,
                   height: size.height,
                 });
 
-                if (pictures.painted(frame)) {
-                  duringPictures++;
-
-                  return;
-                }
+                if (pictures.painted(frame)) return counts.count("duringPictures");
                 sizes.offer(frame, timestamp, image, device);
               },
             };
@@ -553,7 +615,7 @@ export const make = (options: Options) =>
             return yield* current.failure;
           }
           current.subscribers.add(subscription);
-          const baseline = accepted;
+          const baseline = delivered;
 
           if (starting) {
             options.cdp.on("Page.screencastFrame", current.onFrame);
@@ -610,7 +672,8 @@ export const make = (options: Options) =>
                 if (envelope._tag === "Failure") return Effect.fail(envelope.error);
 
                 return Effect.sync(() => {
-                  subscriberMissed += Math.max(0, envelope.sequence - previous - 1);
+                  if (envelope.sequence > previous + 1)
+                    counts.count("lost", envelope.sequence - previous - 1);
                   previous = envelope.sequence;
 
                   return envelope.frame;
@@ -643,18 +706,9 @@ export const make = (options: Options) =>
       recent: Effect.sync(() => history),
       active: Effect.sync(() => generation?.accepting === true),
       excluding: pictures.excluding,
-      stats: Effect.sync(
-        () =>
-          new CaptureStats({
-            received,
-            accepted,
-            outOfOrder,
-            missingTimestamp,
-            foreignSize: sizes.dropped(),
-            duringPictures,
-            subscriberMissed,
-            gaps: gaps.snapshot(),
-          }),
-      ),
+      stats: (windowMillis?: number) =>
+        Effect.sync(
+          () => new CaptureStats({ ...counts.read(windowMillis), ackBacklog: replies.size }),
+        ),
     } satisfies Controller;
   });
