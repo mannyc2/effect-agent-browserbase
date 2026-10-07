@@ -17,7 +17,7 @@ export const routes = {
   navigationDestination: "/casino/reels",
 } as const;
 
-const style = `body{margin:0;font-family:system-ui,sans-serif}button{font:inherit;cursor:pointer}`;
+export const style = `body{margin:0;font-family:system-ui,sans-serif}button{font:inherit;cursor:pointer}`;
 
 // A lobby behind a cookie wall and an age check, as real casino sites are.
 const lobby = `<!doctype html><html><head><title>Lucky Harbor Casino</title><style>${style}
@@ -452,12 +452,20 @@ const settled = `window.__benchSettled = (repaint) => { window.__bench.frameAfte
 // draws more leaves every other stream, and the data an understand task reads, as it was.
 const streams = `window.__benchStream = (salt) => { let state = (window.__benchSeed ^ salt) >>> 0; return () => { state = (state + 0x6d2b79f5) >>> 0; let t = Math.imul(state ^ (state >>> 15), state | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };`;
 
-/** Serve the bench pages to every page of `browser` while the scope is open. */
-export const serve = (browser: Browser.Service, seed = 0) =>
+/**
+ * Serve the bench pages, and any `more` a task brings, to every page of `browser` while the scope
+ * is open.
+ */
+export const serve = (
+  browser: Browser.Service,
+  seed = 0,
+  more: Readonly<Record<string, string>> = {},
+) =>
   Effect.acquireRelease(
     Effect.promise(() =>
       browser.context.route(`${origin}/**`, (route) => {
-        const page = pages[new URL(route.request().url()).pathname];
+        const path = new URL(route.request().url()).pathname;
+        const page = more[path] ?? pages[path];
 
         return route.fulfill(
           page === undefined

@@ -170,11 +170,11 @@ const usageOf = (usage: Response.Usage): Agent.Usage => ({
 });
 
 /** Serve the bench pages for the rest of the scope, and open `path` in the first tab. */
-const open = (path: string, seed = 0) =>
+const open = (path: string, seed = 0, pages: Readonly<Record<string, string>> = {}) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
 
-    yield* serve(browser, seed);
+    yield* serve(browser, seed, pages);
     const page = yield* browser.page;
 
     yield* page.goto(`${origin}${path}`);
@@ -193,12 +193,12 @@ export const refOf = (snapshot: Snapshot, role: string, name: string): string =>
   return ref;
 };
 
-const press = (page: Page, role: string, name: string) =>
+export const press = (page: Page, role: string, name: string) =>
   page
     .snapshot({ full: true })
     .pipe(Effect.flatMap((snapshot) => page.click(refOf(snapshot, role, name))));
 
-const fill = (page: Page, name: string, text: string) =>
+export const fill = (page: Page, name: string, text: string) =>
   page
     .snapshot({ full: true })
     .pipe(
@@ -240,10 +240,12 @@ const buy = (page: Page, quantity: string) =>
 const unreadable = (error: FixtureUnreadable): Effect.Effect<Grade> =>
   Effect.succeed({ pass: false, detail: error.message });
 
-const operate = <A, I>(spec: {
+export const operate = <A, I>(spec: {
   readonly name: string;
   readonly summary: string;
   readonly start: string;
+  /** Pages of the task's own, served beside the bench's. */
+  readonly pages?: Readonly<Record<string, string>>;
   readonly prompt: string;
   readonly answer: Schema.Codec<A, I>;
   readonly maxSteps: number;
@@ -257,7 +259,7 @@ const operate = <A, I>(spec: {
   prompt: spec.prompt,
   withModel: (options) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed);
+      const page = yield* open(spec.start, options.seed, spec.pages);
       let actions = 0;
 
       const stopNarrating = yield* Deferred.make<void>();
@@ -297,7 +299,7 @@ const operate = <A, I>(spec: {
     }).pipe(Effect.scoped),
   scripted: (options = {}) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed);
+      const page = yield* open(spec.start, options.seed, spec.pages);
       const answer = yield* spec.solve(page);
 
       const grade = yield* spec

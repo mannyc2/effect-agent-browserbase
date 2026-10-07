@@ -5,8 +5,9 @@ import { Effect } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 
+import { tasks } from "../Catalog.ts";
 import { MarketTruth, origin, QuoteTruth, routes, serve, truth } from "../Sites.ts";
-import { frameHistory, tasks } from "../Tasks.ts";
+import { frameHistory } from "../Tasks.ts";
 
 describe("scripted solutions", () => {
   for (const task of tasks) {

@@ -5,9 +5,9 @@ import { Console, Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 
 import { type Arm, armNames } from "./Arms.ts";
+import { tasks } from "./Catalog.ts";
 import * as Results from "./Results.ts";
 import { holm, mcnemar, passHatK, wilson } from "./Stats.ts";
-import { tasks } from "./Tasks.ts";
 import { tally } from "./Trial.ts";
 
 type TrialRecord = Results.TrialRecord;
