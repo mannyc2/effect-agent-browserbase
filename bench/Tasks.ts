@@ -219,17 +219,18 @@ const enterLobby = (page: Page) =>
     yield* press(page, "button", layout.adult);
   });
 
-// Every card has a Play button; only the game's own opens it.
+// Every card has a play button, worded as this seed words it; only the game's own opens it.
 const playReels = (page: Page) =>
-  page
-    .find({ role: "button", name: "Play", near: "Temple Reels" })
-    .pipe(
-      Effect.flatMap(([found]) =>
-        found === undefined
-          ? Effect.die("the lobby shows no Temple Reels card")
-          : page.click(found.ref),
-      ),
-    );
+  truth(page, LobbyLayout).pipe(
+    Effect.flatMap(({ layout }) =>
+      page.find({ role: "button", name: layout.play, near: "Temple Reels" }),
+    ),
+    Effect.flatMap(([found]) =>
+      found === undefined
+        ? Effect.die("the lobby shows no Temple Reels card")
+        : page.click(found.ref),
+    ),
+  );
 
 // An order ticket filled in as this seed words it, on the buy side.
 const buy = (page: Page, quantity: string) =>

@@ -1,24 +1,12 @@
-// Every task's scripted solution passes its own grading in a local Chromium: the pages, the grading
-// and the library can do each task without a model.
+// The fixtures' seeded data, read independently of their grading: a seed replays its page, another
+// changes the graded values, and the page shows what its truth says. The gates run every task's
+// scripted solution.
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 
-import { tasks } from "../Catalog.ts";
 import { MarketTruth, origin, QuoteTruth, routes, serve, truth } from "../Sites.ts";
-import { frameHistory } from "../Tasks.ts";
-
-describe("scripted solutions", () => {
-  for (const task of tasks) {
-    it.live(task.name, () =>
-      task.scripted({ seed: 23 }).pipe(
-        Effect.provide(Chromium.layer({ frameHistory })),
-        Effect.map((outcome) => assert.isTrue(outcome.pass, outcome.detail)),
-      ),
-    );
-  }
-});
 
 /** Read the visible cells independently of the fixture's grading values. */
 const quotePage = (path: string, seed: number) =>
