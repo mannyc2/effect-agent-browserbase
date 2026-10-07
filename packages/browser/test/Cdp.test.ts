@@ -194,6 +194,8 @@ it.live("reads every later document after another connection takes over a page",
     const proxy = yield* behindProxy();
     const still = (title: string) => `data:text/html,<title>${title}</title><h1>${title}</h1>`;
     const earlier = yield* Scope.make();
+
+    yield* Effect.addFinalizer(() => Scope.close(earlier, Exit.void));
     const first = yield* Cdp.open({ endpoint: proxy.endpoint }).pipe(Scope.provide(earlier));
     const opened = yield* first.newPage(still("one"));
 
