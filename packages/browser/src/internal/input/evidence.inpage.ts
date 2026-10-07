@@ -4,6 +4,7 @@
  */
 import { Schema } from "effect";
 
+import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 
 export interface FormField {
@@ -31,21 +32,11 @@ export interface Evidence {
 
 type Field = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
-export const evidence = (names: Names) => {
-  const {
-    clean,
-    isButton,
-    isDocument,
-    isElement,
-    isHtml,
-    isInput,
-    isSelect,
-    isTextArea,
-    nameOf,
-    parentOf,
-    roleOf,
-    textOf,
-  } = names;
+export const evidence = (names: Names, placing: ContextReader) => {
+  const { clean, isDocument, isInput, isSelect, isTextArea, nameOf, parentOf, roleOf, textOf } =
+    names;
+
+  const { headingBefore, textBeside, treeOf } = placing;
 
   /** A field a submission would send. */
   const isField = (element: Element): element is Field =>
@@ -61,78 +52,14 @@ export const evidence = (names: Names) => {
         ? (field.files?.length ?? 0) > 0
         : field.value !== "";
 
-  const shown = (element: Element): boolean =>
-    element.checkVisibility({ opacityProperty: true, visibilityProperty: true });
-
-  // Text in these says what a control is called, not what the page says around it.
-  const unspoken =
-    "button,select,textarea,option,script,style,noscript,template,[role=button],[role=menuitem],[role=option],[role=tab],[role=switch],[role=checkbox],[role=radio],[aria-hidden=true]";
-
   // Containers whose text usually describes the controls in them: a row, an item, a group or a form.
   const groups =
     "tr,li,article,fieldset,form,section,dialog,[role=row],[role=listitem],[role=group],[role=region],[role=dialog],[role=alertdialog]";
-
-  /** The visible text just before (or after) a target within `scope`, nearest kept, ≤120 characters. */
-  const textBeside = (target: Element, scope: Node, backwards: boolean): string => {
-    const walker = target.ownerDocument.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
-
-    const labels =
-      isInput(target) || isTextArea(target) || isSelect(target) || isButton(target)
-        ? Array.from(target.labels ?? [])
-        : [];
-
-    let text = "";
-
-    walker.currentNode = target;
-    for (let steps = 0; steps < 400 && text.replace(/\s+/g, "").length < 120; steps++) {
-      const node = backwards ? walker.previousNode() : walker.nextNode();
-
-      if (node === null) break;
-      const parent = node.parentElement;
-
-      if (
-        parent === null ||
-        target.contains(parent) ||
-        parent.closest(unspoken) !== null ||
-        (isHtml(parent) && parent.isContentEditable) ||
-        labels.some((label) => label.contains(parent)) ||
-        !shown(parent)
-      )
-        continue;
-      text = backwards ? `${node.textContent ?? ""} ${text}` : `${text} ${node.textContent ?? ""}`;
-    }
-    const words = text.replace(/\s+/g, " ").trim();
-
-    return words.length <= 120
-      ? words
-      : backwards
-        ? `…${words.slice(-119).trimStart()}`
-        : `${words.slice(0, 119).trimEnd()}…`;
-  };
 
   const dialogOf = (element: Element): Element | undefined => {
     for (let node: Element | null = element; node !== null; node = parentOf(node))
       if (node.tagName === "DIALOG" || /^(?:alert)?dialog$/.test(node.getAttribute("role") ?? ""))
         return node;
-
-    return undefined;
-  };
-
-  /** The nearest visible heading before `target` in tree order, within `scope`. */
-  const headingBefore = (target: Element, scope: Node): string | undefined => {
-    const walker = target.ownerDocument.createTreeWalker(scope, NodeFilter.SHOW_ELEMENT);
-
-    walker.currentNode = target;
-    for (let steps = 0; steps < 2000; steps++) {
-      const node = walker.previousNode();
-
-      if (node === null) break;
-      if (isElement(node) && roleOf(node) === "heading" && shown(node)) {
-        const text = clean(textOf(node), 120);
-
-        if (text !== "") return text;
-      }
-    }
 
     return undefined;
   };
@@ -177,7 +104,7 @@ export const evidence = (names: Names) => {
       if (scope !== null && nearby === "")
         nearby = textBeside(element, scope, true) || textBeside(element, scope, false);
 
-    const heading = headingBefore(element, inTree ?? top);
+    const heading = headingBefore(element, treeOf(element));
 
     const fields =
       form === null

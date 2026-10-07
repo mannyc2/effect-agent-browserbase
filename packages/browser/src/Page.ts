@@ -16,10 +16,11 @@ import { type Duration, type Effect, type Option, Schema, type Stream } from "ef
 import type { Page as PlaywrightPage } from "playwright-core";
 
 import type { BrowserError, PolicyDenied } from "./BrowserError.ts";
-import type { BrowserEvent } from "./BrowserEvent.ts";
+import { type BrowserEvent, Subject, SubjectContext } from "./BrowserEvent.ts";
 import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
+import * as Subjects from "./internal/reading/subjects.inpage.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
 export interface Point {
@@ -53,6 +54,7 @@ export class ResolvedTarget extends Schema.Class<ResolvedTarget>("effect-browser
   tag: Schema.String,
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
+  context: SubjectContext,
   cursor: Schema.String,
   href: Schema.optional(Schema.String),
 }) {}
@@ -116,6 +118,68 @@ export interface ScreenshotOptions extends FrameOptions {
   /** JPEG quality, 0 to 100. Defaults to 80. */
   readonly quality?: number | undefined;
 }
+
+/**
+ * What `find` looks for. Every rule given must hold; with none, it finds every element in scope
+ * that has a role or is a control.
+ */
+export interface FindQuery {
+  /** An ARIA role, such as `"button"` or `"heading"`, ignoring case. */
+  readonly role?: string | undefined;
+  /**
+   * The accessible name: a string that reads the same once spaces are collapsed and case folded,
+   * or a pattern found in it.
+   */
+  readonly name?: string | RegExp | undefined;
+  /**
+   * Text it shows, ignoring case and spacing, or a pattern. Text inside a control or a heading is
+   * that control's or heading's, and only the smallest element showing it matches, not every
+   * element around it.
+   */
+  readonly text?: string | RegExp | undefined;
+  /** Words in its context (row, column, label or heading), ignoring case and spacing. */
+  readonly near?: string | undefined;
+  /** The viewport (the default), or the whole document. */
+  readonly scope?: "viewport" | "document" | undefined;
+}
+
+/**
+ * An element's state as its markup gives it: `checked` for what can be checked, `expanded`,
+ * `selected` and `pressed` where the page says either way, and `level` for headings.
+ */
+export const ElementState = Subjects.ElementState;
+
+export type ElementState = typeof ElementState.Type;
+
+/** An element `find` found: a ref for the actions, what it is, where it is and its state. */
+export class Found extends Schema.Class<Found>("effect-browser/Found")({
+  ref: Schema.String,
+  subject: Subject,
+  /** Its box in viewport CSS pixels, rounded. Reading the document, it may be out of view. */
+  box: Schema.Struct({ x: Schema.Int, y: Schema.Int, width: Schema.Int, height: Schema.Int }),
+  inViewport: Schema.Boolean,
+  state: ElementState,
+}) {}
+
+export interface TextOptions {
+  /** `"viewport"` (the default) reads what the viewport shows; a ref reads that element whole. */
+  readonly scope?: string | undefined;
+  /** Bound on the text's length, cut at a line. Defaults to 12,000 characters. */
+  readonly maxChars?: number | undefined;
+  /** Show what fields hold; a secret field still reads `••••`. Defaults to false. */
+  readonly unmask?: boolean | undefined;
+}
+
+/** What a page showed as text: a line per block, with table cells apart by tabs. */
+export class Text extends Schema.Class<Text>("effect-browser/Text")({
+  url: Schema.String,
+  title: Schema.String,
+  text: Schema.String,
+  /** True when `text` was cut at `maxChars`. */
+  truncated: Schema.Boolean,
+  /** Host monotonic milliseconds from the browser's captured Effect Clock. */
+  at: Schema.Finite,
+}) {}
 
 /** What to include in an observation of the current viewport. */
 export type ObservationMode = "outline" | "screenshot" | "both";
@@ -254,7 +318,18 @@ export interface Page {
     readonly full?: boolean;
     readonly maxChars?: number;
   }) => Effect.Effect<Observation, BrowserError>;
-  readonly hasText: (text: string) => Effect.Effect<boolean, BrowserError>;
+  /**
+   * The elements that match a query, in tree order, with refs the actions take, in one call to the
+   * page. All that match are returned, so a caller tells them apart by their context; none is an
+   * empty result, not a failure.
+   */
+  readonly find: (query?: FindQuery) => Effect.Effect<ReadonlyArray<Found>, BrowserError>;
+  /**
+   * The text the viewport shows, or one element whole, in one call to the page. Field values read
+   * `••••` unless `unmask`, and a secret field's always do, as does one that was secret when the
+   * library saw it.
+   */
+  readonly text: (options?: TextOptions) => Effect.Effect<Text, BrowserError>;
 
   readonly click: (
     target: Target,
@@ -276,6 +351,10 @@ export interface Page {
     values: ReadonlyArray<string>,
   ) => Effect.Effect<string, BrowserError>;
 
+  /**
+   * Wait until the page shows some text, as `find({ text, scope: "document" })` matches it,
+   * looking every 250 ms; `NotFound` after `timeout`, 10 seconds by default.
+   */
   readonly waitForText: (
     text: string,
     timeout?: Duration.Input,

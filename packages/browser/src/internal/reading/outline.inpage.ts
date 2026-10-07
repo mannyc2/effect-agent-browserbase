@@ -1,10 +1,13 @@
 /**
- * In the page: the outline a model reads, with a ref for each control, and whether the page shows
- * some text. See `names.inpage.ts` for what a page-side part may use.
+ * In the page: the outline a model reads, with a ref for each control. See `names.inpage.ts` for
+ * what a page-side part may use.
  */
 import { Schema } from "effect";
 
 import type { Names } from "./names.inpage.ts";
+import type { Subjects } from "./subjects.inpage.ts";
+import type { Texts } from "./text.inpage.ts";
+import type { Walk } from "./walk.inpage.ts";
 
 export interface SnapshotRequest {
   readonly full: boolean;
@@ -27,56 +30,14 @@ export interface SnapshotResult {
   readonly scrollHeight: number;
 }
 
-export const outline = (names: Names) => {
-  const {
-    clean,
-    containers,
-    interactiveRoles,
-    isDisabled,
-    isFrame,
-    isInput,
-    isSelect,
-    isTextArea,
-    nameOf,
-    refFor,
-    refs,
-    roleOf,
-    textOf,
-  } = names;
+export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: Texts) => {
+  const { clean, containers, isFrame, isInput, isSelect, isTextArea, nameOf, refFor, refs } = names;
+  const { roleOf, textOf } = names;
+  const { visit } = walked;
+  const { isControl, stateOf } = subjected;
 
-  const textBlocks = new Set([
-    "P",
-    "LI",
-    "TD",
-    "TH",
-    "DT",
-    "DD",
-    "LABEL",
-    "SPAN",
-    "BLOCKQUOTE",
-    "FIGCAPTION",
-    "CAPTION",
-    "PRE",
-    "STRONG",
-    "EM",
-    "B",
-    "I",
-    "SMALL",
-    "TIME",
-    "CODE",
-    "LEGEND",
-  ]);
-
-  const skipped = new Set([
-    "SCRIPT",
-    "STYLE",
-    "NOSCRIPT",
-    "TEMPLATE",
-    "HEAD",
-    "META",
-    "LINK",
-    "SVG",
-  ]);
+  const textBlocks =
+    /^(?:P|LI|TD|TH|DT|DD|LABEL|SPAN|BLOCKQUOTE|FIGCAPTION|CAPTION|PRE|STRONG|EM|B|I|SMALL|TIME|CODE|LEGEND)$/;
 
   const nested =
     "a[href],button,input,select,textarea,summary,[role],[onclick],[tabindex],[contenteditable],canvas,iframe";
@@ -90,49 +51,24 @@ export const outline = (names: Names) => {
     return label !== null && label.control !== null;
   };
 
-  const isVisible = (element: Element, style: CSSStyleDeclaration, rect: DOMRect): boolean => {
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      style.visibility === "collapse"
-    )
-      return false;
-    if (style.opacity === "0") return false;
-    if (element.getAttribute("aria-hidden") === "true") return false;
-
-    return rect.width > 0 || rect.height > 0 || style.display === "contents";
-  };
-
   const states = (element: Element, role: string | null): string => {
-    const out: Array<string> = [];
+    const state = stateOf(element, role);
 
-    if (role === "heading") out.push(`level=${element.tagName.slice(1)}`);
-    if (isDisabled(element)) out.push("disabled");
-    if (
-      (role === "checkbox" || role === "radio" || role === "switch") &&
-      ((isInput(element) && element.checked) || element.getAttribute("aria-checked") === "true")
-    )
-      out.push("checked");
-    if (element.getAttribute("aria-expanded") === "true") out.push("expanded");
-    if (element.getAttribute("aria-selected") === "true") out.push("selected");
-    if (element.getAttribute("aria-pressed") === "true") out.push("pressed");
-    if (element.ownerDocument.activeElement === element) out.push("focused");
-
-    return out.map((state) => ` [${state}]`).join("");
+    return [
+      state.level === undefined ? "" : `level=${state.level}`,
+      state.disabled ? "disabled" : "",
+      state.checked === true ? "checked" : "",
+      state.expanded === true ? "expanded" : "",
+      state.selected === true ? "selected" : "",
+      state.pressed === true ? "pressed" : "",
+      state.focused ? "focused" : "",
+    ]
+      .filter((name) => name !== "")
+      .map((name) => ` [${name}]`)
+      .join("");
   };
 
   const valueOf = (element: Element): string => {
-    if (isInput(element)) {
-      if (element.type === "password") return element.value === "" ? "" : ` value="••••"`;
-      if (
-        ["checkbox", "radio", "button", "submit", "reset", "image", "file"].includes(element.type)
-      )
-        return "";
-
-      return element.value === "" ? "" : ` value=${JSON.stringify(clean(element.value, 80))}`;
-    }
-    if (isTextArea(element))
-      return element.value === "" ? "" : ` value=${JSON.stringify(clean(element.value, 80))}`;
     if (isSelect(element)) {
       const selected = Array.from(element.selectedOptions, (option) => clean(option.text, 40));
 
@@ -144,8 +80,10 @@ export const outline = (names: Names) => {
 
       return ` value=${JSON.stringify(selected.join(", "))} options=${JSON.stringify(options.join(" | ") + more)}`;
     }
+    // The model sees what it typed, but never what a secret field holds.
+    const value = isInput(element) || isTextArea(element) ? texts.shown(element, true) : undefined;
 
-    return "";
+    return value === undefined || value === "" ? "" : ` value=${JSON.stringify(clean(value, 80))}`;
   };
 
   const hrefOf = (element: Element): string => {
@@ -165,6 +103,13 @@ export const outline = (names: Names) => {
     }
   };
 
+  interface Place {
+    readonly depth: number;
+    readonly insidePointer: boolean;
+    /** Inside a control, only the controls in it are read. */
+    readonly controls: boolean;
+  }
+
   const snapshot = (request: SnapshotRequest): SnapshotResult => {
     if (refs.next < request.firstRef) refs.next = request.firstRef;
     const width = window.innerWidth;
@@ -183,91 +128,64 @@ export const outline = (names: Names) => {
       return "in";
     };
 
-    const emit = (depth: number, line: string, rect: DOMRect): boolean => {
+    const count = (rect: DOMRect) => {
       const where = placement(rect);
 
       if (where === "above") above++;
       if (where === "below") below++;
-      if (where !== "in") return false;
+
+      return where;
+    };
+
+    const emit = (depth: number, line: string, rect: DOMRect): boolean => {
+      if (count(rect) !== "in") return false;
       if (query !== null && !line.toLowerCase().includes(query)) return false;
       lines.push(`${"  ".repeat(Math.min(depth, 8))}- ${line}`);
 
       return true;
     };
 
-    const walk = (
-      root: ParentNode,
-      depth: number,
-      insidePointer: boolean,
-      dx: number,
-      dy: number,
-    ) => {
-      for (const child of Array.from(root.children)) visit(child, depth, insidePointer, dx, dy);
+    const control = (element: Element, rect: DOMRect, role: string | null, depth: number) => {
+      const name = nameOf(element, role);
+      const kind = role ?? "clickable";
+
+      const box =
+        role === "canvas" || role === "iframe"
+          ? ` ${Math.round(rect.width)}x${Math.round(rect.height)} at (${Math.round(rect.x)},${Math.round(rect.y)})`
+          : "";
+
+      const line =
+        placement(rect) === "in"
+          ? `${kind}${name === "" ? "" : ` ${JSON.stringify(name)}`} [ref=${refFor(element)}]${states(element, role)}${valueOf(element)}${hrefOf(element)}${box}`
+          : kind;
+
+      emit(depth, line, rect);
+      if (isFrame(element)) {
+        const body = element.contentDocument?.body;
+
+        if ((body === null || body === undefined) && placement(rect) === "in")
+          lines.push(
+            `${"  ".repeat(Math.min(depth + 1, 8))}- (another site's frame: use a screenshot and coordinates)`,
+          );
+
+        return { depth: depth + 1, insidePointer: false, controls: false };
+      }
+      if (["INPUT", "SELECT", "TEXTAREA", "CANVAS", "IMG"].includes(element.tagName))
+        return undefined;
+
+      return { depth: depth + 1, insidePointer: true, controls: true };
     };
 
-    const visit = (
+    const enter = (
       element: Element,
-      depth: number,
-      insidePointer: boolean,
-      dx: number,
-      dy: number,
-    ): void => {
-      if (skipped.has(element.tagName.toUpperCase())) return;
-      const style = getComputedStyle(element);
-      const local = element.getBoundingClientRect();
-
-      if (!isVisible(element, style, local)) return;
-      const rect = new DOMRect(local.x + dx, local.y + dy, local.width, local.height);
+      style: CSSStyleDeclaration,
+      rect: DOMRect,
+      { depth, insidePointer }: Place,
+    ): Place | undefined => {
       const role = roleOf(element);
-      const pointer = style.cursor === "pointer";
 
-      const interactive =
-        (role !== null && interactiveRoles.has(role)) ||
-        role === "canvas" ||
-        role === "iframe" ||
-        element.hasAttribute("onclick") ||
-        (pointer && !insidePointer && local.width > 0 && local.height > 0);
-
-      if (interactive) {
-        const name = nameOf(element, role);
-        const kind = role ?? "clickable";
-
-        const box =
-          role === "canvas" || role === "iframe"
-            ? ` ${Math.round(rect.width)}x${Math.round(rect.height)} at (${Math.round(rect.x)},${Math.round(rect.y)})`
-            : "";
-
-        const line =
-          placement(rect) === "in"
-            ? `${kind}${name === "" ? "" : ` ${JSON.stringify(name)}`} [ref=${refFor(element)}]${states(element, role)}${valueOf(element)}${hrefOf(element)}${box}`
-            : kind;
-
-        emit(depth, line, rect);
-        if (isFrame(element)) {
-          let inner: Document | null = null;
-
-          try {
-            inner = element.contentDocument;
-          } catch {
-            inner = null;
-          }
-          if (inner?.body !== null && inner?.body !== undefined)
-            walk(inner.body, depth + 1, false, rect.x, rect.y);
-          else if (placement(rect) === "in")
-            lines.push(
-              `${"  ".repeat(Math.min(depth + 1, 8))}- (another site's frame: use a screenshot and coordinates)`,
-            );
-
-          return;
-        }
-        if (["INPUT", "SELECT", "TEXTAREA", "CANVAS", "IMG"].includes(element.tagName)) return;
-        for (const child of Array.from(element.children))
-          if (child.matches(nested) || child.querySelector(nested) !== null)
-            visit(child, depth + 1, true, dx, dy);
-
-        return;
-      }
-
+      if (isControl(element, role, style, rect, insidePointer))
+        return control(element, rect, role, depth);
       if (role === "heading") {
         emit(
           depth,
@@ -275,16 +193,15 @@ export const outline = (names: Names) => {
           rect,
         );
 
-        return;
+        return undefined;
       }
       if (role === "img") {
         const alt = nameOf(element, role);
 
         if (alt !== "") emit(depth, `img ${JSON.stringify(alt)}`, rect);
 
-        return;
+        return undefined;
       }
-
       let inner = depth;
 
       if (role !== null && (containers[element.tagName] !== undefined || role === "dialog")) {
@@ -296,13 +213,13 @@ export const outline = (names: Names) => {
           inner = depth + 1;
       }
 
-      if (textBlocks.has(element.tagName) && element.querySelector(nested) === null) {
-        if (inControlLabel(element)) return;
+      if (textBlocks.test(element.tagName) && element.querySelector(nested) === null) {
+        if (inControlLabel(element)) return undefined;
         const text = clean(textOf(element), 300);
 
         if (text !== "" && !noise.test(text)) emit(inner, `text: ${text}`, rect);
 
-        return;
+        return undefined;
       }
 
       let own = "";
@@ -312,12 +229,26 @@ export const outline = (names: Names) => {
       own = clean(own, 300);
       if (own !== "" && !noise.test(own) && !inControlLabel(element))
         emit(inner, `text: ${own}`, rect);
-      if (element.shadowRoot !== null)
-        walk(element.shadowRoot, inner, insidePointer || pointer, dx, dy);
-      walk(element, inner, insidePointer || pointer, dx, dy);
+
+      return {
+        depth: inner,
+        insidePointer: insidePointer || style.cursor === "pointer",
+        controls: false,
+      };
     };
 
-    walk(document, 0, false, 0, 0);
+    // Inside the viewport, a subtree out of view is skipped whole and counted as one part.
+    visit(
+      null,
+      !request.full,
+      { depth: 0, insidePointer: false, controls: false },
+      {
+        enter,
+        admit: (child, place) =>
+          !place.controls || child.matches(nested) || child.querySelector(nested) !== null,
+        outside: count,
+      },
+    );
 
     let text = lines.join("\n");
     let truncated = false;
@@ -344,12 +275,9 @@ export const outline = (names: Names) => {
     };
   };
 
-  const hasText = (text: string): boolean =>
-    (document.body?.innerText ?? "").toLowerCase().includes(text.toLowerCase());
-
   const viewport = () => ({ width: window.innerWidth, height: window.innerHeight });
 
-  return { hasText, snapshot, viewport };
+  return { snapshot, viewport };
 };
 
 export type Outline = ReturnType<typeof outline>;

@@ -16,7 +16,10 @@ export class Snapshot extends Schema.Class<Snapshot>("effect-browser/Snapshot")(
   text: Schema.String,
   /** True when `text` was cut at `maxChars`. */
   truncated: Schema.Boolean,
-  /** Items left out because they are above or below the viewport (viewport snapshots only). */
+  /**
+   * Parts of the page left out because they lie above or below the viewport, each an element out
+   * of view with all it holds (viewport snapshots only).
+   */
   above: Schema.Finite,
   below: Schema.Finite,
   viewport: Schema.Struct({ width: Schema.Finite, height: Schema.Finite }),
@@ -31,8 +34,8 @@ export class Snapshot extends Schema.Class<Snapshot>("effect-browser/Snapshot")(
 
     const omitted: Array<string> = [];
 
-    if (this.above > 0) omitted.push(`${this.above} items above`);
-    if (this.below > 0) omitted.push(`${this.below} items below`);
+    if (this.above > 0) omitted.push(`${this.above} parts above`);
+    if (this.below > 0) omitted.push(`${this.below} parts below`);
 
     const footer = [
       ...(omitted.length > 0 ? [`(${omitted.join(", ")} the viewport)`] : []),

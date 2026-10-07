@@ -1,9 +1,10 @@
-// Pages for the tests, served from loopback: an order form, a canvas slot machine and a canvas
-// price chart. The slot machine has no DOM controls at all, so only point input can play it.
+// Pages for the tests, served from loopback: an order form, a canvas slot machine, a canvas
+// price chart, a price table, a long page with pinned parts, and an account form. The slot machine
+// has no DOM controls at all, so only point input can play it.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Tracer } from "effect";
 
 const form = `<!doctype html><title>Order</title>
 <body style="margin:0;font-family:sans-serif">
@@ -78,7 +79,57 @@ const busy = `<!doctype html><title>Busy</title><h1>Busy</h1>
 
 const opensBusy = `<!doctype html><title>Opener</title><a href="/busy" target="_blank">Open a busy tab</a>`;
 
+// The third row's first cell spans two columns, so its button is still under "Trade".
+const ticker = `<!doctype html><title>Ticker</title>
+<body style="margin:0;font-family:sans-serif">
+<h1>Prices</h1>
+<table>
+  <thead><tr><th>Coin</th><th>Price</th><th>1h</th><th>24h</th><th>Trade</th></tr></thead>
+  <tbody>
+    <tr><td>BTC</td><td>$64,210</td><td>+0.4%</td><td>-1.2%</td><td><button onclick="bought.textContent = 'Bought BTC'"><span>Buy</span></button></td></tr>
+    <tr><td>ETH</td><td>$3,105</td><td>-0.8%</td><td>+2.5%</td><td><button onclick="bought.textContent = 'Bought ETH'">Buy</button></td></tr>
+    <tr><td colspan="2">SOL, paused</td><td>+1.1%</td><td>+0.3%</td><td><button disabled>Buy</button></td></tr>
+  </tbody>
+</table>
+<p id="bought">Nothing bought</p>
+<div>Ordered <b>25</b> eth</div>`;
+
+// Pinned parts whose containers lie outside the viewport once it scrolls to the middle: a bar in
+// a header, a banner in a footer, and a dialog in an empty wrapper at the end.
+const pinned = `<!doctype html><title>Pinned</title>
+<body style="margin:0;font-family:sans-serif">
+<header style="height:64px"><nav style="position:fixed;top:0;left:0;right:0;height:48px;background:#fff"><a href="/next">Sign in</a></nav></header>
+<main>
+  <h1>A long read</h1>
+  <p>The top of the story</p>
+  <div style="height:3000px"></div>
+  <p id="middle">The middle of the story</p>
+  <div style="height:3000px"></div>
+  <button>At the bottom</button>
+</main>
+<footer><div style="position:fixed;bottom:0;left:0;right:0;height:40px;background:#eee">Cookies help <button>Accept</button></div></footer>
+<div><div role="dialog" aria-label="Offer" style="position:fixed;top:200px;left:300px;width:300px;height:100px;background:#fff">Half price today</div></div>`;
+
+const account = `<!doctype html><title>Account</title>
+<body style="margin:0;font-family:sans-serif">
+<h1>Account</h1>
+<form onsubmit="return false">
+  <label>Email <input id="email" value="ada@example.com"></label>
+  <label>Password <input id="password" type="password"></label>
+  <label>Code <input id="code" autocomplete="one-time-code" value="424242"></label>
+  <label>Note <textarea id="note">Ring twice</textarea></label>
+  <label>Country <select id="country"><option>Norway</option><option selected>Chile</option></select></label>
+  <div id="bio" contenteditable="true">Likes chess</div>
+  <button type="button" onclick="password.type = password.type === 'password' ? 'text' : 'password'">Show password</button>
+  <input type="submit" value="Save">
+</form>
+<table><tr><th>Plan</th><th>Price</th></tr><tr><td>Pro</td><td>$9</td></tr></table>
+<section role="region" aria-label="Story"><p>First part</p><div style="height:2000px"></div><p>Last part</p></section>`;
+
 const pages: Record<string, string> = {
+  "/ticker": ticker,
+  "/pinned": pinned,
+  "/account": account,
   "/busy": busy,
   "/opens-busy": opensBusy,
   "/form": form,
@@ -115,3 +166,25 @@ export const SiteLayer = Layer.effect(
     return Site.of({ url: (path) => `http://127.0.0.1:${port}${path}` });
   }),
 );
+
+/** What an effect sends to the page script, counted by the bridge's spans. */
+export const roundTrips = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const names: Array<string> = [];
+
+    const tracer = Tracer.make({
+      span: (options) => {
+        names.push(options.name);
+
+        return new Tracer.NativeSpan(options);
+      },
+    });
+
+    const value = yield* effect.pipe(Effect.provideService(Tracer.Tracer, tracer));
+
+    return {
+      value,
+      calls: names.filter((name) => name === "Page.evaluate").length,
+      worlds: names.filter((name) => name === "Page.createWorld").length,
+    };
+  });

@@ -1,10 +1,14 @@
 /**
  * In the page: where input lands. It resolves a ref or a point to the control under it, in
- * top-document viewport pixels, and plans a wheel scroll that brings a ref into view. See `reading/names.inpage.ts` for what a page-side part may use.
+ * top-document viewport pixels, with the subject's context, and plans a wheel scroll that brings a
+ * ref into view. See `reading/names.inpage.ts` for what a page-side part may use.
  */
 import { Schema } from "effect";
 
+import { SubjectContext } from "../../BrowserEvent.ts";
+import type { Context, ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
+import type { Walk } from "../reading/walk.inpage.ts";
 
 export interface ResolvedPoint {
   readonly x: number;
@@ -13,6 +17,7 @@ export interface ResolvedPoint {
   readonly tag: string;
   readonly role: string | null;
   readonly name: string;
+  readonly context: Context;
   readonly cursor: string;
   readonly href?: string | undefined;
 }
@@ -24,9 +29,10 @@ export type PointResult =
       readonly detail: string;
     };
 
-export const targets = (names: Names) => {
-  const { describe, interactiveRoles, isDisabled, isFrame, lookup, nameOf, parentOf, roleOf } =
-    names;
+export const targets = (names: Names, walked: Walk, placing: ContextReader) => {
+  const { describe, interactiveRoles, isDisabled, lookup, nameOf, parentOf, roleOf } = names;
+  const { hitAt } = walked;
+  const { contextOf } = placing;
 
   // A painted child of a control still activates the control; keep its name without moving the point.
   const controlOf = (hit: Element): Element => {
@@ -46,30 +52,6 @@ export const targets = (names: Names) => {
     return hit;
   };
 
-  // Coordinate subtraction is valid only for an untransformed frame. Report the frame itself
-  // otherwise: the real pixel input still works, and its receipt must not name a guessed child.
-  const untransformed = (frame: HTMLIFrameElement, rect: DOMRect): boolean => {
-    if (rect.width !== frame.offsetWidth || rect.height !== frame.offsetHeight) return false;
-    let ancestor: Element | null = frame;
-
-    while (ancestor !== null) {
-      const view = ancestor.ownerDocument.defaultView ?? window;
-      const style = view.getComputedStyle(ancestor);
-
-      if (
-        style.transform !== "none" ||
-        style.scale !== "none" ||
-        style.rotate !== "none" ||
-        style.perspective !== "none" ||
-        style.zoom !== "1"
-      )
-        return false;
-      ancestor = parentOf(ancestor);
-    }
-
-    return true;
-  };
-
   /** Whether `node` is `ancestor` or inside it, across shadow roots and same-origin frames. */
   const within = (ancestor: Element, node: Element): boolean => {
     for (let current: Element | null = node; current !== null;) {
@@ -85,31 +67,6 @@ export const targets = (names: Names) => {
   const receives = (element: Element, hit: Element): boolean =>
     within(element, hit) || within(hit, element);
 
-  const hitAt = (root: Document | ShadowRoot, x: number, y: number): Element | null => {
-    let hit = root.elementFromPoint(x, y);
-
-    while (hit?.shadowRoot !== null && hit?.shadowRoot !== undefined) {
-      const inner = hit.shadowRoot.elementFromPoint(x, y);
-
-      if (inner === null || inner === hit) break;
-      hit = inner;
-    }
-    if (hit !== null && isFrame(hit)) {
-      const document = hit.contentDocument;
-
-      if (document !== null) {
-        const rect = hit.getBoundingClientRect();
-
-        if (untransformed(hit, rect))
-          return (
-            hitAt(document, x - rect.left - hit.clientLeft, y - rect.top - hit.clientTop) ?? hit
-          );
-      }
-    }
-
-    return hit;
-  };
-
   // HTML links, SVG links and image-map areas all navigate; SVG keeps lowercase tag names.
   const hrefAttribute = (element: Element): string | null =>
     element.localName === "a" || element.localName === "area"
@@ -124,7 +81,12 @@ export const targets = (names: Names) => {
     return undefined;
   };
 
-  const details = (element: Element, hit: Element, x: number, y: number): ResolvedPoint => {
+  const details = (
+    element: Element,
+    hit: Element,
+    x: number,
+    y: number,
+  ): Omit<ResolvedPoint, "context"> => {
     const link = linkOf(element);
     let href: string | undefined;
 
@@ -168,9 +130,10 @@ export const targets = (names: Names) => {
         return { error: "outside", detail: `(${x}, ${y}) is outside the viewport` };
       const hit = hitAt(document, x, y);
 
-      return hit === null
-        ? { error: "offscreen", detail: `nothing is painted at (${x}, ${y})` }
-        : details(controlOf(hit), hit, x, y);
+      if (hit === null) return { error: "offscreen", detail: `nothing is painted at (${x}, ${y})` };
+      const control = controlOf(hit);
+
+      return { ...details(control, hit, x, y), context: contextOf(control) };
     }
     const ref = target;
     const element = lookup(ref);
@@ -265,7 +228,10 @@ export const targets = (names: Names) => {
     if (hit !== null && !receives(element, hit))
       return { error: "covered", detail: `${ref} is covered by ${describe(hit)}` };
 
-    return details(element, hit ?? element, Math.round(x), Math.round(y));
+    return {
+      ...details(element, hit ?? element, Math.round(x), Math.round(y)),
+      context: contextOf(element),
+    };
   };
 
   // Suggest one visible wheel origin. Unsupported frame geometry and fully clipped panels use
@@ -337,6 +303,7 @@ const ResolvedPointSchema = Schema.Struct({
   tag: Schema.String,
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
+  context: SubjectContext,
   cursor: Schema.String,
   href: Schema.optional(Schema.String),
 });

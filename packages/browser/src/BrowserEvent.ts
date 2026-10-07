@@ -30,15 +30,32 @@ export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
 }) {}
 
 /**
- * What an input acted on, as the page named it when the input was sent: its role (null when it
- * has none), its accessible name (empty when it has none) and its lowercase tag. For a point, it
- * is the control under the point, or else the element painted there. Unlike a ref, it keeps its
- * meaning after the page changes.
+ * The words around a subject that say which one it is, each bound to it in the page rather than
+ * read off nearby text later. In a table, `row` is the row's header or first cell with text and
+ * `column` the header over it; elsewhere, `label` is the words just before it in its row, item,
+ * group or block, at most 40 characters. `heading` is the nearest heading above it, left out for
+ * what is pinned to the viewport. Row, column and heading are at most 60 characters.
+ */
+export const SubjectContext = Schema.Struct({
+  row: Schema.optional(Schema.String),
+  column: Schema.optional(Schema.String),
+  label: Schema.optional(Schema.String),
+  heading: Schema.optional(Schema.String),
+});
+
+export type SubjectContext = typeof SubjectContext.Type;
+
+/**
+ * What an input acted on, or what `Page.find` found, as the page named it then: its role (null
+ * when it has none), its accessible name (empty when it has none), its lowercase tag and its
+ * context. For a point, it is the control under the point, or else the element painted there.
+ * Unlike a ref, it keeps its meaning after the page changes.
  */
 export class Subject extends Schema.Class<Subject>("effect-browser/Subject")({
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   tag: Schema.String,
+  context: SubjectContext,
 }) {}
 
 /**

@@ -3,6 +3,32 @@
 Each release lists what changed since the release before it. From 0.3 on, `effect-browser`,
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version.
 
+## Unreleased
+
+### Added
+
+- `Page.find(query)`: in one call to the page, the elements that a query of `role`, `name` (a
+  string or a `RegExp`), `text` and `near` (words of an element's context) matches, in the viewport
+  or the whole document. Each is a `Found` with a ref the actions take, its `Subject`, its box,
+  whether it is in view, and its state. It replaces 0.2's structured controls.
+- `Page.text({ scope, maxChars, unmask })`: in one call to the page, the text the viewport, or one
+  element, shows. What fields hold reads `••••` unless `unmask` is set; secret fields always do.
+- `BrowserEvent.SubjectContext`, `Page.ElementState`, `Page.FindQuery`, `Page.Found`, `Page.Text`
+  and `Page.TextOptions`.
+
+### Breaking
+
+- `Subject` has a `context`: a table cell's `row` and `column`, the `label` just before an element,
+  and the `heading` above it. Every `Action` records it, and `ResolvedTarget` carries it.
+- `Snapshot.above` and `below` count the parts of the page skipped because they lie out of view,
+  each an element with all it holds, not the outline lines those would have made.
+- The outline masks what every secret field holds, not only passwords: one-time codes and card
+  fields too.
+- A field stays secret once the library has seen it marked secret, so text typed into a password
+  its page then reveals is still redacted, and never read back.
+- `Page.hasText` is removed: `find({ text, scope: "document" })` answers it, within the action
+  timeout. `Page.waitForText` waits for the same match.
+
 ## 0.3.0-beta.0
 
 0.3 replaces the 0.2 set with a rewrite on Effect 4.0.0 and `effect/ai`. No 0.2 API carries over,

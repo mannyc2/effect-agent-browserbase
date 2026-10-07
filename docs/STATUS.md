@@ -19,6 +19,13 @@
   with no page ends it, and the tools follow a newly opened tab without acting on it unseen.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
+- Structured reads in one call to the page. `Page.find` returns the elements that a query of role,
+  name, text and context matches, each with a ref the actions take, its subject, box and state.
+  `Page.text` returns what the viewport, or one element, shows, with what fields hold masked unless
+  asked for and secret fields masked always. A subject's context binds a table cell to its row and
+  its column's header, and every `Action` records it. Reading the viewport, the outline, `find` and
+  `text` skip subtrees out of view, keeping what is pinned in view: locally, the outline of a
+  28,021-element table takes 7 ms instead of 95.
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
   holds and validation before held actions resume: the press point is hit-tested after the
   pointer arrives, typing refuses to start on a control a key could activate, and a multi-key

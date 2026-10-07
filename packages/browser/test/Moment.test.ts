@@ -66,7 +66,7 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
         page: "p1",
         name: "click",
         target: "e3",
-        subject: new Subject({ role: "button", name: "Pay", tag: "button" }),
+        subject: new Subject({ role: "button", name: "Pay", tag: "button", context: {} }),
         x: 40,
         y: 20,
         ok: true,
@@ -138,7 +138,7 @@ it("names what each action acted on, never by a ref", () => {
       events: [
         action(6000, {
           target: "300,320",
-          subject: new Subject({ role: "canvas", name: "", tag: "canvas" }),
+          subject: new Subject({ role: "canvas", name: "", tag: "canvas", context: {} }),
           x: 300,
           y: 320,
         }),
@@ -146,7 +146,7 @@ it("names what each action acted on, never by a ref", () => {
           name: "type",
           target: "e4",
           text: "ada@example.com",
-          subject: new Subject({ role: "textbox", name: "Email", tag: "input" }),
+          subject: new Subject({ role: "textbox", name: "Email", tag: "input", context: {} }),
           x: 10,
           y: 10,
         }),
@@ -154,13 +154,13 @@ it("names what each action acted on, never by a ref", () => {
           name: "select",
           target: "e5",
           text: "eth",
-          subject: new Subject({ role: "combobox", name: "Coin", tag: "select" }),
+          subject: new Subject({ role: "combobox", name: "Coin", tag: "select", context: {} }),
         }),
         action(8000, {
           name: "drag",
           target: '"e6" -> {"x":380,"y":40}',
-          subject: new Subject({ role: "slider", name: "Level", tag: "input" }),
-          to: new Subject({ role: null, name: "", tag: "main" }),
+          subject: new Subject({ role: "slider", name: "Level", tag: "input", context: {} }),
+          to: new Subject({ role: null, name: "", tag: "main", context: {} }),
           x: 380,
           y: 40,
         }),
@@ -348,7 +348,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.deepStrictEqual(
         click?._tag === "Action" ? click.subject : undefined,
-        new Subject({ role: "link", name: "Next page", tag: "a" }),
+        new Subject({ role: "link", name: "Next page", tag: "a", context: {} }),
       );
       // The new page's outline gives refs to its own elements; the timeline uses none of them.
       const [text = ""] = texts(Moment.toPrompt(moment));
