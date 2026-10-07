@@ -31,20 +31,27 @@
   after three refusals in a row. The judges are tested with scripted models; `bun run judges` in
   the bench grades them against the corpus, with paid arms only on opt-in.
 - Moments: `Moment.capture` gathers a page's frames and events over a window that can start where
-  the previous moment ended, so consecutive moments neither repeat nor miss an event, and needs
-  only the page. It also carries what visibly changed (`Change`), which the page script notes from
-  the library's first read of a document: text in view that changed, appeared or disappeared,
-  field values and the title, each with before and after values and nearby words such as a table
-  row and column. `Page.changes` reads the same record in one round trip, which a moment takes
-  alongside its picture. `toPrompt` leads with these changes, most notable first, and names an action
-  by role and name, never by ref, only as the cause of a change that followed it within a second;
-  an action on a canvas or frame, and any action before the record began, is still listed as a
-  step. Whether this narrates better than steps is not yet measured. The outline is opt-in (`snapshot: true`): in the first
-  paired run, moments with and without it scored 61/80 each on every task but `navigated`, where
-  the outline's reused refs misled the model, and it doubled the tokens on `quote-dense`.
-  `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call; describing it is
-  the caller's own `generateObject`, `generateText` or `Chat` turn. Pages keep the screencast
-  frames of the last 5 seconds (`frameHistory`), a moment's default window.
+  the previous moment ended, so consecutive moments neither repeat nor miss an event, and needs only
+  the page. It also carries what visibly changed (`Change`): text in view that changed, appeared,
+  disappeared or came and went, field values and the title, each element folded to what it said at
+  either end of the window, with nearby words such as a table row and column. The page script keeps
+  that record per element from a document's first `Page.changes` read, so pages nobody asks pay
+  nothing; it marks changes as they happen, judges them in view with an IntersectionObserver as the
+  page renders, and reads context only for what a read returns. On a local 2,000-cell ticker table,
+  main-thread busy time per 3 s was 96 ms without the script and 536 ms with the first recorder on
+  any page the library read; now a page never asked stays at 96 ms and a recording one takes 250 ms,
+  where an empty observer alone takes 165. A read covers any window up to a minute, `since` to
+  `until`, on the clock mapping frames use; a moment reads up to its last frame. `toPrompt` leads
+  with news, then what keeps changing, collapsing a column's cells into one line, and names no
+  action as a cause: a time-only rule credited clicks with ticks that followed them. Actions before
+  the record began are still listed as steps, by role and name, never by ref, and
+  `{ actions: "all" }` lists them all. Whether this narrates better than steps is not yet measured.
+  The outline is opt-in (`snapshot: true`): in the first paired run, moments with and without it
+  scored 61/80 each on every task but `navigated`, where the outline's reused refs misled the model,
+  and it doubled the tokens on `quote-dense`. `Moment.toPrompt` lays a moment out as one message for
+  any `effect/ai` call; describing it is the caller's own `generateObject`, `generateText` or `Chat`
+  turn. Pages keep the screencast frames of the last 5 seconds (`frameHistory`), a moment's default
+  window.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor

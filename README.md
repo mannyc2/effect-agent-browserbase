@@ -65,13 +65,16 @@ program.pipe(Effect.provide([Hosted, Model]), Effect.runPromise);
 
 ## A moment
 
-`Moment.capture` gathers a page's screencast frames over a window, what visibly changed on it and its
-events in between; `snapshot: true` adds the page's outline at the end. A change is text in view
-that changed, appeared or disappeared, a field's value or the title, with what it said before and
-where it is (`row "Ether", column "1h"`). `Moment.toPrompt` lays a moment out as one message for any
-`effect/ai` call. It leads with what changed, most notable first, and names an action only as its
-cause (`"$61,240" became "$62,010" (beside "Price"), after a click on button "Refresh"`), so a model
-retells what happened rather than the steps taken; `{ actions: "all" }` lists every step as well.
+`Moment.capture` gathers a page's screencast frames over a window, what visibly changed on it and
+its events in between; `snapshot: true` adds the page's outline at the end. A change is text in view
+that changed, appeared, disappeared or came and went, a field's value or the title, with what it
+said at either end of the window and where it is (`row "Ether", column "1h"`). A page keeps that
+record from the first time it is asked, by a moment or by `Page.changes({ since, until })`, which
+can end a window at a delayed frame's capture time. `Moment.toPrompt` lays a moment out as one
+message for any `effect/ai` call. It leads with what changed, news before what keeps changing
+(`"$61,240" became "$62,010" (beside "Price", under "Bitcoin")`), and names no action as a cause;
+`{ actions: "all" }` lists every step among the changes in order of time. Whether a model narrates
+better from changes than from steps is not yet measured.
 
 ```ts
 import { LanguageModel, Prompt } from "effect/ai";
@@ -87,6 +90,8 @@ const watch = Effect.gen(function* () {
 
   yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
   yield* page.goto("https://example.com/live-chart");
+  // Start the page's record of changes, so the moment can tell what changed while it waited.
+  yield* page.changes();
   yield* Effect.sleep("5 seconds");
 
   const moment = yield* Moment.capture(page, { frames: 3 });
