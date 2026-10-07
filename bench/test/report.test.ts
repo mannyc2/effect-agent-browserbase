@@ -6,10 +6,10 @@ import { Arbitrary, Effect, FileSystem, Path, Result, Schema } from "effect";
 
 import type { Arm } from "../Arms.ts";
 import { emptyAccounting, noTiming } from "../Budget.ts";
-import { pairs, summary } from "../Report.ts";
+import { compare, pairs, summary } from "../Report.ts";
 import * as Results from "../Results.ts";
 import { noPhases } from "../Trace.ts";
-import type { Reason, Status } from "../Trial.ts";
+import { type Reason, type Status, trialSeed } from "../Trial.ts";
 
 const record = (fields: {
   readonly task: string;
@@ -27,7 +27,7 @@ const record = (fields: {
     arm: fields.arm ?? null,
     trial: fields.trial,
     baseSeed: 1,
-    seed: 3704062687,
+    seed: trialSeed(1, fields.task, fields.trial),
     startedAt: "2026-10-07T14:22:14.381Z",
     run: {
       revision: { commit: "d1c390abc31a214a54f6ca33bddf291b2e65e803", dirty: false },
@@ -41,6 +41,7 @@ const record = (fields: {
       concurrency: 4,
       record: false,
       narrateSeconds: null,
+      split: "dev",
     },
     reasoning: null,
     status: fields.status ?? "graded",
@@ -142,8 +143,8 @@ describe("summary", () => {
 });
 
 describe("pairs", () => {
-  it("counts only pairs graded in both arms", () => {
-    const counts = pairs(
+  it("pairs each task's trials on the same seed, over those graded in both arms", () => {
+    const byTask = pairs(
       [
         record({ task: "a", trial: 1, arm: 1, pass: true }),
         record({ task: "a", trial: 1, arm: 5, pass: true }),
@@ -161,6 +162,38 @@ describe("pairs", () => {
       1,
     );
 
-    assert.deepStrictEqual(counts, { pairs: 4, both: 1, onlyFirst: 1, onlySecond: 1, neither: 1 });
+    assert.deepStrictEqual(Object.fromEntries(byTask), {
+      a: { pairs: 2, both: 1, onlyFirst: 1, onlySecond: 0, neither: 0 },
+      b: { pairs: 2, both: 0, onlyFirst: 0, onlySecond: 1, neither: 1 },
+    });
+  });
+});
+
+describe("compare", () => {
+  it("tests each task on its own pairs, and all tasks on their pooled discordant pairs", () => {
+    // Arm 1 wins every pair on one task and loses every pair on the other.
+    const opposite = ["a", "b"].flatMap((task) =>
+      [1, 2, 3, 4].flatMap((trial) => [
+        record({ task, trial, arm: 1, pass: task === "a" }),
+        record({ task, trial, arm: 5, pass: task === "b" }),
+      ]),
+    );
+
+    const [comparison] = compare(opposite);
+
+    assert.deepStrictEqual(
+      comparison?.byTask.map(({ task, onlyFirst, onlySecond, p, adjusted }) => ({
+        task,
+        onlyFirst,
+        onlySecond,
+        p,
+        adjusted,
+      })),
+      [
+        { task: "a", onlyFirst: 4, onlySecond: 0, p: 0.125, adjusted: 0.25 },
+        { task: "b", onlyFirst: 0, onlySecond: 4, p: 0.125, adjusted: 0.25 },
+      ],
+    );
+    assert.strictEqual(comparison?.combined.p, 1);
   });
 });

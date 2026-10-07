@@ -10,6 +10,20 @@ Chromium and a hosted browser load them the same way, with no tunnel. Each page 
 so changing concurrency does not change its page data. The same seed seeds the trial's Effect
 `Random`, which humanized pointer paths and typing draw from.
 
+Operate pages vary with the seed too, so a task's trials sample a family of pages rather than
+repeat one, and every graded answer is the page's own:
+
+- the casino lobby words its cookie banner and age check, and orders their buttons, differently,
+  and moves the game's card among the others; the reels start from different credits and a
+  different default bet, with their controls elsewhere on the canvas;
+- the trading ticket words its fields differently, starts on the buy or the sell side, and
+  numbers its orders from a different id; a limit order rests on the book, open;
+- the checkout words and orders its fields differently, shuffles its countries and shipping
+  choices, names its button differently and issues a different confirmation number.
+
+Prompts stay the same. `run --split eval` draws a held-out family of seeds: work on prompts and
+tools against `dev`, the default, and compare arms on `eval`.
+
 | Task            | Kind       | What the model must do                                                                    |
 | --------------- | ---------- | ----------------------------------------------------------------------------------------- |
 | `casino-play`   | operate    | Pass a cookie wall and an age check, play five spins on a canvas slot machine             |
@@ -215,9 +229,21 @@ after the session ended, and a session whose page never navigated had none.
 ## Arms
 
 `--arm` sets how a model sees a page and acts on it, for the paired experiment. Repeated, it runs
-every selected arm on the same seeds, so trials pair by task and trial number. The summary gives
-each arm's tallies, its median seconds, model turns and tool calls per graded trial, and for each
-two arms the pairs graded in both, split by which arm passed.
+every selected arm on the same seeds, so trials pair by task and seed. A model run's summary, and
+`report` over any results files (`Report.ts`, `Stats.ts`), states its estimand: whether one arm
+passes more often than another on these tasks' pages. The tasks are fixed, not sampled, so a
+difference speaks to these pages only. It then gives:
+
+- each arm's tallies, and its median seconds, model turns and tool calls per graded trial;
+- per task and arm, the pass rate with Wilson's 95% interval; pass^3, the chance that three
+  trials all pass, estimated as τ-bench does; and the dollars and seconds per pass;
+- for each two arms, on the pages both were graded on, McNemar's exact test per task, with
+  Holm's correction across the tasks, and the test stratified by task, which pools the
+  discordant pairs, with Holm's correction across the pairs of arms;
+- infrastructure failures per backend: local Chromium, Chromium with added latency, or
+  Browserbase.
+
+A wrong answer counts against its arm; an infrastructure failure leaves its pair out of the test.
 
 | Arm | Operate tasks                                                                                                                                             | Understand tasks                               |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
@@ -240,8 +266,8 @@ EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
 The first paired run, on 2026-10-06, used `openai/gpt-6-luna` (medium reasoning for operate tasks,
 none for understand tasks) with seed 1: 20 trials of each operate task per arm in local Chromium,
 5 on Browserbase, and 10 of each understand task in arms 2 and 5, for $0.91 in all. Every trial
-was graded. The operate pages do not vary with the seed, so a task's trials repeat one page and
-are not independent observations. In that run, arm 5's moments carried the outline and named an
+was graded. The operate pages did not vary with the seed then, so a task's trials repeated one
+page. In that run, arm 5's moments carried the outline and named an
 action's target by its ref, and arm 2's moments left the outline out; moments now name what an
 action acted on and leave the outline out by default, and arm 1 adds it. The graders match exactly: "On the page" also counts the
 `checkout` trials that left the right order and gave the issued number inside a sentence
@@ -305,7 +331,7 @@ preserving charges that arrived before a failure.
 
 ## Input judges
 
-`bun run judges` grades the input judges of `effect-browser/Policy` against the 77-control corpus
+`bun run bench judges` grades the input judges of `effect-browser/Policy` against the 77-control corpus
 in `packages/browser/test/consequence-corpus.ts`. Each case's input is prepared on local Chromium
 and refused before it reaches the page, so a judge sees exactly what a guard would. Every case is
 judged without a task: the run grades recognising risk, not whether a task asks for it. A risk
@@ -327,8 +353,8 @@ are `cases.jsonl` and `summary.json`: per arm, consequential and benign cases fl
 false alarms per risk, and recall by kind. Without `--out` they go to `.work/judges/`.
 
 ```sh
-bun run judges                          # free: the structure arm
-EFFECT_BROWSER_BENCH_LIVE=1 bun run judges -- --arm decider --arm reviewer \
+bun run bench judges                    # free: the structure arm
+EFFECT_BROWSER_BENCH_LIVE=1 bun run bench judges --arm decider --arm reviewer \
   --arm escalate --model openai/gpt-6-luna --max-usd 0.5
 ```
 
@@ -353,6 +379,8 @@ and Jev `jev-1.13.0`, for $0.018 in all:
 
 `bun run test` runs every scripted solution, grades answers from models scripted to be wrong or
 blindly sure, verifies seeded fixture data and captured evidence, and checks concurrent browser
-ownership and budget admission. No model or hosted browser is called.
+ownership and budget admission. Two gates hold every operate task: its page varies with the seed,
+and an agent that reports the right answer without doing the work fails. No model or hosted
+browser is called.
 
 A new task is an `operate` or `understand` entry in `Tasks.ts`; the tests pick it up.

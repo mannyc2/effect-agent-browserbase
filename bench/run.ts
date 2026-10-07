@@ -5,7 +5,6 @@ import { OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import {
   Cause,
   Clock,
-  Config,
   Console,
   DateTime,
   Duration,
@@ -27,7 +26,7 @@ import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
 import { type Arm, armNames, arms } from "./Arms.ts";
-import { BenchError, efforts, modelRunner, noCalls, noTiming, refuse } from "./Budget.ts";
+import { BenchError, efforts, modelRunner, noCalls, noTiming, optedIn, refuse } from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import * as Latency from "./Latency.ts";
 import * as Recorder from "./Recorder.ts";
@@ -44,6 +43,7 @@ import {
   notAdmitted,
   revision,
   type RunInfo,
+  Split,
   trialSeed,
   uncertainAllocation,
   workDeadline,
@@ -81,13 +81,6 @@ export const errorText = (cause: Cause.Cause<unknown>) => {
   return error instanceof Error ? error.name : "Trial failed";
 };
 
-/** A paid opt-in, on only when its variable is exactly "1". */
-const optIn = (name: string) =>
-  Config.String(name).pipe(
-    Config.map((value) => value === "1"),
-    Config.withDefault(false),
-  );
-
 const atLeast = (minimum: number) => Schema.Finite.check(Schema.isGreaterThanOrEqualTo(minimum));
 
 const flags = {
@@ -108,6 +101,12 @@ const flags = {
   seed: Flag.Int("seed").pipe(
     Flag.withDefault(1),
     Flag.withDescription("Base seed for each trial's page data and randomness. Defaults to 1."),
+  ),
+  split: Flag.Literals("split", Split.literals).pipe(
+    Flag.withDefault("dev"),
+    Flag.withDescription(
+      "The family of seeds: dev to work on prompts and tools, eval, held out, to compare arms. Defaults to dev.",
+    ),
   ),
   model: Flag.String("model").pipe(
     Flag.optional,
@@ -194,9 +193,9 @@ export const command = Command.make(
       return yield* refuse("--arm needs --model: the scripted solutions have no arms");
     if (latency !== undefined && hosted)
       return yield* refuse("--latency slows a local chromium; a hosted browser has its own");
-    if (model !== undefined && !(yield* optIn("EFFECT_BROWSER_BENCH_LIVE")))
+    if (model !== undefined && !(yield* optedIn("EFFECT_BROWSER_BENCH_LIVE")))
       return yield* refuse("model calls cost money: set EFFECT_BROWSER_BENCH_LIVE=1 to make them");
-    if (hosted && !(yield* optIn("EFFECT_BROWSER_BENCH_HOSTED")))
+    if (hosted && !(yield* optedIn("EFFECT_BROWSER_BENCH_HOSTED")))
       return yield* refuse("Browserbase sessions cost money: set EFFECT_BROWSER_BENCH_HOSTED=1");
 
     const fs = yield* FileSystem.FileSystem;
@@ -256,6 +255,7 @@ export const command = Command.make(
       concurrency: options.concurrency,
       record: options.record,
       narrateSeconds: narrateSeconds ?? null,
+      split: options.split,
     };
 
     const label = model?.replace(/[^\w.-]+/g, "_") ?? "scripted";
@@ -324,7 +324,7 @@ export const command = Command.make(
             arm: job.arm,
             trial: job.trial,
             baseSeed: options.seed,
-            seed: trialSeed(options.seed, job.task.name, job.trial),
+            seed: trialSeed(options.seed, job.task.name, job.trial, options.split),
             startedAt: at,
             run,
             reasoning: null,
@@ -363,7 +363,7 @@ export const command = Command.make(
           // A denied or unstarted trial is a durable result too, but must not provision a browser.
           const halted = hosted && (yield* Ref.get(hostedHalt));
           const denied = !halted && runner !== undefined && (yield* runner.exhausted);
-          const seed = trialSeed(options.seed, task.name, trial);
+          const seed = trialSeed(options.seed, task.name, trial, options.split);
           const effectiveReasoning = reasoning ?? (task.kind === "operate" ? "medium" : "none");
           const started = yield* DateTime.now;
           const startedNanos = yield* Clock.monotonicTimeNanos;

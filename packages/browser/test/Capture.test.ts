@@ -408,6 +408,132 @@ const withheldFinalPaint = Effect.fnUntraced(function* () {
   };
 });
 
+// Six zooms whose crops have the 800×600 viewport's own proportions, which no size rule can tell
+// apart, on a page that is red with a green top-left quadrant and a blinking corner, so frames keep
+// arriving. A crop inside the quadrant is green all over; the viewport is red at three quarters.
+// The relay can stamp each native frame later than Chromium did, as a skewed browser clock would,
+// or deliver it late. Any crop frame a reader got says when it was painted and arrived after its
+// zoom ended.
+const sameAspectCrops = Effect.fnUntraced(function* (
+  perturbation: { readonly stampedLater?: number; readonly arrivingLater?: number } = {},
+) {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+  const context = yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+    (context) => Effect.promise(() => context.close()),
+  );
+
+  const createSession = context.newCDPSession.bind(context);
+  const pending = new Set<ReturnType<typeof setTimeout>>();
+
+  context.newCDPSession = async (target) => {
+    const cdp = await createSession(target);
+    const emitter = cdp as EmittingSession;
+    const emit = emitter.emit.bind(emitter);
+
+    emitter.emit = (event, ...args) => {
+      if (event !== "Page.screencastFrame") return emit(event, ...args);
+      const frame = args[0] as RawFrame;
+
+      const stamped = {
+        ...frame,
+        metadata: {
+          ...frame.metadata,
+          timestamp: (frame.metadata.timestamp ?? 0) + (perturbation.stampedLater ?? 0) / 1000,
+        },
+      };
+
+      if (perturbation.arrivingLater === undefined) return emit(event, stamped);
+
+      const timer = setTimeout(() => {
+        pending.delete(timer);
+        emit(event, stamped);
+      }, perturbation.arrivingLater);
+
+      pending.add(timer);
+
+      return true;
+    };
+
+    return cdp;
+  };
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      for (const timer of pending) clearTimeout(timer);
+    }),
+  );
+  const browser = yield* makeBrowser(context, { id: "same-aspect-crops", provider: "test" });
+
+  const page = yield* browser.newPage(
+    "data:text/html," +
+      encodeURIComponent(`<body style="margin:0;background:rgb(255,0,0);overflow:hidden">
+<div style="position:fixed;left:0;top:0;width:400px;height:300px;background:rgb(0,255,0)"></div>
+<div id="blink" style="position:fixed;right:10px;bottom:10px;width:20px;height:20px"></div>
+<script>
+  let turn = 0;
+  setInterval(() => { blink.style.background = turn++ % 2 ? "#00f" : "#ff0"; }, 30);
+</script></body>`),
+  );
+
+  const frames: Array<Frame> = [];
+
+  const reader = yield* page.screencast().pipe(
+    Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+    Effect.forkChild,
+  );
+
+  yield* eventually(Effect.sync(() => frames.length > 0));
+  const zoomed: Array<number> = [];
+
+  for (const region of [
+    { x: 0, y: 0, width: 400, height: 300 },
+    { x: 20, y: 10, width: 200, height: 150 },
+  ])
+    for (let index = 0; index < 3; index++) {
+      yield* page.zoom(region);
+      zoomed.push(yield* browser.now);
+      // The page's own frames arrive between crops, past each crop's window.
+      yield* Effect.sleep("200 millis");
+    }
+  yield* Effect.sleep("300 millis");
+  yield* Fiber.interrupt(reader);
+
+  const greenAtThreeQuarters = yield* Effect.promise(() =>
+    page.playwright.evaluate(
+      async (pictures) =>
+        Promise.all(
+          pictures.map(async (bytes) => {
+            const bitmap = await createImageBitmap(
+              new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
+            );
+
+            const canvas = new OffscreenCanvas(1, 1).getContext("2d");
+
+            if (canvas === null) throw new Error("no 2d canvas");
+            canvas.drawImage(bitmap, bitmap.width * 0.75, bitmap.height * 0.75, 1, 1, 0, 0, 1, 1);
+            const [red = 0, green = 0] = canvas.getImageData(0, 0, 1, 1).data;
+
+            return green > 160 && red < 100;
+          }),
+        ),
+      frames.map((frame) => Array.from(frame.data)),
+    ),
+  );
+
+  const escaped = frames.flatMap((frame, index) => {
+    const ended = zoomed.findLast((at) => at <= frame.receivedAt) ?? Number.NaN;
+
+    return greenAtThreeQuarters[index] === true
+      ? [`painted ${frame.hostTime - ended} ms, arrived ${frame.receivedAt - ended} ms`]
+      : [];
+  });
+
+  return { frames, escaped, stats: yield* page.captureStats() };
+});
+
 const firstFrame = (page: Page) =>
   page.screencast().pipe(Stream.take(1), Stream.runCollect, Effect.timeout("15 seconds"));
 
@@ -764,87 +890,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
     it.effect("keeps a crop with the viewport's own shape out of the screencast", () =>
       Effect.gen(function* () {
-        const browser = yield* busyContext();
-
-        // Red, with a green top-left quadrant and a blinking corner, so frames keep arriving. A
-        // crop inside the quadrant is green all over; the viewport is red at three quarters.
-        const page = yield* browser.newPage(
-          "data:text/html," +
-            encodeURIComponent(`<body style="margin:0;background:rgb(255,0,0);overflow:hidden">
-<div style="position:fixed;left:0;top:0;width:400px;height:300px;background:rgb(0,255,0)"></div>
-<div id="blink" style="position:fixed;right:10px;bottom:10px;width:20px;height:20px"></div>
-<script>
-  let turn = 0;
-  setInterval(() => { blink.style.background = turn++ % 2 ? "#00f" : "#ff0"; }, 30);
-</script></body>`),
-        );
-
-        const frames: Array<Frame> = [];
-
-        const reader = yield* page.screencast().pipe(
-          Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
-          Effect.forkChild,
-        );
-
-        yield* eventually(Effect.sync(() => frames.length > 0));
-        const zoomed: Array<number> = [];
-
-        // Each crop has the 4:3 viewport's proportions, which no size rule can tell apart.
-        for (const region of [
-          { x: 0, y: 0, width: 400, height: 300 },
-          { x: 20, y: 10, width: 200, height: 150 },
-        ])
-          for (let index = 0; index < 3; index++) {
-            yield* page.zoom(region);
-            zoomed.push(yield* browser.now);
-            // Frames of the page itself arrive between crops, past each crop's 50 ms settling.
-            yield* Effect.sleep("150 millis");
-          }
-        yield* Effect.sleep("200 millis");
-        yield* Fiber.interrupt(reader);
-
-        const greenAtThreeQuarters = yield* Effect.promise(() =>
-          page.playwright.evaluate(
-            async (pictures) =>
-              Promise.all(
-                pictures.map(async (bytes) => {
-                  const bitmap = await createImageBitmap(
-                    new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
-                  );
-
-                  const canvas = new OffscreenCanvas(1, 1).getContext("2d");
-
-                  if (canvas === null) throw new Error("no 2d canvas");
-                  canvas.drawImage(
-                    bitmap,
-                    bitmap.width * 0.75,
-                    bitmap.height * 0.75,
-                    1,
-                    1,
-                    0,
-                    0,
-                    1,
-                    1,
-                  );
-                  const [red = 0, green = 0] = canvas.getImageData(0, 0, 1, 1).data;
-
-                  return green > 160 && red < 100;
-                }),
-              ),
-            frames.map((frame) => Array.from(frame.data)),
-          ),
-        );
-
-        const stats = yield* page.captureStats();
-
-        // A crop that gets through says when it was painted and arrived, after its zoom ended.
-        const escaped = frames.flatMap((frame, index) => {
-          const ended = zoomed.findLast((at) => at <= frame.receivedAt) ?? Number.NaN;
-
-          return greenAtThreeQuarters[index] === true
-            ? [`painted ${frame.hostTime - ended} ms, arrived ${frame.receivedAt - ended} ms`]
-            : [];
-        });
+        const { frames, escaped, stats } = yield* sameAspectCrops();
 
         assert.isAbove(frames.length, 10);
         assert.deepStrictEqual(escaped, []);
@@ -857,6 +903,19 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             stats.foreignSize +
             stats.duringPictures,
         );
+      }),
+    );
+
+    // Chromium stamps frames on another clock than the one the calibration reads, and a loaded
+    // machine can skew the two or deliver frames late. Either way the other half of the rule holds.
+    it.effect("keeps those crops out when frames are stamped late, or arrive late", () =>
+      Effect.gen(function* () {
+        for (const perturbation of [{ stampedLater: 80 }, { arrivingLater: 80 }]) {
+          const { frames, escaped } = yield* sameAspectCrops(perturbation);
+
+          assert.isAbove(frames.length, 5, JSON.stringify(perturbation));
+          assert.deepStrictEqual(escaped, [], JSON.stringify(perturbation));
+        }
       }),
     );
 

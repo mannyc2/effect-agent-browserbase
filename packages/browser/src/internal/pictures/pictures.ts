@@ -4,7 +4,7 @@
  * pixel is a CSS pixel and nothing is cropped, and two otherwise, unless Playwright emulates the
  * viewport.
  */
-import { Duration, Effect, Option, Schema } from "effect";
+import { Duration, Effect, Option, Schedule, Schema } from "effect";
 
 import { BrowserError, Failed, InvalidRequest, Timeout } from "../../BrowserError.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
@@ -55,6 +55,15 @@ const LayoutMetrics = Schema.Struct({
 // A screencast frame shows the page as it was when it was painted, and a new picture costs a round
 // trip, so by default a frame painted this recently is reused.
 const defaultMaxAge = Duration.millis(250);
+
+// Chromium answers this while the page has no surface to copy yet, as just after a navigation. The
+// page has one from its first frame, so the picture is taken again a frame later, within the
+// picture's own deadline.
+const surfaceless = (error: BrowserError) =>
+  error.reason._tag === "Failed" && error.reason.detail.includes("Unable to capture screenshot");
+
+const untilPainted = <A, R>(capture: Effect.Effect<A, BrowserError, R>) =>
+  capture.pipe(Effect.retry({ while: surfaceless, schedule: Schedule.spaced("16 millis") }));
 
 /** Measure this page's clock against the browser's, in a world without the page script. */
 const calibrator = (page: PageContext, bridge: Bridge) =>
@@ -121,7 +130,10 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
         quality,
         ...(clip === undefined ? {} : { clip }),
       }),
-    ).pipe(Effect.flatMap(({ data }) => decoded(operation, Buffer.from(data, "base64"))));
+    ).pipe(
+      untilPainted,
+      Effect.flatMap(({ data }) => decoded(operation, Buffer.from(data, "base64"))),
+    );
 
   // Playwright's own picture, taken on the session where it emulates the viewport.
   const emulatedJpeg = (operation: string, quality: number, crop?: Region) =>
@@ -136,7 +148,10 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
           ...(crop === undefined ? {} : { clip: crop }),
         }),
       actionMillis,
-    ).pipe(Effect.flatMap((data) => decoded(operation, data)));
+    ).pipe(
+      untilPainted,
+      Effect.flatMap((data) => decoded(operation, data)),
+    );
 
   return (operation: string, quality: number, crop?: Region) =>
     Effect.gen(function* () {
