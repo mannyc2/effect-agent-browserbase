@@ -810,7 +810,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("decides a frame of another device size by the viewport the page reports", () =>
+    it.effect("holds frames of another device size until a resize is confirmed, in order", () =>
       Effect.gen(function* () {
         const fixture = yield* setup(true);
         const frames: Array<Frame> = [];
@@ -823,30 +823,34 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const template = yield* fixture.template;
         const base = (template.metadata.timestamp ?? 0) * 1000 - 1000;
         const half = { width: 400, height: 300 };
+        const quarter = { width: 200, height: 150 };
 
-        // A scaled capture's frame keeps its picture's shape, but its device is not the viewport.
+        const delivered = (timestamp: number) =>
+          eventually(Effect.sync(() => frames.some((frame) => frame.timestamp === timestamp)));
+
+        // A scaled capture's frames keep their picture's shape but not the device's size, and the
+        // page's own size returns after them.
         yield* Effect.sync(() => fixture.inject(base, half));
-        yield* eventually(
-          fixture.page.captureStats.pipe(
-            Effect.map((stats) => stats.foreignSize > 0 || frames.length > 0),
-          ),
-        );
-        assert.deepStrictEqual(
-          frames.map((frame) => frame.timestamp),
-          [],
-        );
-        yield* Effect.sync(() => fixture.inject(base + 10));
-        // After a real resize, the page reports the frame's device size.
+        yield* Effect.sync(() => fixture.inject(base + 10, half));
+        yield* Effect.sync(() => fixture.inject(base + 20));
+        yield* delivered(base + 20);
+        // After a real resize, the page reports the frames' size.
         yield* Effect.promise(() => fixture.page.playwright.setViewportSize(half));
-        yield* Effect.sync(() => fixture.inject(base + 20, half));
-        yield* eventually(Effect.sync(() => frames.length === 2));
+        yield* Effect.sync(() => fixture.inject(base + 30, half));
+        yield* Effect.sync(() => fixture.inject(base + 40, half));
+        yield* delivered(base + 40);
+        // A size the page never reports, as under browser zoom or when it cannot answer in time,
+        // is the page's once it outlasts any capture.
+        yield* Effect.sync(() => fixture.inject(base + 50, quarter));
+        yield* Effect.sync(() => fixture.inject(base + 60, quarter));
+        yield* delivered(base + 60);
         yield* Fiber.interrupt(reader);
 
         assert.deepStrictEqual(
           frames.map((frame) => frame.timestamp),
-          [base + 10, base + 20],
+          [base + 20, base + 30, base + 40, base + 50, base + 60],
         );
-        assert.strictEqual((yield* fixture.page.captureStats).foreignSize, 1);
+        assert.strictEqual((yield* fixture.page.captureStats).foreignSize, 2);
       }),
     );
 
