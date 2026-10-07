@@ -875,6 +875,122 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       }),
   );
 
+  it.effect("tells only the words a viewer can see", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/quote");
+      const first = yield* Moment.capture(page);
+
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const price = document.querySelector("#price");
+
+          if (price !== null)
+            price.innerHTML =
+              '$13<span style="display:none">token=sk-live-123</span><span hidden>secret</span><span style="visibility:hidden">x</span>';
+          const item = document.createElement("li");
+
+          item.innerHTML = 'Third post<span style="display:none"> draft notes</span>';
+          document.querySelector("#feed")?.append(item);
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(300));
+      const second = yield* Moment.capture(page, { since: first });
+
+      assert.deepStrictEqual(
+        second.changes?.changes.map((change) => [change.kind, change.before, change.after]),
+        [
+          ["appeared", undefined, "Third post"],
+          ["text", "$61,240", "$13"],
+        ],
+      );
+    }),
+  );
+
+  it.effect("takes a list that reuses or replaces its rows as it scrolls for no change", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/quote");
+
+      // Two virtual lists of 1,000 rows, rendering only what is in view: one rewrites a fixed
+      // set of row elements, the other removes the rows that leave and adds those that arrive.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          for (const reuse of [true, false]) {
+            const view = document.createElement("div");
+            const inner = document.createElement("div");
+            const rows = new Map<number, HTMLElement>();
+
+            view.style.cssText = "height:200px;overflow:auto;width:300px";
+            inner.style.cssText = "height:20000px;position:relative";
+            view.append(inner);
+            document.body.prepend(view);
+
+            const render = () => {
+              const top = Math.floor(view.scrollTop / 20);
+
+              if (reuse) {
+                if (rows.size === 0)
+                  for (let index = 0; index < 10; index++) {
+                    const row = document.createElement("div");
+
+                    row.className = "row";
+                    inner.append(row);
+                    rows.set(index, row);
+                  }
+                for (const [index, row] of rows) {
+                  row.style.cssText = `position:absolute;height:20px;top:${(top + index) * 20}px`;
+                  row.textContent = `Row ${top + index}`;
+                }
+
+                return;
+              }
+              for (const [index, row] of rows)
+                if (index < top || index >= top + 10) {
+                  row.remove();
+                  rows.delete(index);
+                }
+              for (let index = top; index < top + 10; index++)
+                if (!rows.has(index)) {
+                  const row = document.createElement("div");
+
+                  row.style.cssText = `position:absolute;height:20px;top:${index * 20}px`;
+                  row.textContent = `Row ${index}`;
+                  inner.append(row);
+                  rows.set(index, row);
+                }
+            };
+
+            render();
+            view.addEventListener("scroll", render);
+          }
+        }),
+      );
+      const first = yield* Moment.capture(page);
+
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          for (const view of document.querySelectorAll("div[style*='overflow']"))
+            view.scrollTop = 100;
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(300));
+      // Once the scroll has settled, a change to a row is a change again, from what it showed.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const row = document.querySelector(".row");
+
+          if (row !== null) row.textContent = `${row.textContent ?? ""} sold`;
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(200));
+      const second = yield* Moment.capture(page, { since: first });
+
+      assert.deepStrictEqual(
+        second.changes?.changes.map((change) => [change.kind, change.before, change.after]),
+        [["text", "Row 5", "Row 5 sold"]],
+      );
+    }),
+  );
+
   it.effect("keeps news on a page that never rests, and counts what it could not keep", () =>
     Effect.gen(function* () {
       const page = yield* start("/quote");

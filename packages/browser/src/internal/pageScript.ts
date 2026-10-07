@@ -2120,13 +2120,32 @@ export const install = (): PageApi => {
     for (let child = node.firstChild; ; child = child.nextSibling) {
       if (removed !== undefined)
         for (const group of removed)
-          if (group.next === child) for (const gone of group.nodes) text += wordsOf(gone, undo);
+          if (group.next === child)
+            for (const gone of group.nodes) if (seeable(gone)) text += wordsOf(gone, undo);
       if (child === null) break;
-      if (undo?.added.has(child) !== true) text += wordsOf(child, undo);
+      if (undo?.added.has(child) !== true && seeable(child)) text += wordsOf(child, undo);
     }
 
     return text + gap;
   };
+
+  /**
+   * Whether a viewer could see a node's words: an element must be shown, so a hidden one's words,
+   * such as a token in a `display: none` span, never reach the record. A removed element can no
+   * longer say; only its own attribute and inline style can still hide it.
+   */
+  const seeable = (node: Node): boolean =>
+    !isElement(node)
+      ? true
+      : node.isConnected
+        ? shown(node)
+        : !node.hasAttribute("hidden") &&
+          !(
+            isHtml(node) &&
+            (node.style.display === "none" ||
+              node.style.visibility === "hidden" ||
+              node.style.opacity === "0")
+          );
 
   /** An element's words now; most changed elements hold only text, which is read whole. */
   const wordsNow = (element: Element): string =>
@@ -2322,6 +2341,25 @@ export const install = (): PageApi => {
     return elements ?? noElements;
   };
 
+  // A list that reuses its rows rewrites them as it scrolls, and one that renders only what is in
+  // view adds and removes them: what changes in an element just after it scrolled is the scroll,
+  // not new content. A page's own scroll is not taken for this, or it would hide every change.
+  let scrolled: { readonly element: Element; readonly at: number } | undefined;
+
+  const onScroll = (event: Event) => {
+    if (event.target instanceof Element) scrolled = { element: event.target, at: epoch() };
+  };
+
+  const scrolling = (element: Element, at: number) =>
+    scrolled !== undefined && at - scrolled.at < 100 && scrolled.element.contains(element);
+
+  /** Let go of what scrolling rewrote: its history no longer says what the element is. */
+  const forsake = (node: Node) => {
+    const track = tracks.get(node);
+
+    if (track !== undefined) drop(track);
+  };
+
   const observer = new MutationObserver((mutations) => {
     const at = epoch();
 
@@ -2394,6 +2432,10 @@ export const install = (): PageApi => {
       for (const node of arrived) arrivals.add(node);
       forget(at, Math.max(mutation.addedNodes.length, mutation.removedNodes.length) - maxNodes);
       if (arrived.length + left.length === 0 || !watched(target)) continue;
+      if (scrolling(target, at)) {
+        for (const node of left) forsake(node);
+        continue;
+      }
 
       // What took another's place in one step, such as a re-rendered price, changed its words.
       const replaced = Math.min(arrived.length, left.length);
@@ -2435,7 +2477,8 @@ export const install = (): PageApi => {
     }
 
     for (const owner of owners)
-      if (owner.isConnected && owner !== document.body && watched(owner))
+      if (scrolling(owner, at)) forsake(owner);
+      else if (owner.isConnected && owner !== document.body && watched(owner))
         record(owner, "content", at, wordsNow(owner), earlier(owner));
     for (const parent of parents)
       if (parent.childElementCount === 0) leaves.add(parent);
@@ -2483,6 +2526,7 @@ export const install = (): PageApi => {
       attributeOldValue: true,
     });
     document.addEventListener("focusin", onFocus, true);
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
     document.addEventListener("input", onValue, true);
     document.addEventListener("change", onValue, true);
     title = document.title;
@@ -2499,6 +2543,8 @@ export const install = (): PageApi => {
     lost.length = 0;
     losses = 0;
     document.removeEventListener("focusin", onFocus, true);
+    document.removeEventListener("scroll", onScroll, { capture: true });
+    scrolled = undefined;
     document.removeEventListener("input", onValue, true);
     document.removeEventListener("change", onValue, true);
     tracks.clear();

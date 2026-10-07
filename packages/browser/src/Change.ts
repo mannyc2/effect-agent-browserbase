@@ -10,7 +10,10 @@
  * visible when what changed was in the viewport as the page rendered it, and neither transparent
  * nor hidden by `visibility`, so a change scrolled away later is still told and one made out of
  * view is not. A removal the record had not watched is judged by what moves into its place, so
- * one out of the flow, or with nothing after it, is not told. What the script cannot read is not seen:
+ * one out of the flow, or with nothing after it, is not told. Words are what a viewer could read:
+ * text inside a hidden part of what changed is left out. What changes in a scrolling element just
+ * after it scrolled, such as a virtual list rewriting or replacing its rows, is taken for the
+ * scroll, not new content; a list that scrolls with the page itself is not recognised. What the script cannot read is not seen:
  * pictures, a canvas, frames, shadow roots, SVG, and anything shown or hidden by CSS alone, such as
  * a class that reveals a toast.
  *
