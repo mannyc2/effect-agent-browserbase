@@ -17,7 +17,6 @@ import {
   Layer,
   Option,
   Ref,
-  Schedule,
   Schema,
   Tracer,
 } from "effect";
@@ -164,7 +163,7 @@ interface TrialRecord {
   readonly timing: Timing;
   /** Opening the browser, the model's tool calls and looks at the page, within `seconds`. */
   readonly phases: Trace.Phases;
-  /** A latency or hosted run's DevTools commands and round trips, by span; null otherwise. */
+  /** A latency run's DevTools commands and round trips, by span; null otherwise. */
   readonly protocol: Trace.Protocol | null;
   /** The fastest round trip to the browser that its clock calibrations measured; null if none ran. */
   readonly roundTripMillis: number | null;
@@ -317,34 +316,6 @@ const main = Effect.gen(function* () {
       : latency !== undefined
         ? Latency.layer(latency, { humanize: options.humanize, frameHistory }, trial.record)
         : Chromium.layer({ humanize: options.humanize, frameHistory });
-
-  // A hosted trial's commands come from Browserbase's log of its session, read once the session
-  // has ended, a few times while it is still empty. Reading it is no part of the trial or its trace.
-  const sessionProtocol = (traced: Trace.Collected, label: string) => {
-    const session = Trace.sessionOf(traced.spans);
-
-    return session === undefined
-      ? Effect.succeed(null)
-      : Effect.gen(function* () {
-          const client = yield* BrowserbaseClient.BrowserbaseClient;
-
-          return yield* client.sessionLogs(session.id);
-        }).pipe(
-          Effect.repeat({
-            until: (logs) => logs.length > 0,
-            times: 3,
-            schedule: Schedule.spaced("2 seconds"),
-          }),
-          Effect.map((logs) => Trace.hosted(traced, logs)),
-          Effect.provide(browserbaseClient),
-          Effect.withTracerEnabled(false),
-          Effect.catch((error) =>
-            Console.error(`${label}: the session's log was not read: ${error.message}`).pipe(
-              Effect.as(null),
-            ),
-          ),
-        );
-  };
 
   // After a create whose outcome is unknown, no further hosted session is requested.
   const hostedHalt = yield* Ref.make(false);
@@ -581,13 +552,7 @@ const main = Effect.gen(function* () {
 
         // Before the spans are read, so the commands' own spans are among them.
         const protocol =
-          exit === undefined
-            ? null
-            : latency !== undefined
-              ? Trace.protocol(traced, commands)
-              : hosted
-                ? yield* sessionProtocol(traced, `${task.name} #${trial}`)
-                : null;
+          latency === undefined || exit === undefined ? null : Trace.protocol(traced, commands);
 
         const calls = account === undefined ? noCalls : yield* account.calls;
 
@@ -631,7 +596,7 @@ const main = Effect.gen(function* () {
           phases: exit === undefined ? Trace.noPhases : Trace.phases(traced.spans),
           protocol,
           roundTripMillis: Trace.roundTripOf(traced.spans),
-          region: Trace.sessionOf(traced.spans)?.region ?? null,
+          region: Trace.regionOf(traced.spans),
           traceId: exit === undefined ? null : Trace.traceOf(traced.spans),
           seconds,
         };

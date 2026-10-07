@@ -113,7 +113,7 @@ error with its closed diagnostic, the call `accounting` (calls, tokens, known do
 reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
 provider requests), `phases` (seconds opening the browser, in the model's tool calls, and looking
 at the page outside them: the agent's observations, an arm's own pictures and outlines, a moment's
-capture), a latency or hosted run's `protocol` (see below), the fastest round trip to the browser
+capture), a latency run's `protocol` (see below), the fastest round trip to the browser
 its clock calibrations measured (`roundTripMillis`), a hosted trial's Browserbase `region`, the
 trial's `traceId` and elapsed seconds including browser setup and cleanup. The ISO start time is a
 calendar date; elapsed time uses a monotonic clock.
@@ -185,19 +185,12 @@ capture took about 0.7 seconds.
 
 ### Hosted commands
 
-A hosted trial's commands come from Browserbase's log of its session, read once the session has
-ended and again, two seconds apart, up to three more times while it is still empty. Each logged
-command becomes the same `CDP <method>` span and counts in `protocol` the same way, with two
-differences. Browserbase timed it on its own clock, so the bench estimates the offset from page
-script round trips: each `Page.evaluate` span holds one `Runtime.evaluate`, which Browserbase
-handled in its middle, and the offset is where the most such pairs agree (`clockOffsetMillis` in
-`protocol`; null, with no command spans or `bySpan`, when fewer than three do). And a command's span
-covers its time at Browserbase, without the trip there and back, so a command that reached
-Browserbase within half a round trip of the previous answer leaving shares its round trip. The
-client decodes methods and times only; parameters and results stay with Browserbase. A log that
-cannot be read leaves `protocol` null and says so. This has run only against a stand-in for
-Browserbase's API: the first paid run should confirm what the log's times measure and that the log
-holds every command the bench sent.
+A hosted trial's `protocol` is null: the bench cannot read a hosted connection's messages, and
+Browserbase's session log is no substitute. On 7 October 2026 its entries carried no timestamps,
+though its API reference lists them; it kept about every other DevTools message; it appeared 5 to
+20 seconds after the session ended; and a session whose page never navigated had none. Count a
+trial's commands and round trips with `--latency`, which runs the same code; a hosted trial's spans
+give each operation's time.
 
 ## Arms
 
