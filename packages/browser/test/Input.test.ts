@@ -7,8 +7,8 @@ import type { CDPSession } from "playwright-core";
 import { Browser } from "../src/Browser.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
-import * as BrowserClock from "../src/internal/clock.ts";
-import * as PageImpl from "../src/internal/page.ts";
+import * as PageImpl from "../src/internal/page/page.ts";
+import * as BrowserClock from "../src/internal/pictures/clock.ts";
 import * as Motion from "../src/Motion.ts";
 import type * as Page from "../src/Page.ts";
 

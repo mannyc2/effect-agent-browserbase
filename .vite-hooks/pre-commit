@@ -1,0 +1,5 @@
+# The static half of `bun run ready`, which takes seconds: format check, lint and typecheck. Tests
+# and the build stay in CI. `vp hooks enable` turns this on in a clone; `VP_GIT_HOOKS=0` skips it.
+bun run fmt:check
+bun run lint
+bun run check

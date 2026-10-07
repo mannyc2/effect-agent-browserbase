@@ -11,6 +11,7 @@
   "jsPlugins": [
     { "name": "stylistic", "specifier": "./plugins/style.js" },
     { "name": "exports", "specifier": "./plugins/exports.ts" },
+    { "name": "directives", "specifier": "./plugins/directives.ts" },
     { "name": "vite-plus", "specifier": "vite-plus/oxlint-plugin" }
   ],
   "options": { "typeAware": true },
@@ -105,6 +106,7 @@
     // Don't do bad things that are easy to avoid.
     "eslint/no-new": "error",
     "eslint/no-warning-comments": "error",
+    "directives/require-reason": "error",
     "typescript/no-deprecated": "error",
     "typescript/switch-exhaustiveness-check": "error"
   },
@@ -136,6 +138,123 @@
             "property": "randomUUID",
             "message": "Draw a UUID from the Effect `Crypto` service the Layer captured."
           }
+        ]
+      }
+    },
+    {
+      // Size limits for library code. A module over 600 lines, or a function over 150, does more
+      // than one job; the function limit falls to 100 as the exceptions below go. Only code
+      // counts, not blank lines or comments.
+      "files": ["**/packages/*/src/**/*.ts"],
+      "rules": {
+        "eslint/max-lines": ["error", { "max": 600, "skipBlankLines": true, "skipComments": true }],
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 150, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    // The exceptions, each at its file's size when the limits came in. Lower a number when a change
+    // shrinks its file, and never raise one; split the code instead. These are services built as
+    // one closure over their state.
+    {
+      "files": ["**/packages/browser/src/internal/pictures/capture.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 320, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browserbase/src/BrowserbaseClient.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 242, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browser/src/Browser.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 232, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browser/src/Tools.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 226, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browser/src/internal/input/perform.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 215, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browser/src/Agent.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 161, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browser/src/internal/pictures/calibration.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 156, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    // Parts of the page script. Each is one function because the page receives it as source text;
+    // a new page-side feature is a new part.
+    {
+      "files": ["**/packages/browser/src/internal/input/guard.inpage.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 410, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browser/src/internal/reading/outline.inpage.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 265, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browser/src/internal/reading/names.inpage.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 244, "skipBlankLines": true, "skipComments": true }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/browser/src/internal/input/targets.inpage.ts"],
+      "rules": {
+        "eslint/max-lines-per-function": [
+          "error",
+          { "max": 235, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },

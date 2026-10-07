@@ -12,7 +12,11 @@ current state.
   with reasons, `Schema` for data at boundaries, `Config.Redacted` for secrets. Read
   `node_modules/effect/AGENTS.md` before writing Effect code.
 - Few files, each with one clear job. Prefer deleting code to adding options. A module's doc
-  comment says what it is for.
+  comment says what it is for. `CONTRIBUTING.md`'s "Keeping it small" sets the size limits and
+  what a PR states.
+- A failure stays a failure: never fold one into a success value or a log line, except for
+  cleanup in a finalizer. Concurrent work belongs to a scope and has a bound; no module-level
+  state. A lifecycle's state is one tagged union changed in one place, not a set of flags.
 - `effect-browser` depends on `effect` and `playwright-core` only; `effect-browserbase` and
   `effect-browser-human-strokes` reach it only through its public entry points. Tests stay in their
   package's `test/`.

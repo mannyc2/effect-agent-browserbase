@@ -37,10 +37,11 @@ import {
   type RecordedEvent,
 } from "./BrowserEvent.ts";
 import { CaptureCalibration } from "./Frame.ts";
-import * as Startup from "./internal/calibration.ts";
-import * as BrowserClock from "./internal/clock.ts";
-import * as PageImpl from "./internal/page.ts";
-import * as Timeline from "./internal/timeline.ts";
+import { reasonOf } from "./internal/page/context.ts";
+import * as PageImpl from "./internal/page/page.ts";
+import * as Startup from "./internal/pictures/calibration.ts";
+import * as BrowserClock from "./internal/pictures/clock.ts";
+import * as Timeline from "./internal/timeline/events.ts";
 import * as Motion from "./Motion.ts";
 import type * as Page from "./Page.ts";
 
@@ -186,7 +187,7 @@ export const make = Effect.fn("Browser.make")(function* (
             (error) =>
               new BrowserError({
                 operation: "calibrate",
-                reason: PageImpl.reasonOf(error.cause),
+                reason: reasonOf(error.cause),
                 dispatched: false,
               }),
           ),
@@ -220,8 +221,7 @@ export const make = Effect.fn("Browser.make")(function* (
   const native = <A>(operation: string, run: () => Promise<A>) =>
     Effect.tryPromise({
       try: run,
-      catch: (cause) =>
-        new BrowserError({ operation, reason: PageImpl.reasonOf(cause), dispatched: false }),
+      catch: (cause) => new BrowserError({ operation, reason: reasonOf(cause), dispatched: false }),
     });
 
   const releaseNative = (run: () => Promise<unknown>) =>
