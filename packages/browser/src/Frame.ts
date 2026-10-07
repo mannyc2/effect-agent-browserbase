@@ -109,9 +109,9 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Cap
    */
   foreignSize: Count,
   /**
-   * Frames dropped because they may have been painted while the library took a clipped or scaled
-   * picture of the page, such as a zoom: Chromium draws those into the screencast too. The page's
-   * own frames painted meanwhile are among them.
+   * Frames dropped because they may have been painted, or arrived, while the library took a clipped
+   * or scaled picture of the page, such as a zoom: Chromium draws those into the screencast too.
+   * The page's own frames from that time are among them.
    */
   duringPictures: Count,
   subscriberMissed: Count,

@@ -19,8 +19,8 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   newest screencast frame serves when it was painted at most `maxAge` ago (250 ms by default; 0
   always takes a new screenshot), and with `after: "input"` only when painted after the page's
   latest input. `Page.screenshot` takes the same options.
-- `CaptureStats.duringPictures`: frames left out because they may have been painted while the
-  library took a clipped or scaled picture of the page.
+- `CaptureStats.duringPictures`: frames left out because they may have been painted, or arrived,
+  while the library took a clipped or scaled picture of the page.
 - Every page span reports its protocol cost on the page's own session: `calls`, `bytesOut`,
   `bytesIn` and `waitedMillis`. A picture's `source` is `frame` or `screenshot`.
 

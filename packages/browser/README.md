@@ -316,8 +316,8 @@ Playwright's platform behavior, and Unicode insertion has no timestamp field. St
 unstamped so the measurement remains observable.
 
 `Page.captureStats` reports lifetime received and accepted frames, missing timestamps, frames
-dropped out of order, for their size (`foreignSize`) or for being painted during one of the
-library's own clipped pictures (`duringPictures`), observed subscriber losses and paint-time gap
+dropped out of order, for their size (`foreignSize`) or for coming during one of the library's own
+clipped pictures (`duringPictures`), observed subscriber losses and paint-time gap
 totals/minimum/maximum/last. Chromium draws a clipped or scaled screenshot of the page, taken
 from any session, into its running screencast. Readers never receive a frame whose picture has
 another shape than its device. Frames of another device size wait, in order: the page's own size
@@ -326,8 +326,9 @@ delivers them as a real resize, so a page that cannot answer, or that measures i
 under browser zoom, is never stalled. `foreignSize` therefore also counts some of the page's own
 frames: those of a new size still unconfirmed when another size replaced it, when the capture
 stopped, or beyond the 16 held. The library's own clipped pictures are left out by time instead:
-every frame painted from the picture's call until 10 ms after its reply is dropped, the page's own
-included, so a crop with the viewport's own proportions never reaches readers either. Such a crop
+every frame painted or delivered from the picture's call until 50 ms after its reply is dropped,
+the page's own included, so a crop with the viewport's own proportions never reaches readers
+either. Such a crop
 taken by someone else still passes where Chromium keeps the device's size during the capture, as in
 browsers launched through Playwright, `Chromium.layer` included.
 Each page's own session holds focus emulation, so a tab behind another keeps painting and its
