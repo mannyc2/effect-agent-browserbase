@@ -19,7 +19,7 @@ sandboxed. Hosts that don't allow unprivileged user namespaces, such as many con
 | `Browser`      | The `Browser` service: tabs, recent events and the Playwright context                |
 | `Chromium`     | A local Chromium as a `Browser` layer                                                |
 | `Cdp`          | Any DevTools endpoint as a `Browser` layer                                           |
-| `Page`         | One tab: navigation, snapshots, screenshots, input, waits and the screencast         |
+| `Page`         | One tab: navigation, reads, screenshots, input, waits and the screencast             |
 | `Snapshot`     | The model-readable outline of a page, with refs for its controls                     |
 | `Frame`        | A screencast frame                                                                   |
 | `BrowserEvent` | Actions, navigations, tabs, dialogs and pointer motion, as they happen               |
@@ -61,11 +61,44 @@ schema value with `region` and `image`; crop pixel coordinates need the region's
 using them as click coordinates.
 
 `Page.click` returns a `ResolvedTarget` captured before input: the requested point, element label,
-role, accessible name, cursor and link target. Pixel targeting resolves through the page script and
-keeps the original point; the receipt names the control even when a nested child received the hit.
-Refs inside same-origin frames are measured, scrolled and checked for cover in the top viewport.
-A ref that no longer names an element of the current documents, including one in a frame that has
-since navigated, fails with `StaleRef` naming that ref, with or without a guard.
+role, accessible name, context, cursor and link target. Pixel targeting resolves through the page
+script and keeps the original point; the receipt names the control even when a nested child
+received the hit. Refs inside same-origin frames are measured, scrolled and checked for cover in the
+top viewport. A ref that no longer names an element of the current documents, including one in a
+frame that has since navigated, fails with `StaleRef` naming that ref, with or without a guard.
+
+A subject names an element durably: its role, accessible name and tag, and its context, the words
+around it that say which one it is. In a table, `row` is the row's header or first cell with text
+and `column` the header over it, spanned cells counted; elsewhere, `label` is the words just before
+it in its row, item, group or block. `heading` is the nearest heading above it, left out for what
+is pinned to the viewport. The page binds each to the element, so a value is never read under
+another column's header.
+
+`Page.find` reads structure without the outline, in one call to the page. It returns every element
+that matches a query, in tree order, each a `Found`: a ref the actions take, its `subject`, its box,
+whether it is in the viewport, and its state (disabled, focused, and checked, expanded, selected,
+pressed or a heading's level where they apply). A `role` matches ignoring case. A `name` matches
+when it reads the same once spaces are collapsed and case folded, or when a `RegExp` finds itself
+in it. `text` matches the smallest element showing it, and a control or heading for the words
+inside it; `near` matches words of the context. With no rule, `find` returns every element in
+scope that has a role or is a control. There is no ordinal: a caller tells equal elements apart by
+their context, and finding none is an empty result, not a failure. `scope: "document"` reads the
+whole page; the default is the viewport.
+
+`Page.text` reads what the viewport shows, or one element whole with `scope` set to its ref, in one
+call to the page: a line per block, table cells apart by tabs, cut at a line after `maxChars`
+(12,000 by default). Like the outline, it leaves out what the page hides from assistive technology,
+such as icon glyphs. What a field holds reads `••••` unless `unmask` is set, and a secret field's
+always does, as does one that was secret when the library saw it, such as a password its page now
+reveals. The outline shows what fields hold, as the agent needs, but masks a secret field the same
+way.
+
+Reading the viewport, the outline, `find` and `text` skip a subtree whose box lies outside it before
+styling anything in it, so a long table costs only its rows in view. A box says nothing of what is
+positioned out of it, so a subtree is kept when its box is empty, or when it holds what is painted
+at the viewport's edges, corners or middle, or in its top layer; something pinned elsewhere, inside
+a subtree out of view, is missed. The outline's `above` and `below` count the parts skipped, each an
+element out of view with all it holds.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
@@ -243,9 +276,9 @@ changes and can miss a final paint, so a page that stopped changing gets a new c
 returns the new capture as a `Screenshot`-timed frame. A `Moment`'s last frame comes from it, so a
 stopped capture, a lost final paint or later input never presents older paint as the moment.
 Every operation is recorded as an `Action`, also when its caller interrupts it. An element or point
-action records its `subject`, and a drag where it ended (`to`): the role, accessible name and tag
-of what it found, read as the input was sent. A ref is reused by later outlines, so read `subject`
-rather than resolving `target` against a later snapshot.
+action records its `subject`, and a drag where it ended (`to`): the role, accessible name, tag and
+context of what it found, read as the input was sent, the same subject `Page.find` gives. A ref is
+reused by later outlines, so read `subject` rather than resolving `target` against a later snapshot.
 
 Local launches and new Browserbase sessions measure clock offset and send-to-captured-image delay
 on a private blank page before user scripts or public pages run. `Browser.captureCalibration`
@@ -357,8 +390,8 @@ records except text: the target, the subject's role, name and tag, whether input
 `queuedMillis` spent waiting for admission and the locks, and a failure's reason as `error.type`.
 `Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
-`Page.observe`, `Page.snapshot`, `Page.screenshot` (its `source` a reused screencast frame or a new
-capture), `Page.zoom` and the waits are spans, and so is each round trip to the page's script
+`Page.observe`, `Page.snapshot`, `Page.find`, `Page.text`, `Page.screenshot` (its `source` a reused
+screencast frame or a new capture), `Page.zoom` and the waits are spans, and so is each round trip to the page's script
 (`Page.evaluate`). `Chromium.launch`, `Cdp.connect`, `Browser.calibrate` and `Browser.newPage`
 cover opening a browser; `Browserbase.open` records its session's id and region, and
 `Browserbase.holdContext` and `Browserbase.release` the waits around a session that saves to a
