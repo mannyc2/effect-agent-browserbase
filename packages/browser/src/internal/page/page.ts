@@ -11,6 +11,7 @@ import type { Page } from "../../Page.ts";
 import * as Actions from "../input/actions.ts";
 import * as Pictures from "../pictures/pictures.ts";
 import * as Reading from "../reading/reading.ts";
+import * as Ready from "../reading/ready.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
@@ -65,7 +66,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     scroll: input.scroll,
     select: input.select,
     waitForText: reading.waitForText,
-    waitForStill: Pictures.waitForStill(page, capture),
+    ready: Ready.make(page, bridge, capture),
     screencast: capture.stream,
     captureStats: capture.stats,
     latestFrame: capture.latest,

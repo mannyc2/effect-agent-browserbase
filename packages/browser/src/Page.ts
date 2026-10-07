@@ -16,7 +16,7 @@ import { type Duration, type Effect, type Option, Schema, type Stream } from "ef
 import type { Page as PlaywrightPage } from "playwright-core";
 
 import type { BrowserError, PolicyDenied } from "./BrowserError.ts";
-import { type BrowserEvent, Subject, SubjectContext } from "./BrowserEvent.ts";
+import { Box, type BrowserEvent, Subject, SubjectContext } from "./BrowserEvent.ts";
 import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
@@ -55,6 +55,8 @@ export class ResolvedTarget extends Schema.Class<ResolvedTarget>("effect-browser
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   context: SubjectContext,
+  /** For a point target, the box of what it found there. */
+  box: Schema.optional(Box),
   cursor: Schema.String,
   href: Schema.optional(Schema.String),
 }) {}
@@ -139,6 +141,8 @@ export interface FindQuery {
   readonly text?: string | RegExp | undefined;
   /** Words in its context (row, column, label or heading), ignoring case and spacing. */
   readonly near?: string | undefined;
+  /** Only what a point action at this viewport point would reach: the control there, or else what is painted there. */
+  readonly at?: Point | undefined;
   /** The viewport (the default), or the whole document. */
   readonly scope?: "viewport" | "document" | undefined;
 }
@@ -155,8 +159,8 @@ export type ElementState = typeof ElementState.Type;
 export class Found extends Schema.Class<Found>("effect-browser/Found")({
   ref: Schema.String,
   subject: Subject,
-  /** Its box in viewport CSS pixels, rounded. Reading the document, it may be out of view. */
-  box: Schema.Struct({ x: Schema.Int, y: Schema.Int, width: Schema.Int, height: Schema.Int }),
+  /** Its box, rounded. Reading the document, it may be out of view. */
+  box: Box,
   inViewport: Schema.Boolean,
   state: ElementState,
 }) {}
@@ -180,6 +184,12 @@ export class Text extends Schema.Class<Text>("effect-browser/Text")({
   /** Host monotonic milliseconds from the browser's captured Effect Clock. */
   at: Schema.Finite,
 }) {}
+
+export interface ReadyOptions {
+  /** How long the screen must also stay still, as for reels coming to rest. */
+  readonly quietMillis?: number | undefined;
+  readonly timeout?: Duration.Input | undefined;
+}
 
 /** What to include in an observation of the current viewport. */
 export type ObservationMode = "outline" | "screenshot" | "both";
@@ -360,13 +370,15 @@ export interface Page {
     timeout?: Duration.Input,
   ) => Effect.Effect<void, BrowserError>;
   /**
-   * Wait until the screen stops changing, such as reels coming to rest: no frame for `quietMillis`
-   * (600 by default). Needs no running screencast; one it starts counts from its first frame.
+   * Wait until the page is ready to be shown, asking the page every 100 ms: its document is parsed
+   * and has painted since, nothing that ends is animating in view, its fonts and the images in
+   * view have loaded, and the viewport shows something. With `quietMillis`, the screen must then
+   * also stay still that long: no frame comes, counted from the first frame of a capture the wait
+   * starts itself. A canvas that keeps drawing, such as a live chart, is never still, and a page
+   * is never ready without a painted frame, as a hidden tab may be. `Timeout` after `timeout`,
+   * 15 seconds by default.
    */
-  readonly waitForStill: (options?: {
-    readonly quietMillis?: number;
-    readonly timeout?: Duration.Input;
-  }) => Effect.Effect<void, BrowserError>;
+  readonly ready: (options?: ReadyOptions) => Effect.Effect<void, BrowserError>;
 
   /**
    * Screencast frames for as long as the stream runs. Concurrent streams share one screencast and

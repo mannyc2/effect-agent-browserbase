@@ -5,7 +5,7 @@
 import { Deferred, Duration, Effect, Exit, Option, Ref } from "effect";
 
 import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
-import { Action, Subject } from "../../BrowserEvent.ts";
+import { Action, type ActionOptions, Subject } from "../../BrowserEvent.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
 import type { PageContext } from "../page/context.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
@@ -29,6 +29,13 @@ export interface InputMarks {
 const subjectOf = (target: ResolvedTarget) =>
   new Subject({ role: target.role, name: target.name, tag: target.tag, context: target.context });
 
+/** What an action records of what it acted on: subjects, and a point target's box. */
+const actedOn = (subject: ResolvedTarget, to?: ResolvedTarget) => ({
+  subject: subjectOf(subject),
+  box: subject.box,
+  ...(to === undefined ? {} : { to: subjectOf(to) }),
+});
+
 /** A subject as span attributes under `prefix`, without a role it does not have. */
 const subjectAttributes = (prefix: string, subject: Subject | undefined) =>
   subject === undefined
@@ -38,6 +45,35 @@ const subjectAttributes = (prefix: string, subject: Subject | undefined) =>
         [`${prefix}.name`]: subject.name,
         [`${prefix}.tag`]: subject.tag,
       };
+
+/** The options an action was asked, without a number it refuses as not finite. */
+const recordable = (options: ActionOptions | undefined): ActionOptions | undefined => {
+  const finite = (value: number | undefined) =>
+    value === undefined || Number.isFinite(value) ? value : undefined;
+
+  return options === undefined
+    ? undefined
+    : {
+        ...options,
+        clickCount: finite(options.clickCount),
+        holdMillis: finite(options.holdMillis),
+        times: finite(options.times),
+        dx: finite(options.dx),
+        dy: finite(options.dy),
+      };
+};
+
+/** What an action's record keeps of its call. */
+export interface Call {
+  readonly target?: string | undefined;
+  /** The rest of what the caller asked, recorded so a plan can ask it again. */
+  readonly options?: ActionOptions | undefined;
+  readonly text?: string | undefined;
+  /** The text may be a secret: it is recorded only once the action reveals that it is not. */
+  readonly secret?: boolean | undefined;
+  /** False for navigation, which sends no input and leaves the browser-wide lock free. */
+  readonly input?: boolean | undefined;
+}
 
 export const make = (
   page: PageContext,
@@ -53,14 +89,7 @@ export const make = (
   // while a policy is waiting. Validation binds approval to the document and targets it saw.
   const perform = <A>(
     name: string,
-    info: {
-      readonly target?: string | undefined;
-      readonly text?: string | undefined;
-      /** The text may be a secret: it is recorded only once the action reveals that it is not. */
-      readonly secret?: boolean | undefined;
-      /** False for navigation, which sends no input and leaves the browser-wide lock free. */
-      readonly input?: boolean | undefined;
-    },
+    info: Call,
     timeout: Duration.Duration,
     prepare: Effect.Effect<PolicyPlan, BrowserError>,
     body: (marks: InputMarks, approval: Approval | undefined) => Effect.Effect<A, BrowserError>,
@@ -70,7 +99,7 @@ export const make = (
       const sendsInput = info.input ?? true;
       const sent = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
-      const acted = yield* Ref.make<{ readonly subject?: Subject; readonly to?: Subject }>({});
+      const acted = yield* Ref.make<Pick<Action, "subject" | "to" | "box">>({});
 
       // The page may react to preparatory input, so no cached paint is current while the action
       // runs, but only the action's own input can have given it effect. `touched` covers both and
@@ -90,11 +119,7 @@ export const make = (
         sent: Ref.set(sent, true).pipe(Effect.andThen(touch)),
         touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
-        on: (subject: ResolvedTarget, to?: ResolvedTarget) =>
-          Ref.set(acted, {
-            subject: subjectOf(subject),
-            ...(to === undefined ? {} : { to: subjectOf(to) }),
-          }),
+        on: (subject: ResolvedTarget, to?: ResolvedTarget) => Ref.set(acted, actedOn(subject, to)),
         reveal: Effect.sync(() => {
           revealed = true;
         }),
@@ -246,7 +271,7 @@ export const make = (
           const exit = yield* Effect.exit(restore(run));
           const dispatched = yield* Ref.get(sent);
           const point = yield* Ref.get(at);
-          const { subject, to } = yield* Ref.get(acted);
+          const { subject, to, box } = yield* Ref.get(acted);
 
           if (touched) activity.changing -= 1;
           const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
@@ -271,8 +296,10 @@ export const make = (
               page: id,
               name,
               target: info.target,
+              options: recordable(info.options),
               subject,
               to,
+              box,
               text:
                 info.text === undefined ? undefined : revealed ? info.text.slice(0, 200) : redacted,
               x: Option.getOrUndefined(Option.map(point, (p) => p.x)),

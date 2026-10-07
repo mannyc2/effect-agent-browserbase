@@ -94,6 +94,7 @@ export const make = Effect.fnUntraced(function* (
         name: wanted(query.name),
         text: wanted(query.text),
         near: query.near ?? null,
+        at: query.at ?? null,
         scope: query.scope ?? "viewport",
         firstRef: yield* Ref.get(nextRef),
       };

@@ -29,7 +29,7 @@ export interface Visitor<S> {
 }
 
 export const walk = (names: Names) => {
-  const { isElement, isFrame, parentOf } = names;
+  const { interactiveRoles, isElement, isFrame, parentOf, roleOf } = names;
 
   const skipped = new Set("SCRIPT STYLE NOSCRIPT TEMPLATE HEAD META LINK SVG".split(" "));
 
@@ -94,6 +94,43 @@ export const walk = (names: Names) => {
     }
 
     return hit;
+  };
+
+  // A painted child of a control still activates the control; keep its name without moving the point.
+  const controlOf = (hit: Element): Element => {
+    let element: Element | null = hit;
+
+    while (element !== null) {
+      const role = roleOf(element);
+
+      if (
+        (role !== null && (interactiveRoles.has(role) || role === "canvas" || role === "iframe")) ||
+        element.hasAttribute("onclick")
+      )
+        return element;
+      element = parentOf(element);
+    }
+
+    return hit;
+  };
+
+  /** An element's box in top-document viewport pixels, through the frames around it. */
+  const boxOf = (element: Element) => {
+    const rect = element.getBoundingClientRect();
+    let { x, y } = rect;
+
+    for (
+      let frame = element.ownerDocument.defaultView?.frameElement ?? null;
+      frame !== null;
+      frame = frame.ownerDocument.defaultView?.frameElement ?? null
+    ) {
+      const outer = frame.getBoundingClientRect();
+
+      x += outer.left + frame.clientLeft;
+      y += outer.top + frame.clientTop;
+    }
+
+    return { x, y, width: rect.width, height: rect.height };
   };
 
   /** What is painted where pinned things sit, and every element holding it. */
@@ -175,7 +212,7 @@ export const walk = (names: Names) => {
     else one(root, state, 0, 0);
   };
 
-  return { hitAt, visit };
+  return { boxOf, controlOf, hitAt, visit };
 };
 
 export type Walk = ReturnType<typeof walk>;

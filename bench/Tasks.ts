@@ -512,7 +512,7 @@ export const gapsWithin = (frames: ReadonlyArray<Frame>, maximumMillis: number) 
 const spin = (page: Page) =>
   page
     .click({ x: 480, y: 561 })
-    .pipe(Effect.andThen(page.waitForStill({ quietMillis: 400, timeout: Duration.seconds(10) })));
+    .pipe(Effect.andThen(page.ready({ quietMillis: 400, timeout: Duration.seconds(10) })));
 
 const casinoPlay = operate({
   name: "casino-play",
@@ -791,7 +791,7 @@ const tumbleWin = understand({
         Effect.timeout("20 seconds"),
         Effect.orDie,
       );
-      yield* page.waitForStill({ quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
     }),
   // Three frames can omit an entire paying cascade; give the describer its visual evidence.
   capture: { frames: 12, windowMillis: 20_000 },
@@ -839,7 +839,7 @@ const orderFilled = understand({
       yield* Effect.sleep("700 millis");
       yield* fill(page, "Quantity (BTC)", "0.25");
       yield* press(page, "button", "Place order");
-      yield* page.waitForStill({ quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
   minimumSpanMillis: () => Effect.succeed(500),
@@ -892,7 +892,7 @@ const navigated = understand({
     Effect.gen(function* () {
       yield* Effect.sleep("700 millis");
       yield* press(page, "button", "Play");
-      yield* page.waitForStill({ quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
   minimumSpanMillis: () => Effect.succeed(500),

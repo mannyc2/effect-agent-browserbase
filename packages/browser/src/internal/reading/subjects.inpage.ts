@@ -5,7 +5,7 @@
  */
 import { Schema } from "effect";
 
-import { SubjectContext } from "../../BrowserEvent.ts";
+import { Box, SubjectContext } from "../../BrowserEvent.ts";
 import type { Context, ContextReader } from "./context.inpage.ts";
 import type { FindRequest, Match } from "./match.inpage.ts";
 import type { Names } from "./names.inpage.ts";
@@ -33,7 +33,7 @@ export const FindResultSchema = Schema.Struct({
       name: Schema.String,
       tag: Schema.String,
       context: SubjectContext,
-      box: Schema.Struct({ x: Schema.Int, y: Schema.Int, width: Schema.Int, height: Schema.Int }),
+      box: Box,
       inViewport: Schema.Boolean,
       state: ElementState,
     }),
@@ -44,7 +44,8 @@ export const FindResultSchema = Schema.Struct({
 export type FindResult = typeof FindResultSchema.Type;
 
 export const subjects = (names: Names, walked: Walk, matching: Match, placing: ContextReader) => {
-  const { interactiveRoles, isDisabled, isInput, nameOf, refFor, refs, roleOf } = names;
+  const { interactiveRoles, isDisabled, isInput, nameOf, refFor, refs, roleOf, textOf } = names;
+  const { boxOf, controlOf, hitAt } = walked;
   const { contextOf, known } = placing;
 
   /** What the outline lists as a control, with a ref: something a person would act on. */
@@ -97,6 +98,7 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
    */
   const find = (request: FindRequest): FindResult => {
     if (refs.next < request.firstRef) refs.next = request.firstRef;
+    const { at } = request;
     const matches = matching.compile(request);
     const byText = request.text !== null;
     const viewport = request.scope === "viewport";
@@ -131,51 +133,74 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     const named = (entry: Entry) => (entry.name ??= nameOf(entry.element, entry.role));
     const placed = (entry: Entry) => (entry.context ??= contextOf(entry.element, read));
 
-    walked.visit(
-      null,
-      viewport,
-      { pointer: false, owned: false },
-      {
-        enter: (element, style, rect, state) => {
-          const role = roleOf(element);
-          const control = isControl(element, role, style, rect, state.pointer);
-          const unit = control || role === "heading";
-          const candidate = byText ? unit || !state.owned : role !== null || control;
+    // At a point, the one element a point action there would reach, if it meets the other rules.
+    const element = at === null ? null : hitAt(document, at.x, at.y);
 
-          const entry =
-            candidate && (!viewport || inView(rect))
-              ? { element, rect, role, matched: false }
-              : undefined;
+    if (element !== null) {
+      const control = controlOf(element);
+      const box = boxOf(control);
 
-          if (entry !== undefined) entries.push(entry);
-          open.push({ entry, inline: style.display === "inline", parts: [], inside: false });
+      const entry: Entry = {
+        element: control,
+        rect: new DOMRect(box.x, box.y, box.width, box.height),
+        role: roleOf(control),
+        matched: false,
+      };
 
-          return {
-            pointer: state.pointer || style.cursor === "pointer",
-            owned: state.owned || unit,
-          };
+      entry.matched = matches({
+        role: entry.role,
+        name: () => named(entry),
+        text: () => textOf(control),
+        context: () => placed(entry),
+      });
+      entries.push(entry);
+    }
+    if (at === null)
+      walked.visit(
+        null,
+        viewport,
+        { pointer: false, owned: false },
+        {
+          enter: (element, style, rect, state) => {
+            const role = roleOf(element);
+            const control = isControl(element, role, style, rect, state.pointer);
+            const unit = control || role === "heading";
+            const candidate = byText ? unit || !state.owned : role !== null || control;
+
+            const entry =
+              candidate && (!viewport || inView(rect))
+                ? { element, rect, role, matched: false }
+                : undefined;
+
+            if (entry !== undefined) entries.push(entry);
+            open.push({ entry, inline: style.display === "inline", parts: [], inside: false });
+
+            return {
+              pointer: state.pointer || style.cursor === "pointer",
+              owned: state.owned || unit,
+            };
+          },
+          text: byText ? (node) => open.at(-1)?.parts.push(node.textContent ?? "") : undefined,
+          leave: () => {
+            const closed = open.pop();
+            const parent = open.at(-1);
+
+            if (closed === undefined) return;
+            const { entry } = closed;
+            const text = closed.parts.join("");
+
+            if (parent !== undefined) parent.parts.push(closed.inline ? text : ` ${text} `);
+            if (entry !== undefined && !(byText && closed.inside))
+              entry.matched = matches({
+                role: entry.role,
+                name: () => named(entry),
+                text: () => text,
+                context: () => placed(entry),
+              });
+            if (parent !== undefined) parent.inside ||= closed.inside || entry?.matched === true;
+          },
         },
-        text: byText ? (node) => open.at(-1)?.parts.push(node.textContent ?? "") : undefined,
-        leave: () => {
-          const closed = open.pop();
-          const parent = open.at(-1);
-
-          if (closed === undefined) return;
-          const { entry } = closed;
-          const text = closed.parts.join("");
-
-          if (parent !== undefined) parent.parts.push(closed.inline ? text : ` ${text} `);
-          if (entry !== undefined && !(byText && closed.inside))
-            entry.matched = matches({
-              role: entry.role,
-              name: () => named(entry),
-              text: () => text,
-              context: () => placed(entry),
-            });
-          if (parent !== undefined) parent.inside ||= closed.inside || entry?.matched === true;
-        },
-      },
-    );
+      );
 
     const found = entries
       .filter((entry) => entry.matched)

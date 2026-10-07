@@ -18,6 +18,7 @@ export interface FindRequest {
   readonly name: Wanted | null;
   readonly text: Wanted | null;
   readonly near: string | null;
+  readonly at: { readonly x: number; readonly y: number } | null;
   readonly scope: "viewport" | "document";
   readonly firstRef: number;
 }

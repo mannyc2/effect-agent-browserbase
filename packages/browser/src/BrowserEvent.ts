@@ -58,11 +58,45 @@ export class Subject extends Schema.Class<Subject>("effect-browser/Subject")({
   context: SubjectContext,
 }) {}
 
+const Button = Schema.Literals(["left", "right", "middle"]);
+
+/** An element's box in viewport CSS pixels; it may lie partly or wholly outside the viewport. */
+export const Box = Schema.Struct({
+  x: Schema.Finite,
+  y: Schema.Finite,
+  width: Schema.Finite,
+  height: Schema.Finite,
+});
+
+export type Box = typeof Box.Type;
+
+/**
+ * What else an action was asked, where it changes what the action does: a click's button, count
+ * and hold, how `type` enters its text, how often and how long `press` holds its keys, how far
+ * `scroll` moves, and the options `select` chose. A number that is not finite, which the action
+ * refuses, is left out.
+ */
+export const ActionOptions = Schema.Struct({
+  button: Schema.optional(Button),
+  clickCount: Schema.optional(Schema.Finite),
+  holdMillis: Schema.optional(Schema.Finite),
+  replace: Schema.optional(Schema.Boolean),
+  submit: Schema.optional(Schema.Boolean),
+  prose: Schema.optional(Schema.Boolean),
+  times: Schema.optional(Schema.Finite),
+  dx: Schema.optional(Schema.Finite),
+  dy: Schema.optional(Schema.Finite),
+  values: Schema.optional(Schema.Array(Schema.String)),
+});
+
+export type ActionOptions = typeof ActionOptions.Type;
+
 /**
  * One page operation ended, including one its caller interrupted (`error: "interrupted"`).
- * `target` is what the caller asked for: a ref, a point, a URL or keys. `subject` is what an
- * element or point action found there, and `to` where a drag ended; an action that failed before
- * finding its target has neither. Point actions carry the viewport point they used.
+ * `target` is what the caller asked for: a ref, a point, a URL or keys, and `options` the rest.
+ * `subject` is what an element or point action found there, and `to` where a drag ended; an
+ * action that failed before finding its target has neither. Point actions carry the viewport
+ * point they used.
  */
 export class Action extends Schema.TaggedClass<Action>()("Action", {
   at: Schema.Finite,
@@ -70,8 +104,11 @@ export class Action extends Schema.TaggedClass<Action>()("Action", {
   page: Schema.String,
   name: Schema.String,
   target: Schema.optional(Schema.String),
+  options: Schema.optional(ActionOptions),
   subject: Schema.optional(Subject),
   to: Schema.optional(Subject),
+  /** For an action at a point, the box of what it found there. */
+  box: Schema.optional(Box),
   text: Schema.optional(Schema.String),
   x: Schema.optional(Schema.Finite),
   y: Schema.optional(Schema.Finite),
@@ -81,7 +118,6 @@ export class Action extends Schema.TaggedClass<Action>()("Action", {
 }) {}
 
 const Sequence = Schema.Int.check(Schema.isGreaterThan(0));
-const Button = Schema.Literals(["left", "right", "middle"]);
 
 /** One whole glide, published before its first input. Offsets use the host monotonic clock. */
 export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlanned", {

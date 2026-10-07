@@ -26,6 +26,13 @@
   its column's header, and every `Action` records it. Reading the viewport, the outline, `find` and
   `text` skip subtrees out of view, keeping what is pinned in view: locally, the outline of a
   28,021-element table takes 7 ms instead of 95.
+- Plans and readiness. `Plan.fromEvents` records a page's walk from its events, and `Plan.replay`
+  replays it on a fresh page by subject, with no model call: it waits for `Page.ready` before each
+  step that acts, finds the one element each step names by role, name and context, and stops at
+  the first step it cannot take with a typed reason. On plan 016's drift site, four walks under
+  nine drift operators, five seeds each, ended in the wrong place 0 times in 200 replays.
+  `Page.ready` says whether a page is ready to be shown, from the page's own evidence, and with
+  `quietMillis` also waits for the screen to be still.
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
   holds and validation before held actions resume: the press point is hit-tested after the
   pointer arrives, typing refuses to start on a control a key could activate, and a multi-key

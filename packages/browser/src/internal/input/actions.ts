@@ -82,7 +82,14 @@ const click = (input: Parts) => {
   return (target: Target, clickOptions: ClickOptions = {}) =>
     perform(
       "click",
-      { target: typeof target === "string" ? target : `${target.x},${target.y}` },
+      {
+        target: typeof target === "string" ? target : `${target.x},${target.y}`,
+        options: {
+          button: clickOptions.button,
+          clickCount: clickOptions.clickCount,
+          holdMillis: clickOptions.holdMillis,
+        },
+      },
       settings.actionTimeout,
       Effect.suspend(() =>
         Number.isFinite(clickOptions.clickCount ?? 1)
@@ -238,7 +245,16 @@ const typeText = (input: Parts) => {
   return (text: string, typeOptions: TypeOptions = {}) =>
     perform(
       "type",
-      { target: typeOptions.into, text, secret: true },
+      {
+        target: typeOptions.into,
+        options: {
+          replace: typeOptions.replace,
+          submit: typeOptions.submit,
+          prose: typeOptions.prose,
+        },
+        text,
+        secret: true,
+      },
       Duration.sum(
         settings.actionTimeout,
         Duration.millis(
@@ -407,7 +423,7 @@ const press = (input: Parts) => {
   return (keys: string, pressOptions: PressOptions = {}) =>
     perform(
       "press",
-      { target: keys },
+      { target: keys, options: { times: pressOptions.times, holdMillis: pressOptions.holdMillis } },
       settings.actionTimeout,
       Effect.suspend(() => {
         if (!Number.isFinite(pressOptions.times ?? 1))
@@ -485,6 +501,7 @@ const scroll = (input: Parts) => {
             : typeof scrollOptions.at === "string"
               ? scrollOptions.at
               : `${scrollOptions.at.x},${scrollOptions.at.y}`,
+        options: { dx: scrollOptions.dx, dy: scrollOptions.dy },
       },
       settings.actionTimeout,
       valid.pipe(
@@ -546,7 +563,7 @@ const select = (input: Parts) => {
   return (ref: string, values: ReadonlyArray<string>) =>
     perform(
       "select",
-      { target: ref, text: values.join(", ") },
+      { target: ref, options: { values }, text: values.join(", ") },
       settings.actionTimeout,
       preparePolicy("select", { target: ref, text: values.join(", ") }, [ref]),
       (marks, approval) =>
