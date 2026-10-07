@@ -5,8 +5,8 @@
 import { Clock, Duration, Effect, Exit, Option, Queue, Semaphore, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
-import { BrowserError, InvalidRequest } from "../BrowserError.ts";
-import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../Frame.ts";
+import { BrowserError, InvalidRequest } from "../../BrowserError.ts";
+import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../../Frame.ts";
 import { type Estimate, toHostTime } from "./clock.ts";
 
 interface Size {

@@ -54,7 +54,10 @@ bun run ready                       # fmt check, lint, typecheck, test, build
 ## Layout
 
 - `packages/browser` (`effect-browser`): the browser, pages, snapshots, frames, events, tools, the
-  agent and moments. It depends on `effect` and `playwright-core` only.
+  agent and moments. It depends on `effect` and `playwright-core` only. Its public modules are flat
+  in `src/`; `src/internal/` is grouped by domain: page, pictures, input, reading, timeline and
+  agent. Code that runs inside the page sits in `*.inpage.ts` parts, each one self-contained
+  function that the bridge in `internal/page/bridge.ts` composes into the injected script.
 - `packages/browserbase` (`effect-browserbase`): the Browserbase client and sessions as a
   `Browser`. It depends on `effect-browser` through its public entry points.
 - `packages/human-strokes` (`effect-browser-human-strokes`): an optional pointer planner over

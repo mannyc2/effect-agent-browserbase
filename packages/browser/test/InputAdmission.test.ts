@@ -7,7 +7,7 @@ import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
-import * as Input from "../src/internal/input.ts";
+import * as Input from "../src/internal/input/replies.ts";
 import { maximumSamples } from "../src/Motion.ts";
 import type { Page } from "../src/Page.ts";
 

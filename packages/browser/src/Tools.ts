@@ -27,7 +27,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
-import * as Url from "./internal/url.ts";
+import * as Url from "./internal/page/url.ts";
 import * as Page from "./Page.ts";
 
 const ref = Schema.optional(Schema.String).annotate({
