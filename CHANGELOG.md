@@ -42,6 +42,26 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   acknowledgements of frames not yet answered, which slow a screencast over a slow connection.
 - Every page span reports its protocol cost on the page's own session: `calls`, `bytesOut`,
   `bytesIn` and `waitedMillis`. A picture's `source` is `frame` or `screenshot`.
+- `Supervisor`, a new module: a browser kept open across losses and session ends, as generations
+  from a provider's `open`. `browser` waits, bounded by `waitTimeout`, for the current generation,
+  and every caller shares one open, which runs in the supervisor's scope. A loss is published at
+  once and the next generation opens on the `reopen` schedule; `rotate`, or the time `rotateBefore`
+  ahead of a generation's `expiresAt`, makes the next generation before it breaks the current one,
+  or breaks first when generations are `exclusive`; `retire` stops at once and releases what is
+  open. `states` streams each generation's `Opening`, `Reopening`, `Open`, `Lost`, `Down` and
+  `Closed`, the last with the release outcome, `Settled` or `Unconfirmed`, as `Generation` values.
+  Pages don't carry over between generations.
+- `Browserbase.supervise`: Browserbase sessions as `Supervisor` generations. Sessions that persist
+  to a stored context are exclusive.
+- `Browserbase.reconcile(contextId)` ends a stored context's running sessions, found by the
+  `persistsContext` label `open` puts in their user metadata, confirms they ended, and lets the
+  context go after `contextSettle`: the way out of an `Unconfirmed` release, and of a persisting
+  create whose answer was lost.
+- `effect-browserbase/testing`: `TestBrowserbase`, the Browserbase API in memory as an `HttpClient`,
+  whose sessions run until released or until their timeout on the Effect `Clock`, with a `Script`
+  of lost creates, pending or refused releases and failed status reads; and
+  `BrowserbaseContract.checks`, what the package relies on Browserbase to do, which the fake
+  passes.
 
 ### Changed
 
@@ -75,6 +95,16 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ### Breaking
 
+- `Browserbase.open` and `attach` give a `Hosted`, `{ browser, session, release }`, instead of the
+  `Browser`. `release` ends the session, confirms it ended, and gives the outcome; for `open`, the
+  scope's close runs it too, once.
+- A Browserbase release confirms the session ended: it reads the session, trying again a second
+  apart for up to a minute, including after a failed read. A session still running then is
+  `Unconfirmed`, and a persisting session's context stays held until `reconcile`. Before, a failed
+  release was a logged warning, and the context was let go after a minute whatever the session
+  did.
+- A persisting session carries `persistsContext: <context id>` in its user metadata, beside the
+  caller's own.
 - `Subject` has a `context`: a table cell's `row` and `column`, the `label` just before an element,
   and the `heading` above it. Every `Action` records it, and `ResolvedTarget` carries it.
 - `Snapshot.above` and `below` count the parts of the page skipped because they lie out of view,

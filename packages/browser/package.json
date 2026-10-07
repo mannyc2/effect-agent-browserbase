@@ -85,6 +85,11 @@
       "types": "./dist/Snapshot.d.mts",
       "default": "./dist/Snapshot.mjs"
     },
+    "./Supervisor": {
+      "@effect-browser/source": "./src/Supervisor.ts",
+      "types": "./dist/Supervisor.d.mts",
+      "default": "./dist/Supervisor.mjs"
+    },
     "./Tools": {
       "@effect-browser/source": "./src/Tools.ts",
       "types": "./dist/Tools.d.mts",
