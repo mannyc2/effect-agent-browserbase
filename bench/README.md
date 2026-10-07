@@ -210,9 +210,21 @@ after the session ended, and a session whose page never navigated had none.
 ## Arms
 
 `--arm` sets how a model sees a page and acts on it, for the paired experiment. Repeated, it runs
-every selected arm on the same seeds, so trials pair by task and trial number. The summary gives
-each arm's tallies, its median seconds, model turns and tool calls per graded trial, and for each
-two arms the pairs graded in both, split by which arm passed.
+every selected arm on the same seeds, so trials pair by task and seed. A model run's summary, and
+`report` over any results files (`Report.ts`, `Stats.ts`), states its estimand: whether one arm
+passes more often than another on these tasks' pages. The tasks are fixed, not sampled, so a
+difference speaks to these pages only. It then gives:
+
+- each arm's tallies, and its median seconds, model turns and tool calls per graded trial;
+- per task and arm, the pass rate with Wilson's 95% interval; pass^3, the chance that three
+  trials all pass, estimated as τ-bench does; and the dollars and seconds per pass;
+- for each two arms, on the pages both were graded on, McNemar's exact test per task, with
+  Holm's correction across the tasks, and the test stratified by task, which pools the
+  discordant pairs, with Holm's correction across the pairs of arms;
+- infrastructure failures per backend: local Chromium, Chromium with added latency, or
+  Browserbase.
+
+A wrong answer counts against its arm; an infrastructure failure leaves its pair out of the test.
 
 | Arm | Operate tasks                                                                                                                                             | Understand tasks                               |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
