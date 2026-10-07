@@ -183,6 +183,11 @@ took two (finding its point, then the mouse events together) and a 120 ms settle
 took six in a row, five of them Playwright's screenshot, so an observation with an outline and a
 capture took about 0.7 seconds.
 
+Since then, startup calibration runs its probes in the private page's main world, sends its
+marker script with the screencast start, and spaces its markers 180 ms apart from sending rather
+than from each answer; a page's later documents reuse its main frame's id. At 72 ms, opening a
+browser went from 2.6 to 2.2 seconds and calibration from 15 round trips to 10.
+
 ### Hosted commands
 
 A hosted trial's browser connects through a relay in the bench: Playwright speaks to a local
