@@ -9,9 +9,9 @@ npm install effect-browser-human-strokes@beta effect-browser@beta effect playwri
 
 ```ts
 import { Effect } from "effect";
+import * as HumanStrokes from "effect-browser-human-strokes";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
-import * as HumanStrokes from "effect-browser-human-strokes";
 
 const browser = HumanStrokes.provideTo(Chromium.layer({ humanize: true }));
 
