@@ -16,6 +16,7 @@ import * as Arms from "./Arms.ts";
 import type { Arm } from "./Arms.ts";
 import type { Trace } from "./Recording.ts";
 import {
+  BoardTruth,
   CheckoutTruth,
   type FixtureUnreadable,
   FrameTruth,
@@ -909,6 +910,255 @@ const navigated = understand({
   }),
 });
 
+const BoardAnswer = Schema.Struct({
+  priceChanged: Schema.Boolean,
+  asset: Schema.String,
+  table: Schema.String,
+  priceBefore: Schema.NullOr(Schema.Finite),
+  priceAfter: Schema.NullOr(Schema.Finite),
+  noticeShown: Schema.Boolean,
+  notice: Schema.String,
+});
+
+export type BoardAnswer = typeof BoardAnswer.Type;
+
+/** Names a model may give an asset instead of its ticker; Ethereum Classic before Ethereum. */
+const assetNames: ReadonlyArray<readonly [RegExp, string]> = [
+  [/ethereum classic/gi, "ETC"],
+  [/bitcoin/gi, "BTC"],
+  [/ethereum|\bether\b/gi, "ETH"],
+  [/solana/gi, "SOL"],
+  [/ripple/gi, "XRP"],
+  [/dogecoin/gi, "DOGE"],
+  [/cardano/gi, "ADA"],
+  [/avalanche/gi, "AVAX"],
+  [/chainlink/gi, "LINK"],
+  [/polkadot/gi, "DOT"],
+];
+
+const assetCodes = new Set(assetNames.map(([, code]) => code));
+
+/** The board's assets a phrase names, by ticker with or without its "-USD", or by name. */
+export const assetsIn = (text: string): ReadonlyArray<string> => {
+  const coded = assetNames.reduce(
+    (result, [name, code]) => result.replace(name, ` ${code} `),
+    text,
+  );
+
+  const words = coded.toUpperCase().match(/[A-Z]+/g) ?? [];
+
+  return [...new Set(words.map((word) => word.replace(/USDT?$/, "")))]
+    .filter((word) => assetCodes.has(word))
+    .toSorted();
+};
+
+const tableWords: ReadonlyArray<readonly [string, RegExp]> = [
+  ["Spot markets", /\bspot\b/i],
+  ["Perpetual futures", /\bperp|\bfutures?\b/i],
+  ["Evening watchlist", /watch\s*-?list|\bevening\b/i],
+];
+
+/** The board's tables a phrase names, such as "perps" for "Perpetual futures". */
+export const tablesIn = (text: string): ReadonlyArray<string> =>
+  tableWords.filter(([, words]) => words.test(text)).map(([table]) => table);
+
+/** The numbers written in a phrase, with or without "$" and thousands separators. */
+const numbersIn = (text: string) =>
+  (text.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map((figure) => Number(figure.replaceAll(",", "")));
+
+/** Within half the board's last displayed digit: 4 decimals under $1, else cents. */
+const samePrice = (answer: number | null, expected: number | null) =>
+  answer !== null &&
+  expected !== null &&
+  Math.abs(answer - expected) < (expected < 1 ? 0.00005 : 0.005);
+
+const sameSet = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+/**
+ * Grades what a model says changed on the board against what did. Phrasing never fails an answer:
+ * an asset counts by its ticker, with or without "-USD", or by its name; a table by a word that
+ * names it alone, such as "spot" or "perps"; prices are numbers within half the last displayed
+ * digit; a notice counts when it names the alert's asset and its level, however worded. Fields
+ * for something that did not happen, such as the asset when no price changed, are not graded.
+ */
+export const gradeBoard = (answer: BoardAnswer, expected: BoardAnswer): Grade => {
+  const wrong: Array<string> = [];
+
+  if (answer.priceChanged !== expected.priceChanged)
+    wrong.push(expected.priceChanged ? "missed the price change" : "reported a price change");
+  else if (expected.priceChanged) {
+    if (!sameSet(assetsIn(answer.asset), assetsIn(expected.asset))) wrong.push("asset");
+    if (!sameSet(tablesIn(answer.table), tablesIn(expected.table))) wrong.push("table");
+    if (!samePrice(answer.priceBefore, expected.priceBefore)) wrong.push("price before");
+    if (!samePrice(answer.priceAfter, expected.priceAfter)) wrong.push("price after");
+  }
+
+  if (answer.noticeShown !== expected.noticeShown)
+    wrong.push(expected.noticeShown ? "missed the notice" : "reported a notice");
+  else if (expected.noticeShown) {
+    const figures = numbersIn(answer.notice);
+
+    if (
+      !sameSet(assetsIn(answer.notice), assetsIn(expected.notice)) ||
+      !numbersIn(expected.notice).every((figure) => figures.includes(figure))
+    )
+      wrong.push("notice");
+  }
+
+  return {
+    pass: wrong.length === 0,
+    detail: `${wrong.length === 0 ? "" : `wrong: ${wrong.join(", ")}; `}answered ${JSON.stringify(answer)}, expected ${JSON.stringify(expected)}`,
+  };
+};
+
+const boardInstructions =
+  "These screenshots and notes cover the last few seconds of a market board. Say what changed on it in that time. If a price changed, name its asset and table and give the price before and after. If a notice or alert appeared, even for a moment, say what it said. If nothing changed, say so.";
+
+const boardAnswer = (page: Page) =>
+  truth(page, BoardTruth).pipe(
+    Effect.map((board): BoardAnswer => ({
+      priceChanged: board.change !== null,
+      asset: board.change?.ticker ?? "",
+      table: board.change?.table ?? "",
+      priceBefore: board.change?.before ?? null,
+      priceAfter: board.change?.after ?? null,
+      noticeShown: board.notice !== null,
+      notice: board.notice?.text ?? "",
+    })),
+  );
+
+/** Push a tick or an alert through the board's feed, as a live page receives one. */
+const feed = (page: Page, push: "tick" | "flash") =>
+  Effect.promise(() =>
+    page.playwright.evaluate(
+      (name) =>
+        (window as unknown as { __benchBoard: Record<string, () => void> }).__benchBoard[name]?.(),
+      push,
+    ),
+  );
+
+const boardWhen = (page: Page, ready: (board: typeof BoardTruth.Type) => boolean) =>
+  truth(page, BoardTruth).pipe(
+    Effect.repeat({ schedule: Schedule.spaced("50 millis"), until: ready }),
+    Effect.timeout(Duration.seconds(10)),
+    Effect.orDie,
+  );
+
+const settle = (page: Page) =>
+  page.waitForStill({ quietMillis: 150, timeout: Duration.seconds(3) });
+
+/** The first selected frame was painted before `at`, so the pictures hold the earlier state. */
+const startsBefore = (frames: ReadonlyArray<Frame>, at: number | null, what: string) => {
+  const first = frames[0]?.timestamp;
+
+  return at !== null && first !== undefined && first < at
+    ? undefined
+    : `no captured frame precedes the ${what}`;
+};
+
+/** A selected frame was painted in `[from, until)`, while what appeared there showed. */
+const showsBetween = (frames: ReadonlyArray<Frame>, from: number | null, until: number | null) =>
+  from !== null &&
+  until !== null &&
+  frames.some(
+    (frame) => frame.timestamp !== undefined && frame.timestamp >= from && frame.timestamp < until,
+  );
+
+const boardTick = understand({
+  name: "board-tick",
+  summary: "Notice that one price in three dense quote tables moved by a fraction of a percent",
+  start: routes.board,
+  setup: (page) =>
+    Effect.gen(function* () {
+      yield* Effect.sleep("700 millis");
+      yield* feed(page, "tick");
+      yield* settle(page);
+    }),
+  capture: { frames: 2, windowMillis: 5000 },
+  minimumSpanMillis: () => Effect.succeed(500),
+  covers: (frames, page) =>
+    truth(page, BoardTruth).pipe(
+      Effect.map((board) => startsBefore(frames, board.changedAt, "price change")),
+    ),
+  instructions: boardInstructions,
+  answer: BoardAnswer,
+  expected: boardAnswer,
+  grade: gradeBoard,
+});
+
+// The alert's draining bar paints all the while it shows, so most of the window's frames hold it
+// and the middle of three is one of them; the capture is incomplete unless a picture shows it.
+const boardFlash = understand({
+  name: "board-flash",
+  summary: "Notice an alert that showed for 1.2 seconds and was gone by the moment",
+  start: routes.board,
+  setup: (page) =>
+    Effect.gen(function* () {
+      yield* Effect.sleep("700 millis");
+      yield* feed(page, "flash");
+      yield* boardWhen(page, (board) => board.hiddenAt !== null);
+      yield* settle(page);
+    }),
+  capture: { frames: 3, windowMillis: 5000 },
+  minimumSpanMillis: () => Effect.succeed(1200),
+  covers: (frames, page) =>
+    truth(page, BoardTruth).pipe(
+      Effect.map(
+        (board) =>
+          startsBefore(frames, board.shownAt, "alert") ??
+          (showsBetween(frames, board.shownAt, board.hiddenAt)
+            ? undefined
+            : "no captured frame shows the alert"),
+      ),
+    ),
+  instructions: boardInstructions,
+  answer: BoardAnswer,
+  expected: boardAnswer,
+  grade: gradeBoard,
+});
+
+/**
+ * A price ticks, then the page is scrolled to the news below the board. The moment's two frames
+ * show the board before the tick and the news after the scroll, so by design no picture holds the
+ * new price: this task measures what a moment adds beyond its frames, and `board-steady` is its
+ * control.
+ */
+const boardScroll = (ticks: boolean) =>
+  understand({
+    name: ticks ? "board-scrolled" : "board-steady",
+    summary: ticks
+      ? "Tell a price that changed and was then scrolled out of view, which no frame shows"
+      : "The control for board-scrolled: the same scroll, with no price change",
+    start: routes.board,
+    setup: (page) =>
+      Effect.gen(function* () {
+        yield* Effect.sleep("700 millis");
+        if (ticks) yield* feed(page, "tick");
+        yield* Effect.sleep("1200 millis");
+        yield* page.scroll({ dy: 700 });
+        yield* boardWhen(page, (board) => board.scrolledAt !== null);
+        yield* settle(page);
+      }),
+    capture: { frames: 2, windowMillis: 5000 },
+    minimumSpanMillis: () => Effect.succeed(1500),
+    covers: (frames, page) =>
+      truth(page, BoardTruth).pipe(
+        Effect.map((board) =>
+          ticks
+            ? (startsBefore(frames, board.changedAt, "price change") ??
+              (showsBetween(frames, board.changedAt, board.scrolledAt)
+                ? "a captured frame shows the new price before the scroll"
+                : undefined))
+            : startsBefore(frames, board.scrolledAt, "scroll"),
+        ),
+      ),
+    instructions: boardInstructions,
+    answer: BoardAnswer,
+    expected: boardAnswer,
+    grade: gradeBoard,
+  });
+
 export const tasks: ReadonlyArray<Task> = [
   casinoPlay,
   casinoMoment,
@@ -922,4 +1172,8 @@ export const tasks: ReadonlyArray<Task> = [
   tumbleWin,
   orderFilled,
   navigated,
+  boardTick,
+  boardFlash,
+  boardScroll(true),
+  boardScroll(false),
 ];

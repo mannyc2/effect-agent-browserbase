@@ -9,20 +9,24 @@ Chromium and a hosted browser load them the same way, with no tunnel. Each page 
 `window.__bench` for grading; models never see it. Each trial derives its fixture seed from the base seed, task and trial number,
 so changing concurrency does not change its page data.
 
-| Task            | Kind       | What the model must do                                                                    |
-| --------------- | ---------- | ----------------------------------------------------------------------------------------- |
-| `casino-play`   | operate    | Pass a cookie wall and an age check, play five spins on a canvas slot machine             |
-| `casino-moment` | understand | Read the credits and the last win off the canvas, just after a win                        |
-| `chart-read`    | understand | Read the last price, to within 0.05%, and the trend off a canvas chart                    |
-| `chart-spike`   | understand | Notice a 3.5% jump, from three frames over the last four seconds                          |
-| `chart-calm`    | understand | The control for `chart-spike`: the same question, before the jump                         |
-| `chart-trade`   | operate    | Buy 0.25 BTC at market on a live trading page and report the order id                     |
-| `checkout`      | operate    | Fill in a shipping form, with a select and radios, and report the confirmation            |
-| `quote-table`   | understand | Read the quote's price, 1-hour/24-hour changes and exact 24-hour header                   |
-| `quote-dense`   | understand | Bind the quote to the right row, period and table among similar panels                    |
-| `tumble-win`    | understand | Count paying cascades on a 6×5 canvas slot and read the final multiplier, win and balance |
-| `order-filled`  | understand | Identify the filled order, its quantity, price and status                                 |
-| `navigated`     | understand | Identify the destination URL, title and control that triggered navigation                 |
+| Task             | Kind       | What the model must do                                                                          |
+| ---------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `casino-play`    | operate    | Pass a cookie wall and an age check, play five spins on a canvas slot machine                   |
+| `casino-moment`  | understand | Read the credits and the last win off the canvas, just after a win                              |
+| `chart-read`     | understand | Read the last price, to within 0.05%, and the trend off a canvas chart                          |
+| `chart-spike`    | understand | Notice a 3.5% jump, from three frames over the last four seconds                                |
+| `chart-calm`     | understand | The control for `chart-spike`: the same question, before the jump                               |
+| `chart-trade`    | operate    | Buy 0.25 BTC at market on a live trading page and report the order id                           |
+| `checkout`       | operate    | Fill in a shipping form, with a select and radios, and report the confirmation                  |
+| `quote-table`    | understand | Read the quote's price, 1-hour/24-hour changes and exact 24-hour header                         |
+| `quote-dense`    | understand | Bind the quote to the right row, period and table among similar panels                          |
+| `tumble-win`     | understand | Count paying cascades on a 6×5 canvas slot and read the final multiplier, win and balance       |
+| `order-filled`   | understand | Identify the filled order, its quantity, price and status                                       |
+| `navigated`      | understand | Identify the destination URL, title and control that triggered navigation                       |
+| `board-tick`     | understand | Say which price in three dense quote tables moved by a fraction of a percent, from what to what |
+| `board-flash`    | understand | Report an alert that showed for 1.2 seconds and was gone by the moment                          |
+| `board-scrolled` | understand | Report a price that changed before the page scrolled away from it; by design no frame shows it  |
+| `board-steady`   | understand | The control for `board-scrolled`: the same scroll, with no price change                         |
 
 An operate task gives a model the browser tools (`Agent.run`). An understand task brings the page to
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call:
@@ -55,6 +59,19 @@ continue to use narrative action events, without the cursor-rendering track. Fra
 evidence spans use mapped browser paint time, with screenshot timing represented separately;
 late delivery cannot make old paint count as the fixture's final state. Capture counters expose
 native filtering, paint gaps and observed subscriber loss.
+
+The `board-*` tasks ask what changed on a page that stays the same page, as a narrator must. They
+share one question, one answer and one grader, which judges what an answer says rather than how it
+says it: an asset counts by its ticker, with or without "-USD", or by its name; a table by a word
+that names it alone, such as "spot" or "perps"; prices are numbers within half the last displayed
+digit; an alert counts when it names its asset and level, however worded. A field for something
+that did not happen, such as the asset when no price changed, is not graded. The board never marks
+what changed and keeps no trace of a former price or a removed alert, and each seed moves another
+price or raises another alert. `board-tick` and `board-flash` keep their evidence in the pictures:
+the tick's first frame precedes it, and one of the flash's three frames must show the alert, whose
+draining bar paints all the while it shows. `board-scrolled` deliberately does not: its two frames
+show the board before the tick and the news after the scroll, so it measures what a moment tells
+beyond its frames, and `board-steady` is its control.
 
 ## Running
 

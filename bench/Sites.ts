@@ -15,6 +15,7 @@ export const routes = {
   order: "/markets/btc",
   navigation: "/casino",
   navigationDestination: "/casino/reels",
+  board: "/markets/board",
 } as const;
 
 const style = `body{margin:0;font-family:system-ui,sans-serif}button{font:inherit;cursor:pointer}`;
@@ -399,6 +400,117 @@ body{background:#150e26}canvas{display:block}
   draw(0);
 </script></body></html>`;
 
+// Three dense quote tables above a long news column. Nothing moves until the bench calls
+// `__benchBoard.tick()`, which moves one seeded price by a fraction of a percent, or `flash()`,
+// which shows a seeded alert for 1.2 seconds, its bar draining as a toast's does, and removes it,
+// as a feed's push would. The page
+// never marks what changed, and keeps no trace of a former price or a removed alert.
+const board = `<!doctype html><html><head><title>Market board | Harbor Markets</title><style>${style}
+body{background:#10151e;color:#d6dfed;font-size:13px}
+header{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:#1a2330;border-bottom:1px solid #344152}
+main{padding:0 16px 16px}h1{font-size:22px;margin:12px 0 2px}p{color:#899bb4;margin:4px 0 10px}
+.panels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.panel{background:#17202d;border:1px solid #344152;border-radius:6px;padding:8px;min-width:0}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:11px}
+caption{text-align:left;font-size:15px;font-weight:650;padding:2px 0 8px;color:#eef4ff}
+th{color:#91a4c0;font-weight:500;font-size:10px;text-align:right;white-space:nowrap}
+td,th{padding:6px 3px;border-bottom:1px solid #283548}td{text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}.up{color:#48c3a2}.down{color:#f3878a}
+article{background:#151c27;border-left:3px solid #344152;margin:12px 0;padding:10px 14px;max-width:820px}
+article h2{font-size:16px;margin:0 0 6px}
+#toasts{position:fixed;top:56px;right:16px}
+.toast{background:#3a2c12;border:1px solid #e6ad48;color:#ffe2a8;padding:12px 16px;border-radius:6px;font-size:15px;font-weight:600}
+.toast::after{content:"";display:block;height:3px;margin-top:8px;background:#e6ad48;animation:drain 1.2s linear forwards}
+@keyframes drain{from{width:100%}to{width:0}}
+</style></head><body>
+<header><strong>HARBOR MARKETS</strong><canvas id="feed" width="160" height="24"></canvas><span>Board · Markets · Watchlists</span></header>
+<main><h1>Market board</h1><p>USD quotes · Prices shown in US dollars</p>
+<div class="panels" id="panels"></div>
+<h1>Market news</h1><div id="news"></div></main><div id="toasts" role="status"></div>
+<script>
+  const trial = window.__benchSeed;
+  // Mulberry32: trial seeds that differ only in a few bits still diverge from the first draw.
+  let randomState = (trial ^ 0x3b6e1a95) >>> 0;
+  const random = () => {
+    randomState = (randomState + 0x6d2b79f5) >>> 0;
+    let mixed = Math.imul(randomState ^ (randomState >>> 15), randomState | 1);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = (values) => values[Math.floor(random() * values.length)];
+  const shuffle = (values) => {
+    const result = [...values];
+    for (let index = result.length - 1; index > 0; index--) {
+      const other = Math.floor(random() * (index + 1));
+      [result[index], result[other]] = [result[other], result[index]];
+    }
+    return result;
+  };
+  const assets = [
+    ["BTC-USD", 64325.17], ["ETH-USD", 3124.86], ["SOL-USD", 146.28], ["XRP-USD", 0.5284],
+    ["DOGE-USD", 0.1148], ["ADA-USD", 0.3852], ["ETC-USD", 23.51], ["AVAX-USD", 28.63],
+    ["LINK-USD", 14.74], ["DOT-USD", 4.29]
+  ];
+  const tables = ["Spot markets", "Perpetual futures", "Evening watchlist"];
+  const unit = (price) => (price < 1 ? 0.0001 : 0.01);
+  const round = (value, step) => Number((Math.round(value / step) * step).toFixed(step < 0.01 ? 4 : 2));
+  const rows = tables.flatMap((table, tableIndex) => assets.map(([ticker, base]) => {
+    const price = round(base * (1 + (random() - 0.5) / 25 + tableIndex / 80), unit(base));
+    const change = () => Math.round((random() - 0.45) * 900) / 100;
+    return { ticker, table, price, c1h: change(), c24h: change() };
+  }));
+  const money = (value) => "$" + value.toLocaleString("en-US", { minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 });
+  const percent = (value) => (value >= 0 ? "+" : "") + value.toFixed(2) + "%";
+  const cells = new Map();
+  for (const table of shuffle(tables)) {
+    const body = shuffle(rows.filter((row) => row.table === table)).map((row, index) => {
+      const id = "p" + rows.indexOf(row);
+      return "<tr><td>" + row.ticker + "</td><td id='" + id + "'>" + money(row.price) + "</td><td class='" + (row.c1h >= 0 ? "up" : "down") + "'>" + percent(row.c1h) + "</td><td class='" + (row.c24h >= 0 ? "up" : "down") + "'>" + percent(row.c24h) + "</td><td>$" + (6.2 + index * 3.1 + tables.indexOf(table) * 1.7).toFixed(1) + "M</td></tr>";
+    }).join("");
+    document.getElementById("panels").insertAdjacentHTML("beforeend", "<section class='panel'><table aria-label='" + table + "'><caption>" + table + "</caption><thead><tr><th scope='col'>Asset</th><th scope='col'>Price</th><th scope='col'>1h %</th><th scope='col'>24h %</th><th scope='col'>24h volume</th></tr></thead><tbody>" + body + "</tbody></table></section>");
+  }
+  const headlines = ["Funding rates ease across majors", "Exchange adds weekend settlement", "Stablecoin supply reaches a new high", "Miners trim reserves after the halving", "Options desks see rising demand for puts", "Regulators publish custody guidance", "Layer-two fees fall to yearly lows", "Liquidity thins ahead of the holiday", "Treasury yields steady before the auction", "Desk flows tilt toward large caps", "Index providers review their weights", "Market makers widen weekend spreads"];
+  document.getElementById("news").innerHTML = headlines.map((headline) => "<article><h2>" + headline + "</h2><p>Desk notes summarise the session's flows, with figures refreshed at the close. Coverage continues through the evening with regional updates and a look at the week ahead.</p></article>").join("");
+  const plot = document.getElementById("feed").getContext("2d");
+  const spark = Array.from({ length: 21 }, (_, index) => [index * 8, 4 + random() * 16]);
+  const paint = () => {
+    plot.clearRect(0, 0, 160, 24); plot.strokeStyle = "#42bba0"; plot.lineWidth = 1.5; plot.beginPath();
+    for (const [x, y] of spark) plot.lineTo(x, y);
+    plot.stroke();
+  };
+  paint();
+  const now = () => performance.timeOrigin + performance.now();
+  window.__bench = { rows, change: null, notice: null, changedAt: null, shownAt: null, hiddenAt: null, scrolledAt: null };
+  window.__benchBoard = {
+    tick: () => {
+      const row = pick(rows), before = row.price, step = unit(before);
+      const move = Math.max(3 * step, before * (0.0008 + random() * 0.0032));
+      const after = round(before + (random() < 0.5 ? -move : move), step);
+      row.price = after;
+      document.getElementById("p" + rows.indexOf(row)).textContent = money(after);
+      __bench.change = { ticker: row.ticker, table: row.table, before, after };
+      __bench.changedAt = now();
+      __benchSettled(paint);
+    },
+    flash: () => {
+      const row = pick(rows.filter((candidate) => candidate.table === "Spot markets"));
+      const step = row.price >= 1000 ? 50 : row.price >= 100 ? 5 : row.price >= 10 ? 0.5 : row.price >= 1 ? 0.05 : 0.005;
+      // A round level beside the price, never the price itself, so the board cannot give it away.
+      const below = Math.floor(row.price / step) * step;
+      const level = round(random() < 0.5 && below < row.price ? below : below + step, 0.0001);
+      const text = "Price alert: " + row.ticker + " crossed " + money(level);
+      const toast = document.createElement("div");
+      toast.className = "toast"; toast.textContent = text;
+      document.getElementById("toasts").append(toast);
+      __bench.notice = { text, ticker: row.ticker, level };
+      __bench.shownAt = now();
+      setTimeout(() => { toast.remove(); __bench.hiddenAt = now(); __benchSettled(paint); }, 1200);
+    },
+  };
+  addEventListener("scrollend", () => { __bench.scrolledAt = now(); __benchSettled(paint); });
+  __benchSettled(paint);
+</script></body></html>`;
+
 const pages: Readonly<Record<string, string>> = {
   "/casino": lobby,
   "/casino/reels": reels,
@@ -407,6 +519,7 @@ const pages: Readonly<Record<string, string>> = {
   [routes.quotes]: quotes(false),
   [routes.denseQuotes]: quotes(true),
   [routes.tumble]: tumble,
+  [routes.board]: board,
 };
 
 // A screencast can drop an animation's final paint for good once the page goes still. A settled
@@ -545,6 +658,32 @@ export const TumbleTruth = Schema.Struct({
   completedTumbles: Schema.Int,
   durationMillis: Schema.Finite,
   pays: Schema.Array(Schema.Finite),
+});
+
+const BoardRow = Schema.Struct({
+  ticker: Schema.String,
+  table: Schema.String,
+  price: Schema.Finite,
+});
+
+/** A market board, and what the bench made happen on it, timed on the browser's epoch clock. */
+export const BoardTruth = Schema.Struct({
+  rows: Schema.Array(BoardRow),
+  change: Schema.NullOr(
+    Schema.Struct({
+      ticker: Schema.String,
+      table: Schema.String,
+      before: Schema.Finite,
+      after: Schema.Finite,
+    }),
+  ),
+  notice: Schema.NullOr(
+    Schema.Struct({ text: Schema.String, ticker: Schema.String, level: Schema.Finite }),
+  ),
+  changedAt: Schema.NullOr(Schema.Finite),
+  shownAt: Schema.NullOr(Schema.Finite),
+  hiddenAt: Schema.NullOr(Schema.Finite),
+  scrolledAt: Schema.NullOr(Schema.Finite),
 });
 
 export const NavigationTruth = Schema.Struct({
