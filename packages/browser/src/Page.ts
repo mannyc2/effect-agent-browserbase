@@ -20,7 +20,6 @@ import { Box, type BrowserEvent, Subject, SubjectContext } from "./BrowserEvent.
 import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
-import * as Subjects from "./internal/reading/subjects.inpage.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
 export interface Point {
@@ -151,7 +150,15 @@ export interface FindQuery {
  * An element's state as its markup gives it: `checked` for what can be checked, `expanded`,
  * `selected` and `pressed` where the page says either way, and `level` for headings.
  */
-export const ElementState = Subjects.ElementState;
+export const ElementState = Schema.Struct({
+  disabled: Schema.Boolean,
+  focused: Schema.Boolean,
+  checked: Schema.optional(Schema.Boolean),
+  expanded: Schema.optional(Schema.Boolean),
+  selected: Schema.optional(Schema.Boolean),
+  pressed: Schema.optional(Schema.Boolean),
+  level: Schema.optional(Schema.Int),
+});
 
 export type ElementState = typeof ElementState.Type;
 

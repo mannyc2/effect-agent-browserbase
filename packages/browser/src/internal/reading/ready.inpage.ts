@@ -6,7 +6,7 @@
  */
 import { Schema } from "effect";
 
-import type { Walk } from "./walk.inpage.ts";
+import type { Texts } from "./text.inpage.ts";
 
 /** What the page is still waiting for; none when it is ready. */
 export const ReadinessSchema = Schema.Array(
@@ -15,18 +15,11 @@ export const ReadinessSchema = Schema.Array(
 
 export type Readiness = typeof ReadinessSchema.Type;
 
-export const ready = (walked: Walk) => {
+export const ready = (texts: Texts) => {
   const inView = (element: Element): boolean => {
-    const rect = element.getBoundingClientRect();
+    const { width, height, right, bottom, left, top } = element.getBoundingClientRect();
 
-    return (
-      rect.width > 0 &&
-      rect.height > 0 &&
-      rect.right > 0 &&
-      rect.bottom > 0 &&
-      rect.left < window.innerWidth &&
-      rect.top < window.innerHeight
-    );
+    return width * height > 0 && right > 0 && bottom > 0 && left < innerWidth && top < innerHeight;
   };
 
   // A hidden document paints no frames, so it is not ready to be shown.
@@ -73,13 +66,11 @@ export const ready = (walked: Walk) => {
           element.checkVisibility({ opacityProperty: true, visibilityProperty: true }),
       );
 
-      if (!shown)
-        walked.visit(null, true, true, {
-          enter: () => (shown ? undefined : true),
-          text: (node) => {
-            shown ||= (node.textContent ?? "").trim() !== "";
-          },
-        });
+      if (!shown) {
+        const read = texts.read({ ref: null, maxChars: 1, unmask: false });
+
+        shown = read !== null && read.text !== "";
+      }
       if (!shown) waiting.push("content");
 
       return waiting;

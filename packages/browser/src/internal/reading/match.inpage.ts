@@ -5,8 +5,9 @@
  * - A name given as a string matches when the two read the same once their spaces are collapsed,
  *   their case folded and their characters given one Unicode form; a pattern matches when it
  *   finds itself in the name.
- * - Text and `near` match when they appear, read the same way, in the element's text or in any of
- *   its context: its row, column, label or heading.
+ * - Text matches when it appears, read the same way, in the element's text.
+ * - `near` matches when its words appear, whole and in order, in any of the element's context:
+ *   its row, column, label or heading. Replay chooses among candidates by the same rule.
  */
 import type { Context } from "./context.inpage.ts";
 
@@ -45,38 +46,32 @@ export const match = () => {
       .toUpperCase()
       .toLowerCase();
 
-  // `g` and `y` keep a position from one test to the next, so one pattern would answer
-  // differently for each element it is tried on.
-  const pattern = (wanted: Exclude<Wanted, string>) =>
-    new RegExp(wanted.source, wanted.flags.replace(/[gy]/g, ""));
-
-  // A pattern is tried on the text as the page shows it, so its own flags decide about case.
-  const shown = (value: string) => value.replace(/\s+/g, " ").trim();
-
-  const equal = (wanted: Wanted) => {
+  /** A string that reads the same, or, unless `whole`, appears within; or a pattern found within. */
+  const rule = (wanted: Wanted, whole: boolean) => {
     if (typeof wanted !== "string") {
-      const found = pattern(wanted);
+      // `g` and `y` keep a position from one test to the next, so one pattern would answer
+      // differently for each element. A pattern is tried on the text as the page shows it.
+      const found = new RegExp(wanted.source, wanted.flags.replace(/[gy]/g, ""));
 
-      return (value: string) => found.test(shown(value));
+      return (value: string) => found.test(value.replace(/\s+/g, " ").trim());
     }
     const target = normalize(wanted);
 
-    return (value: string) => normalize(value) === target;
+    return whole
+      ? (value: string) => normalize(value) === target
+      : (value: string) => normalize(value).includes(target);
   };
 
-  const within = (wanted: Wanted) => {
-    if (typeof wanted !== "string") return equal(wanted);
-    const target = normalize(wanted);
-
-    return (value: string) => normalize(value).includes(target);
-  };
+  /** Whether a value's words appear, whole and in order, among a text's: "BTC" not in "WBTC". */
+  const holds = (text: string, value: string) =>
+    ` ${normalize(text)} `.includes(` ${normalize(value)} `);
 
   /** Whether a candidate meets every rule a query gives; a rule left out always holds. */
   const compile = (request: Pick<FindRequest, "role" | "name" | "text" | "near">) => {
     const role = request.role === null ? null : normalize(request.role);
-    const name = request.name === null ? null : equal(request.name);
-    const text = request.text === null ? null : within(request.text);
-    const near = request.near === null ? null : within(request.near);
+    const name = request.name === null ? null : rule(request.name, true);
+    const text = request.text === null ? null : rule(request.text, false);
+    const { near } = request;
 
     return (candidate: Candidate): boolean => {
       if (role !== null && normalize(candidate.role ?? "") !== role) return false;
@@ -85,11 +80,13 @@ export const match = () => {
       if (near === null) return true;
       const { row, column, label, heading } = candidate.context();
 
-      return [row, column, label, heading].some((value) => value !== undefined && near(value));
+      return [row, column, label, heading].some(
+        (value) => value !== undefined && holds(value, near),
+      );
     };
   };
 
-  return { compile, normalize };
+  return { compile, holds, normalize };
 };
 
 export type Match = ReturnType<typeof match>;

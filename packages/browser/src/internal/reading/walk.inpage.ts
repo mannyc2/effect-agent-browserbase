@@ -33,18 +33,12 @@ export const walk = (names: Names) => {
 
   const skipped = new Set("SCRIPT STYLE NOSCRIPT TEMPLATE HEAD META LINK SVG".split(" "));
 
-  const isVisible = (element: Element, style: CSSStyleDeclaration, rect: DOMRect): boolean => {
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      style.visibility === "collapse"
-    )
-      return false;
-    if (style.opacity === "0") return false;
-    if (element.getAttribute("aria-hidden") === "true") return false;
-
-    return rect.width > 0 || rect.height > 0 || style.display === "contents";
-  };
+  const isVisible = (element: Element, style: CSSStyleDeclaration, rect: DOMRect): boolean =>
+    style.display !== "none" &&
+    style.visibility === "visible" &&
+    style.opacity !== "0" &&
+    element.getAttribute("aria-hidden") !== "true" &&
+    (rect.width > 0 || rect.height > 0 || style.display === "contents");
 
   // Coordinate subtraction is valid only for an untransformed frame. Report the frame itself
   // otherwise: the real pixel input still works, and its receipt must not name a guessed child.
@@ -115,22 +109,14 @@ export const walk = (names: Names) => {
   };
 
   /** An element's box in top-document viewport pixels, through the frames around it. */
-  const boxOf = (element: Element) => {
-    const rect = element.getBoundingClientRect();
-    let { x, y } = rect;
+  const boxOf = (element: Element): { x: number; y: number; width: number; height: number } => {
+    const { x, y, width, height } = element.getBoundingClientRect();
+    const frame = element.ownerDocument.defaultView?.frameElement ?? null;
 
-    for (
-      let frame = element.ownerDocument.defaultView?.frameElement ?? null;
-      frame !== null;
-      frame = frame.ownerDocument.defaultView?.frameElement ?? null
-    ) {
-      const outer = frame.getBoundingClientRect();
+    if (frame === null) return { x, y, width, height };
+    const outer = boxOf(frame);
 
-      x += outer.left + frame.clientLeft;
-      y += outer.top + frame.clientTop;
-    }
-
-    return { x, y, width: rect.width, height: rect.height };
+    return { x: x + outer.x + frame.clientLeft, y: y + outer.y + frame.clientTop, width, height };
   };
 
   /** What is painted where pinned things sit, and every element holding it. */

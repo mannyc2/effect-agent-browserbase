@@ -3,45 +3,10 @@
  * an element's role, name and tag, plus its context (see `context.inpage.ts`). Its state is read
  * beside it. See `names.inpage.ts` for what a page-side part may use.
  */
-import { Schema } from "effect";
-
-import { Box, SubjectContext } from "../../BrowserEvent.ts";
 import type { Context, ContextReader } from "./context.inpage.ts";
 import type { FindRequest, Match } from "./match.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Walk } from "./walk.inpage.ts";
-
-/**
- * An element's state as its markup gives it. `checked` is there for what can be checked,
- * `expanded`, `selected` and `pressed` where the page says either way, and `level` for headings.
- */
-export const ElementState = Schema.Struct({
-  disabled: Schema.Boolean,
-  focused: Schema.Boolean,
-  checked: Schema.optional(Schema.Boolean),
-  expanded: Schema.optional(Schema.Boolean),
-  selected: Schema.optional(Schema.Boolean),
-  pressed: Schema.optional(Schema.Boolean),
-  level: Schema.optional(Schema.Int),
-});
-
-export const FindResultSchema = Schema.Struct({
-  found: Schema.Array(
-    Schema.Struct({
-      ref: Schema.String,
-      role: Schema.NullOr(Schema.String),
-      name: Schema.String,
-      tag: Schema.String,
-      context: SubjectContext,
-      box: Box,
-      inViewport: Schema.Boolean,
-      state: ElementState,
-    }),
-  ),
-  nextRef: Schema.Finite,
-});
-
-export type FindResult = typeof FindResultSchema.Type;
 
 export const subjects = (names: Names, walked: Walk, matching: Match, placing: ContextReader) => {
   const { interactiveRoles, isDisabled, isInput, nameOf, refFor, refs, roleOf, textOf } = names;
@@ -60,7 +25,7 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     element.hasAttribute("onclick") ||
     (style.cursor === "pointer" && !insidePointer && rect.width > 0 && rect.height > 0);
 
-  const stateOf = (element: Element, role: string | null): typeof ElementState.Type => {
+  const stateOf = (element: Element, role: string | null) => {
     // A state the page gives either way, or none.
     const given = (attribute: string) => {
       const value = element.getAttribute(attribute);
@@ -72,15 +37,16 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
       element.hasAttribute("aria-checked") ||
       ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role ?? "");
 
+    // In the order the outline shows them.
     return {
       disabled: isDisabled(element),
-      focused: element.ownerDocument.activeElement === element,
       checked: checkable
         ? (isInput(element) && element.checked) || element.getAttribute("aria-checked") === "true"
         : undefined,
       expanded: given("aria-expanded"),
       selected: given("aria-selected"),
       pressed: given("aria-pressed"),
+      focused: element.ownerDocument.activeElement === element,
       level:
         role === "heading"
           ? Number(element.getAttribute("aria-level")) ||
@@ -96,7 +62,7 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
    * heading is that control's or heading's, and an element is left out when one inside it
    * matches too: the smallest element showing the text is found, not each one around it.
    */
-  const find = (request: FindRequest): FindResult => {
+  const find = (request: FindRequest) => {
     if (refs.next < request.firstRef) refs.next = request.firstRef;
     const { at } = request;
     const matches = matching.compile(request);
@@ -133,26 +99,19 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     const named = (entry: Entry) => (entry.name ??= nameOf(entry.element, entry.role));
     const placed = (entry: Entry) => (entry.context ??= contextOf(entry.element, read));
 
+    const judge = (entry: Entry, text: () => string) =>
+      matches({ role: entry.role, name: () => named(entry), text, context: () => placed(entry) });
+
     // At a point, the one element a point action there would reach, if it meets the other rules.
-    const element = at === null ? null : hitAt(document, at.x, at.y);
+    const hit = at === null ? null : hitAt(document, at.x, at.y);
 
-    if (element !== null) {
-      const control = controlOf(element);
-      const box = boxOf(control);
+    if (hit !== null) {
+      const element = controlOf(hit);
+      const { x, y, width, height } = boxOf(element);
+      const rect = new DOMRect(x, y, width, height);
+      const entry: Entry = { element, rect, role: roleOf(element), matched: false };
 
-      const entry: Entry = {
-        element: control,
-        rect: new DOMRect(box.x, box.y, box.width, box.height),
-        role: roleOf(control),
-        matched: false,
-      };
-
-      entry.matched = matches({
-        role: entry.role,
-        name: () => named(entry),
-        text: () => textOf(control),
-        context: () => placed(entry),
-      });
+      entry.matched = judge(entry, () => textOf(element));
       entries.push(entry);
     }
     if (at === null)
@@ -191,12 +150,7 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
 
             if (parent !== undefined) parent.parts.push(closed.inline ? text : ` ${text} `);
             if (entry !== undefined && !(byText && closed.inside))
-              entry.matched = matches({
-                role: entry.role,
-                name: () => named(entry),
-                text: () => text,
-                context: () => placed(entry),
-              });
+              entry.matched = judge(entry, () => text);
             if (parent !== undefined) parent.inside ||= closed.inside || entry?.matched === true;
           },
         },
@@ -206,10 +160,12 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
       .filter((entry) => entry.matched)
       .map((entry) => ({
         ref: refFor(entry.element),
-        role: entry.role,
-        name: named(entry),
-        tag: entry.element.tagName.toLowerCase(),
-        context: placed(entry),
+        subject: {
+          role: entry.role,
+          name: named(entry),
+          tag: entry.element.tagName.toLowerCase(),
+          context: placed(entry),
+        },
         box: {
           x: Math.round(entry.rect.x),
           y: Math.round(entry.rect.y),

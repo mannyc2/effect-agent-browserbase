@@ -46,23 +46,6 @@ const subjectAttributes = (prefix: string, subject: Subject | undefined) =>
         [`${prefix}.tag`]: subject.tag,
       };
 
-/** The options an action was asked, without a number it refuses as not finite. */
-const recordable = (options: ActionOptions | undefined): ActionOptions | undefined => {
-  const finite = (value: number | undefined) =>
-    value === undefined || Number.isFinite(value) ? value : undefined;
-
-  return options === undefined
-    ? undefined
-    : {
-        ...options,
-        clickCount: finite(options.clickCount),
-        holdMillis: finite(options.holdMillis),
-        times: finite(options.times),
-        dx: finite(options.dx),
-        dy: finite(options.dy),
-      };
-};
-
 /** What an action's record keeps of its call. */
 export interface Call {
   readonly target?: string | undefined;
@@ -296,7 +279,7 @@ export const make = (
               page: id,
               name,
               target: info.target,
-              options: recordable(info.options),
+              options: Exit.isSuccess(exit) ? info.options : undefined,
               subject,
               to,
               box,

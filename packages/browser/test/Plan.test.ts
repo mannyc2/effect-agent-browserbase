@@ -43,8 +43,26 @@ const candidates = Arbitrary.map(Arbitrary.array(context, { maxLength: 6 }), (co
   contexts.map((one, index) => buy(one, `e${index + 1}`)),
 );
 
-const shape = (choice: ReturnType<typeof choose>) =>
-  choice._tag === "One" ? `One ${choice.found.ref}` : JSON.stringify(choice);
+// What `choose` decides, as a plain value: the element chosen, or why none was.
+const decide = (subject: Subject, found: ReadonlyArray<Found>) =>
+  Effect.runSync(
+    choose(subject, found).pipe(
+      Effect.map((one) => ({ _tag: "One" as const, found: one })),
+      Effect.catch((error) =>
+        Effect.succeed(
+          error._tag === "Ambiguous"
+            ? { _tag: "Ambiguous" as const, count: error.count }
+            : { _tag: error._tag },
+        ),
+      ),
+    ),
+  );
+
+const shape = (choice: {
+  readonly _tag: string;
+  readonly found?: Found;
+  readonly count?: number;
+}) => (choice.found === undefined ? JSON.stringify(choice) : `One ${choice.found.ref}`);
 
 // Whether a context names a row, read as words, independently of how `choose` reads it.
 const names = (subject: SubjectContext, row: string) =>
@@ -70,8 +88,8 @@ describe("Plan's choice of a subject", () => {
       ];
 
       assert.strictEqual(
-        shape(choose(buy(recorded).subject, turned)),
-        shape(choose(buy(recorded).subject, found)),
+        shape(decide(buy(recorded).subject, turned)),
+        shape(decide(buy(recorded).subject, found)),
       );
     },
   );
@@ -80,7 +98,7 @@ describe("Plan's choice of a subject", () => {
     "never chooses an element in another row or under another column",
     { recorded: context, found: candidates },
     ({ recorded, found }) => {
-      const choice = choose(buy(recorded).subject, found);
+      const choice = decide(buy(recorded).subject, found);
 
       if (choice._tag !== "One") return;
       const chosen = choice.found.subject.context;
@@ -98,11 +116,11 @@ describe("Plan's choice of a subject", () => {
     "finds a copy of what it chose as good, with no ordinal to prefer one",
     { recorded: context, found: candidates },
     ({ recorded, found }) => {
-      const choice = choose(buy(recorded).subject, found);
+      const choice = decide(buy(recorded).subject, found);
 
       if (choice._tag !== "One") return;
 
-      const copied = choose(buy(recorded).subject, [
+      const copied = decide(buy(recorded).subject, [
         ...found,
         buy(choice.found.subject.context, "e99"),
       ]);
@@ -118,10 +136,10 @@ describe("Plan's choice of a subject", () => {
     ({ recorded, found }) => {
       if (recorded.row === undefined) return;
       const subject = buy(recorded).subject;
-      const before = choose(subject, found);
+      const before = decide(subject, found);
 
       assert.strictEqual(
-        shape(choose(subject, [...found, buy({ row: "XRP" }, "e98")])),
+        shape(decide(subject, [...found, buy({ row: "XRP" }, "e98")])),
         shape(before._tag === "Missing" ? { _tag: "Drifted" } : before),
       );
     },
@@ -132,7 +150,7 @@ describe("Plan's choice of a subject", () => {
     { recorded: context, found: candidates },
     ({ recorded, found }) => {
       assert.strictEqual(
-        choose(buy(recorded).subject, found)._tag === "Missing",
+        decide(buy(recorded).subject, found)._tag === "Missing",
         found.length === 0,
       );
     },

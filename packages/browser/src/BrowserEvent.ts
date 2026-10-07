@@ -73,8 +73,7 @@ export type Box = typeof Box.Type;
 /**
  * What else an action was asked, where it changes what the action does: a click's button, count
  * and hold, how `type` enters its text, how often and how long `press` holds its keys, how far
- * `scroll` moves, and the options `select` chose. A number that is not finite, which the action
- * refuses, is left out.
+ * `scroll` moves, and the options `select` chose. Only a completed action records them.
  */
 export const ActionOptions = Schema.Struct({
   button: Schema.optional(Button),

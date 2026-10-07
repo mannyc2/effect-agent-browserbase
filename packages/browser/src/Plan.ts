@@ -25,8 +25,10 @@ import {
   type Navigated,
   Subject,
 } from "./BrowserEvent.ts";
-import { choose } from "./internal/reading/choose.ts";
+import { Ambiguous, choose, Drifted, Missing } from "./internal/reading/choose.ts";
 import type { Found, Page, Point, ReadyOptions, Target } from "./Page.ts";
+
+export { Ambiguous, Drifted, Missing } from "./internal/reading/choose.ts";
 
 const ViewportPoint = Schema.Struct({ x: Schema.Finite, y: Schema.Finite });
 
@@ -72,31 +74,6 @@ export class Plan extends Schema.Class<Plan>("effect-browser/Plan")({
   /** The input slots its steps type, in order; replay needs text for each. */
   get inputs(): ReadonlyArray<string> {
     return this.steps.flatMap((step) => (step.input === undefined ? [] : [step.input]));
-  }
-}
-
-/** Nothing on the page has the step's role and name. */
-export class Missing extends Schema.TaggedError<Missing>()("Missing", {}) {
-  override get message() {
-    return "nothing on the page has the recorded role and name";
-  }
-}
-
-/** Several elements match the step's subject equally well, and nothing tells them apart. */
-export class Ambiguous extends Schema.TaggedError<Ambiguous>()("Ambiguous", {
-  count: Schema.Int,
-}) {
-  override get message() {
-    return `${this.count} elements match the recorded subject equally well`;
-  }
-}
-
-/** The page is not where the recording was: another site, or the subject in another row. */
-export class Drifted extends Schema.TaggedError<Drifted>()("Drifted", {
-  detail: Schema.String,
-}) {
-  override get message() {
-    return this.detail;
   }
 }
 
@@ -189,23 +166,11 @@ export const locate = (page: Page, subject: Subject) =>
       ...(subject.role === null ? {} : { role: subject.role }),
     })
     .pipe(
-      Effect.map((found) => choose(subject, found)),
-      Effect.repeat({
+      Effect.flatMap((found) => choose(subject, found)),
+      Effect.retry({
         schedule: Schedule.spaced(Duration.millis(250)),
-        until: (choice) => choice._tag === "One",
         times: 8,
-      }),
-      Effect.flatMap((choice): Effect.Effect<Found, Missing | Ambiguous | Drifted> => {
-        switch (choice._tag) {
-          case "One":
-            return Effect.succeed(choice.found);
-          case "Missing":
-            return Effect.fail(new Missing());
-          case "Ambiguous":
-            return Effect.fail(new Ambiguous({ count: choice.count }));
-          case "Drifted":
-            return Effect.fail(new Drifted({ detail: "the subject is in another row or column" }));
-        }
+        while: (error) => error._tag !== "BrowserError",
       }),
       Effect.withSpan("Plan.locate", { attributes: { role: subject.role ?? "" } }),
     );
@@ -272,10 +237,7 @@ const take = (
     case "reload":
       return page.reload;
     case "press":
-      return page.press(step.target ?? "", {
-        times: options.times,
-        holdMillis: options.holdMillis,
-      });
+      return page.press(step.target ?? "", options);
     case "click":
       return aim(page, step.subject, step.point, step.box).pipe(
         Effect.flatMap((at) => page.click(at, options)),
@@ -296,9 +258,9 @@ const take = (
     // A scroll or a typing step may name no element: the page, or whatever has focus.
     case "scroll":
       return step.subject === undefined
-        ? page.scroll({ dx: options.dx, dy: options.dy })
+        ? page.scroll(options)
         : Effect.flatMap(aim(page, step.subject, step.point, step.box), (at) =>
-            page.scroll({ at, dx: options.dx, dy: options.dy }),
+            page.scroll({ ...options, at }),
           );
     case "type":
       return step.subject === undefined

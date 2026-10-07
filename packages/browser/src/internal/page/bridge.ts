@@ -25,11 +25,11 @@ import {
 } from "../input/guard.inpage.ts";
 import { type PointResult, targets } from "../input/targets.inpage.ts";
 import { context } from "../reading/context.inpage.ts";
-import { type FindRequest, match } from "../reading/match.inpage.ts";
+import { match } from "../reading/match.inpage.ts";
 import { names } from "../reading/names.inpage.ts";
 import { outline, type SnapshotRequest, type SnapshotResult } from "../reading/outline.inpage.ts";
 import { type Readiness, ready } from "../reading/ready.inpage.ts";
-import { type FindResult, subjects } from "../reading/subjects.inpage.ts";
+import { subjects, type Subjects } from "../reading/subjects.inpage.ts";
 import { text, type TextRequest, type TextResult } from "../reading/text.inpage.ts";
 import { walk } from "../reading/walk.inpage.ts";
 import { contextGone, type PageContext } from "./context.ts";
@@ -37,7 +37,7 @@ import { contextGone, type PageContext } from "./context.ts";
 export interface PageApi {
   readonly version: number;
   snapshot(request: SnapshotRequest): SnapshotResult;
-  find(request: FindRequest): FindResult;
+  find: Subjects["find"];
   text(request: TextRequest): TextResult;
   ready(): Promise<Readiness>;
   point(target: string | { readonly x: number; readonly y: number }, scroll?: boolean): PointResult;
@@ -95,7 +95,7 @@ const install = (
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
-    ready: makeReady(walked).check,
+    ready: makeReady(texts).check,
     point: located.point,
     scrollPlan: located.scrollPlan,
     viewport: read.viewport,
