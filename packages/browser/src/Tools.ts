@@ -17,9 +17,11 @@ import {
   Duration,
   Effect,
   Option,
+  Predicate,
   Ref,
   Result,
   Schema,
+  SchemaTransformation,
   Semaphore,
   Stream,
 } from "effect";
@@ -30,16 +32,32 @@ import type { BrowserError } from "./BrowserError.ts";
 import * as Url from "./internal/url.ts";
 import * as Page from "./Page.ts";
 
-const ref = Schema.optional(Schema.String).annotate({
+// A parameter a model may leave out. Its JSON Schema allows null, as an optional one's does, and
+// models send null for one they mean to leave out, so null reads as absent rather than refused.
+const absent = <S extends Schema.Top>(
+  schema: S,
+  annotations: { readonly description?: string } = {},
+) =>
+  Schema.optionalKey(Schema.NullOr(schema).annotate(annotations)).pipe(
+    Schema.decodeTo(
+      Schema.optional(Schema.toType(schema)),
+      SchemaTransformation.transformOptional<S["Type"] | undefined, S["Type"] | null>({
+        decode: (input) => Option.filter(input, Predicate.isNotNullish),
+        encode: (output) => Option.filter(output, Predicate.isNotUndefined),
+      }),
+    ),
+  );
+
+const ref = absent(Schema.String, {
   description: "A ref from the latest snapshot, such as e12",
 });
 
-const x = Schema.optional(Schema.Finite).annotate({
-  description: "Viewport x in screenshot pixels, when there is no ref",
+const x = absent(Schema.Finite, {
+  description: "Viewport x in screenshot pixels; with y, used instead of a ref",
 });
 
-const y = Schema.optional(Schema.Finite).annotate({
-  description: "Viewport y in screenshot pixels, when there is no ref",
+const y = absent(Schema.Finite, {
+  description: "Viewport y in screenshot pixels; with x, used instead of a ref",
 });
 
 const tool = <const Name extends string, Parameters extends Schema.Struct.Fields>(
@@ -72,10 +90,10 @@ export const Snapshot = tool(
   "browser_snapshot",
   "Read the page as a text outline in which controls carry refs for the other tools. Covers the viewport unless full is set.",
   {
-    full: Schema.optional(Schema.Boolean).annotate({
+    full: absent(Schema.Boolean, {
       description: "Read the whole page, not just the viewport",
     }),
-    query: Schema.optional(Schema.String).annotate({
+    query: absent(Schema.String, {
       description: "Keep only lines containing this text",
     }),
   },
@@ -91,8 +109,8 @@ export const Click = tool("browser_click", "Click an element by ref, or a point 
   ref,
   x,
   y,
-  double: Schema.optional(Schema.Boolean),
-  button: Schema.optional(Schema.Literals(["left", "right", "middle"])),
+  double: absent(Schema.Boolean),
+  button: absent(Schema.Literals(["left", "right", "middle"])),
 });
 
 export const Hover = tool(
@@ -111,11 +129,11 @@ export const Type = tool(
   {
     text: Schema.String,
     ref,
-    append: Schema.optional(Schema.Boolean).annotate({
+    append: absent(Schema.Boolean, {
       description: "Keep the field's content and add to it",
     }),
-    submit: Schema.optional(Schema.Boolean).annotate({ description: "Press Enter afterwards" }),
-    prose: Schema.optional(Schema.Boolean).annotate({
+    submit: absent(Schema.Boolean, { description: "Press Enter afterwards" }),
+    prose: absent(Schema.Boolean, {
       description:
         "Allow corrected slips when humanized and replacing an explicit prose ref; sensitive fields stay exact",
     }),
@@ -127,10 +145,10 @@ export const Press = tool(
   "Press a key or chord, such as Enter, Escape, Space, ArrowDown or Control+A.",
   {
     keys: Schema.String,
-    times: Schema.optional(Schema.Int).annotate({
+    times: absent(Schema.Int, {
       description: "Press it this many times; defaults to 1",
     }),
-    holdMillis: Schema.optional(Schema.Finite).annotate({
+    holdMillis: absent(Schema.Finite, {
       description: "Hold the keys down this long",
     }),
   },
@@ -141,7 +159,7 @@ export const Scroll = tool(
   "Scroll the page, or whatever is under a ref or point, such as a list or a chart.",
   {
     direction: Schema.Literals(["down", "up", "right", "left"]),
-    pages: Schema.optional(Schema.Finite).annotate({
+    pages: absent(Schema.Finite, {
       description: "How far, in viewports; defaults to 0.8",
     }),
     ref,
@@ -176,9 +194,9 @@ export const Wait = tool(
   "browser_wait",
   "Wait for text to appear, for the screen to stop moving (reels, animations, loading), or for some seconds.",
   {
-    text: Schema.optional(Schema.String),
-    still: Schema.optional(Schema.Boolean),
-    seconds: Schema.optional(Schema.Finite).annotate({ description: "At most 30" }),
+    text: absent(Schema.String),
+    still: absent(Schema.Boolean),
+    seconds: absent(Schema.Finite, { description: "At most 30" }),
   },
 );
 
@@ -187,10 +205,10 @@ export const Tabs = tool(
   "List the tabs, switch to one, open a new one or close one.",
   {
     action: Schema.Literals(["list", "select", "new", "close"]),
-    index: Schema.optional(Schema.Int).annotate({
+    index: absent(Schema.Int, {
       description: "The tab's number in the list, for select and close",
     }),
-    url: Schema.optional(Schema.String).annotate({ description: "For new" }),
+    url: absent(Schema.String, { description: "For new" }),
   },
 );
 
@@ -371,10 +389,11 @@ const target = (op: {
   readonly x?: number | undefined;
   readonly y?: number | undefined;
 }) =>
-  op.ref !== undefined
-    ? Effect.succeed<Page.Target>(op.ref)
-    : op.x !== undefined && op.y !== undefined
-      ? Effect.succeed<Page.Target>({ x: op.x, y: op.y })
+  // A point is the more specific of the two, such as a spot on a canvas a ref names.
+  op.x !== undefined && op.y !== undefined
+    ? Effect.succeed<Page.Target>({ x: op.x, y: op.y })
+    : op.ref !== undefined
+      ? Effect.succeed<Page.Target>(op.ref)
       : Effect.fail("give a ref from the snapshot, or x and y from a screenshot");
 
 /** Where a model may go: web addresses, inline data and a blank page, never local files. */

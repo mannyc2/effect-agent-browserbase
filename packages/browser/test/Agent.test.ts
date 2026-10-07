@@ -233,6 +233,46 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("reads a null parameter as absent and clicks a point given with a ref", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/form");
+      const submit = yield* Effect.promise(() => page.playwright.locator("#submit").boundingBox());
+
+      if (submit === null) return yield* Effect.die("the Submit button has no box");
+
+      // As a model did on a hosted canvas: nulls for what it leaves out, and a point on the
+      // control it means alongside a ref it does not.
+      const model = scripted([
+        (prompt) => [
+          call("browser_type", {
+            ref: refIn(prompt, "textbox", "Amount"),
+            text: "25",
+            append: null,
+            submit: null,
+            prose: null,
+          }),
+          call("browser_click", {
+            ref: refIn(prompt, "textbox", "Amount"),
+            x: Math.round(submit.x + submit.width / 2),
+            y: Math.round(submit.y + submit.height / 2),
+            double: null,
+            button: null,
+          }),
+          finish,
+        ],
+        (prompt) => {
+          assert.isTrue(resultsIn(prompt).every((part) => part.isFailure === false));
+
+          return [call("done", { answer: "done" }), finish];
+        },
+      ]);
+
+      yield* Agent.run("Submit the order.").pipe(Effect.provide(model.layer));
+
+      assert.strictEqual(yield* read(page, "#outcome"), "Ordered 25 btc");
+    }),
+  );
+
   it.effect("halts on failure and answers every remaining call without executing it", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
