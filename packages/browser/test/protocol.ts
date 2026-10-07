@@ -19,6 +19,11 @@ export interface Command {
   readonly sessionId: string | undefined;
   /** The message's size on the wire. */
   readonly bytes: number;
+  /**
+   * The round trip it went out in. Commands sent while another awaits its answer share one, as
+   * they would share the latency of a remote browser. Screencast acknowledgements take none.
+   */
+  readonly round: number;
 }
 
 export interface Proxy {
@@ -104,19 +109,27 @@ const accept = (key: string) =>
 const relay = (browser: URL, proxy: Proxy) =>
   createServer((client) => {
     const attaching = new Set<number>();
+    const awaiting = new Set<number>();
+    let rounds = 0;
     let upstream: WebSocket | undefined;
     let request = Buffer.alloc(0);
 
     const fromClient = messages(
       (text) => {
         const { id, method, sessionId } = JSON.parse(text) as Command;
-        const command = { id, method, sessionId, bytes: Buffer.byteLength(text) };
+        const acknowledging = method === "Page.screencastFrameAck";
+
+        if (!acknowledging && awaiting.size === 0) rounds++;
+        const command = { id, method, sessionId, bytes: Buffer.byteLength(text), round: rounds };
 
         proxy.commands.push(command);
         if (method === "Target.attachToTarget") attaching.add(id);
         if (proxy.swallow(command))
           client.write(frame(JSON.stringify({ id, result: {}, sessionId })));
-        else upstream?.send(text);
+        else {
+          if (!acknowledging) awaiting.add(id);
+          upstream?.send(text);
+        }
       },
       () => {
         // Answer the closing handshake, or the client waits for it.
@@ -147,7 +160,10 @@ const relay = (browser: URL, proxy: Proxy) =>
           readonly result?: { readonly sessionId?: string };
         };
 
-        if (id !== undefined) proxy.answers.set(id, Buffer.byteLength(data));
+        if (id !== undefined) {
+          proxy.answers.set(id, Buffer.byteLength(data));
+          awaiting.delete(id);
+        }
         if (id !== undefined && attaching.delete(id) && result?.sessionId !== undefined)
           proxy.attached.add(result.sessionId);
         client.write(frame(data));
