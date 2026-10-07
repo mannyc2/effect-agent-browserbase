@@ -42,6 +42,14 @@ interface NativeFrame {
   readonly sessionId: number;
 }
 
+interface Held {
+  readonly frame: Frame;
+  readonly timestamp: number;
+  readonly device: Size;
+  /** How many frames had been received when it arrived. */
+  readonly order: number;
+}
+
 interface Generation {
   readonly subscribers: Set<Queue.Queue<Envelope>>;
   readonly calibration: Estimate;
@@ -53,6 +61,10 @@ interface Generation {
   predecessor: number | undefined;
   failure: BrowserError | undefined;
   stopReply: Promise<void> | undefined;
+  /** The viewport the page's own frames fill: as last read, or until a read, the first frame's. */
+  viewport: Size | null;
+  /** The newest frame whose device is not the viewport's size, until a read decides it. */
+  held: Held | undefined;
 }
 
 export interface Controller {
@@ -66,6 +78,15 @@ export interface Controller {
 const replyCapacity = 32;
 const subscriberCapacity = 16;
 const deadline = Duration.seconds(2);
+
+// Device sizes can be fractional at some scale factors; the page reports whole pixels.
+const sameSize = (left: Size, right: Size) =>
+  Math.abs(left.width - right.width) < 1 && Math.abs(left.height - right.height) < 1;
+
+// A frame is its device scaled to fit, so it keeps the device's shape to within a pixel a side.
+const sameShape = (image: Size, device: Size) =>
+  Math.abs(image.width * device.height - image.height * device.width) <
+  device.width + device.height;
 
 export const make = (options: Options) =>
   Effect.gen(function* () {
@@ -83,14 +104,82 @@ export const make = (options: Options) =>
     let accepted = 0;
     let outOfOrder = 0;
     let missingTimestamp = 0;
+    let foreignSize = 0;
     let subscriberMissed = 0;
     let gapCount = 0;
     let gapTotal = 0;
     let gapMin: number | null = null;
     let gapMax: number | null = null;
     let gapLast: number | null = null;
+    // Wakes the reader that decides held frames; wakes during a read coalesce into one more pass.
+    const wake = yield* Queue.sliding<void>(1);
 
     const now = () => Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6;
+
+    // A page too busy to report its viewport in time reads as null.
+    const readViewport = options.viewport.pipe(
+      Effect.interruptible,
+      Effect.timeoutOrElse({ duration: deadline, orElse: () => Effect.succeed(null) }),
+      Effect.orElseSucceed(() => null),
+      Effect.provideService(Clock.Clock, options.clock),
+    );
+
+    const accept = (current: Generation, frame: Frame, timestamp: number) => {
+      if (current.predecessor !== undefined) {
+        const gap = timestamp - current.predecessor;
+
+        gapCount++;
+        gapTotal += gap;
+        gapMin = gapMin === null ? gap : Math.min(gapMin, gap);
+        gapMax = gapMax === null ? gap : Math.max(gapMax, gap);
+        gapLast = gap;
+      }
+      current.predecessor = timestamp;
+      accepted++;
+      latest = Option.some(frame);
+      history = [...history.filter((kept) => kept.hostTime >= frame.hostTime - keepMillis), frame];
+      for (const subscriber of current.subscribers)
+        Queue.offerUnsafe(subscriber, { _tag: "Frame", sequence: accepted, frame });
+    };
+
+    const discard = (current: Generation) => {
+      if (current.held === undefined) return;
+      current.held = undefined;
+      foreignSize++;
+    };
+
+    // Reading the viewport decides the running capture's held frame. A viewport of the frame's
+    // device size means the page really changed size, and the frame is delivered. Any other
+    // answer, or none, drops it once the read began after it arrived; an earlier read cannot rule
+    // out a resize, so the frame gets a read of its own.
+    const settle: Effect.Effect<void> = Effect.suspend(() => {
+      const current = generation;
+
+      if (current?.held === undefined) return Effect.void;
+      const since = received;
+
+      return readViewport.pipe(
+        Effect.flatMap((viewport) => {
+          if (generation !== current) return settle;
+          if (viewport !== null) current.viewport = viewport;
+          const held = current.held;
+
+          if (held === undefined) return Effect.void;
+          if (viewport !== null && sameSize(held.device, viewport)) {
+            current.held = undefined;
+            accept(current, held.frame, held.timestamp);
+
+            return Effect.void;
+          }
+          if (held.order > since) return settle;
+          discard(current);
+
+          return Effect.void;
+        }),
+      );
+    });
+
+    yield* Queue.take(wake).pipe(Effect.andThen(settle), Effect.forever, Effect.forkScoped);
 
     const notifyFailure = (current: Generation, failure: BrowserError) => {
       if (current.failure !== undefined) return;
@@ -102,6 +191,7 @@ export const make = (options: Options) =>
     const stop = (current: Generation) => {
       if (!current.accepting) return;
       current.accepting = false;
+      discard(current);
       options.cdp.off("Page.screencastFrame", current.onFrame);
       let response: Promise<unknown>;
 
@@ -194,14 +284,8 @@ export const make = (options: Options) =>
             const calibration = yield* options.calibrate.pipe(Effect.interruptible);
 
             // A page too busy to report its viewport is still captured, at device size.
-            const size =
-              screencast.size ??
-              (yield* options.viewport.pipe(
-                Effect.interruptible,
-                Effect.timeoutOrElse({ duration: deadline, orElse: () => Effect.succeed(null) }),
-                Effect.orElseSucceed(() => null),
-                Effect.provideService(Clock.Clock, options.clock),
-              ));
+            const viewport = screencast.size === undefined ? yield* readViewport : null;
+            const size = screencast.size ?? viewport;
 
             if (closed) return yield* options.error(new Error("Target page has been closed"));
 
@@ -214,6 +298,8 @@ export const make = (options: Options) =>
               predecessor: undefined,
               failure: undefined,
               stopReply: undefined,
+              viewport,
+              held: undefined,
               onFrame: (native) => {
                 if (!created.accepting) return;
                 received++;
@@ -263,12 +349,22 @@ export const make = (options: Options) =>
                 }
                 const receivedAt = now();
                 const data = Buffer.from(native.data, "base64");
+                const image = options.imageSize(data);
 
-                const size = options.imageSize(data) ??
-                  created.size ?? {
-                    width: native.metadata.deviceWidth,
-                    height: native.metadata.deviceHeight,
-                  };
+                const device = {
+                  width: native.metadata.deviceWidth,
+                  height: native.metadata.deviceHeight,
+                };
+
+                // A clipped or scaled screenshot of the page, from any session, draws into its
+                // running screencast without resizing the page. Its frames show a picture of
+                // another shape than their device, or a device of another size than the viewport.
+                if (image !== undefined && !sameShape(image, device)) {
+                  foreignSize++;
+
+                  return;
+                }
+                const size = image ?? created.size ?? device;
 
                 const frame = new Frame({
                   page: options.id,
@@ -283,24 +379,16 @@ export const make = (options: Options) =>
                   height: size.height,
                 });
 
-                if (created.predecessor !== undefined) {
-                  const gap = timestamp - created.predecessor;
+                // A newer frame always supersedes a held one.
+                discard(created);
+                created.viewport ??= device;
+                if (!sameSize(device, created.viewport)) {
+                  created.held = { frame, timestamp, device, order: received };
+                  Queue.offerUnsafe(wake, undefined);
 
-                  gapCount++;
-                  gapTotal += gap;
-                  gapMin = gapMin === null ? gap : Math.min(gapMin, gap);
-                  gapMax = gapMax === null ? gap : Math.max(gapMax, gap);
-                  gapLast = gap;
+                  return;
                 }
-                created.predecessor = timestamp;
-                accepted++;
-                latest = Option.some(frame);
-                history = [
-                  ...history.filter((kept) => kept.hostTime >= frame.hostTime - keepMillis),
-                  frame,
-                ];
-                for (const subscriber of created.subscribers)
-                  Queue.offerUnsafe(subscriber, { _tag: "Frame", sequence: accepted, frame });
+                accept(created, frame, timestamp);
               },
             };
 
@@ -431,6 +519,7 @@ export const make = (options: Options) =>
             accepted,
             outOfOrder,
             missingTimestamp,
+            foreignSize,
             subscriberMissed,
             gaps: {
               count: gapCount,

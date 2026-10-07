@@ -102,6 +102,8 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Cap
   accepted: Count,
   outOfOrder: Count,
   missingTimestamp: Count,
+  /** Frames that did not show the viewport, as a clipped screenshot's do in a screencast. */
+  foreignSize: Count,
   subscriberMissed: Count,
   gaps: Schema.Struct({
     count: Count,

@@ -263,7 +263,13 @@ Playwright's platform behavior, and Unicode insertion has no timestamp field. St
 unstamped so the measurement remains observable.
 
 `Page.captureStats` reports lifetime received and accepted frames, missing timestamps, frames
-dropped out of order, observed subscriber losses and paint-time gap totals/minimum/maximum/last.
+dropped out of order or for not showing the viewport (`foreignSize`), observed subscriber losses
+and paint-time gap totals/minimum/maximum/last. Chromium draws a clipped or scaled screenshot of
+the page, taken from any session, into its running screencast. Readers never receive a frame of
+another shape than its device, or whose device is not the viewport's size; after a real viewport
+change, frames of the new size reach them once the page reports that viewport. A crop with the
+viewport's own proportions still passes where Chromium keeps the device's size during the capture,
+as it does in browsers launched through Playwright, `Chromium.layer` included.
 Concurrent readers share one native screencast and its quality and size: a reader without options
 joins whatever is running, and one whose explicit options differ fails with `InvalidRequest` rather
 than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
