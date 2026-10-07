@@ -201,8 +201,11 @@ export interface Settings {
 
 /** A window of changes, in host monotonic milliseconds on the browser's clock. */
 export interface ChangesOptions {
-  /** Where the window starts; defaults to all the record keeps, up to a minute. */
-  readonly since?: number | undefined;
+  /**
+   * Where the window starts: the changes a previous read returned, which it then continues
+   * exactly, or a time. Defaults to all the record keeps, up to a minute.
+   */
+  readonly since?: Changes | number | undefined;
   /** Where it ends, such as a frame's capture time; defaults to now. */
   readonly until?: number | undefined;
 }

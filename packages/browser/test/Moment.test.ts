@@ -250,7 +250,7 @@ describe("a moment's account of what changed", () => {
     });
 
   const recorded = (changes: ReadonlyArray<Change>, from = 0) =>
-    new Changes({ from, at: 10_000, truncated: 0, changes });
+    new Changes({ from, at: 10_000, cursor: 0, truncated: 0, changes });
 
   const price = { beside: "Price", heading: "Bitcoin" };
 
@@ -419,6 +419,7 @@ describe("a moment's account of what changed", () => {
       changes: new Changes({
         from: 0,
         at: 10_000,
+        cursor: 0,
         truncated: 40,
         changes: [...ticks, placed],
       }),
@@ -888,6 +889,72 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.isAbove(placed, -1);
       assert.isBelow(placed, text.indexOf(" cells in column "));
       assert.include(text, "The page changed too much to keep");
+    }),
+  );
+
+  it.effect("continues each read exactly where the last ended, on the clock frames use", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const page = yield* start("/quote");
+
+      const run = <A>(script: () => A) => Effect.promise(() => page.playwright.evaluate(script));
+
+      yield* run(() => {
+        const price = document.querySelector("#price");
+
+        if (price !== null) price.textContent = "0";
+      });
+      let previous = yield* page.changes();
+      const reads: Array<Changes> = [];
+
+      // A counter ticks every 20 ms while reads follow one another every 80 ms.
+      yield* run(() => {
+        const price = document.querySelector("#price");
+        let count = 0;
+
+        Object.assign(window, {
+          counter: setInterval(() => {
+            if (price !== null) price.textContent = String(++count);
+          }, 20),
+        });
+      });
+      for (let index = 0; index < 12; index++) {
+        yield* Effect.sleep(Duration.millis(80));
+        previous = yield* page.changes({ since: previous });
+        reads.push(previous);
+      }
+      yield* run(() => clearInterval(Reflect.get(window, "counter")));
+
+      const prices = reads.flatMap((read) =>
+        read.changes.filter((change) => change.context.beside === "Price"),
+      );
+
+      assert.strictEqual(prices.length, reads.length);
+      // Each read begins with the value the last one ended on, and together they count every tick.
+      prices.slice(1).forEach((change, index) => {
+        assert.strictEqual(change.before, prices[index]?.after);
+      });
+      assert.strictEqual(
+        prices.reduce((total, change) => total + change.count, 0),
+        Number(prices.at(-1)?.after) - Number(prices[0]?.before),
+      );
+      for (const read of reads) assert.strictEqual(read.truncated, 0);
+
+      // A change is placed on the host clock where it happened.
+      yield* Effect.sleep(Duration.millis(100));
+      const before = yield* browser.now;
+
+      yield* run(() => {
+        const price = document.querySelector("#price");
+
+        if (price !== null) price.textContent = "done";
+      });
+      const after = yield* browser.now;
+      const [done] = (yield* page.changes({ since: previous })).changes;
+
+      assert.strictEqual(done?.after, "done");
+      assert.isAtLeast(done?.at ?? -Infinity, before - 10);
+      assert.isAtMost(done?.at ?? Infinity, after + 10);
     }),
   );
 

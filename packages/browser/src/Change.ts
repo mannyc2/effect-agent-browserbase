@@ -66,8 +66,13 @@ export class Change extends Schema.Class<Change>("effect-browser/Change")({
 export class Changes extends Schema.Class<Changes>("effect-browser/Changes")({
   /** Where the record is whole: changes before it, if any, are unknown. */
   from: Schema.Finite,
-  /** Where the window ends. */
+  /** Where the window ends: its `until`, or when the page was read. */
   at: Schema.Finite,
+  /**
+   * Where the window ends on the page's own clock. Give these changes as the next read's `since`
+   * and the two windows meet exactly, so consecutive reads neither miss nor repeat a change.
+   */
+  cursor: Schema.Finite,
   /** Changes in the window the record did not keep, at least; 0 when it kept them all. */
   truncated: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Oldest first, by when each began to change. */

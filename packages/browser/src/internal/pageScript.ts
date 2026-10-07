@@ -181,6 +181,8 @@ export interface ChangeRecord {
 
 export interface ChangesResult {
   readonly now: number;
+  /** Where the window ended: its `until`, or now if that is later. */
+  readonly until: number;
   /** Where the record is whole: when it started, or a minute ago. */
   readonly from: number;
   /** Changes in the window the record did not keep. */
@@ -2536,7 +2538,7 @@ export const install = (): PageApi => {
     if (started === undefined) {
       start();
 
-      return { now, from: now, truncated: 0, records: [] };
+      return { now, until: now, from: now, truncated: 0, records: [] };
     }
     for (const track of tracks.values())
       if ((track.samples.at(-1)?.at ?? now) < now - retention) drop(track);
@@ -2549,7 +2551,8 @@ export const install = (): PageApi => {
     waiting.clear();
 
     const after = since ?? Number.NEGATIVE_INFINITY;
-    const upTo = until ?? now;
+    // A window cannot end later than now: what changes after it belongs to the next read.
+    const upTo = Math.min(until ?? now, now);
     const headers = new Map<Element, Element | null>();
     const records: Array<ChangeRecord> = [];
 
@@ -2561,6 +2564,7 @@ export const install = (): PageApi => {
 
     return {
       now,
+      until: upTo,
       from: Math.max(started, now - retention),
       truncated: lost.filter((at) => at > after && at <= upTo).length,
       records: records.toSorted((left, right) => left.startedAt - right.startedAt),
@@ -2733,6 +2737,7 @@ const ChangeRecordSchema = Schema.Struct({
 
 export const ChangesResultSchema = Schema.Struct({
   now: Schema.Finite,
+  until: Schema.Finite,
   from: Schema.Finite,
   truncated: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   records: Schema.Array(ChangeRecordSchema),

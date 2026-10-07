@@ -41,8 +41,9 @@
   main-thread busy time per 3 s was 96 ms without the script and 536 ms with the first recorder on
   any page the library read; now a page never asked stays at 96 ms and a recording one takes 250 ms,
   where an empty observer alone takes 165. A read covers any window up to a minute, `since` to
-  `until`, on the clock mapping frames use; a moment reads up to its last frame. `toPrompt` leads
-  with news, then what keeps changing, collapsing a column's cells into one line, and names no
+  `until`, on the clock mapping frames use; given the last read's changes, a read continues on the
+  page's own clock exactly where that one ended, and a moment reads up to its last frame. `toPrompt`
+  leads with news, then what keeps changing, collapsing a column's cells into one line, and names no
   action as a cause: a time-only rule credited clicks with ticks that followed them. Actions before
   the record began are still listed as steps, by role and name, never by ref, and
   `{ actions: "all" }` lists them all. Whether this narrates better than steps is not yet measured.

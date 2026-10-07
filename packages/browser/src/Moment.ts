@@ -115,10 +115,19 @@ export const capture = Effect.fn("Moment.capture")(function* (
     {
       picture: page.currentFrame.pipe(
         Effect.flatMap((current) =>
-          page.changes({ since: start(current.hostTime), until: current.hostTime }).pipe(
-            Effect.option,
-            Effect.map((record) => ({ current, record })),
-          ),
+          page
+            .changes({
+              // A moment that follows another continues its changes exactly where they ended.
+              since:
+                isMoment(options.since) && options.since.changes !== undefined
+                  ? options.since.changes
+                  : start(current.hostTime),
+              until: current.hostTime,
+            })
+            .pipe(
+              Effect.option,
+              Effect.map((record) => ({ current, record })),
+            ),
         ),
       ),
       snapshot:

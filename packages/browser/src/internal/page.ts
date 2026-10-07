@@ -86,6 +86,8 @@ const closedPattern =
   /has been closed|Target closed|Session closed|browser has disconnected|Target page, context or browser/i;
 
 /** A call to the page script, its arguments quoted as JavaScript literals. */
+const isChanges = Schema.is(Changes);
+
 const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
@@ -2060,7 +2062,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   // so a window that ends at a frame's capture time ends where the picture does.
   const changes = (options: ChangesOptions = {}) =>
     Effect.gen(function* () {
-      const { since, until } = options;
+      const { until } = options;
+      // The changes a previous read returned give its window's end on the page's own clock.
+      const previous = isChanges(options.since) ? options.since : undefined;
+      const since = isChanges(options.since) ? options.since.at : options.since;
 
       if ([since, until].some((time) => time !== undefined && !Number.isFinite(time)))
         return yield* failWith(
@@ -2074,7 +2079,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       const result = yield* evaluate(
         "changes",
-        scriptCall("changes", toPage(since), toPage(until)),
+        scriptCall("changes", previous?.cursor ?? toPage(since), toPage(until)),
       ).pipe(Effect.flatMap(decodeWith("changes", Script.ChangesResultSchema)));
 
       const host = (pageTime: number) => BrowserClock.toHostTime(estimate, pageTime);
@@ -2082,7 +2087,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       return new Changes({
         from: Math.max(host(result.from), since ?? Number.NEGATIVE_INFINITY),
-        at: Math.min(host(result.now), until ?? Number.POSITIVE_INFINITY),
+        at: Math.min(host(result.until), until ?? Number.POSITIVE_INFINITY),
+        cursor: result.until,
         truncated: result.truncated,
         changes: result.records.map(
           (record) =>
