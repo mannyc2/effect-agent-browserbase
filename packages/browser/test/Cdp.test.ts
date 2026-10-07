@@ -8,7 +8,9 @@ import { chromium } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
+import type { Page } from "../src/Page.ts";
 import * as Tools from "../src/Tools.ts";
+import { behindProxy } from "./protocol.ts";
 
 const freePort = Effect.callback<number>((resume) => {
   const server = createServer();
@@ -137,4 +139,49 @@ it.live("captures an unsized page at its CSS viewport and reuses current frames"
     }
     assert.isAbove(reused, 0);
   }).pipe(Effect.scoped, Effect.provide(attachedWith(["--force-device-scale-factor=2"]))),
+);
+
+// Animation frames a page runs in a second, read from its own counter.
+const paintRate = (page: Page) =>
+  Effect.gen(function* () {
+    const count = Effect.promise(() =>
+      page.playwright.evaluate(() => (window as unknown as { painted: number }).painted),
+    );
+
+    const before = yield* count;
+
+    yield* Effect.sleep("1 second");
+
+    return (yield* count) - before;
+  });
+
+const painting = `data:text/html,${encodeURIComponent(
+  "<script>window.painted = 0; (function tick() { window.painted++; requestAnimationFrame(tick); })();</script>",
+)}`;
+
+// Over raw CDP a tab behind another is hidden and stops painting, unless some session holds focus
+// emulation on it. Playwright sends it on its own sessions; the proxy swallows those, so only the
+// library's own session can keep the page behind painting. Planting its absence too, the same
+// page stops: the measurement can see a page that is not painting.
+it.live("keeps a page behind painting with its own focus emulation", () =>
+  Effect.gen(function* () {
+    const behind = (plantedOff: boolean) =>
+      Effect.gen(function* () {
+        const proxy = yield* behindProxy();
+
+        proxy.swallow = (command) =>
+          command.method === "Emulation.setFocusEmulationEnabled" &&
+          (plantedOff || !proxy.attached.has(command.sessionId ?? ""));
+        const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+        const page = yield* browser.newPage(painting);
+
+        // The newest tab is in front.
+        yield* browser.newPage("about:blank");
+
+        return yield* paintRate(page);
+      }).pipe(Effect.scoped);
+
+    assert.isAbove(yield* behind(false), 20);
+    assert.strictEqual(yield* behind(true), 0);
+  }),
 );

@@ -221,6 +221,7 @@ const setup = Effect.fnUntraced(function* (
       return ++sequence;
     },
     recentEvents: Effect.sync(() => [...track]),
+    focused: Effect.void,
     settings: {
       humanize: options.humanize ?? true,
       actionTimeout: Duration.seconds(30),

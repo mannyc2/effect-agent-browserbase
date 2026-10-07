@@ -138,9 +138,8 @@ const describeWith = (
       recentFrames: page.recentFrames.pipe(
         Effect.tap((frames) => Effect.sync(() => histories.push(frames))),
       ),
-      currentFrame: page.currentFrame.pipe(
-        Effect.tap((frame) => Effect.sync(() => currents.push(frame))),
-      ),
+      frame: (options) =>
+        page.frame(options).pipe(Effect.tap((frame) => Effect.sync(() => currents.push(frame)))),
     };
 
     const model = yield* LanguageModel.make({
@@ -377,9 +376,11 @@ describe("understanding evidence", () => {
 
   it.live("waits for the final browser paint when frame delivery is delayed", () =>
     Effect.gen(function* () {
-      const { outcome, prompts, history, frameAfter } = yield* describeWith("order-filled", order, {
-        frameDelayMillis: 500,
-      });
+      const { outcome, prompts, history, current, frameAfter } = yield* describeWith(
+        "order-filled",
+        order,
+        { frameDelayMillis: 500 },
+      );
 
       const prompt = prompts[0];
 
@@ -390,10 +391,16 @@ describe("understanding evidence", () => {
 
       assert.isTrue(history.some((frame) => paintTime(frame) < frameAfter));
       // Delayed delivery can also lose the settling repaint. Either a retained paint after the
-      // barrier is final, or, with none retained, a fresh screenshot taken after the barrier is.
+      // barrier is final, or a fresh screenshot taken after the barrier is: a frame stands in for
+      // the page only while it was painted at most 250 ms ago, and these arrive 500 ms late.
       if (final === undefined) {
         assert.include(outcome.detail, "final frame from a fresh screenshot");
-        assert.isTrue(history.every((frame) => paintTime(frame) < frameAfter));
+        assert.isTrue(
+          history.every(
+            (frame) =>
+              paintTime(frame) < frameAfter || (current?.hostTime ?? 0) - frame.hostTime > 250,
+          ),
+        );
       } else assert.isAtLeast(paintTime(final), frameAfter);
     }),
   );

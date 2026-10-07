@@ -236,12 +236,27 @@ Compare these stamps only within that clock: they are not epoch dates or compara
 milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
 Screenshot fallbacks have only a host capture interval; their `timestamp` getter is undefined.
 Moment windows and frame captions use `hostTime`, so delayed delivery cannot make old paint current.
-`Page.screenshot({ fresh: true })` bypasses the frame cache. A cached frame is reused only while no
-action is changing the page, if it was painted after the page's latest submitted input (including
-input of an interrupted action) and delivered within the last 250 ms: a screencast sends only
-changes and can miss a final paint, so a page that stopped changing gets a new capture. `Page.currentFrame` applies the same rule and
-returns the new capture as a `Screenshot`-timed frame. A `Moment`'s last frame comes from it, so a
-stopped capture, a lost final paint or later input never presents older paint as the moment.
+A picture states how old it may be. `Page.frame({ maxAge, after })` and `Page.screenshot` serve the
+newest screencast frame when it has the viewport's size and was painted at most `maxAge` ago, at the
+earliest its timing allows: 250 ms by default, while 0 always takes a new screenshot. With
+`after: "input"` the frame must also follow the page's latest submitted input, including input of
+an interrupted action, while no action is changing the page: what a caller that has just acted
+needs. A screencast sends only changes and can miss a final paint, so a frame is only ever as
+current as its age. Otherwise a new screenshot is taken, which `frame` returns as a
+`Screenshot`-timed frame. `observe` and a `Moment`'s last frame use `after: "input"`, so a stopped
+capture, a lost final paint or later input never presents older paint as the page an action left.
+
+A new picture goes on the page's own protocol session. Where a device pixel is a CSS pixel and
+nothing is cropped, it is one `Page.captureScreenshot`; a crop, or another device pixel ratio, adds
+the page's layout metrics for Playwright's clip formula. Over CDP the page's first picture also
+learns its viewport. Where Playwright emulates the viewport, as `Chromium.layer` does, a crop or a
+scaled picture is Playwright's own screenshot, on its own session: a clipped capture on another
+session would clear that emulation when it restores its own.
+
+Reads go to the page script in an isolated world. The page's own session registers the script at the
+library's first read of the page, so every later document runs it from its start: a document's
+first read takes two round trips and later reads one. Tabs the library only tracks are left alone,
+and the clock probe runs in a world of its own.
 Every operation is recorded as an `Action`, also when its caller interrupts it. An element or point
 action records its `subject`, and a drag where it ended (`to`): the role, accessible name and tag
 of what it found, read as the input was sent. A ref is reused by later outlines, so read `subject`
@@ -268,17 +283,23 @@ Playwright's platform behavior, and Unicode insertion has no timestamp field. St
 unstamped so the measurement remains observable.
 
 `Page.captureStats` reports lifetime received and accepted frames, missing timestamps, frames
-dropped out of order or for their size (`foreignSize`), observed subscriber losses and paint-time
-gap totals/minimum/maximum/last. Chromium draws a clipped or scaled screenshot of the page, taken
+dropped out of order, for their size (`foreignSize`) or for being painted during one of the
+library's own clipped pictures (`duringPictures`), observed subscriber losses and paint-time gap
+totals/minimum/maximum/last. Chromium draws a clipped or scaled screenshot of the page, taken
 from any session, into its running screencast. Readers never receive a frame whose picture has
 another shape than its device. Frames of another device size wait, in order: the page's own size
 returning drops them, while the page reporting a viewport of their size, or their lasting a second,
 delivers them as a real resize, so a page that cannot answer, or that measures in other units as
 under browser zoom, is never stalled. `foreignSize` therefore also counts some of the page's own
 frames: those of a new size still unconfirmed when another size replaced it, when the capture
-stopped, or beyond the 16 held. A crop with the viewport's own proportions still passes where
-Chromium keeps the device's size during the capture, as in browsers launched through Playwright,
-`Chromium.layer` included.
+stopped, or beyond the 16 held. The library's own clipped pictures are left out by time instead:
+every frame painted from the picture's call until 10 ms after its reply is dropped, the page's own
+included, so a crop with the viewport's own proportions never reaches readers either. Such a crop
+taken by someone else still passes where Chromium keeps the device's size during the capture, as in
+browsers launched through Playwright, `Chromium.layer` included.
+Each page's own session holds focus emulation, so a tab behind another keeps painting and its
+capture keeps delivering, whatever else is attached; a capture starts once the browser has
+confirmed it.
 Concurrent readers share one native screencast and its quality and size: a reader without options
 joins whatever is running, and one whose explicit options differ fails with `InvalidRequest` rather
 than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
@@ -357,9 +378,13 @@ records except text: the target, the subject's role, name and tag, whether input
 `queuedMillis` spent waiting for admission and the locks, and a failure's reason as `error.type`.
 `Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
-`Page.observe`, `Page.snapshot`, `Page.screenshot` (its `source` a reused screencast frame or a new
-capture), `Page.zoom` and the waits are spans, and so is each round trip to the page's script
-(`Page.evaluate`). `Chromium.launch`, `Cdp.connect`, `Browser.calibrate` and `Browser.newPage`
+`Page.observe`, `Page.snapshot`, `Page.screenshot` and `Page.frame` (with `source`: a reused
+screencast `frame` or a new `screenshot`), `Page.zoom` and the waits are spans, and so is each round
+trip to the page's script (`Page.evaluate`) and its registration (`Page.register`). Each page span
+reports its cost on the page's own protocol session: `calls`, `bytesOut` and `bytesIn` (their
+parameters and results as JSON) and `waitedMillis`, how long at least one call awaited its reply.
+An operation inside another counts toward both. Calls Playwright makes on its own sessions, such as
+navigation, are not counted. `Chromium.launch`, `Cdp.connect`, `Browser.calibrate` and `Browser.newPage`
 cover opening a browser; `Browserbase.open` records its session's id and region, and
 `Browserbase.holdContext` and `Browserbase.release` the waits around a session that saves to a
 stored context. `Browser.calibrate` and `Page.calibrateClock` map the browser's clock onto the

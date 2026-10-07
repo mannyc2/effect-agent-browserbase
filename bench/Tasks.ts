@@ -281,7 +281,7 @@ const freshFrame = (page: Page) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
     const startedAt = yield* browser.now;
-    const image = yield* page.screenshot({ fresh: true });
+    const image = yield* page.screenshot({ maxAge: 0 });
     const finishedAt = yield* browser.now;
 
     return new Frame({

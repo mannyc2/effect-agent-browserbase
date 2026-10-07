@@ -11,7 +11,7 @@ import * as Keys from "./keys.ts";
 import type * as Replies from "./replies.ts";
 
 export const make = (page: PageContext, dispatch: Dispatch) => {
-  const { cdp, playwright, native } = page;
+  const { cdp, send, playwright, native } = page;
   const { stamp, inputCall, dispatchKey, dispatchText } = dispatch;
 
   // A multi-key action stops before its next key once the page has moved to another document.
@@ -28,7 +28,7 @@ export const make = (page: PageContext, dispatch: Dispatch) => {
     Effect.suspend(() =>
       watchingDocuments
         ? Effect.void
-        : native(operation, () => cdp.send("Page.enable")).pipe(
+        : native(operation, () => send("Page.enable")).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
                 watchingDocuments = true;
@@ -104,7 +104,7 @@ export const make = (page: PageContext, dispatch: Dispatch) => {
               key,
               "down",
               (at, estimate) =>
-                cdp.send("Input.dispatchKeyEvent", {
+                send("Input.dispatchKeyEvent", {
                   type: "keyDown",
                   ...stamp(estimate, at),
                   modifiers: 0,
@@ -126,7 +126,7 @@ export const make = (page: PageContext, dispatch: Dispatch) => {
               key,
               "up",
               (at, estimate) =>
-                cdp.send("Input.dispatchKeyEvent", {
+                send("Input.dispatchKeyEvent", {
                   type: "keyUp",
                   ...stamp(estimate, at),
                   modifiers: 0,

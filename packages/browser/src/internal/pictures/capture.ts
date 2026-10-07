@@ -16,7 +16,10 @@ interface Size {
 
 interface Options {
   readonly id: string;
+  /** The page's own session, for the capture's events. */
   readonly cdp: CDPSession;
+  /** Its calls, counted into the operation that sends them. */
+  readonly send: CDPSession["send"];
   readonly clock: Clock.Clock;
   readonly calibrate: Effect.Effect<Estimate, BrowserError>;
   /** How long frames are kept, measured back from the newest. */
@@ -74,6 +77,14 @@ export interface Controller {
   readonly recent: Effect.Effect<ReadonlyArray<Frame>>;
   readonly stats: Effect.Effect<CaptureStats>;
   readonly active: Effect.Effect<boolean>;
+  /** Run a clipped or scaled picture of the page, keeping what it draws out of the capture. */
+  readonly excluding: <A, E, R>(picture: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+}
+
+/** When the library took a clipped picture: from its call to its reply, in host milliseconds. */
+interface Excluded {
+  readonly from: number;
+  until: number;
 }
 
 const replyCapacity = 32;
@@ -112,6 +123,47 @@ const paintGaps = () => {
 // Another capture's frames last only as long as it does; a run of frames that lasts longer is
 // the page's own.
 const outlasting = Duration.seconds(1);
+
+// No frame painted during a picture arrives this long after it.
+const excludedFor = Duration.seconds(10);
+
+// Chromium stamps frames from another clock than the one the calibration reads: a crop's last
+// frame maps up to about 2 ms past the picture's reply, so its window stays open a little longer.
+const settling = Duration.millis(10);
+
+/**
+ * Chromium draws the library's own clipped pictures into the running screencast, with the page's
+ * device size and shape when the crop has the viewport's proportions. A frame that may have been
+ * painted while one was taken, from its call to its reply, is left out, the page's own included.
+ */
+const pictureWindows = (now: () => number) => {
+  let windows: ReadonlyArray<Excluded> = [];
+
+  return {
+    painted: ({ hostTime, timing }: Frame) =>
+      windows.some(
+        (window) =>
+          hostTime + timing.uncertaintyMillis >= window.from &&
+          hostTime - timing.uncertaintyMillis <= window.until + Duration.toMillis(settling),
+      ),
+    excluding: <A, E, R>(picture: Effect.Effect<A, E, R>) =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const window = { from: now(), until: Number.POSITIVE_INFINITY };
+          const since = window.from - Duration.toMillis(excludedFor);
+
+          windows = [...windows.filter((kept) => kept.until > since), window];
+
+          return window;
+        }),
+        () => picture,
+        (window) =>
+          Effect.sync(() => {
+            window.until = now();
+          }),
+      ),
+  };
+};
 
 // A page too busy to report its viewport in time reads as null.
 const readViewport = (options: Options) =>
@@ -244,9 +296,11 @@ export const make = (options: Options) =>
     let outOfOrder = 0;
     let missingTimestamp = 0;
     let subscriberMissed = 0;
+    let duringPictures = 0;
     const gaps = paintGaps();
 
     const now = () => Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6;
+    const pictures = pictureWindows(now);
 
     // Frames that show the page go to the running capture's readers.
     const sizes = yield* sizeFilter(options, (frame, timestamp) => {
@@ -283,7 +337,7 @@ export const make = (options: Options) =>
       let response: Promise<unknown>;
 
       try {
-        response = options.cdp.send("Page.stopScreencast");
+        response = options.send("Page.stopScreencast");
       } catch (cause) {
         notifyFailure(current, options.error(cause));
 
@@ -399,7 +453,7 @@ export const make = (options: Options) =>
                 let response: Promise<unknown>;
 
                 try {
-                  response = options.cdp.send("Page.screencastFrameAck", {
+                  response = options.send("Page.screencastFrameAck", {
                     sessionId: native.sessionId,
                   });
                 } catch (cause) {
@@ -452,6 +506,11 @@ export const make = (options: Options) =>
                   height: size.height,
                 });
 
+                if (pictures.painted(frame)) {
+                  duringPictures++;
+
+                  return;
+                }
                 sizes.offer(frame, timestamp, image, device);
               },
             };
@@ -496,7 +555,7 @@ export const make = (options: Options) =>
 
             const started = yield* Effect.tryPromise({
               try: () =>
-                options.cdp.send("Page.startScreencast", {
+                options.send("Page.startScreencast", {
                   format: "jpeg",
                   quality,
                   ...(size === null ? {} : { maxWidth: size.width, maxHeight: size.height }),
@@ -577,6 +636,7 @@ export const make = (options: Options) =>
       latest: Effect.sync(() => latest),
       recent: Effect.sync(() => history),
       active: Effect.sync(() => generation?.accepting === true),
+      excluding: pictures.excluding,
       stats: Effect.sync(
         () =>
           new CaptureStats({
@@ -585,6 +645,7 @@ export const make = (options: Options) =>
             outOfOrder,
             missingTimestamp,
             foreignSize: sizes.dropped(),
+            duringPictures,
             subscriberMissed,
             gaps: gaps.snapshot(),
           }),

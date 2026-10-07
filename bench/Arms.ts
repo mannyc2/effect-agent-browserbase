@@ -326,7 +326,7 @@ const perActionOutline = <A, I, E>(task: string, options: OperateOptions<A, I, E
         browser_screenshot: () =>
           Effect.gen(function* () {
             const page = yield* tools.page;
-            const image = yield* page.screenshot();
+            const image = yield* page.screenshot({ after: "input" });
 
             pending.push(...picture(image));
 

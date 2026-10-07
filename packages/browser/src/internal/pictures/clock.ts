@@ -124,7 +124,7 @@ const command = <A>(run: () => Promise<A>): Effect.Effect<A, ClockCalibrationFai
  * The owning clock supplies both stamps and the deadline even if a caller overrides Clock later.
  */
 export const calibrate = (
-  cdp: CDPSession,
+  send: CDPSession["send"],
   clock: Clock.Clock,
   // The page's main world when absent.
   contextId?: number,
@@ -137,7 +137,7 @@ export const calibrate = (
 
       // A round trip to the page's script like any other, so traced as one.
       const response = yield* command(() =>
-        cdp.send("Runtime.evaluate", {
+        send("Runtime.evaluate", {
           ...(contextId === undefined ? {} : { contextId }),
           expression: "performance.timeOrigin + performance.now()",
           returnByValue: true,

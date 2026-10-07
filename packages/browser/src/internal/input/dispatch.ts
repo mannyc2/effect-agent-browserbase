@@ -29,7 +29,7 @@ export type MouseEvent = {
 };
 
 export const make = (page: PageContext) => {
-  const { id, cdp, pointer, publish, now, noteInput } = page;
+  const { id, send, pointer, publish, now, noteInput } = page;
   // Each run's clock mapping, recorded when it begins.
   const inputClocks = new WeakMap<Replies.Run, BrowserClock.Estimate>();
 
@@ -82,7 +82,7 @@ export const make = (page: PageContext) => {
               })
             : undefined;
 
-    const response = cdp.send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
+    const response = send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 
     noteInput();
     if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
@@ -149,7 +149,7 @@ export const make = (page: PageContext) => {
 
   const dispatchText = (text: string, secret: boolean): Promise<unknown> => {
     const track = new TextInserted({ at: now(), page: id, text: secret ? "•" : text });
-    const response = cdp.send("Input.insertText", { text });
+    const response = send("Input.insertText", { text });
 
     noteInput();
     publish(track);

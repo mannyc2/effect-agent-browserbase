@@ -49,7 +49,7 @@ const looks = new Set([
   "Page.observe",
   "Page.screenshot",
   "Page.snapshot",
-  "Page.currentFrame",
+  "Page.frame",
   "Moment.capture",
 ]);
 
