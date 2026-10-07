@@ -14,7 +14,8 @@ Operate pages vary with the seed too, so a task's trials sample a family of page
 repeat one, and every graded answer is the page's own:
 
 - the casino lobby words its cookie banner and age check, and orders their buttons, differently,
-  and moves the game's card among the others; the reels start from different credits and a
+  moves the game's card among the others, words the cards' play buttons differently and opens the
+  game at a different table, so `navigated`'s destination and trigger change too; the reels start from different credits and a
   different default bet, with their controls elsewhere on the canvas;
 - the trading ticket words its fields differently, starts on the buy or the sell side, and
   numbers its orders from a different id; a limit order rests on the book, open;
@@ -413,9 +414,12 @@ with an error: review it, copy it over the package's copy and run `bun run fmt`.
 
 `bun run test` runs every scripted solution, grades answers from models scripted to be wrong or
 blindly sure, verifies seeded fixture data and captured evidence, and checks concurrent browser
-ownership and budget admission. Two gates hold every operate task: its page varies with the seed,
-and an agent that reports the right answer without doing the work fails. No model or hosted
-browser is called.
+ownership and budget admission. Gates hold every task. An operate task's page varies with the
+seed, and an agent that reports the right answer without doing the work fails (`gates.test.ts`).
+An understand task fails a describer that gives another seed's right answer, so no constant
+answer passes it (`answers.test.ts`); `chart-spike` and its control `chart-calm` are classes, each
+with one answer on every seed, and a constant answer passes at most one of the two. No model or
+hosted browser is called.
 
 A new task is an `operate` or `understand` entry in `Tasks.ts`, or an errand in `Errands.ts`, an
 operate task on an everyday page of its own; `Catalog.ts` lists every task, and the tests pick it
