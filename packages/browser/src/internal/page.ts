@@ -186,6 +186,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
+  // The main frame keeps its id from one document to the next, so it is looked up once.
+  const mainFrame = yield* Ref.make(Option.none<string>());
   const nextRef = yield* Ref.make(1);
   // Actions that have started changing the page and not yet ended, and the latest submitted input
   // or page change. While an action runs no cached paint is current; afterwards only paint from
@@ -394,14 +396,22 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
-      const tree = yield* native(operation, () => cdp.send("Page.getFrameTree"));
-
-      const created = yield* native(operation, () =>
-        cdp.send("Page.createIsolatedWorld", {
-          frameId: tree.frameTree.frame.id,
-          worldName: "effect-browser",
-        }),
+      const lookup = native(operation, () => cdp.send("Page.getFrameTree")).pipe(
+        Effect.map((tree) => tree.frameTree.frame.id),
+        Effect.tap((id) => Ref.set(mainFrame, Option.some(id))),
       );
+
+      const isolate = (frameId: string) =>
+        native(operation, () =>
+          cdp.send("Page.createIsolatedWorld", { frameId, worldName: "effect-browser" }),
+        );
+
+      // A remembered id that no longer names the main frame is looked up again.
+      const created = yield* Option.match(yield* Ref.get(mainFrame), {
+        onNone: () => Effect.flatMap(lookup, isolate),
+        onSome: (frameId) =>
+          isolate(frameId).pipe(Effect.catch(() => Effect.flatMap(lookup, isolate))),
+      });
 
       const installed = yield* native(operation, () =>
         cdp.send("Runtime.evaluate", {

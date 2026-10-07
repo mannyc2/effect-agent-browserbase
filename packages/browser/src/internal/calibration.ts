@@ -147,19 +147,12 @@ const measure = (context: BrowserContext, privatePage: Page, ownerClock: Clock.C
     );
 
     const cdp = session.value;
-    const tree = yield* command(() => cdp.send("Page.getFrameTree"));
 
-    const world = yield* command(() =>
-      cdp.send("Page.createIsolatedWorld", {
-        frameId: tree.frameTree.frame.id,
-        worldName: "effect-browser-startup-calibration",
-      }),
-    );
-
+    // The page is private and opened before any caller script, so its main world is ours; an
+    // isolated world would cost two more round trips.
     const evaluate = (expression: string) =>
       command(() =>
         cdp.send("Runtime.evaluate", {
-          contextId: world.executionContextId,
           expression,
           awaitPromise: true,
           returnByValue: true,
@@ -172,12 +165,7 @@ const measure = (context: BrowserContext, privatePage: Page, ownerClock: Clock.C
         ),
       );
 
-    const clock = yield* BrowserClock.calibrate(cdp, ownerClock, world.executionContextId);
-
-    const viewport = yield* evaluate(installSource).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(viewportSchema)),
-      Effect.mapError(failed),
-    );
+    const clock = yield* BrowserClock.calibrate(cdp, ownerClock);
 
     const frames: Array<EncodedFrame> = [];
     const acknowledgements = new Set<Promise<void>>();
@@ -272,20 +260,36 @@ const measure = (context: BrowserContext, privatePage: Page, ownerClock: Clock.C
     yield* Effect.addFinalizer(() => release(stop));
     started = true;
     accepting = true;
-    yield* command(() =>
-      cdp.send("Page.startScreencast", {
-        format: "jpeg",
-        quality: 60,
-        maxWidth: 320,
-        maxHeight: 200,
-      }),
+
+    // Neither waits on the other, so they share a round trip. Frames painted before the marker
+    // script ran show none of its colours and match no marker.
+    const [viewport] = yield* Effect.all(
+      [
+        evaluate(installSource).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(viewportSchema)),
+          Effect.mapError(failed),
+        ),
+        command(() =>
+          cdp.send("Page.startScreencast", {
+            format: "jpeg",
+            quality: 60,
+            maxWidth: 320,
+            maxHeight: 200,
+          }),
+        ),
+      ],
+      { concurrency: "unbounded" },
     );
 
     const sent: Array<number> = [];
 
+    // Markers are sent 180 ms apart, so each paints on its own. Their answers' round trips count
+    // toward the spacing rather than adding to it.
     for (let marker = 0; marker < 3; marker++) {
       yield* check;
-      sent.push(Number(ownerClock.monotonicTimeNanosUnsafe()) / 1e6);
+      const sentAt = Number(ownerClock.monotonicTimeNanosUnsafe()) / 1e6;
+
+      sent.push(sentAt);
       yield* command(() =>
         cdp.send("Input.dispatchMouseEvent", {
           type: "mouseMoved",
@@ -294,7 +298,9 @@ const measure = (context: BrowserContext, privatePage: Page, ownerClock: Clock.C
           button: "none",
         }),
       );
-      yield* Effect.sleep(Duration.millis(180));
+      const answered = Number(ownerClock.monotonicTimeNanosUnsafe()) / 1e6;
+
+      yield* Effect.sleep(Duration.millis(Math.max(0, 180 - (answered - sentAt))));
     }
 
     yield* command(stop);
