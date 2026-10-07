@@ -27,13 +27,14 @@ import { FetchHttpClient } from "effect/http";
 
 import { type Arm, armNames, arms } from "./Arms.ts";
 import { BenchError, efforts, modelRunner, noCalls, noTiming, optedIn, refuse } from "./Budget.ts";
+import { tasks } from "./Catalog.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import * as Latency from "./Latency.ts";
 import * as Recorder from "./Recorder.ts";
 import * as Relay from "./Relay.ts";
 import * as Report from "./Report.ts";
 import * as Results from "./Results.ts";
-import { frameHistory, tasks } from "./Tasks.ts";
+import { frameHistory } from "./Tasks.ts";
 import * as Trace from "./Trace.ts";
 import {
   type Classification,
