@@ -41,6 +41,7 @@ const record = (fields: {
       concurrency: 4,
       record: false,
       narrateSeconds: null,
+      split: "dev",
     },
     reasoning: null,
     status: fields.status ?? "graded",

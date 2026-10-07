@@ -43,6 +43,7 @@ import {
   notAdmitted,
   revision,
   type RunInfo,
+  Split,
   trialSeed,
   uncertainAllocation,
   workDeadline,
@@ -100,6 +101,12 @@ const flags = {
   seed: Flag.Int("seed").pipe(
     Flag.withDefault(1),
     Flag.withDescription("Base seed for each trial's page data and randomness. Defaults to 1."),
+  ),
+  split: Flag.Literals("split", Split.literals).pipe(
+    Flag.withDefault("dev"),
+    Flag.withDescription(
+      "The family of seeds: dev to work on prompts and tools, eval, held out, to compare arms. Defaults to dev.",
+    ),
   ),
   model: Flag.String("model").pipe(
     Flag.optional,
@@ -248,6 +255,7 @@ export const command = Command.make(
       concurrency: options.concurrency,
       record: options.record,
       narrateSeconds: narrateSeconds ?? null,
+      split: options.split,
     };
 
     const label = model?.replace(/[^\w.-]+/g, "_") ?? "scripted";
@@ -316,7 +324,7 @@ export const command = Command.make(
             arm: job.arm,
             trial: job.trial,
             baseSeed: options.seed,
-            seed: trialSeed(options.seed, job.task.name, job.trial),
+            seed: trialSeed(options.seed, job.task.name, job.trial, options.split),
             startedAt: at,
             run,
             reasoning: null,
@@ -355,7 +363,7 @@ export const command = Command.make(
           // A denied or unstarted trial is a durable result too, but must not provision a browser.
           const halted = hosted && (yield* Ref.get(hostedHalt));
           const denied = !halted && runner !== undefined && (yield* runner.exhausted);
-          const seed = trialSeed(options.seed, task.name, trial);
+          const seed = trialSeed(options.seed, task.name, trial, options.split);
           const effectiveReasoning = reasoning ?? (task.kind === "operate" ? "medium" : "none");
           const started = yield* DateTime.now;
           const startedNanos = yield* Clock.monotonicTimeNanos;

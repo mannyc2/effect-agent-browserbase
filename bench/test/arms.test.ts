@@ -112,14 +112,19 @@ const trial = (name: string, arm: Arm, turns: ReadonlyArray<Turn>) =>
     };
   });
 
-const fullName = (prompt: Prompt.Prompt) =>
-  /textbox "Full name" \[ref=(e\d+)\]/.exec(textOf(prompt))?.[1] ?? "missing";
+/** The first text field the outline shows: the seed sets the checkout's labels and their order. */
+const firstField = (prompt: Prompt.Prompt) => {
+  const [, label = "missing", ref = "missing"] =
+    /textbox "([^"]+)" \[ref=(e\d+)\]/.exec(textOf(prompt)) ?? [];
+
+  return { label, ref };
+};
 
 describe("arm 1, per-action outline", () => {
   it.live("answers every action with an outline and shows pictures only on request", () =>
     Effect.gen(function* () {
       const result = yield* trial("checkout", 1, [
-        (prompt) => [call("browser_type", { ref: fullName(prompt), text: "Ada" }), finish],
+        (prompt) => [call("browser_type", { ref: firstField(prompt).ref, text: "Ada" }), finish],
         () => [call("browser_screenshot", {}), finish],
         () => [call("give_up", { reason: "scripted" }), finish],
       ]);
@@ -132,7 +137,9 @@ describe("arm 1, per-action outline", () => {
       if (first === undefined || second === undefined || third === undefined) return;
 
       // The opening is an outline alone.
-      assert.include(textOf(first.prompt), 'textbox "Full name"');
+      const field = firstField(first.prompt);
+
+      assert.notStrictEqual(field.ref, "missing");
       assert.strictEqual(pictures(first.prompt), 0);
       assert.includeMembers(names(first.tools), ["browser_screenshot", "browser_snapshot"]);
       assert.notInclude(names(first.tools), "browser_zoom");
@@ -141,7 +148,7 @@ describe("arm 1, per-action outline", () => {
       // The type receipt carries a fresh outline, showing the typed value; no picture follows.
       const receipt = textOf(second.prompt).split('Typed \\"Ada\\"').at(1) ?? "";
 
-      assert.include(receipt, 'textbox \\"Full name\\"');
+      assert.include(receipt, `textbox \\"${field.label}\\"`);
       assert.strictEqual(pictures(second.prompt), 0);
       assert.strictEqual(pictures(third.prompt), 1);
 
