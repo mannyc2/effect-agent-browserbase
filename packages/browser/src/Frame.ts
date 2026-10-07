@@ -102,6 +102,12 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Cap
   accepted: Count,
   outOfOrder: Count,
   missingTimestamp: Count,
+  /**
+   * Frames dropped for their size. Most are other captures' frames, which a clipped screenshot
+   * draws into a screencast. The rest are the page's own frames of a new size, dropped while still
+   * unconfirmed: when another size replaced it, when its capture stopped, or beyond the 16 held.
+   */
+  foreignSize: Count,
   subscriberMissed: Count,
   gaps: Schema.Struct({
     count: Count,

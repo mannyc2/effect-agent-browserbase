@@ -123,7 +123,10 @@ const setup = Effect.fnUntraced(function* (controlled = false) {
 
   const page = yield* browser.page;
 
-  const inject = (timestamp: number | undefined) => {
+  const inject = (
+    timestamp: number | undefined,
+    device?: { readonly width: number; readonly height: number },
+  ) => {
     if (received === undefined || replay === undefined)
       throw new Error("capture has not received a native JPEG");
 
@@ -131,6 +134,7 @@ const setup = Effect.fnUntraced(function* (controlled = false) {
       ...received,
       metadata: {
         ...received.metadata,
+        ...(device === undefined ? {} : { deviceWidth: device.width, deviceHeight: device.height }),
         timestamp: timestamp === undefined ? undefined : timestamp / 1000,
       },
     });
@@ -160,6 +164,12 @@ const setup = Effect.fnUntraced(function* (controlled = false) {
 
 const count = (calls: ReadonlyArray<Call>, method: string) =>
   calls.filter((call) => call.method === method).length;
+
+const eventually = (check: Effect.Effect<boolean>) =>
+  check.pipe(
+    Effect.repeat({ schedule: Schedule.spaced("5 millis"), until: (holds) => holds }),
+    Effect.timeout("5 seconds"),
+  );
 
 // Back-to-back long tasks with only timer gaps keep any in-page clock probe waiting, as a heavy
 // game or chart can, while the browser itself still composites and captures the page.
@@ -735,12 +745,117 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         assert.strictEqual(
           stats.received,
-          stats.accepted + stats.outOfOrder + stats.missingTimestamp,
+          stats.accepted + stats.outOfOrder + stats.missingTimestamp + stats.foreignSize,
         );
         assert.isAbove(stats.accepted, 0);
         assert.strictEqual(count(calls, "Page.startScreencast"), 1);
         assert.strictEqual(count(calls, "Page.stopScreencast"), 1);
         assert.strictEqual(count(calls, "Page.screencastFrameAck"), stats.received);
+      }),
+    );
+
+    it.effect("keeps a zoom's crops out of the screencast and follows a real viewport change", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext("fresh");
+
+        // The page keeps painting, so frames arrive throughout.
+        const page = yield* browser.newPage(
+          "data:text/html," +
+            encodeURIComponent(`<body><script>
+  let turn = 0;
+  setInterval(() => { document.body.style.background = "hsl(" + (turn += 30) + ",70%,50%)"; }, 40);
+</script></body>`),
+        );
+
+        const frames: Array<Frame> = [];
+
+        const reader = yield* page.screencast().pipe(
+          Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+          Effect.forkChild,
+        );
+
+        const seen = (width: number, height: number) =>
+          eventually(
+            Effect.sync(() =>
+              frames.some((frame) => frame.width === width && frame.height === height),
+            ),
+          );
+
+        yield* seen(800, 600);
+
+        // A crop is a clipped screenshot, which Chromium also draws into the running screencast.
+        const crop = page
+          .zoom({ x: 10, y: 20, width: 100, height: 100 })
+          .pipe(Effect.andThen(Effect.sleep("100 millis")));
+
+        for (let index = 0; index < 3; index++) yield* crop;
+        yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 480 }));
+        yield* seen(640, 480);
+        yield* crop;
+        yield* Fiber.interrupt(reader);
+
+        // Every delivered frame shows the whole viewport, before and after it changes size.
+        const sizes = frames.map((frame) => `${frame.width}x${frame.height}`);
+        const resized = sizes.indexOf("640x480");
+
+        assert.deepStrictEqual([...new Set(sizes.slice(0, resized))], ["800x600"]);
+        assert.deepStrictEqual([...new Set(sizes.slice(resized))], ["640x480"]);
+        const stats = yield* page.captureStats;
+
+        assert.isAbove(stats.foreignSize, 0);
+        assert.strictEqual(
+          stats.received,
+          stats.accepted + stats.outOfOrder + stats.missingTimestamp + stats.foreignSize,
+        );
+      }),
+    );
+
+    it.effect("holds frames of another device size until a resize is confirmed, in order", () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup(true);
+        const frames: Array<Frame> = [];
+
+        const reader = yield* fixture.page.screencast().pipe(
+          Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+          Effect.forkChild,
+        );
+
+        const template = yield* fixture.template;
+        const base = (template.metadata.timestamp ?? 0) * 1000 - 1000;
+        const half = { width: 400, height: 300 };
+        const quarter = { width: 200, height: 150 };
+
+        const delivered = (timestamp: number) =>
+          eventually(Effect.sync(() => frames.some((frame) => frame.timestamp === timestamp)));
+
+        // A scaled capture's frames keep their picture's shape but not the device's size, and the
+        // page's own size returns after them.
+        yield* Effect.sync(() => fixture.inject(base, half));
+        yield* Effect.sync(() => fixture.inject(base + 10, half));
+        yield* Effect.sync(() => fixture.inject(base + 20));
+        yield* delivered(base + 20);
+        // After a real resize, the page reports the frames' size.
+        yield* Effect.promise(() => fixture.page.playwright.setViewportSize(half));
+        yield* Effect.sync(() => fixture.inject(base + 30, half));
+        yield* Effect.sync(() => fixture.inject(base + 40, half));
+        yield* delivered(base + 40);
+        // A size the page never reports, as under browser zoom or when it cannot answer in time,
+        // is the page's once it outlasts any capture. Its frames still never go back in time.
+        yield* Effect.sync(() => fixture.inject(base + 60, quarter));
+        yield* Effect.sync(() => fixture.inject(base + 50, quarter));
+        yield* delivered(base + 60);
+        yield* Fiber.interrupt(reader);
+        const stats = yield* fixture.page.captureStats;
+
+        assert.deepStrictEqual(
+          frames.map((frame) => frame.timestamp),
+          [base + 20, base + 30, base + 40, base + 60],
+        );
+        assert.deepStrictEqual([stats.foreignSize, stats.outOfOrder], [2, 1]);
+        assert.strictEqual(
+          stats.received,
+          stats.accepted + stats.outOfOrder + stats.missingTimestamp + stats.foreignSize,
+        );
       }),
     );
 
@@ -798,6 +913,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             accepted: 3,
             outOfOrder: 2,
             missingTimestamp: 2,
+            foreignSize: 0,
             subscriberMissed: 0,
             gaps: { count: 2, totalMillis: 100, minMillis: 16, maxMillis: 84, lastMillis: 84 },
           },
