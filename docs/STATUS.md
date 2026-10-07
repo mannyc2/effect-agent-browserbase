@@ -95,7 +95,8 @@ The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` a
 `effect-agent-browser`, published on 2 October 2026 from tag `v0.2.0-beta.9` (`976d316`) on the
 `beta` dist-tag. 0.3 is not released. It will be released by plain npm trusted publishing from
 `.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase` and
-`effect-browser-human-strokes`; [RELEASING.md](RELEASING.md) has the steps.
+`effect-browser-human-strokes`; [RELEASING.md](RELEASING.md) has the steps, and
+[CHANGELOG.md](../CHANGELOG.md) lists what each release changes.
 
 ## History
 
