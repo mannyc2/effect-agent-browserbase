@@ -413,6 +413,11 @@ const account = (moment: Moment, options: PromptOptions) => {
           `The page changed too much to keep: at least ${record.truncated} more changes are not told.`,
         ]
       : []),
+    ...(record !== undefined && record.scrolled > 0
+      ? [
+          `As lists scrolled, ${record.scrolled} of their rows changed with them; those are not told.`,
+        ]
+      : []),
     ...(record !== undefined && begins > moment.from
       ? [`Changes before ${seconds(moment, begins)} were not recorded.`]
       : []),

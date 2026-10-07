@@ -188,6 +188,8 @@ export interface ChangesResult {
   readonly from: number;
   /** Changes in the window the record did not keep. */
   readonly truncated: number;
+  /** Changes in the window taken for a list's scroll and not told. */
+  readonly scrolled: number;
   readonly records: ReadonlyArray<ChangeRecord>;
 }
 
@@ -1867,6 +1869,8 @@ export const install = (): PageApi => {
     readonly state: State;
     /** Whether it was in view when it changed; unknown until the page next renders. */
     seen: boolean | undefined;
+    /** Whether scrolling made it, so it is kept as the element's state but not told. */
+    readonly scrolled: boolean;
   }
 
   interface Track {
@@ -1911,6 +1915,13 @@ export const install = (): PageApi => {
     visible.delete(element);
   };
 
+  /** What a track said before its latest sample. */
+  const stateBefore = (track: Track): State => {
+    const prior = track.samples.at(-2);
+
+    return prior === undefined ? track.initial : prior.state;
+  };
+
   const settle = (sample: Sample, seen: boolean) => {
     if (sample.seen !== undefined) return;
     sample.seen = seen;
@@ -1924,6 +1935,23 @@ export const install = (): PageApi => {
       const seen = entry.isIntersecting && shown(entry.target);
 
       for (const sample of waiting.get(entry.target) ?? []) settle(sample, seen);
+      // What arrived out of view and came into it soon after, such as posts a feed added below
+      // as it scrolled, was seen arriving.
+      const track = tracks.get(entry.target);
+      const last = track?.samples.at(-1);
+
+      if (
+        seen &&
+        track !== undefined &&
+        last?.seen === false &&
+        !last.scrolled &&
+        last.state !== null &&
+        epoch() - last.at < 2000 &&
+        stateBefore(track) === null
+      ) {
+        last.seen = true;
+        blind.delete(track);
+      }
       waiting.delete(entry.target);
       if (!tracks.has(entry.target)) unobserve(entry.target);
     }
@@ -1955,7 +1983,13 @@ export const install = (): PageApi => {
   };
 
   /** A new state for a track. A removed element's place is in view if what took it is. */
-  const sample = (track: Track, at: number, state: State, near: Element | null = null) => {
+  const sample = (
+    track: Track,
+    at: number,
+    state: State,
+    near: Element | null = null,
+    scrolled = false,
+  ) => {
     // One batch of mutations counts once, as it left the element: a move is no change.
     if (track.samples.at(-1)?.at === at) track.samples.pop();
     const last = track.samples.at(-1);
@@ -1977,7 +2011,14 @@ export const install = (): PageApi => {
         forget(oldest.at);
       }
     }
-    const next: Sample = { track, at, state, seen: track.kind === "title" ? true : undefined };
+
+    const next: Sample = {
+      track,
+      at,
+      state,
+      seen: track.kind === "title" ? true : undefined,
+      scrolled,
+    };
 
     track.samples.push(next);
     if (track.samples.length >= 4) busy.add(track);
@@ -2122,7 +2163,7 @@ export const install = (): PageApi => {
       if (removed !== undefined)
         for (const group of removed)
           if (group.next === child)
-            for (const gone of group.nodes) if (seeable(gone)) text += wordsOf(gone, undo);
+            for (const gone of group.nodes) if (unhidden(gone)) text += wordsOf(gone, undo);
       if (child === null) break;
       if (undo?.added.has(child) !== true && seeable(child)) text += wordsOf(child, undo);
     }
@@ -2131,15 +2172,37 @@ export const install = (): PageApi => {
   };
 
   /**
-   * Whether a viewer could see a node's words: an element must be shown, so a hidden one's words,
-   * such as a token in a `display: none` span, never reach the record. A removed element can no
-   * longer say; only its own attribute and inline style can still hide it.
+   * Whether an element's style hides its words: not shown, clipped away as screen-reader text is,
+   * no larger than nothing, far off the page, or written in no size, no colour or no scale.
+   */
+  const concealed = (element: Element): boolean => {
+    if (!shown(element)) return true;
+    const style = getComputedStyle(element);
+    const out = style.position === "absolute" || style.position === "fixed";
+
+    return (
+      (out && style.getPropertyValue("clip") !== "auto") ||
+      style.clipPath !== "none" ||
+      Number.parseFloat(style.fontSize) === 0 ||
+      /^transparent$|,\s*0\)$/.test(style.color) ||
+      style.transform.startsWith("matrix(0, 0, 0, 0,") ||
+      (out && (Number.parseFloat(style.left) < -999 || Number.parseFloat(style.top) < -999)) ||
+      (style.overflow !== "visible" &&
+        (Number.parseFloat(style.width) === 0 || Number.parseFloat(style.height) === 0))
+    );
+  };
+
+  /**
+   * Whether a viewer could see a node's words, so a hidden one's, such as a token in a
+   * `display: none` span, never reach the record. Only an element with attributes can be styled
+   * apart from its parent, so the rest, most of a page, are not asked. A removed element can no
+   * longer say, so only its own attribute and inline style can hide it.
    */
   const seeable = (node: Node): boolean =>
-    !isElement(node)
+    !isElement(node) || node.attributes.length === 0
       ? true
       : node.isConnected
-        ? shown(node)
+        ? !concealed(node)
         : !node.hasAttribute("hidden") &&
           !(
             isHtml(node) &&
@@ -2147,6 +2210,13 @@ export const install = (): PageApi => {
               node.style.visibility === "hidden" ||
               node.style.opacity === "0")
           );
+
+  /**
+   * Whether what a batch removed can be read back into what an element said before it. A class
+   * may have hidden it, so one with a class is left out, as is what `seeable` leaves out.
+   */
+  const unhidden = (node: Node): boolean =>
+    seeable(node) && !(isElement(node) && node.hasAttribute("class"));
 
   /** An element's words now; most changed elements hold only text, which is read whole. */
   const wordsNow = (element: Element): string =>
@@ -2361,6 +2431,12 @@ export const install = (): PageApi => {
 
   const noElements: ReadonlyArray<Element> = [];
 
+  /** Whether a mutation added or removed text that says something. */
+  const wordy = (mutation: MutationRecord): boolean =>
+    [...mutation.addedNodes, ...mutation.removedNodes].some(
+      (node) => node.nodeType === Node.TEXT_NODE && /\S/.test(node.nodeValue ?? ""),
+    );
+
   // One mutation that adds or removes more elements than this, such as a list rebuilt wholesale,
   // is followed for its first ones and the rest are counted.
   const maxNodes = 64;
@@ -2390,22 +2466,28 @@ export const install = (): PageApi => {
   };
 
   // A list that reuses its rows rewrites them as it scrolls, and one that renders only what is in
-  // view adds and removes them: what changes in an element just after it scrolled is the scroll,
-  // not new content. A page's own scroll is not taken for this, or it would hide every change.
+  // view swaps them for others: inside an element that just scrolled, several sibling rows taking
+  // each other's words, or rows both added and removed under one parent, is the scroll, not new
+  // content. Their states are still kept, so what follows is told from what they showed, and the
+  // record counts them; a single change or a net arrival, such as a new message, is told as ever.
   let scrolled: { readonly element: Element; readonly at: number } | undefined;
 
   const onScroll = (event: Event) => {
     if (event.target instanceof Element) scrolled = { element: event.target, at: epoch() };
   };
 
-  const scrolling = (element: Element, at: number) =>
-    scrolled !== undefined && at - scrolled.at < 100 && scrolled.element.contains(element);
+  const swept: Array<number> = [];
+  let sweeps = 0;
 
-  /** Let go of what scrolling rewrote: its history no longer says what the element is. */
-  const forsake = (node: Node) => {
-    const track = tracks.get(node);
+  const sweep = (at: number, count: number) => {
+    for (let index = 0; index < Math.min(count, 1024); index++) swept[sweeps++ % 1024] = at;
+  };
 
-    if (track !== undefined) drop(track);
+  /** What a track says now. */
+  const stateOf = (track: Track): State => {
+    const last = track.samples.at(-1);
+
+    return last === undefined ? track.initial : last.state;
   };
 
   const observer = new MutationObserver((mutations) => {
@@ -2419,6 +2501,9 @@ export const install = (): PageApi => {
     const owners = new Set<Element>();
     const parents = new Set<Element>();
     const arrivals = new Set<Node>();
+    const scroller = scrolled !== undefined && at - scrolled.at < 100 ? scrolled.element : null;
+    const swaps = new Map<Element, Array<() => void>>();
+    const swapped = new Map<Element, { arrived: number; left: Array<Element> }>();
     let byTarget: Map<Node | null, Array<MutationRecord>> | undefined;
     let undo: Undo | undefined;
 
@@ -2433,6 +2518,52 @@ export const install = (): PageApi => {
       );
 
       return clean(wordsOf(element, undo ?? undoOf(byTarget.get(element) ?? [])), 600);
+    };
+
+    /** Tell the elements one mutation added to or removed from `target`. */
+    const place = (
+      mutation: MutationRecord,
+      target: Element,
+      arrived: ReadonlyArray<Element>,
+      left: ReadonlyArray<Element>,
+    ) => {
+      // What took another's place in one step, such as a re-rendered price, changed its words.
+      const replaced = Math.min(arrived.length, left.length);
+
+      for (let index = 0; index < arrived.length; index++) {
+        const node = arrived[index];
+        const old = index < replaced ? left[index] : undefined;
+
+        if (node === undefined) continue;
+        const track = old === undefined ? undefined : tracks.get(old);
+
+        if (track !== undefined && old !== undefined) {
+          tracks.delete(old);
+          unobserve(old);
+          track.node = node;
+          tracks.set(node, track);
+          sample(track, at, wordsNow(node));
+        } else if (old !== undefined && refused.has(old)) {
+          refused.add(node);
+          forget(at);
+        } else {
+          const words = wordsNow(node);
+
+          if (words !== "" || old !== undefined)
+            record(node, "content", at, words, () => (old === undefined ? null : wordsNow(old)));
+        }
+      }
+
+      for (const node of left.slice(replaced)) {
+        const words = wordsNow(node);
+        const next = neighbour(mutation.nextSibling);
+        // What moves up into a removed element's place in the flow shows where it was. Out of the
+        // flow, or with nothing after it, its place is unknown, and it is not told.
+        const near = next !== null && inFlow(node) && inFlow(next) ? next : null;
+
+        if (words !== "" || tracks.has(node))
+          record(node, "content", at, null, () => words, target, near);
+      }
     };
 
     for (const mutation of mutations) {
@@ -2480,53 +2611,72 @@ export const install = (): PageApi => {
       for (const node of arrived) arrivals.add(node);
       forget(at, Math.max(mutation.addedNodes.length, mutation.removedNodes.length) - maxNodes);
       if (arrived.length + left.length === 0 || !watched(target)) continue;
-      if (scrolling(target, at)) {
-        for (const node of left) forsake(node);
+      // Elements that came with new words of their parent are told by the parent's change.
+      if (owners.has(target) && wordy(mutation)) continue;
+      if (scroller?.contains(target) === true) {
+        const sums = swapped.get(target) ?? { arrived: 0, left: [] };
+
+        sums.arrived += arrived.length;
+        sums.left.push(...left);
+        swapped.set(target, sums);
+        swaps.set(target, [
+          ...(swaps.get(target) ?? []),
+          () => place(mutation, target, arrived, left),
+        ]);
         continue;
       }
+      place(mutation, target, arrived, left);
+    }
 
-      // What took another's place in one step, such as a re-rendered price, changed its words.
-      const replaced = Math.min(arrived.length, left.length);
+    // Rows both added and removed under one parent of a scrolled element are its scroll.
+    for (const [target, steps] of swaps) {
+      const sums = swapped.get(target);
 
-      for (let index = 0; index < arrived.length; index++) {
-        const node = arrived[index];
-        const old = index < replaced ? left[index] : undefined;
-
-        if (node === undefined) continue;
-        const track = old === undefined ? undefined : tracks.get(old);
-
-        if (track !== undefined && old !== undefined) {
-          tracks.delete(old);
-          unobserve(old);
-          track.node = node;
-          tracks.set(node, track);
-          sample(track, at, wordsNow(node));
-        } else if (old !== undefined && refused.has(old)) {
-          refused.add(node);
-          forget(at);
-        } else {
-          const words = wordsNow(node);
-
-          if (words !== "" || old !== undefined)
-            record(node, "content", at, words, () => (old === undefined ? null : wordsNow(old)));
-        }
+      if (sums === undefined || sums.arrived < 2 || sums.left.length < 2) {
+        for (const step of steps) step();
+        continue;
       }
+      sweep(at, Math.max(sums.arrived, sums.left.length));
+      for (const node of sums.left) {
+        const track = tracks.get(node);
 
-      for (const node of left.slice(replaced)) {
-        const words = wordsNow(node);
-        const next = neighbour(mutation.nextSibling);
-        // What moves up into a removed element's place in the flow shows where it was. Out of the
-        // flow, or with nothing after it, its place is unknown, and it is not told.
-        const near = next !== null && inFlow(node) && inFlow(next) ? next : null;
-
-        if (words !== "" || tracks.has(node))
-          record(node, "content", at, null, () => words, target, near);
+        if (track !== undefined) sample(track, at, null, null, true);
       }
     }
 
+    // Sibling rows of a scrolled element that took each other's words are its scroll.
+    const rewritten =
+      scroller === null
+        ? []
+        : [
+            ...Map.groupBy(
+              [...owners].filter((owner) => scroller.contains(owner)),
+              (owner) => owner.parentElement,
+            ).values(),
+          ].filter((rows) => rows.length >= 3);
+
+    for (const rows of rewritten) {
+      const before = rows.map((row) => {
+        const track = tracks.get(row);
+
+        return track === undefined ? earlier(row)() : stateOf(track);
+      });
+
+      const now = rows.map(wordsNow);
+      const moved = now.filter((words) => before.includes(words)).length;
+
+      if (moved * 2 < rows.length) continue;
+      sweep(at, rows.length);
+      rows.forEach((row, index) => {
+        owners.delete(row);
+        const track = tracks.get(row);
+
+        if (track !== undefined) sample(track, at, now[index] ?? null, null, true);
+      });
+    }
+
     for (const owner of owners)
-      if (scrolling(owner, at)) forsake(owner);
-      else if (owner.isConnected && owner !== document.body && watched(owner))
+      if (owner.isConnected && owner !== document.body && watched(owner))
         record(owner, "content", at, wordsNow(owner), earlier(owner));
     for (const parent of parents)
       if (parent.childElementCount === 0) leaves.add(parent);
@@ -2585,6 +2735,9 @@ export const install = (): PageApi => {
     observer.disconnect();
     sight.disconnect();
     // A new record starts afresh: it owes nothing to what the last one could not keep.
+    scrolled = undefined;
+    swept.length = 0;
+    sweeps = 0;
     visible = new WeakMap();
     refused = new WeakSet();
     leaves = new WeakSet();
@@ -2592,7 +2745,6 @@ export const install = (): PageApi => {
     losses = 0;
     document.removeEventListener("focusin", onFocus, true);
     document.removeEventListener("scroll", onScroll, { capture: true });
-    scrolled = undefined;
     document.removeEventListener("input", onValue, true);
     document.removeEventListener("change", onValue, true);
     tracks.clear();
@@ -2610,7 +2762,11 @@ export const install = (): PageApi => {
     until: number,
     tables: Map<Element, TableFacts>,
   ): ChangeRecord | undefined => {
-    const changed = track.samples.filter((sample) => sample.at > since && sample.at <= until);
+    // What scrolling did is the element's state, not a change of it.
+    const changed = track.samples.filter(
+      (sample) => sample.at > since && sample.at <= until && !sample.scrolled,
+    );
+
     const first = changed[0];
     const last = changed.at(-1);
 
@@ -2620,11 +2776,13 @@ export const install = (): PageApi => {
       !changed.some((sample) => sample.seen === true)
     )
       return undefined;
-    const prior = track.samples.findLast((sample) => sample.at <= since);
+    const prior = track.samples.findLast((sample) => sample.at <= since && !sample.scrolled);
+    const previous = track.samples[track.samples.indexOf(first) - 1];
 
-    // What it said at `since`; `undefined` when the record let that go.
+    // What it said just before its first change in the window; `undefined` when the record let
+    // that go.
     const start =
-      prior === undefined ? (track.known <= since ? track.initial : undefined) : prior.state;
+      previous === undefined ? (track.known <= since ? track.initial : undefined) : previous.state;
 
     const words = [start, ...changed.map((sample) => sample.state)].filter(
       (state): state is string => typeof state === "string",
@@ -2671,7 +2829,7 @@ export const install = (): PageApi => {
     if (started === undefined) {
       start();
 
-      return { now, until: now, from: now, truncated: 0, records: [] };
+      return { now, until: now, from: now, truncated: 0, scrolled: 0, records: [] };
     }
     for (const track of tracks.values())
       if ((track.samples.at(-1)?.at ?? now) < now - retention) drop(track);
@@ -2700,6 +2858,7 @@ export const install = (): PageApi => {
       until: upTo,
       from: Math.max(started, now - retention),
       truncated: lost.filter((at) => at > after && at <= upTo).length,
+      scrolled: swept.filter((at) => at > after && at <= upTo).length,
       records: records.toSorted((left, right) => left.startedAt - right.startedAt),
     };
   };
@@ -2874,6 +3033,7 @@ export const ChangesResultSchema = Schema.Struct({
   until: Schema.Finite,
   from: Schema.Finite,
   truncated: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  scrolled: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   records: Schema.Array(ChangeRecordSchema),
 });
 

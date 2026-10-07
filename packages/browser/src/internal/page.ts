@@ -2196,6 +2196,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         at: Math.min(host(result.until), until ?? Number.POSITIVE_INFINITY),
         cursor: result.until,
         truncated: result.truncated,
+        scrolled: result.scrolled,
         changes: result.records.map(
           (record) =>
             new Change({

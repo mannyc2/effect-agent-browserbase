@@ -250,7 +250,7 @@ describe("a moment's account of what changed", () => {
     });
 
   const recorded = (changes: ReadonlyArray<Change>, from = 0) =>
-    new Changes({ from, at: 10_000, cursor: 0, truncated: 0, changes });
+    new Changes({ from, at: 10_000, cursor: 0, truncated: 0, scrolled: 0, changes });
 
   const price = { beside: "Price", heading: "Bitcoin" };
 
@@ -474,6 +474,7 @@ describe("a moment's account of what changed", () => {
         at: 10_000,
         cursor: 0,
         truncated: 40,
+        scrolled: 0,
         changes: [...ticks, placed],
       }),
     });
@@ -1066,6 +1067,106 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.deepStrictEqual(
         second.changes?.changes.map((change) => [change.kind, change.before, change.after]),
         [["text", "Row 5", "Row 5 sold"]],
+      );
+      assert.isAbove(second.changes?.scrolled ?? 0, 0);
+    }),
+  );
+
+  it.effect("keeps every change in an order book that scrolls as it ticks", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/quote");
+
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          document.body.insertAdjacentHTML(
+            "afterbegin",
+            `<div id="book" style="height:300px;overflow:auto"><p>Last <span id="last">100</span></p>${Array.from({ length: 60 }, (_, level) => `<p>Level ${level} <span>${200 + level}</span></p>`).join("")}</div>`,
+          );
+        }),
+      );
+      const first = yield* Moment.capture(page);
+
+      // The price ticks every 50 ms while the book is nudged up and down, and a trade arrives.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(async () => {
+          const book = document.querySelector("#book");
+          const last = document.querySelector("#last");
+          let price = 100;
+
+          const ticking = setInterval(() => {
+            if (last !== null) last.textContent = String(++price);
+          }, 50);
+
+          for (let step = 0; step < 60; step++) {
+            if (book !== null) book.scrollTop = step % 2 === 0 ? 2 : 0;
+            if (step === 30) {
+              const trade = document.createElement("p");
+
+              trade.textContent = "Trade 5 BTC at 101";
+              book?.prepend(trade);
+            }
+            await new Promise((resolve) => {
+              setTimeout(resolve, 16);
+            });
+          }
+          clearInterval(ticking);
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(300));
+      const second = yield* Moment.capture(page, { since: first });
+      const changes = second.changes?.changes ?? [];
+      const price = changes.find((change) => change.context.beside === "Last");
+
+      assert.strictEqual(price?.before, "100");
+      assert.strictEqual(price?.count, Number(price?.after) - 100);
+      assert.isTrue(
+        changes.some(
+          (change) => change.kind === "appeared" && change.after === "Trade 5 BTC at 101",
+        ),
+      );
+      assert.strictEqual(second.changes?.scrolled, 0);
+    }),
+  );
+
+  it.effect("keeps what changes in an app whose whole page is one scrolling element", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/quote");
+
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          document.body.style.overflow = "hidden";
+          document.body.innerHTML =
+            '<div id="app" style="height:100vh;overflow:auto"><h1>Shop</h1><div style="height:150px"></div><p>Price <span id="price">$10</span></p><div style="height:3000px"></div></div>';
+        }),
+      );
+      const first = yield* Moment.capture(page);
+
+      yield* Effect.promise(async () => {
+        await page.playwright.mouse.move(400, 300);
+        await page.playwright.mouse.wheel(0, 100);
+      });
+      yield* Effect.sleep(Duration.millis(40));
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const price = document.querySelector("#price");
+
+          if (price !== null) price.textContent = "$12";
+          const toast = document.createElement("div");
+
+          toast.textContent = "Added to cart";
+          toast.style.cssText = "position:sticky;top:0";
+          document.querySelector("#app")?.prepend(toast);
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(300));
+      const second = yield* Moment.capture(page, { since: first });
+
+      assert.deepStrictEqual(
+        second.changes?.changes.map((change) => [change.kind, change.before, change.after]),
+        [
+          ["appeared", undefined, "Added to cart"],
+          ["text", "$10", "$12"],
+        ],
       );
     }),
   );

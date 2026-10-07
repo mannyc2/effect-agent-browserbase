@@ -12,8 +12,10 @@
  * view is not. A removal the record had not watched is judged by what moves into its place, so
  * one out of the flow, or with nothing after it, is not told. Words are what a viewer could read:
  * text inside a hidden part of what changed is left out. What changes in a scrolling element just
- * after it scrolled, such as a virtual list rewriting or replacing its rows, is taken for the
- * scroll, not new content; a list that scrolls with the page itself is not recognised. What the script cannot read is not seen:
+ * after it scrolled is taken for the scroll, not new content, when it looks like a virtual list:
+ * several sibling rows taking each other's words, or rows both added and removed under one parent.
+ * Those are counted in `Changes.scrolled`, and anything else, such as one price or a new message,
+ * is told as ever. A list that scrolls with the page itself is not recognised. What the script cannot read is not seen:
  * pictures, a canvas, frames, shadow roots, SVG, and anything shown or hidden by CSS alone, such as
  * a class that reveals a toast.
  *
@@ -82,6 +84,11 @@ export class Changes extends Schema.Class<Changes>("effect-browser/Changes")({
   cursor: Schema.Finite,
   /** Changes in the window the record did not keep, at least; 0 when it kept them all. */
   truncated: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /**
+   * Changes in the window taken for a list's scroll, such as rows a virtual list rewrote or swapped
+   * as it scrolled, and so not told.
+   */
+  scrolled: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Oldest first, by when each began to change. */
   changes: Schema.Array(Change),
 }) {}
