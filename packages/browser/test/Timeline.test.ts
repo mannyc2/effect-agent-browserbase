@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
 
 import { PageOpened, RecordedEvent, TrackPerformed, TrackPlanned } from "../src/BrowserEvent.ts";
-import * as Timeline from "../src/internal/timeline.ts";
+import * as Timeline from "../src/internal/timeline/events.ts";
 
 const opened = (at: number) => new PageOpened({ at, page: "p1", url: "about:blank" });
 

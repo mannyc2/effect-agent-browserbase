@@ -29,7 +29,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
-import * as Url from "./internal/url.ts";
+import * as Url from "./internal/page/url.ts";
 import * as Page from "./Page.ts";
 
 // A parameter a model may leave out. Its JSON Schema allows null, as an optional one's does, and

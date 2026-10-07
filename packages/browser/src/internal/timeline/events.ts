@@ -4,8 +4,8 @@
  */
 import { Cause, Deferred, Effect, Stream } from "effect";
 
-import { BrowserError, EventHistoryExpired, InvalidRequest } from "../BrowserError.ts";
-import { type BrowserEvent, RecordedEvent } from "../BrowserEvent.ts";
+import { BrowserError, EventHistoryExpired, InvalidRequest } from "../../BrowserError.ts";
+import { type BrowserEvent, RecordedEvent } from "../../BrowserEvent.ts";
 
 /** The owning Browser validates capacity and closes this timeline with its scope. */
 export const make = (capacity: number) => {

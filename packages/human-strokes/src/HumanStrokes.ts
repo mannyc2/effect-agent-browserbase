@@ -1,6 +1,6 @@
 // This Node-only layer owns one fixed package asset without adding a platform dependency or
 // requiring a caller filesystem service.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- reads only its own package's asset
 import { readFile } from "node:fs/promises";
 
 import { Effect, Layer, Random, Result } from "effect";

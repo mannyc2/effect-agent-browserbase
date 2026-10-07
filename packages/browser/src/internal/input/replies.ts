@@ -5,7 +5,7 @@
  */
 import { Data, Effect } from "effect";
 
-import { maximumSamples } from "../Motion.ts";
+import { maximumSamples } from "../../Motion.ts";
 
 export const capacity = 64;
 

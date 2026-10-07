@@ -18,7 +18,8 @@ import type { Page as PlaywrightPage } from "playwright-core";
 import type { BrowserError, PolicyDenied } from "./BrowserError.ts";
 import type { BrowserEvent } from "./BrowserEvent.ts";
 import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
-import * as Script from "./internal/pageScript.ts";
+import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
+import * as Guard from "./internal/input/guard.inpage.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
 export interface Point {
@@ -128,7 +129,7 @@ export class Observation extends Schema.Class<Observation>("effect-browser/Obser
  * Facts never come from what an element's text says. What an input means, such as a payment
  * or a deletion, takes a judge that reads the evidence in the {@link InputRequest}.
  */
-export const Fact = Script.Fact;
+export const Fact = Guard.Fact;
 
 export type Fact = typeof Fact.Type;
 
@@ -176,7 +177,7 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Inp
       method: Schema.String,
       action: Schema.String,
       /** Each field's type, name and autocomplete tokens, and whether it is filled: never its value. */
-      fields: Schema.Array(Script.FormFieldSchema),
+      fields: Schema.Array(FormFieldSchema),
     }),
   ),
 }) {}

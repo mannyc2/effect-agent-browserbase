@@ -3,8 +3,8 @@ import { Clock as EffectClock, Duration, Effect, Option } from "effect";
 import { chromium, type CDPSession } from "playwright-core";
 
 import { make as makeBrowser } from "../src/Browser.ts";
-import * as Calibration from "../src/internal/calibration.ts";
-import * as Clock from "../src/internal/clock.ts";
+import * as Calibration from "../src/internal/pictures/calibration.ts";
+import * as Clock from "../src/internal/pictures/clock.ts";
 
 describe("Clock calibration", () => {
   it("keeps the true offset inside the full interval for asymmetric transports", () => {
