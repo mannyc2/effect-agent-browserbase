@@ -234,7 +234,8 @@ difference speaks to these pages only. It then gives:
 
 - each arm's tallies, and its median seconds, model turns and tool calls per graded trial;
 - per task and arm, the pass rate with Wilson's 95% interval; pass^3, the chance that three
-  trials all pass, estimated as τ-bench does; and the dollars and seconds per pass;
+  trials all pass, estimated as τ-bench does; the dollars and seconds per pass; and, for an
+  operate task, how many graded trials left the work on the page;
 - for each two arms, on the pages both were graded on, McNemar's exact test per task, with
   Holm's correction across the tasks, and the test stratified by task, which pools the
   discordant pairs, with Holm's correction across the pairs of arms;
@@ -242,6 +243,10 @@ difference speaks to these pages only. It then gives:
   Browserbase.
 
 A wrong answer counts against its arm; an infrastructure failure leaves its pair out of the test.
+On the page, an operate trial counts when its page holds the work the task asked for, whatever
+the answer said, so an order placed and then reported inside a sentence counts there but fails its
+grade. Each record keeps it as `onPage`, so a report counts format-only failures both ways until
+answers are judged rather than matched.
 
 | Arm | Operate tasks                                                                                                                                             | Understand tasks                               |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
