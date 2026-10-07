@@ -173,6 +173,7 @@ export const table = (records: ReadonlyArray<TrialRecord>) =>
       const subset = records.filter((record) => record.task === task && record.arm === arm);
       const graded = subset.filter((record) => record.status === "graded");
       const passed = graded.filter((record) => record.pass === true).length;
+      const operate = graded.filter((record) => record.onPage !== null);
 
       if (subset.length === 0) return [];
 
@@ -182,6 +183,9 @@ export const table = (records: ReadonlyArray<TrialRecord>) =>
           arm,
           graded: graded.length,
           passed,
+          /** Graded operate trials whose page holds the work, whatever the answer; null for understand. */
+          onPage:
+            operate.length === 0 ? null : operate.filter((record) => record.onPage === true).length,
           interval: wilson(passed, graded.length),
           passHatK: passHatK(passed, graded.length, reliability),
           usdPerPass:
@@ -258,10 +262,10 @@ const comparisonLines = (records: ReadonlyArray<TrialRecord>) => [
   "Estimand: whether one arm passes more often than another on these tasks' pages, paired by task",
   "and seed. The tasks are fixed, not sampled, so a difference speaks to these pages only.",
   "",
-  `${"task".padEnd(14)} arm  passed  rate  95% interval  pass^${reliability}  $/pass  s/pass  infra`,
+  `${"task".padEnd(14)} arm  passed  rate  95% interval  pass^${reliability}  $/pass  s/pass  on page  infra`,
   ...table(records).map(
     (row) =>
-      `${row.task.padEnd(14)} ${String(row.arm ?? "-").padStart(3)}  ${`${row.passed}/${row.graded}`.padStart(6)}  ${fixed(row.passed / row.graded, 2).padStart(4)}  ${`${fixed(row.interval.low, 2)}-${fixed(row.interval.high, 2)}`.padEnd(12)}  ${fixed(row.passHatK, 2).padStart(6)}  ${fixed(row.usdPerPass, 4).padStart(6)}  ${fixed(row.secondsPerPass, 1).padStart(6)}  ${row.infrastructureFailed}`,
+      `${row.task.padEnd(14)} ${String(row.arm ?? "-").padStart(3)}  ${`${row.passed}/${row.graded}`.padStart(6)}  ${fixed(row.passed / row.graded, 2).padStart(4)}  ${`${fixed(row.interval.low, 2)}-${fixed(row.interval.high, 2)}`.padEnd(12)}  ${fixed(row.passHatK, 2).padStart(6)}  ${fixed(row.usdPerPass, 4).padStart(6)}  ${fixed(row.secondsPerPass, 1).padStart(6)}  ${(row.onPage === null ? "-" : `${row.onPage}/${row.graded}`).padStart(7)}  ${row.infrastructureFailed}`,
   ),
   ...compare(records).flatMap(({ first, second, byTask, combined }) => [
     "",
@@ -321,9 +325,16 @@ export const summary = (records: ReadonlyArray<TrialRecord>): ReadonlyArray<stri
     const subset = records.filter((record) => record.arm === arm);
     const graded = subset.filter((record) => record.status === "graded");
     const spent = subset.reduce((total, record) => total + record.accounting.knownUsd, 0);
+    const operate = graded.filter((record) => record.onPage !== null);
+
+    // A format-only failure is graded as one; on the page, the work counts whatever the answer said.
+    const onPage =
+      operate.length === 0
+        ? ""
+        : `; on the page, ${operate.filter((record) => record.onPage === true).length} of ${operate.length} graded operate trials`;
 
     lines.push(
-      `${tallied(`arm ${arm} (${arm === null ? "" : armNames[arm]}):`, subset)}; median ${median(graded.map((record) => record.seconds)).toFixed(1)}s, ${median(graded.map((record) => record.steps ?? 0))} turns and ${median(graded.map((record) => record.actions ?? 0))} tool calls per graded trial; $${spent.toFixed(4)} known`,
+      `${tallied(`arm ${arm} (${arm === null ? "" : armNames[arm]}):`, subset)}${onPage}; median ${median(graded.map((record) => record.seconds)).toFixed(1)}s, ${median(graded.map((record) => record.steps ?? 0))} turns and ${median(graded.map((record) => record.actions ?? 0))} tool calls per graded trial; $${spent.toFixed(4)} known`,
     );
   }
 
