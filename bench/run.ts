@@ -39,6 +39,7 @@ import {
 import * as Diagnostics from "./Diagnostics.ts";
 import * as Latency from "./Latency.ts";
 import * as Recorder from "./Recorder.ts";
+import * as Relay from "./Relay.ts";
 import { frameHistory, type Task, tasks } from "./Tasks.ts";
 import * as Trace from "./Trace.ts";
 import {
@@ -163,7 +164,7 @@ interface TrialRecord {
   readonly timing: Timing;
   /** Opening the browser, the model's tool calls and looks at the page, within `seconds`. */
   readonly phases: Trace.Phases;
-  /** A latency run's DevTools commands and round trips, by span; null otherwise. */
+  /** A latency or hosted run's DevTools commands and round trips, by span; null otherwise. */
   readonly protocol: Trace.Protocol | null;
   /** The fastest round trip to the browser that its clock calibrations measured; null if none ran. */
   readonly roundTripMillis: number | null;
@@ -305,14 +306,16 @@ const main = Effect.gen(function* () {
     Layer.provide(FetchHttpClient.layer),
   );
 
-  // A trial's browser. A latency run's records the DevTools commands the trial sends, and a hosted
-  // run's session carries the trial's `metadata`.
+  // A trial's browser. A latency or hosted run's records the DevTools commands the trial sends, and
+  // a hosted run's session carries the trial's `metadata`.
   const browser = (trial: {
     readonly record: (command: Latency.Command) => void;
     readonly metadata: Readonly<Record<string, string>>;
   }) =>
     hosted
-      ? hostedBrowser(options.humanize, trial.metadata).pipe(Layer.provide(browserbaseClient))
+      ? hostedBrowser(options.humanize, trial.metadata).pipe(
+          Layer.provide(Relay.client(trial.record).pipe(Layer.provide(browserbaseClient))),
+        )
       : latency !== undefined
         ? Latency.layer(latency, { humanize: options.humanize, frameHistory }, trial.record)
         : Chromium.layer({ humanize: options.humanize, frameHistory });
@@ -552,7 +555,9 @@ const main = Effect.gen(function* () {
 
         // Before the spans are read, so the commands' own spans are among them.
         const protocol =
-          latency === undefined || exit === undefined ? null : Trace.protocol(traced, commands);
+          (latency === undefined && !hosted) || exit === undefined
+            ? null
+            : Trace.protocol(traced, commands);
 
         const calls = account === undefined ? noCalls : yield* account.calls;
 

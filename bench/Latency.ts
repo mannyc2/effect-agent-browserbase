@@ -136,6 +136,7 @@ const frameAt = (data: Buffer, at: number) => {
   return {
     last: (first & 0x80) !== 0,
     control: (first & 0x08) !== 0,
+    close: (first & 0x0f) === 0x08,
     payload,
     size: head + length,
   };
@@ -143,9 +144,9 @@ const frameAt = (data: Buffer, at: number) => {
 
 /**
  * Read one direction of a WebSocket connection, past its opening handshake, as the text of each
- * message once its last frame has arrived.
+ * message once its last frame has arrived, and `onClose` at a closing frame.
  */
-const messages = (onMessage: (text: string) => void) => {
+export const messages = (onMessage: (text: string) => void, onClose: () => void = () => {}) => {
   let held: Array<Buffer> = [];
   let size = 0;
   let needed = 0;
@@ -183,6 +184,7 @@ const messages = (onMessage: (text: string) => void) => {
         return;
       }
       at += frame.size;
+      if (frame.close) onClose();
       if (frame.control) continue;
       parts.push(frame.payload);
       if (frame.last) {
@@ -206,7 +208,7 @@ const fields = (
 };
 
 // Each command the bench sends, matched with its answer by the id the bench gave it.
-const protocol = (clock: Clock.Clock, record: (command: Command) => void) => {
+export const protocol = (clock: Clock.Clock, record: (command: Command) => void) => {
   const pending = new Map<number, { readonly method: string; readonly sent: bigint }>();
 
   return {
@@ -332,17 +334,8 @@ const portOf = (server: Server) => {
   return typeof address === "object" && address !== null ? address.port : 0;
 };
 
-/**
- * Open a `Browser` on a new 1280×720 context of a local Chromium whose DevTools connection takes
- * `roundTripMillis` more per round trip, half each way. The context is fresh, as a new hosted
- * session's is, so it is calibrated the same way. Each command sent over the connection is passed
- * to `record` once answered.
- */
-export const open = Effect.fn("Latency.open")(function* (
-  roundTripMillis: number,
-  options: Browser.Options,
-  record: (command: Command) => void,
-) {
+/** A local Chromium for the rest of the scope, and its DevTools WebSocket address. */
+export const chromiumEndpoint = Effect.gen(function* () {
   const profile = yield* Effect.acquireRelease(
     Effect.sync(() => mkdtempSync(join(tmpdir(), "bench-latency-"))),
     (directory) =>
@@ -355,6 +348,22 @@ export const open = Effect.fn("Latency.open")(function* (
   );
 
   const { endpoint } = yield* Effect.acquireRelease(launch(profile), ({ child }) => stop(child));
+
+  return endpoint;
+});
+
+/**
+ * Open a `Browser` on a new 1280×720 context of a local Chromium whose DevTools connection takes
+ * `roundTripMillis` more per round trip, half each way. The context is fresh, as a new hosted
+ * session's is, so it is calibrated the same way. Each command sent over the connection is passed
+ * to `record` once answered.
+ */
+export const open = Effect.fn("Latency.open")(function* (
+  roundTripMillis: number,
+  options: Browser.Options,
+  record: (command: Command) => void,
+) {
+  const endpoint = yield* chromiumEndpoint;
 
   const clock = yield* Clock.Clock;
 

@@ -113,7 +113,7 @@ error with its closed diagnostic, the call `accounting` (calls, tokens, known do
 reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
 provider requests), `phases` (seconds opening the browser, in the model's tool calls, and looking
 at the page outside them: the agent's observations, an arm's own pictures and outlines, a moment's
-capture), a latency run's `protocol` (see below), the fastest round trip to the browser
+capture), a latency or hosted run's `protocol` (see below), the fastest round trip to the browser
 its clock calibrations measured (`roundTripMillis`), a hosted trial's Browserbase `region`, the
 trial's `traceId` and elapsed seconds including browser setup and cleanup. The ISO start time is a
 calendar date; elapsed time uses a monotonic clock.
@@ -185,12 +185,15 @@ capture took about 0.7 seconds.
 
 ### Hosted commands
 
-A hosted trial's `protocol` is null: the bench cannot read a hosted connection's messages, and
-Browserbase's session log is no substitute. On 7 October 2026 its entries carried no timestamps,
-though its API reference lists them; it kept about every other DevTools message; it appeared 5 to
-20 seconds after the session ended; and a session whose page never navigated had none. Count a
-trial's commands and round trips with `--latency`, which runs the same code; a hosted trial's spans
-give each operation's time.
+A hosted trial's browser connects through a relay in the bench: Playwright speaks to a local
+WebSocket, and each message goes on over the session's own connection to Browserbase. The relay
+records commands as the latency proxy does, so a hosted trial has the same `CDP <method>` spans and
+`protocol`, timed on the bench's clock. A command's span is its whole round trip; less the
+trial's `roundTripMillis`, about what the trip itself costs, it is roughly the browser's time on it.
+The relay offers Playwright no compression; the onward connection is the session's. Browserbase's
+session log is no substitute: on 7 October 2026 its entries carried no timestamps, though its API
+reference lists them, it kept about every other DevTools message, it appeared 5 to 20 seconds
+after the session ended, and a session whose page never navigated had none.
 
 ## Arms
 
