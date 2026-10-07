@@ -4,7 +4,7 @@
  * pixel is a CSS pixel and nothing is cropped, and two otherwise, unless Playwright emulates the
  * viewport.
  */
-import { Duration, Effect, Option, Schedule, Schema, Sink, Stream } from "effect";
+import { Duration, Effect, Option, Schedule, Schema } from "effect";
 
 import { BrowserError, Failed, InvalidRequest, Timeout } from "../../BrowserError.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
@@ -361,39 +361,3 @@ export const make = Effect.fnUntraced(function* (
 
   return { capture, screenshot, frame, zoom };
 });
-
-export const waitForStill =
-  (page: PageContext, capture: Capture.Controller) =>
-  (stillOptions: { readonly quietMillis?: number; readonly timeout?: Duration.Input } = {}) => {
-    const quiet = stillOptions.quietMillis ?? 600;
-    const screencast = capture.stream;
-
-    const still = <E>(frames: Stream.Stream<Frame, E>) =>
-      frames.pipe(Stream.timeout(Duration.millis(quiet)), Stream.runDrain);
-
-    // A running capture's silence already means the page is still. A new capture's first frame
-    // can take longer than `quiet`, over half a second from a hosted browser, so the quiet counts
-    // from that frame; Chrome sends one as a capture starts, even of a still page.
-    return capture.active.pipe(
-      Effect.flatMap((running) =>
-        running
-          ? still(screencast())
-          : Stream.peel(screencast(), Sink.take(1)).pipe(
-              Effect.flatMap(([, rest]) => still(rest)),
-              Effect.scoped,
-            ),
-      ),
-      Effect.timeoutOrElse({
-        duration: stillOptions.timeout ?? Duration.seconds(15),
-        orElse: () =>
-          failWith(
-            "waitForStill",
-            new Timeout({
-              millis: Duration.toMillis(stillOptions.timeout ?? Duration.seconds(15)),
-            }),
-          ),
-      }),
-      page.span("Page.waitForStill"),
-      page.owned,
-    );
-  };

@@ -16,15 +16,15 @@ export interface TextRequest {
   readonly unmask: boolean;
 }
 
-export const TextResultSchema = Schema.Union([
+/** What `read` sends back, or null when its ref no longer names an element. */
+export const TextResultSchema = Schema.NullOr(
   Schema.Struct({
     text: Schema.String,
     truncated: Schema.Boolean,
     url: Schema.String,
     title: Schema.String,
   }),
-  Schema.Struct({ error: Schema.Literal("stale"), detail: Schema.String }),
-]);
+);
 
 export type TextResult = typeof TextResultSchema.Type;
 
@@ -66,8 +66,7 @@ export const text = (names: Names, walked: Walk) => {
   const read = (request: TextRequest): TextResult => {
     const root = request.ref === null ? null : lookup(request.ref);
 
-    if (root === undefined)
-      return { error: "stale", detail: `${request.ref ?? ""} is not on the page any more` };
+    if (root === undefined) return null;
     const lines: Array<string> = [];
     let line = "";
 

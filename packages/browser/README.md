@@ -35,6 +35,7 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
 | `Moment`       | What a page showed and what happened on it over a window, laid out as a model prompt |
+| `Plan`         | A walk recorded from a page's events, replayed on a fresh page by subject            |
 
 `Agent.run` batches each turn's tool calls in order, halting on the first failure or a completed
 `done` / `give_up`. Skipped calls receive a not-executed result. A malformed `done` answer can
@@ -86,10 +87,10 @@ whether it is in the viewport, and its state (disabled, focused, and checked, ex
 pressed or a heading's level where they apply). A `role` matches ignoring case. A `name` matches
 when it reads the same once spaces are collapsed and case folded, or when a `RegExp` finds itself
 in it. `text` matches the smallest element showing it, and a control or heading for the words
-inside it; `near` matches words of the context. With no rule, `find` returns every element in
-scope that has a role or is a control. There is no ordinal: a caller tells equal elements apart by
-their context, and finding none is an empty result, not a failure. `scope: "document"` reads the
-whole page; the default is the viewport.
+inside it; `near` matches whole words of the context, as replay's choice does. With no rule,
+`find` returns every element in scope that has a role or is a control. There is no ordinal: a
+caller tells equal elements apart by their context, and finding none is an empty result, not a
+failure. `scope: "document"` reads the whole page; the default is the viewport.
 
 `Page.text` reads what the viewport shows, or one element whole with `scope` set to its ref, in one
 call to the page: a line per block, table cells apart by tabs, cut at a line after `maxChars`
@@ -105,6 +106,33 @@ positioned out of it, so a subtree is kept when its box is empty, or when it hol
 at the viewport's edges, corners or middle, or in its top layer; something pinned elsewhere, inside
 a subtree out of view, is missed. The outline's `above` and `below` count the parts skipped, each an
 element out of view with all it holds.
+
+`Page.ready` waits until a page is ready to be shown, asking the page in one call every 100 ms:
+its document is parsed and has painted since, nothing that ends is animating in view, its fonts
+and the images in view have loaded, and the viewport shows something. A hidden tab, which paints
+nothing, is never ready. With `quietMillis`, the screen must then also stay still that long: no
+screencast frame comes, counted from the first frame of a capture the wait starts itself, since a
+hosted browser sends that frame over half a second late. Stillness is a heuristic on a canvas: a
+canvas that keeps drawing, such as a live chart, is never still, and one that pauses longer than
+`quietMillis` between phases reads as still. On the slot machine fixture, 0 of 130 waits, at
+local speed, with the CPU slowed four times, and behind 70 and 300 ms round trips, ended while
+the reels spun.
+
+`Plan` rehearses a walk once and replays it later, near live, with no model call.
+`Plan.fromEvents(page.recentEvents)` keeps one page's completed actions with their subjects and
+the options they were given, its navigations with the address asked for and the one reached, and
+what was typed as an input slot named for its field, never the text itself. `Plan.replay(page,
+plan, { inputs })` takes the steps in turn: before each that acts, it waits for `Page.ready`
+(`settle` sets how, or `false` not to wait), finds the one element the step's subject names with
+`Plan.locate`, and acts on it. Context decides between equal candidates: one in another row or
+under another column is not the subject, and the rest rank by how much of the recorded context
+they repeat; a tie is `Ambiguous`, since there is no ordinal. An element step never falls back to
+coordinates. A step recorded at a point presses the same place within the element found, brought
+into view first, and only when a press there reaches that element, not something over it. Replay
+stops at the first step it cannot take, with a `ReplayError` naming the step and why: `Missing`,
+`Ambiguous`, `Drifted` (the subject is only in another row, or the walk ended on another site), or
+the step's `BrowserError`. Nothing is replayed automatically, and a plan of another version does
+not decode.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
@@ -419,9 +447,9 @@ records except text: the target, the subject's role, name and tag, whether input
 `Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
 `Page.observe`, `Page.snapshot`, `Page.find`, `Page.text`, `Page.screenshot` and `Page.frame` (with
-`source`: a reused screencast `frame` or a new `screenshot`), `Page.zoom` and the waits are spans,
-and so is each round trip to the page's script (`Page.evaluate`) and its registration
-(`Page.register`). Each page span reports its cost on the page's own protocol session: `calls`,
+`source`: a reused screencast `frame` or a new `screenshot`), `Page.zoom`, `Page.ready` and the
+other waits are spans, as are `Plan.replay` and `Plan.locate`, and so is each round trip to the
+page's script (`Page.evaluate`) and its registration (`Page.register`). Each page span reports its cost on the page's own protocol session: `calls`,
 `bytesOut` and `bytesIn` (their parameters and results as JSON) and `waitedMillis`, how long at
 least one call awaited its reply. An operation inside another counts toward both. Calls Playwright
 makes on its own sessions, such as navigation, are not counted. `Chromium.launch`, `Cdp.connect`,

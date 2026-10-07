@@ -70,6 +70,11 @@
       "types": "./dist/Page.d.mts",
       "default": "./dist/Page.mjs"
     },
+    "./Plan": {
+      "@effect-browser/source": "./src/Plan.ts",
+      "types": "./dist/Plan.d.mts",
+      "default": "./dist/Plan.mjs"
+    },
     "./Policy": {
       "@effect-browser/source": "./src/Policy.ts",
       "types": "./dist/Policy.d.mts",

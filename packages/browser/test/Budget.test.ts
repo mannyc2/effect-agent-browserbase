@@ -123,7 +123,10 @@ it.live("a read costs two calls on a new document, and one warm", () =>
     holds(yield* sentBy(proxy, page.snapshot()), 2, 2);
     holds(yield* sentBy(proxy, page.snapshot()), 1, 1);
     holds(yield* sentBy(proxy, page.find({ role: "heading" })), 1, 1);
+    holds(yield* sentBy(proxy, page.find({ at: { x: 20, y: 20 } })), 1, 1);
     holds(yield* sentBy(proxy, page.text()), 1, 1);
+    // A still page is ready at its first check.
+    holds(yield* sentBy(proxy, page.ready()), 1, 1);
     assert.include((yield* page.text()).text, "two");
   }).pipe(Effect.scoped),
 );

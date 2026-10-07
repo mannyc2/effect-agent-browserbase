@@ -3,7 +3,7 @@
  * registers the script, so every later document runs it in an isolated world from its start; calls
  * go to the current document's world. The script is composed from the domains' page-side parts,
  * the `*.inpage.ts` modules, in the order they depend on one another: names, the walk, matching,
- * context, subjects and text, then the outline and the input parts.
+ * context, subjects, text and readiness, then the outline and the input parts.
  */
 import { Effect, Semaphore } from "effect";
 
@@ -25,10 +25,11 @@ import {
 } from "../input/guard.inpage.ts";
 import { type PointResult, targets } from "../input/targets.inpage.ts";
 import { context } from "../reading/context.inpage.ts";
-import { type FindRequest, match } from "../reading/match.inpage.ts";
+import { match } from "../reading/match.inpage.ts";
 import { names } from "../reading/names.inpage.ts";
 import { outline, type SnapshotRequest, type SnapshotResult } from "../reading/outline.inpage.ts";
-import { type FindResult, subjects } from "../reading/subjects.inpage.ts";
+import { type Readiness, ready } from "../reading/ready.inpage.ts";
+import { subjects, type Subjects } from "../reading/subjects.inpage.ts";
 import { text, type TextRequest, type TextResult } from "../reading/text.inpage.ts";
 import { walk } from "../reading/walk.inpage.ts";
 import { contextGone, type PageContext } from "./context.ts";
@@ -36,8 +37,9 @@ import { contextGone, type PageContext } from "./context.ts";
 export interface PageApi {
   readonly version: number;
   snapshot(request: SnapshotRequest): SnapshotResult;
-  find(request: FindRequest): FindResult;
+  find: Subjects["find"];
   text(request: TextRequest): TextResult;
+  ready(): Promise<Readiness>;
   point(target: string | { readonly x: number; readonly y: number }, scroll?: boolean): PointResult;
   scrollPlan(
     ref: string,
@@ -68,6 +70,7 @@ const install = (
   makeContext: typeof context,
   makeSubjects: typeof subjects,
   makeText: typeof text,
+  makeReady: typeof ready,
   makeOutline: typeof outline,
   makeTargets: typeof targets,
   makeEvidence: typeof evidence,
@@ -76,7 +79,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 6) return installed;
+  if (installed !== undefined && installed.version === 7) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named);
@@ -88,10 +91,11 @@ const install = (
   const edited = makeEdit(named, guarded);
 
   const api: PageApi = {
-    version: 6,
+    version: 7,
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
+    ready: makeReady(texts).check,
     point: located.point,
     scrollPlan: located.scrollPlan,
     viewport: read.viewport,
@@ -109,7 +113,7 @@ const install = (
 };
 
 /** The expression that installs the script and evaluates to its API. */
-export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, outline, targets, evidence, guard, edit].join(", ")})`;
+export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, ready, outline, targets, evidence, guard, edit].join(", ")})`;
 
 const worldName = "effect-browser";
 

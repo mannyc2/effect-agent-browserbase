@@ -2,7 +2,7 @@
  * Reading a page: its outline with refs, the elements a query finds, the text it shows, and an
  * observation that pairs the outline with a picture.
  */
-import { Duration, Effect, Ref, Schedule } from "effect";
+import { Duration, Effect, Ref, Schedule, Schema } from "effect";
 
 import {
   type BrowserError,
@@ -11,7 +11,6 @@ import {
   StaleRef,
   Timeout,
 } from "../../BrowserError.ts";
-import { Subject } from "../../BrowserEvent.ts";
 import type { Image } from "../../Frame.ts";
 import {
   type FindQuery,
@@ -26,8 +25,10 @@ import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext } from "../page/context.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
 import { type SnapshotRequest, SnapshotResultSchema } from "./outline.inpage.ts";
-import { FindResultSchema } from "./subjects.inpage.ts";
 import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
+
+// What `find` reads back: the elements, and the next ref the page may give.
+const FindResults = Schema.Struct({ found: Schema.Array(Found), nextRef: Schema.Finite });
 
 // A pattern crosses into the page as its source and flags.
 const wanted = (value: string | RegExp | undefined): Wanted | null =>
@@ -94,27 +95,19 @@ export const make = Effect.fnUntraced(function* (
         name: wanted(query.name),
         text: wanted(query.text),
         near: query.near ?? null,
+        at: query.at ?? null,
         scope: query.scope ?? "viewport",
         firstRef: yield* Ref.get(nextRef),
       };
 
       const result = yield* evaluate("find", scriptCall("find", request)).pipe(
-        Effect.flatMap(decodeWith("find", FindResultSchema)),
+        Effect.flatMap(decodeWith("find", FindResults)),
       );
 
       yield* counted(result.nextRef);
       yield* Effect.annotateCurrentSpan({ found: result.found.length });
 
-      return result.found.map(
-        ({ ref, role, name, tag, context, box, inViewport, state }) =>
-          new Found({
-            ref,
-            subject: new Subject({ role, name, tag, context }),
-            box,
-            inViewport,
-            state,
-          }),
-      );
+      return result.found;
     }).pipe(
       bounded("find"),
       // The query's words are the caller's, and may be anything; only its shape is traced.
@@ -142,7 +135,7 @@ export const make = Effect.fnUntraced(function* (
         Effect.flatMap(decodeWith("text", TextResultSchema)),
       );
 
-      if ("error" in result) return yield* failWith("text", new StaleRef({ ref: scope }));
+      if (result === null) return yield* failWith("text", new StaleRef({ ref: scope }));
       yield* Effect.annotateCurrentSpan({ chars: result.text.length, truncated: result.truncated });
 
       return new Text({ ...result, at: now() });
