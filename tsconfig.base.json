@@ -20,6 +20,16 @@
     "plugins": [
       {
         "name": "@effect/language-service",
+        // Effect 4 marks its AI, HTTP and observability modules unstable, and these packages are
+        // built on them; the exact Effect pin is what holds them still. Any other unstable or
+        // experimental API still warns.
+        "allowedUnstableApis": [
+          "effect/ai",
+          "effect/http",
+          "effect/observability",
+          "@effect/ai-openrouter",
+          "@effect/ai-typesafe"
+        ],
         "diagnosticSeverity": {
           "allOfMapToForEach": "warning",
           "anyUnknownInErrorContext": "suggestion",

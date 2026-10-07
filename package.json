@@ -19,18 +19,22 @@
     "ready": "bun run fmt:check && bun run lint && bun run check && bun run test && bun run build"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.45.0",
+    "@effect/tsgo": "0.51.0",
     "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "26.1.2",
     "effect": "4.0.0",
-    "oxfmt": "0.64.0",
+    "oxfmt": "0.72.0",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
     "playwright-core": "1.63.0",
     "typescript": "7.0.2",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.2",
-    "vite-plus": "0.3.2",
-    "vitest": "4.1.11"
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+    "vite-plus": "1.1.0",
+    "vitest": "5.0.3"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+    "vitest": "5.0.3"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

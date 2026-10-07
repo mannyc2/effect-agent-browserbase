@@ -11,8 +11,9 @@ Open a focused PR against `main` that explains the change and how it was checked
 | Bun                  | 1.4.2                        |
 | Effect               | 4.0.0                        |
 | Playwright           | playwright-core 1.63.0       |
-| TypeScript / Vite+   | 7.0.2 / 0.3.2                |
-| Effect tsgo / Oxlint | 0.45.0 / 1.82.0              |
+| TypeScript / Vite+   | 7.0.2 / 1.1.0                |
+| Vitest               | 5.0.3, as Vite+ 1.1.0 ships  |
+| Effect tsgo / Oxlint | 0.51.0 / 1.82.0              |
 
 Every manifest names exact versions and `bun.lock` is committed. On a host with a different Node or
 Bun, `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"` installs the
