@@ -281,8 +281,8 @@ capture, a lost final paint or later input never presents older paint as the pag
 
 A new picture goes on the page's own protocol session. Where a device pixel is a CSS pixel and
 nothing is cropped, it is one `Page.captureScreenshot`; a crop, or another device pixel ratio, adds
-the page's layout metrics for Playwright's clip formula. Over CDP the page's first picture also
-learns its viewport. Where Playwright emulates the viewport, as `Chromium.layer` does, a crop or a
+the page's layout metrics for Playwright's clip formula. Where Playwright knows no viewport, as in
+the default context over CDP, the page's first picture also learns it. Where Playwright emulates the viewport, as `Chromium.layer` does, a crop or a
 scaled picture is Playwright's own screenshot, on its own session: a clipped capture on another
 session would clear that emulation when it restores its own.
 
