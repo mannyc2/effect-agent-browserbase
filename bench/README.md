@@ -183,8 +183,8 @@ and exported traces out of commits; a packed replay leaves the spans out.
 ### Latency
 
 `--latency <ms>` runs the local Chromium over the DevTools protocol through a proxy that adds that
-many milliseconds to each round trip, half each way, with a fresh 1280×720 context calibrated as a
-new hosted session's is. It costs nothing, so hosted round trips can be measured before paying for
+many milliseconds to each round trip, half each way, with a fresh 1280×720 context, as a new hosted
+session's is. It costs nothing, so hosted round trips can be measured before paying for
 sessions; it reproduces neither a hosted browser's network nor its machine.
 
 The proxy also reads the protocol. Each command a trial sends becomes a `CDP <method>` client span
@@ -194,7 +194,7 @@ another. The trial's `protocol` counts its commands and round trips, in all and 
 span with its methods; commands in flight together share a round trip. The run ends with the span
 names that took the most round trips, and about how long one took. Attribution is by time alone: a
 command sent in the background, such as a screencast frame's acknowledgement, or by an operation
-running alongside another, such as a clock calibration during a page's first outline, lands on the
+running alongside another, such as a clock measurement alongside a capture, lands on the
 innermost span open at the time. Only method names are kept, since parameters can carry typed
 text. The proxy declines the WebSocket compression the bench offers, to read the messages; a round
 trip costs the same, as the proxy adds delay but no bandwidth limit.
@@ -209,6 +209,11 @@ Since then, startup calibration runs its probes in the private page's main world
 marker script with the screencast start, and spaces its markers 180 ms apart from sending rather
 than from each answer; a page's later documents reuse its main frame's id. At 72 ms, opening a
 browser went from 2.6 to 2.2 seconds and calibration from 15 round trips to 10.
+
+Since then, opening a browser measures nothing: a browser's first capture maps its clock, and later
+captures start with that mapping. At 72 ms, opening a browser went from 2.2 to 0.6 seconds and from
+about 17 round trips to 4, the scripted `checkout` and `chart-read` trials from 50 round trips to 36
+on average, and a later capture's start to its first frame from 0.52 to 0.23 seconds.
 
 ### Hosted commands
 
@@ -377,6 +382,23 @@ and Jev `jev-1.13.0`, for $0.018 in all:
 - **Labels within a risky input:** Jev added `communication` 13 times and `access` 7 times where
   the case's truth names another risk. The 6 `secret` labels that every arm adds are forms that
   submit a filled password or card: structure says so, while the truth names only the main risk.
+
+## Browserbase contract
+
+`effect-browserbase/testing` exports the in-memory Browserbase its tests and the bench's hosted
+tests run on (`TestBrowserbase`), and the checks it is held to (`BrowserbaseContract.checks`):
+what the package relies on Browserbase to do. `bun run bench contract` runs those checks against
+Browserbase itself, so a fake that has drifted from the service shows:
+
+```sh
+EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... bun run bench contract
+```
+
+Each check prints `held`, `BROKEN` with what Browserbase did instead, or `unrun` with the
+operation and reason when Browserbase could not be asked; a failed call's own text is left out,
+since it can carry session ids. Checks that move the test clock, such as a session ending at its
+timeout, run against the fake only. A run opens two sessions of a few seconds each and a stored
+context, and exits with an error unless every check held.
 
 ## Tests
 

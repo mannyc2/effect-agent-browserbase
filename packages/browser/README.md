@@ -304,15 +304,17 @@ Compare these stamps only within that clock: they are not epoch dates or compara
 milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
 Screenshot fallbacks have only a host capture interval; their `timestamp` getter is undefined.
 Moment windows and frame captions use `hostTime`, so delayed delivery cannot make old paint current.
-A picture states how old it may be. `Page.frame({ maxAge, after })` and `Page.screenshot` serve the
-newest screencast frame when it has the viewport's size and was painted at most `maxAge` ago, at the
-earliest its timing allows: 250 ms by default, while 0 always takes a new screenshot. With
-`after: "input"` the frame must also follow the page's latest submitted input, including input of
-an interrupted action, while no action is changing the page: what a caller that has just acted
-needs. A screencast sends only changes and can miss a final paint, so a frame is only ever as
-current as its age. Otherwise a new screenshot is taken, which `frame` returns as a
-`Screenshot`-timed frame. `observe` and a `Moment`'s last frame use `after: "input"`, so a stopped
-capture, a lost final paint or later input never presents older paint as the page an action left.
+A picture states how old it may be. `Page.frame({ maxAge, after })` serves the newest screencast
+frame when it has the viewport's size and was painted at most `maxAge` ago, at the earliest its
+timing allows: 250 ms by default, while 0 always takes a new screenshot. With `after: "input"` the
+frame must also follow the page's latest submitted input, including input of an interrupted action,
+while no action is changing the page: what a caller that has just acted needs. `Page.screenshot`
+always applies that rule, so a caller that acts and then looks sees what its action did; a deck or a
+narrator that wants a picture of a stated age reads `frame`. A screencast sends only changes and can
+miss a final paint, so a frame is only ever as current as its age. Otherwise a new screenshot is
+taken, which `frame` returns as a `Screenshot`-timed frame. `observe` takes a screenshot and a
+`Moment`'s last frame uses `after: "input"`, so a stopped capture, a lost final paint or later input
+never presents older paint as the page an action left.
 
 A new picture goes on the page's own protocol session. Where a device pixel is a CSS pixel and
 nothing is cropped, it is one `Page.captureScreenshot`; a crop, or another device pixel ratio, adds
@@ -330,30 +332,30 @@ action records its `subject`, and a drag where it ended (`to`): the role, access
 context of what it found, read as the input was sent, the same subject `Page.find` gives. A ref is
 reused by later outlines, so read `subject` rather than resolving `target` against a later snapshot.
 
-Local launches and new Browserbase sessions measure clock offset and send-to-captured-image delay
-on a private blank page before user scripts or public pages run. `Browser.captureCalibration`
-holds those samples; `delayFor(frame)` maps their median delay onto that frame's clock estimate for
-the consumer's compositor. This measures the first observed captured marker, not pure rendering lag.
-The measurement is evidence, not a prerequisite: if it fails, `captureCalibration` is empty and the
-browser opens anyway. Only a private page that cannot be closed fails `Browser.make`.
-Supplied contexts and attached sessions receive read-only clock probes and expose no active startup
-measurement. Transport asymmetry remains in the reported uncertainty.
-
 Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its
-pages. The startup measurement seeds it; otherwise the first page that needs it probes it. Each new
-capture refreshes the mapping and keeps the previous estimate if the page cannot answer in time, so a
-busy page only fails while its browser has no estimate at all; that failure is undispatched. A new
-measurement replaces the estimate only if it is no less certain, or if its interval cannot contain
-the current offset (the clocks moved); a probe slowed by one busy tab cannot skew every tab's stamps.
+pages. Opening a browser measures nothing: the browser's first capture measures the mapping, with
+three read-only probes in a world of their own, and waits for that one estimate. A later capture
+starts with the estimate there is and, once it is ten seconds old, measures again alongside, for the
+captures after it. A busy page's capture fails, undispatched, only while its browser has no estimate
+at all. An estimate says less about the offset as it ages, by up to 100 parts per million of its
+age, and a frame carries the uncertainty of its capture's estimate at its paint. A new measurement
+replaces the estimate only if it says more about the offset than the aged one, or if its interval
+cannot contain the current offset (the clocks moved); a probe slowed by one busy tab cannot skew
+every tab's stamps. Transport asymmetry remains in the reported uncertainty.
 
-Mouse input and raw text-key events carry the calibrated epoch timestamp. Shortcut chords retain
-Playwright's platform behavior, and Unicode insertion has no timestamp field. Startup probes are
-unstamped so the measurement remains observable.
+Once a capture has mapped the clock, mouse input and raw text-key events carry the epoch time each
+was meant for; until then Chromium stamps them as it receives them, and input never waits for a
+measurement. Shortcut chords retain Playwright's platform behavior, and Unicode insertion has no
+timestamp field.
 
-`Page.captureStats` reports lifetime received and accepted frames, missing timestamps, frames
-dropped out of order, for their size (`foreignSize`) or for coming during one of the library's own
-clipped pictures (`duringPictures`), observed subscriber losses and paint-time gap
-totals/minimum/maximum/last. Chromium draws a clipped or scaled screenshot of the page, taken
+`Page.captureStats()` counts, over the page's life or with `{ window }` over up to the latest
+minute: received and accepted frames, missing timestamps, `late` frames (Chromium encodes several at
+once and finished these after a newer one; they are dropped, never reordered, and a busy machine
+makes more of them), frames dropped for their size (`foreignSize`) or for coming during one of the
+library's own clipped pictures (`duringPictures`), frames a reader `lost` by falling behind, and
+paint-time gap totals/minimum/maximum/last. `ackBacklog` is the acknowledgements still unanswered:
+Chromium sends a frame only while few are, so a backlog over a slow connection means fewer frames.
+Chromium draws a clipped or scaled screenshot of the page, taken
 from any session, into its running screencast. Readers never receive a frame whose picture has
 another shape than its device. Frames of another device size wait, in order: the page's own size
 returning drops them, while the page reporting a viewport of their size, or their lasting a second,
@@ -372,7 +374,7 @@ confirmed it.
 Concurrent readers share one native screencast and its quality and size: a reader without options
 joins whatever is running, and one whose explicit options differ fails with `InvalidRequest` rather
 than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
-observed sequence gaps add to `subscriberMissed`. Late subscribers do not count earlier history.
+observed sequence gaps add to `lost`. Late subscribers do not count earlier history.
 ACKs are independent of reader speed and bounded to 32 unresolved replies; exhaustion ends capture
 with a typed error. `recentFrames` keeps the frames painted within `frameHistory` of the newest,
 5 seconds by default, a moment's default window. Capture stops when its last
@@ -468,13 +470,13 @@ other waits are spans, as are `Plan.replay` and `Plan.locate`, and so is each ro
 page's script (`Page.evaluate`) and its registration (`Page.register`). Each page span reports its cost on the page's own protocol session: `calls`,
 `bytesOut` and `bytesIn` (their parameters and results as JSON) and `waitedMillis`, how long at
 least one call awaited its reply. An operation inside another counts toward both. Calls Playwright
-makes on its own sessions, such as navigation, are not counted. `Chromium.launch`, `Cdp.connect`,
-`Browser.calibrate` and `Browser.newPage`
-cover opening a browser; `Browserbase.open` records its session's id and region,
+makes on its own sessions, such as navigation, are not counted. `Chromium.launch`, `Cdp.connect` and
+`Browser.newPage` cover opening a browser; `Browserbase.open` records its session's id and region,
 `Browserbase.release` a release and its outcome, and `Browserbase.holdContext` the wait for a
-stored context another session writes to. `Browser.calibrate` and `Page.calibrateClock` map the browser's clock onto the
-host's with three probes, each a `Page.evaluate` of `clock`, and record the fastest probe's
-`roundTripMillis`: the round trip to the browser.
+stored context another session writes to. `Page.calibrateClock` maps the browser's clock onto the
+host's with three probes, each a `Page.evaluate` of `clock`, and records the fastest probe's
+`roundTripMillis`: the round trip to the browser. One that runs alongside a capture shows its
+failure only there.
 
 Spans never carry typed text. A tool span keeps a browser tool's parameters with `text` replaced by
 `redacted`, and only the names of any other tool's parameters, which may hold anything; a script

@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Option, Schedule, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Option, Schedule, Stream, Struct } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
@@ -178,7 +178,7 @@ const busy = `<h1 style="font-size:80px">Busy</h1><script>
   setTimeout(spin, 50);
 </script>`;
 
-const busyContext = Effect.fnUntraced(function* (contextOrigin: "fresh" | "borrowed") {
+const busyContext = Effect.fnUntraced(function* () {
   const native = (yield* Browser).context.browser();
 
   if (native === null) return yield* Effect.die("the fixture requires local Chromium");
@@ -188,7 +188,7 @@ const busyContext = Effect.fnUntraced(function* (contextOrigin: "fresh" | "borro
     (context) => Effect.promise(() => context.close()),
   );
 
-  return yield* makeBrowser(context, { id: "busy-capture", provider: "test", contextOrigin });
+  return yield* makeBrowser(context, { id: "busy-capture", provider: "test" });
 });
 
 // Paint keeps changing, but each native frame reaches the host 150 ms after Chromium sent it, as
@@ -531,7 +531,7 @@ const sameAspectCrops = Effect.fnUntraced(function* (
       : [];
   });
 
-  return { frames, escaped, stats: yield* page.captureStats };
+  return { frames, escaped, stats: yield* page.captureStats() };
 });
 
 const firstFrame = (page: Page) =>
@@ -540,21 +540,16 @@ const firstFrame = (page: Page) =>
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Capture",
   (it) => {
-    it.effect("keeps borrowed pages unchanged and exposes no active startup measurement", () =>
+    it.effect("opens over a context without opening pages, sending input or capturing", () =>
       Effect.gen(function* () {
-        const { browser, page, calls, pageCount } = yield* setup();
+        const { page, calls, pageCount } = yield* setup();
 
-        assert.isTrue(Option.isNone(browser.captureCalibration));
         assert.strictEqual(pageCount(), 1);
         assert.strictEqual(yield* page.title, "Capture fixture");
         assert.isEmpty(calls.filter((call) => call.method.startsWith("Input.")));
         assert.strictEqual(count(calls, "Page.startScreencast"), 0);
         const owned = yield* Browser;
 
-        assert.isTrue(Option.isSome(owned.captureCalibration));
-        if (Option.isNone(owned.captureCalibration)) return;
-        assert.isAbove(owned.captureCalibration.value.paintSamples.length, 0);
-        assert.isAtMost(owned.captureCalibration.value.paintSamples.length, 3);
         assert.isEmpty(owned.context.pages());
         assert.isEmpty(yield* owned.pages);
         assert.isEmpty(yield* owned.recentEvents);
@@ -563,80 +558,28 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
     it.effect("captures a busy page with the clock mapping its browser already holds", () =>
       Effect.gen(function* () {
-        // A fresh browser holds its startup estimate; a borrowed one takes it from an idle page.
-        for (const origin of ["fresh", "borrowed"] as const) {
-          const browser = yield* busyContext(origin);
+        // An idle page's capture measures the browser's clock; a busy page's then starts with it.
+        const browser = yield* busyContext();
 
-          if (origin === "borrowed") {
-            const idle = yield* browser.newPage();
+        yield* firstFrame(yield* browser.newPage());
+        const page = yield* browser.newPage();
 
-            yield* firstFrame(idle);
-          }
-          const page = yield* browser.newPage();
+        yield* Effect.promise(() => page.playwright.setContent(busy));
+        yield* Effect.sleep("300 millis");
+        const frames = yield* firstFrame(page);
+        const frame = frames[0];
 
-          yield* Effect.promise(() => page.playwright.setContent(busy));
-          yield* Effect.sleep("300 millis");
-          const frames = yield* firstFrame(page);
-          const frame = frames[0];
-
-          assert.strictEqual(frame?.timing._tag, "BrowserPaint", origin);
-          assert.isAtMost(
-            frame?.hostTime ?? Infinity,
-            (frame?.receivedAt ?? 0) + (frame?.timing.uncertaintyMillis ?? 0) + 5,
-          );
-        }
-      }),
-    );
-
-    it.effect("keeps every tab's input stamps when a busy tab's capture measures the clock", () =>
-      Effect.gen(function* () {
-        const browser = yield* busyContext("fresh");
-
-        const quiet = yield* browser.newPage(
-          "data:text/html," +
-            encodeURIComponent(`<body style="margin:0;height:100vh"><script>
-  window.deltas = [];
-  addEventListener("mousedown", (event) => deltas.push(performance.now() - event.timeStamp));
-</script></body>`),
+        assert.strictEqual(frame?.timing._tag, "BrowserPaint");
+        assert.isAtMost(
+          frame?.hostTime ?? Infinity,
+          (frame?.receivedAt ?? 0) + (frame?.timing.uncertaintyMillis ?? 0) + 5,
         );
-
-        const deltas = Effect.promise(() =>
-          quiet.playwright.evaluate(() => (window as unknown as { deltas: number[] }).deltas),
-        );
-
-        for (let index = 0; index < 3; index++) yield* quiet.click({ x: 50, y: 50 });
-        const before = (yield* deltas).length;
-
-        // Back-to-back 150 ms tasks with no timer gaps delay every clock probe in that tab.
-        const busy = yield* browser.newPage(
-          "data:text/html," +
-            encodeURIComponent(`<body>busy<script>
-  const channel = new MessageChannel();
-  let turns = 0;
-  channel.port1.onmessage = () => {
-    const end = performance.now() + 150;
-    while (performance.now() < end) {}
-    if (++turns < 200) channel.port2.postMessage(0);
-  };
-  channel.port2.postMessage(0);
-</script></body>`),
-        );
-
-        yield* busy
-          .screencast()
-          .pipe(Stream.take(1), Stream.runDrain, Effect.timeout("15 seconds"));
-        for (let index = 0; index < 3; index++) yield* quiet.click({ x: 50, y: 50 });
-        const after = (yield* deltas).slice(before);
-
-        // Handler time minus the stamped event time: a future stamp would make it negative.
-        assert.strictEqual(after.length, 3);
-        assert.isBelow(Math.max(...after.map(Math.abs)), 50, JSON.stringify(after));
       }),
     );
 
     it.effect("fails a busy page's first capture, undispatched, only while no mapping exists", () =>
       Effect.gen(function* () {
-        const browser = yield* busyContext("borrowed");
+        const browser = yield* busyContext();
         const page = yield* browser.newPage();
 
         yield* Effect.promise(() => page.playwright.setContent(busy));
@@ -660,7 +603,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         yield* pressed;
         // While the action may still change the page, no cached paint is current.
-        const image = yield* page.screenshot({ after: "input", maxAge: "10 seconds" });
+        const image = yield* page.screenshot({ maxAge: "10 seconds" });
 
         assert.isFalse(yield* reusedBefore(image, Infinity));
         yield* Fiber.join(clicking);
@@ -678,7 +621,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const input = yield* pressed;
 
         yield* Fiber.interrupt(clicking);
-        const image = yield* page.screenshot({ after: "input", maxAge: "10 seconds" });
+        const image = yield* page.screenshot({ maxAge: "10 seconds" });
 
         assert.isFalse(yield* reusedBefore(image, input));
 
@@ -742,7 +685,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
     it.effect("makes a moment's last frame the page now, after a stopped capture and input", () =>
       Effect.gen(function* () {
-        const browser = yield* busyContext("fresh");
+        const browser = yield* busyContext();
         const page = yield* browser.newPage();
 
         // The page repaints a few times before it settles, so several frames are retained.
@@ -867,12 +810,12 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.isAbove(frame.hostTime, began - 1000);
         assert.deepStrictEqual([frame.width, frame.height], [800, 600]);
         assert.deepStrictEqual([frame.data[0], frame.data[1]], [0xff, 0xd8]);
-        const stats = yield* page.captureStats;
+        const stats = yield* page.captureStats();
 
         assert.strictEqual(
           stats.received,
           stats.accepted +
-            stats.outOfOrder +
+            stats.late +
             stats.missingTimestamp +
             stats.foreignSize +
             stats.duringPictures,
@@ -886,7 +829,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
     it.effect("keeps a zoom's crops out of the screencast and follows a real viewport change", () =>
       Effect.gen(function* () {
-        const browser = yield* busyContext("fresh");
+        const browser = yield* busyContext();
 
         // The page keeps painting, so frames arrive throughout.
         const page = yield* browser.newPage(
@@ -930,14 +873,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         assert.deepStrictEqual([...new Set(sizes.slice(0, resized))], ["800x600"]);
         assert.deepStrictEqual([...new Set(sizes.slice(resized))], ["640x480"]);
-        const stats = yield* page.captureStats;
+        const stats = yield* page.captureStats();
 
         // The library's own crops are left out as they are taken, before any size rule.
         assert.isAbove(stats.duringPictures, 0);
         assert.strictEqual(
           stats.received,
           stats.accepted +
-            stats.outOfOrder +
+            stats.late +
             stats.missingTimestamp +
             stats.foreignSize +
             stats.duringPictures,
@@ -955,7 +898,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(
           stats.received,
           stats.accepted +
-            stats.outOfOrder +
+            stats.late +
             stats.missingTimestamp +
             stats.foreignSize +
             stats.duringPictures,
@@ -1011,17 +954,17 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Effect.sync(() => fixture.inject(base + 50, quarter));
         yield* delivered(base + 60);
         yield* Fiber.interrupt(reader);
-        const stats = yield* fixture.page.captureStats;
+        const stats = yield* fixture.page.captureStats();
 
         assert.deepStrictEqual(
           frames.map((frame) => frame.timestamp),
           [base + 20, base + 30, base + 40, base + 60],
         );
-        assert.deepStrictEqual([stats.foreignSize, stats.outOfOrder], [2, 1]);
+        assert.deepStrictEqual([stats.foreignSize, stats.late], [2, 1]);
         assert.strictEqual(
           stats.received,
           stats.accepted +
-            stats.outOfOrder +
+            stats.late +
             stats.missingTimestamp +
             stats.foreignSize +
             stats.duringPictures,
@@ -1055,7 +998,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
     it.effect("counts invalid and reordered callbacks while gaps follow browser paint time", () =>
       Effect.gen(function* () {
         const fixture = yield* setup(true);
-        const before = yield* fixture.page.captureStats;
+        const before = yield* fixture.page.captureStats();
 
         const collect = yield* fixture.page
           .screencast()
@@ -1070,25 +1013,23 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Effect.sync(() => fixture.inject(Number.NaN));
         yield* Effect.sync(() => fixture.inject(base + 100));
         const frames = yield* Fiber.join(collect);
-        const stats = yield* fixture.page.captureStats;
+        const stats = yield* fixture.page.captureStats();
 
         assert.deepStrictEqual(
           frames.map((frame) => frame.timestamp),
           [base, base + 16, base + 100],
         );
-        assert.deepStrictEqual(
-          { ...stats },
-          {
-            received: 7,
-            accepted: 3,
-            outOfOrder: 2,
-            missingTimestamp: 2,
-            foreignSize: 0,
-            duringPictures: 0,
-            subscriberMissed: 0,
-            gaps: { count: 2, totalMillis: 100, minMillis: 16, maxMillis: 84, lastMillis: 84 },
-          },
-        );
+        // Chromium answers the acknowledgements in its own time, so the backlog is left out.
+        assert.deepStrictEqual(Struct.omit(stats, ["ackBacklog"]), {
+          received: 7,
+          accepted: 3,
+          late: 2,
+          missingTimestamp: 2,
+          foreignSize: 0,
+          duringPictures: 0,
+          lost: 0,
+          gaps: { count: 2, totalMillis: 100, minMillis: 16, maxMillis: 84, lastMillis: 84 },
+        });
         assert.strictEqual(before.received, 0);
         assert.deepStrictEqual(
           (yield* fixture.page.recentFrames).map((frame) => frame.timestamp),
@@ -1097,7 +1038,48 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.closeTo(frames[2]!.hostTime - frames[0]!.hostTime, 100, 0.001);
         assert.strictEqual(count(fixture.calls, "Page.screencastFrameAck"), 7);
         yield* Effect.sync(() => fixture.inject(base + 200));
-        assert.deepStrictEqual(yield* fixture.page.captureStats, stats);
+        assert.deepStrictEqual(
+          Struct.omit(yield* fixture.page.captureStats(), ["ackBacklog"]),
+          Struct.omit(stats, ["ackBacklog"]),
+        );
+      }),
+    );
+
+    it.effect("counts over a window of the latest minute, and refuses a longer one", () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup(true);
+
+        const collect = yield* fixture.page
+          .screencast()
+          .pipe(Stream.take(4), Stream.runCollect, Effect.forkChild);
+
+        const template = yield* fixture.template;
+        const base = (template.metadata.timestamp ?? 0) * 1000 - 1000;
+
+        yield* Effect.sync(() => fixture.inject(base));
+        yield* Effect.sync(() => fixture.inject(base + 10));
+        yield* Effect.sleep("1 second");
+        // The window holds these: one late frame, and the gaps that the last two delivered end.
+        for (const offset of [40, 30, 100]) yield* Effect.sync(() => fixture.inject(base + offset));
+        yield* Fiber.join(collect);
+        const recent = yield* fixture.page.captureStats({ window: "500 millis" });
+        const whole = yield* fixture.page.captureStats();
+
+        assert.deepStrictEqual([recent.received, recent.accepted, recent.late], [3, 2, 1]);
+        assert.deepStrictEqual(recent.gaps, {
+          count: 2,
+          totalMillis: 90,
+          minMillis: 30,
+          maxMillis: 60,
+          lastMillis: 60,
+        });
+        assert.deepStrictEqual([whole.received, whole.accepted, whole.late], [5, 4, 1]);
+        assert.strictEqual(whole.gaps.count, 3);
+        for (const window of ["0 millis", "61 seconds"] as const) {
+          const error = yield* fixture.page.captureStats({ window }).pipe(Effect.flip);
+
+          assert.strictEqual(error.reason._tag, "InvalidRequest", window);
+        }
       }),
     );
 
@@ -1159,7 +1141,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
                 duration: "3 seconds",
                 orElse: () =>
                   Effect.gen(function* () {
-                    const stats = yield* fixture.page.captureStats;
+                    const stats = yield* fixture.page.captureStats();
 
                     return yield* Effect.die(
                       "fast reader missed frame " +
@@ -1179,7 +1161,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           }
           assert.strictEqual(fastFrames.length, 20);
           assert.strictEqual(fastFrames[0]?.timestamp, base + 10);
-          assert.strictEqual((yield* fixture.page.captureStats).subscriberMissed, 0);
+          assert.strictEqual((yield* fixture.page.captureStats()).lost, 0);
           yield* Deferred.succeed(release, undefined);
           yield* Fiber.join(slow).pipe(
             Effect.timeoutOrElse({
@@ -1191,7 +1173,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(slowFrames.length, 17);
           assert.strictEqual(slowFrames[1]?.timestamp, base + 50);
           assert.strictEqual(slowFrames.at(-1)?.timestamp, base + 200);
-          assert.strictEqual((yield* fixture.page.captureStats).subscriberMissed, 4);
+          assert.strictEqual((yield* fixture.page.captureStats()).lost, 4);
           assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 1);
           assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 0);
           yield* Fiber.interrupt(fast);
@@ -1222,7 +1204,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Effect.sync(() => fixture.inject(base + 500));
         yield* Effect.sync(() => fixture.inject(base + 530));
         yield* Fiber.join(second);
-        assert.deepStrictEqual((yield* fixture.page.captureStats).gaps, {
+        assert.deepStrictEqual((yield* fixture.page.captureStats()).gaps, {
           count: 2,
           totalMillis: 50,
           minMillis: 20,
@@ -1256,11 +1238,18 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.match(error.message, /ack/i);
           assert.strictEqual(count(fixture.calls, "Page.screencastFrameAck"), 32);
           assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 1);
-          const stopped = yield* fixture.page.captureStats;
+          const stopped = yield* fixture.page.captureStats();
 
+          assert.strictEqual(stopped.ackBacklog, 32);
           yield* Effect.sync(() => fixture.inject(base + 100));
-          assert.deepStrictEqual(yield* fixture.page.captureStats, stopped);
+          assert.deepStrictEqual(yield* fixture.page.captureStats(), stopped);
           fixture.releaseAcks();
+          yield* eventually(
+            fixture.page.captureStats().pipe(
+              Effect.map((stats) => stats.ackBacklog === 0),
+              Effect.orDie,
+            ),
+          );
         }),
     );
 

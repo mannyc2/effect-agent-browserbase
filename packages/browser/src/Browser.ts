@@ -37,10 +37,8 @@ import {
   PageOpened,
   type RecordedEvent,
 } from "./BrowserEvent.ts";
-import { CaptureCalibration } from "./Frame.ts";
 import { reasonOf } from "./internal/page/context.ts";
 import * as PageImpl from "./internal/page/page.ts";
-import * as Startup from "./internal/pictures/calibration.ts";
 import * as BrowserClock from "./internal/pictures/clock.ts";
 import * as Timeline from "./internal/timeline/events.ts";
 import * as Motion from "./Motion.ts";
@@ -71,9 +69,6 @@ export interface Options {
   readonly initScripts?: ReadonlyArray<string> | undefined;
 }
 
-/** Providers attest freshness only immediately after allocating the context or session. */
-export type ContextOrigin = "fresh" | "borrowed";
-
 export interface EventOptions {
   /** Resume after this sequence; 0 replays from the beginning if it is still retained. */
   readonly after?: number | undefined;
@@ -87,11 +82,6 @@ export interface Service {
   readonly now: Effect.Effect<number>;
   /** The Playwright context, for anything this API does not cover. Never give it to a model. */
   readonly context: BrowserContext;
-  /**
-   * Measured on a private startup page only when the provider attested a fresh context. A failed
-   * measurement leaves it empty rather than failing the browser.
-   */
-  readonly captureCalibration: Option.Option<CaptureCalibration>;
   /** Open pages in the order they opened. */
   readonly pages: Effect.Effect<ReadonlyArray<Page.Page>>;
   /** The first open page, opening one when there is none. */
@@ -131,11 +121,7 @@ const holdFocus = (cdp: CDPSession) => {
  */
 export const make = Effect.fn("Browser.make")(function* (
   context: BrowserContext,
-  info: {
-    readonly id: string;
-    readonly provider: string;
-    readonly contextOrigin?: ContextOrigin | undefined;
-  },
+  info: { readonly id: string; readonly provider: string },
   options: Options = {},
 ) {
   const clock = yield* Clock.Clock;
@@ -182,40 +168,8 @@ export const make = Effect.fn("Browser.make")(function* (
       dispatched: false,
     });
 
-  // A caller's scripts or existing tabs can react to probe input. Providers opt fresh allocations
-  // into this private phase before scripts, page registration or the public service exist.
-  // A failed measurement leaves `captureCalibration` empty; the browser still opens.
-  const startup =
-    info.contextOrigin === "fresh"
-      ? yield* Startup.owned(context, clock).pipe(
-          Effect.tap((measured) =>
-            Effect.annotateCurrentSpan({
-              measured: Option.isSome(measured),
-              ...Option.match(measured, {
-                onNone: () => ({}),
-                // The fastest clock probe's: the transport's round trip, plus a trivial script.
-                onSome: ({ clock }) => ({
-                  roundTripMillis: Math.round(clock.roundTripMillis * 10) / 10,
-                }),
-              }),
-            }),
-          ),
-          // Round trips to a private page: what this costs over a remote connection shows here.
-          Effect.withSpan("Browser.calibrate", {}, { captureStackTrace: false }),
-          Effect.mapError(
-            (error) =>
-              new BrowserError({
-                operation: "calibrate",
-                reason: reasonOf(error.cause),
-                dispatched: false,
-              }),
-          ),
-        )
-      : Option.none<Startup.StartupCalibration>();
-
-  const captureCalibration = Option.map(startup, (measured) => new CaptureCalibration(measured));
-  // The startup page measured the same host wall clock every later renderer reads.
-  const mapping = BrowserClock.mapping(Option.map(startup, (measured) => measured.clock));
+  // Measured on first need: the first capture of any page measures it, and input never waits.
+  const mapping = BrowserClock.mapping(now);
 
   const timeline = Timeline.make(eventHistory);
 
@@ -397,7 +351,6 @@ export const make = Effect.fn("Browser.make")(function* (
   const service: Service = {
     id: info.id,
     provider: info.provider,
-    captureCalibration,
     now: Effect.sync(now),
     context,
     pages,

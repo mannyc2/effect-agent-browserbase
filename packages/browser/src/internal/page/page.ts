@@ -22,11 +22,9 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const { id, playwright, settings, native, owned } = page;
   const bridge = yield* Bridge.make(page);
   const viewport = Viewport.make(page, bridge);
-  const calibrateClock = Pictures.calibrator(page, bridge);
-  const input = Actions.make(page, bridge, viewport, calibrateClock);
-  const pictures = yield* Pictures.make(page, viewport, calibrateClock);
-  // An observation reads the page an action left, so its picture follows the latest input.
-  const reading = yield* Reading.make(page, bridge, () => pictures.screenshot({ after: "input" }));
+  const input = Actions.make(page, bridge, viewport);
+  const pictures = yield* Pictures.make(page, bridge, viewport);
+  const reading = yield* Reading.make(page, bridge, () => pictures.screenshot());
   const navigation = Navigation.make(page, input.perform, input.preparePolicy);
   const { capture } = pictures;
 
@@ -68,7 +66,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     waitForText: reading.waitForText,
     ready: Ready.make(page, bridge, capture),
     screencast: capture.stream,
-    captureStats: capture.stats,
+    captureStats: pictures.captureStats,
     latestFrame: capture.latest,
     recentFrames: capture.recent,
     recentEvents: options.recentEvents,

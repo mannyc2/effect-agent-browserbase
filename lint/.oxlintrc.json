@@ -162,7 +162,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 313, "skipBlankLines": true, "skipComments": true }
+          { "max": 295, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },
@@ -180,7 +180,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 232, "skipBlankLines": true, "skipComments": true }
+          { "max": 201, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },
@@ -198,7 +198,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 208, "skipBlankLines": true, "skipComments": true }
+          { "max": 194, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },
@@ -208,15 +208,6 @@
         "eslint/max-lines-per-function": [
           "error",
           { "max": 161, "skipBlankLines": true, "skipComments": true }
-        ]
-      }
-    },
-    {
-      "files": ["**/packages/browser/src/internal/pictures/calibration.ts"],
-      "rules": {
-        "eslint/max-lines-per-function": [
-          "error",
-          { "max": 156, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },

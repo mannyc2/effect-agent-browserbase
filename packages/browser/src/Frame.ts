@@ -61,46 +61,18 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
 }
 
 /**
- * Startup measurements from a private blank page. The first captured image containing a probe
- * bounds its observed presentation delay; it does not measure the first paint or future page load.
+ * A page's capture counts, over its life or a window of the latest minute: what Chromium sent,
+ * what readers got, and why the rest went no further. Frames that came late are counted apart from
+ * those a reader lost.
  */
-export class CaptureCalibration extends Schema.Class<CaptureCalibration>(
-  "effect-browser/CaptureCalibration",
-)({
-  clock: Schema.Struct({
-    offsetMillis: Schema.Finite,
-    uncertaintyMillis: Nonnegative,
-    roundTripMillis: Nonnegative,
-    sampledAt: Schema.Finite,
-  }),
-  paintSamples: Schema.Array(Schema.Struct({ sentAt: Schema.Finite, timestamp: Schema.Finite })),
-}) {
-  /**
-   * Combined send-to-captured-image delay on this frame's mapping. Recomputing the offset preserves
-   * the cancellation of clock-estimation bias when capture starts with a newer calibration.
-   */
-  delayFor(frame: Frame): number | undefined {
-    if (frame.timing._tag !== "BrowserPaint" || this.paintSamples.length === 0) return undefined;
-
-    const offsets = this.paintSamples
-      .map((sample) => sample.timestamp - sample.sentAt)
-      .toSorted((left, right) => left - right);
-
-    const middle = Math.floor(offsets.length / 2);
-    const upper = offsets[middle];
-
-    if (upper === undefined) return undefined;
-    const median = offsets.length % 2 === 0 ? ((offsets[middle - 1] ?? upper) + upper) / 2 : upper;
-
-    return median - (frame.timing.timestamp - frame.hostTime);
-  }
-}
-
-/** Lifetime capture counters. Subscriber loss is observed per reader, so totals can exceed frames. */
 export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/CaptureStats")({
   received: Count,
   accepted: Count,
-  outOfOrder: Count,
+  /**
+   * Frames Chromium finished encoding after a newer one, dropped rather than reordered. It encodes
+   * several at once, so a busy machine makes more of them; none was a paint readers missed.
+   */
+  late: Count,
   missingTimestamp: Count,
   /**
    * Frames dropped for their size. Most are other captures' frames, which a clipped screenshot
@@ -114,7 +86,17 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Cap
    * The page's own frames from that time are among them.
    */
   duringPictures: Count,
-  subscriberMissed: Count,
+  /**
+   * Frames a reader missed by falling behind. Each reader counts its own, so with several readers
+   * this can exceed the frames accepted.
+   */
+  lost: Count,
+  /**
+   * Acknowledgements of frames sent and not yet answered, now, whatever the window. Chromium sends
+   * a frame only while few are unacknowledged, so a backlog means fewer frames.
+   */
+  ackBacklog: Count,
+  /** Paint-time gaps between consecutive accepted frames. */
   gaps: Schema.Struct({
     count: Count,
     totalMillis: Nonnegative,

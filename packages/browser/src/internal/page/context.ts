@@ -28,7 +28,7 @@ export interface MakeOptions {
   readonly settings: Settings;
   readonly motion: Motion.Service;
   readonly clock: Clock.Clock;
-  /** The browser's epoch mapping; pages measure it only when the browser has none. */
+  /** The browser's epoch mapping: its first capture measures it, and later ones renew it. */
   readonly mapping: BrowserClock.Mapping;
   readonly pointer: Ref.Ref<Option.Option<Point>>;
   readonly inputLock: Semaphore.Semaphore;

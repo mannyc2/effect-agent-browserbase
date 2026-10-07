@@ -232,8 +232,8 @@ export const protocol = (collected: Collected, sent: ReadonlyArray<Command>): Pr
 };
 
 /**
- * The fastest round trip to the browser that the unit's clock calibrations measured, at startup
- * (`Browser.calibrate`) or for a page (`Page.calibrateClock`); null if none ran.
+ * The fastest round trip to the browser that the unit's clock calibrations measured
+ * (`Page.calibrateClock`, which a browser's first capture runs); null if none ran.
  */
 export const roundTripOf = (spans: ReadonlyArray<Tracer.Span>): number | null => {
   const measured = spans.flatMap((span) => {

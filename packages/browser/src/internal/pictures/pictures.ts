@@ -66,7 +66,7 @@ const untilPainted = <A, R>(capture: Effect.Effect<A, BrowserError, R>) =>
   capture.pipe(Effect.retry({ while: surfaceless, schedule: Schedule.spaced("16 millis") }));
 
 /** Measure this page's clock against the browser's, in a world without the page script. */
-export const calibrator = (page: PageContext, bridge: Bridge) =>
+const calibrator = (page: PageContext, bridge: Bridge) =>
   bridge.bareWorld("calibrate").pipe(
     Effect.flatMap((contextId) =>
       BrowserClock.calibrate(page.protocol.send, page.clock, contextId).pipe(
@@ -246,11 +246,13 @@ const sourceOf = (reused: Option.Option<Frame>) => (Option.isSome(reused) ? "fra
 
 export const make = Effect.fnUntraced(function* (
   page: PageContext,
+  bridge: Bridge,
   viewport: Viewport,
-  calibrateClock: Effect.Effect<BrowserClock.Estimate, BrowserError>,
 ) {
   const { id, cdp, clock, playwright, settings, mapping, now, span, owned, lock } = page;
   const { send } = page.protocol;
+  const calibrateClock = calibrator(page, bridge);
+  const pageScope = yield* Effect.scope;
 
   // Input and capture share the owner's monotonic clock; caller-provided clocks cannot move it.
   // Registration measures nothing: a page that is busy while it opens, such as a popup running
@@ -262,8 +264,13 @@ export const make = Effect.fnUntraced(function* (
     send,
     clock,
     // A capture starts once the page's own session keeps it painting behind other tabs, and with
-    // the browser's clock mapped.
-    calibrate: Effect.andThen(page.focused, mapping.refresh(calibrateClock)),
+    // the browser's clock mapped. Only a browser's first capture waits for a measurement; a later
+    // one starts with the estimate there is and, once it is ten seconds old, measures again
+    // alongside, for later captures. A failure there shows in its `Page.calibrateClock` span.
+    calibrate: page.focused.pipe(
+      Effect.andThen(mapping.current(calibrateClock)),
+      Effect.tap(() => Effect.forkIn(mapping.renew(calibrateClock), pageScope)),
+    ),
     frameHistory: settings.frameHistory,
     viewport: Effect.suspend(() => viewport.viewportFor("screencast")),
     onClose: (listener) => {
@@ -282,10 +289,14 @@ export const make = Effect.fnUntraced(function* (
   const picture = camera(page, viewport, capture);
   const reusable = reuse(page, viewport, capture);
 
+  // A caller that acts and then looks must see what its action did, so a screenshot reuses only a
+  // frame painted after the page's latest input.
   const screenshot = (options: ScreenshotOptions = {}) =>
     Effect.gen(function* () {
       const reused =
-        options.clip === undefined ? yield* reusable("screenshot", options) : Option.none<Frame>();
+        options.clip === undefined
+          ? yield* reusable("screenshot", { maxAge: options.maxAge, after: "input" })
+          : Option.none<Frame>();
 
       const image = Option.isSome(reused)
         ? reused.value.image
@@ -359,5 +370,21 @@ export const make = Effect.fnUntraced(function* (
         owned,
       );
 
-  return { capture, screenshot, frame, zoom };
+  const captureStats = (options: { readonly window?: Duration.Input | undefined } = {}) => {
+    if (options.window === undefined) return capture.stats();
+
+    const millis = Option.match(Duration.fromInput(options.window), {
+      onNone: () => Number.NaN,
+      onSome: Duration.toMillis,
+    });
+
+    return millis > 0 && millis <= Duration.toMillis(Capture.countsKept)
+      ? capture.stats(millis)
+      : failWith(
+          "captureStats",
+          new InvalidRequest({ detail: "window must be over zero and at most a minute" }),
+        );
+  };
+
+  return { capture, screenshot, frame, zoom, captureStats };
 });
