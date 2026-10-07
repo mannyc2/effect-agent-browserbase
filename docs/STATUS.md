@@ -116,10 +116,12 @@ paid calls.
 0.3 is built in four phases, each ending with a pass that deletes what the phase made redundant,
 and each becoming the next beta.
 
-- **Phase 1, cost and replay, is done.** Pictures and reads go on each page's own counted protocol
-  session, the clock is measured on first need, and `Page.find`, `Page.text`, `Plan` and
-  `Page.ready` are in. Its beta, `0.3.0-beta.1`, is prepared in the changelog and the package
-  versions, and not tagged.
+- **Phase 1, cost and replay, is built, and its review's fixes are under way.** Pictures and reads
+  go on each page's own counted protocol session, the clock is measured on first need, and
+  `Page.find`, `Page.text`, `Plan` and `Page.ready` are in. The review found frames of the previous
+  page served after a navigation, replays that act in the wrong place, and a busy page's first
+  capture failing or widening the clock's estimate. Its beta, `0.3.0-beta.1`, is prepared in the
+  changelog and the package versions; it waits for those fixes, and is not tagged.
 - **Phase 2, identity and lifetime, is under way.** `Supervisor`, the Browserbase release outcomes
   and `effect-browserbase/testing` have landed.
 
@@ -129,7 +131,7 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
 | `effect-browser`               | 8,871 → 11,771                 | 11,064 → 13,624 | 129 → 158                 |
-| `effect-browserbase`           | 807 → 1,007, and 549 `testing` | 611 → 791       | 32 → 36, and 14 `testing` |
+| `effect-browserbase`           | 807 → 1,007, and 560 `testing` | 611 → 1,053     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
 `effect-browser`'s figures include phase 2's supervisor: 566 source lines, 473 test lines and 7
