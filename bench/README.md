@@ -300,7 +300,7 @@ preserving charges that arrived before a failure.
 
 ## Input judges
 
-`bun run judges` grades the input judges of `effect-browser/Policy` against the 77-control corpus
+`bun run bench judges` grades the input judges of `effect-browser/Policy` against the 77-control corpus
 in `packages/browser/test/consequence-corpus.ts`. Each case's input is prepared on local Chromium
 and refused before it reaches the page, so a judge sees exactly what a guard would. Every case is
 judged without a task: the run grades recognising risk, not whether a task asks for it. A risk
@@ -322,8 +322,8 @@ are `cases.jsonl` and `summary.json`: per arm, consequential and benign cases fl
 false alarms per risk, and recall by kind. Without `--out` they go to `.work/judges/`.
 
 ```sh
-bun run judges                          # free: the structure arm
-EFFECT_BROWSER_BENCH_LIVE=1 bun run judges -- --arm decider --arm reviewer \
+bun run bench judges                    # free: the structure arm
+EFFECT_BROWSER_BENCH_LIVE=1 bun run bench judges --arm decider --arm reviewer \
   --arm escalate --model openai/gpt-6-luna --max-usd 0.5
 ```
 

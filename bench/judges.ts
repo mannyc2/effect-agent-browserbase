@@ -1,41 +1,33 @@
-// Grades input judges against the labelled corpus of consequential controls. Free runs use the
-// structure arm only, which validates the plumbing and shows what facts alone catch.
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
-
+// The `judges` command grades input judges against the labelled corpus of consequential controls.
+// Free runs use the structure arm only, which validates the plumbing and shows what facts alone
+// catch.
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
-import { NodeServices } from "@effect/platform-node";
-import { Clock, type Config, Console, DateTime, Effect, Layer, Schema } from "effect";
+import {
+  Clock,
+  type Config,
+  Console,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  type PlatformError,
+  Schema,
+} from "effect";
 import { Browser, make as makeBrowser } from "effect-browser/Browser";
 import { PolicyDenied } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
 import type { InputRequest } from "effect-browser/Page";
 import * as Policy from "effect-browser/Policy";
 import { AiError } from "effect/ai";
+import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
 import { corpus, type Case } from "../packages/browser/test/consequence-corpus.ts";
-import { type Account, BenchError, ledger, modelRunner } from "./Budget.ts";
+import { type Account, BenchError, ledger, modelRunner, optedIn, refuse } from "./Budget.ts";
 import * as Trace from "./Trace.ts";
 import { revision } from "./Trial.ts";
-
-const help = `Usage: bun run judges -- [options]
-
-  --arm <name>          structure, reviewer, decider or escalate; repeat for more. Defaults to
-                        structure, the free arm: a judge that knows only the facts.
-  --model <id>          OpenRouter model for the reviewer, as in the reviewer and escalate arms.
-  --jev <model>         TypeSafe model for the decider. Defaults to jev-1.13.0.
-  --threshold <p>       Probability from which a risk counts. Defaults to 0.5.
-  --max-usd <amount>    Admission budget for each provider. Defaults to 0.5.
-  --concurrency <n>     Cases judged at once. Defaults to 4.
-  --out <dir>           New results directory. Defaults to .work/judges/<timestamp>.
-  --help                Show this help.
-
-The reviewer, decider and escalate arms cost money: they need EFFECT_BROWSER_BENCH_LIVE=1, and the
-decider needs TYPESAFE_API_KEY. Escalate asks Jev first and the reviewer when Jev is unsure. Every
-case is judged without a task, so this grades recognising risk, not whether a task asks for it.`;
 
 const arms = ["structure", "reviewer", "decider", "escalate"] as const;
 
@@ -49,62 +41,24 @@ export interface Options {
   readonly maxUsd: number;
   readonly concurrency: number;
   readonly out: string | undefined;
-  readonly help: boolean;
 }
 
-/** Validate opt-in before launching a browser or consulting any provider. */
-export const options = Effect.fnUntraced(function* (args: ReadonlyArray<string>, live: boolean) {
-  const parsed = yield* Effect.try({
-    try: () =>
-      parseArgs({
-        args: [...args],
-        options: {
-          arm: { type: "string", multiple: true },
-          model: { type: "string" },
-          jev: { type: "string", default: "jev-1.13.0" },
-          threshold: { type: "string", default: "0.5" },
-          "max-usd": { type: "string", default: "0.5" },
-          concurrency: { type: "string", default: "4" },
-          out: { type: "string" },
-          help: { type: "boolean", default: false },
-        },
-      }).values,
-    catch: () => new BenchError({ message: "Invalid flags. Use --help." }),
-  });
+/** Check what parsing cannot, before launching a browser or consulting any provider. */
+export const admit = Effect.fnUntraced(function* (options: Options) {
+  if (new Set(options.arms).size !== options.arms.length)
+    return yield* refuse(`--arm takes ${arms.join(", ")}, each once.`);
 
-  const chosen = parsed.arm ?? ["structure"];
+  const reviews = options.arms.includes("reviewer") || options.arms.includes("escalate");
 
-  const value: Options = {
-    arms: chosen.filter((arm): arm is Arm => (arms as ReadonlyArray<string>).includes(arm)),
-    model: parsed.model,
-    jev: parsed.jev,
-    threshold: Number(parsed.threshold),
-    maxUsd: Number(parsed["max-usd"]),
-    concurrency: Number(parsed.concurrency),
-    out: parsed.out,
-    help: parsed.help,
-  };
+  if (reviews && (options.model === undefined || options.model.trim() === ""))
+    return yield* refuse("The reviewer needs --model, an OpenRouter model.");
+  if (
+    options.arms.some((arm) => arm !== "structure") &&
+    !(yield* optedIn("EFFECT_BROWSER_BENCH_LIVE"))
+  )
+    return yield* refuse("Model calls cost money: set EFFECT_BROWSER_BENCH_LIVE=1 to make them.");
 
-  if (value.help) return value;
-  if (value.arms.length !== chosen.length || new Set(value.arms).size !== value.arms.length)
-    return yield* new BenchError({ message: `--arm takes ${arms.join(", ")}, each once.` });
-  if (!Number.isFinite(value.threshold) || value.threshold <= 0 || value.threshold > 1)
-    return yield* new BenchError({ message: "--threshold must be above 0 and at most 1." });
-  if (!Number.isFinite(value.maxUsd) || value.maxUsd <= 0)
-    return yield* new BenchError({ message: "--max-usd must be finite and positive." });
-  if (!Number.isSafeInteger(value.concurrency) || value.concurrency < 1)
-    return yield* new BenchError({ message: "--concurrency must be a positive integer." });
-
-  const reviews = value.arms.includes("reviewer") || value.arms.includes("escalate");
-
-  if (reviews && (value.model === undefined || value.model.trim() === ""))
-    return yield* new BenchError({ message: "The reviewer needs --model, an OpenRouter model." });
-  if (value.arms.some((arm) => arm !== "structure") && !live)
-    return yield* new BenchError({
-      message: "Model calls cost money: set EFFECT_BROWSER_BENCH_LIVE=1 to make them.",
-    });
-
-  return value;
+  return options;
 });
 
 /** The input each case makes, prepared and refused before it reaches the page. */
@@ -307,20 +261,21 @@ const summarize = (graded: ReadonlyArray<Graded>) => {
   };
 };
 
-export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, live: boolean) {
-  const chosen = yield* options(args, live);
+const unwritten = (error: PlatformError.PlatformError) =>
+  new BenchError({ message: `could not write the judges' results: ${error.message}` });
 
-  if (chosen.help) return yield* Console.log(help);
+const judge = Effect.fnUntraced(function* (requested: Options) {
+  const chosen = yield* admit(requested);
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const createdAt = DateTime.formatIso(yield* DateTime.now);
 
   const out =
     chosen.out ??
-    fileURLToPath(
-      new URL("../.work/judges/" + createdAt.replace(/[:.]/g, "-") + "/", import.meta.url),
-    );
+    path.join(import.meta.dirname, "..", ".work", "judges", createdAt.replace(/[:.]/g, "-"));
 
-  mkdirSync(out, { recursive: true });
-  const cases = join(out, "cases.jsonl");
+  yield* fs.makeDirectory(out, { recursive: true }).pipe(Effect.mapError(unwritten));
+  const cases = path.join(out, "cases.jsonl");
   const prepared = yield* prepare.pipe(Effect.provide(Chromium.layer()));
   const model = chosen.model ?? "";
   const reviews = chosen.arms.includes("reviewer") || chosen.arms.includes("escalate");
@@ -407,7 +362,9 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
             seconds,
           };
 
-          appendFileSync(cases, JSON.stringify(graded) + "\n");
+          yield* fs
+            .writeFileString(cases, `${JSON.stringify(graded)}\n`, { flag: "a" })
+            .pipe(Effect.mapError(unwritten));
 
           return graded;
         }).pipe(
@@ -430,44 +387,79 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
     jev: jevBudget === undefined ? null : yield* jevBudget.snapshot,
   };
 
-  writeFileSync(
-    join(out, "summary.json"),
-    `${JSON.stringify(
-      {
-        createdAt,
-        revision: yield* revision,
-        model: chosen.model ?? null,
-        jev: decides ? chosen.jev : null,
-        threshold: chosen.threshold,
-        maxUsd: chosen.maxUsd,
-        cases: prepared.length,
-        spent,
-        arms: summaries,
-      },
-      null,
-      2,
-    )}\n`,
-  );
+  yield* fs
+    .writeFileString(
+      path.join(out, "summary.json"),
+      `${JSON.stringify(
+        {
+          createdAt,
+          revision: yield* revision,
+          model: chosen.model ?? null,
+          jev: decides ? chosen.jev : null,
+          threshold: chosen.threshold,
+          maxUsd: chosen.maxUsd,
+          cases: prepared.length,
+          spent,
+          arms: summaries,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    .pipe(Effect.mapError(unwritten));
   yield* Console.log(`Results in ${out}; spent ${JSON.stringify(spent)}`);
-});
+}, Effect.provide(Trace.layer));
 
-const failed = Schema.is(BenchError);
-
-if (process.argv[1] === fileURLToPath(import.meta.url))
-  Effect.runPromise(
-    main(process.argv.slice(2), process.env.EFFECT_BROWSER_BENCH_LIVE === "1").pipe(
-      Effect.catchIf(failed, (error) =>
-        Console.error(error.message).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              process.exitCode = 1;
-            }),
-          ),
-        ),
-      ),
-      Effect.provide([Trace.layer, NodeServices.layer]),
+const flags = {
+  arm: Flag.Literals("arm", arms).pipe(
+    Flag.atLeast(0),
+    Flag.withDescription(
+      "structure, reviewer, decider or escalate; repeat for more. Defaults to structure, the free arm: a judge that knows only the facts.",
     ),
-  ).catch((error: unknown) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  ),
+  model: Flag.String("model").pipe(
+    Flag.optional,
+    Flag.withDescription(
+      "OpenRouter model for the reviewer, as in the reviewer and escalate arms.",
+    ),
+  ),
+  jev: Flag.String("jev").pipe(
+    Flag.withDefault("jev-1.13.0"),
+    Flag.withDescription("TypeSafe model for the decider. Defaults to jev-1.13.0."),
+  ),
+  threshold: Flag.Finite("threshold").pipe(
+    Flag.withSchema(Schema.Finite.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1))),
+    Flag.withDefault(0.5),
+    Flag.withDescription("Probability from which a risk counts. Defaults to 0.5."),
+  ),
+  maxUsd: Flag.Finite("max-usd").pipe(
+    Flag.withSchema(Schema.Finite.check(Schema.isGreaterThan(0))),
+    Flag.withDefault(0.5),
+    Flag.withDescription("Admission budget for each provider, in USD. Defaults to 0.5."),
+  ),
+  concurrency: Flag.Int("concurrency").pipe(
+    Flag.withSchema(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDefault(4),
+    Flag.withDescription("Cases judged at once. Defaults to 4."),
+  ),
+  out: Flag.String("out").pipe(
+    Flag.optional,
+    Flag.withDescription("New results directory. Defaults to .work/judges/<timestamp>."),
+  ),
+};
+
+export const command = Command.make("judges", flags, (parsed) =>
+  judge({
+    arms: parsed.arm.length === 0 ? ["structure"] : parsed.arm,
+    model: Option.getOrUndefined(parsed.model),
+    jev: parsed.jev,
+    threshold: parsed.threshold,
+    maxUsd: parsed.maxUsd,
+    concurrency: parsed.concurrency,
+    out: Option.getOrUndefined(parsed.out),
+  }),
+).pipe(
+  Command.withDescription(
+    "Grade input judges against the corpus of consequential controls. The structure arm is free; the reviewer, decider and escalate arms call models, so they need EFFECT_BROWSER_BENCH_LIVE=1, and the decider TYPESAFE_API_KEY.",
+  ),
+);

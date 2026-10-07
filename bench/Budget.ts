@@ -14,6 +14,13 @@ export class BenchError extends Schema.TaggedError<BenchError>()("BenchError", {
 
 export const refuse = (message: string) => Effect.fail(new BenchError({ message }));
 
+/** A paid opt-in, such as `EFFECT_BROWSER_BENCH_LIVE`: on only when its variable is exactly 1. */
+export const optedIn = (name: string) =>
+  Config.String(name).pipe(
+    Config.map((value) => value === "1"),
+    Config.withDefault(false),
+  );
+
 export const efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export type Reasoning = (typeof efforts)[number];

@@ -6,8 +6,7 @@
   "scripts": {
     "bench": "node --conditions=@effect-browser/source bench.ts",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test --run",
-    "judges": "node --conditions=@effect-browser/source judges.ts"
+    "test": "vp test --run"
   },
   "devDependencies": {
     "@effect/ai-openrouter": "4.0.0",
