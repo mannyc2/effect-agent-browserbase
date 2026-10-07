@@ -400,6 +400,15 @@ since it can carry session ids. Checks that move the test clock, such as a sessi
 timeout, run against the fake only. A run opens two sessions of a few seconds each and a stored
 context, and exits with an error unless every check held.
 
+The checks hold behaviour; `effect-browserbase`'s own tests hold shapes. They check every answer
+of the fake and every request of the client against a copy of the part of Browserbase's published
+OpenAPI document the package relies on (`packages/browserbase/test/browserbase-openapi.json`): its
+session and context operations, with references inlined and prose left out (`OpenApi.ts`).
+`bun run bench contract --spec` compares that copy with the document Browserbase publishes now, for
+free and with no session. It prints each operation as `same`, `CHANGED` or `MISSING`, and on a
+difference writes the published operations to `.work/contract/browserbase-openapi.json` and exits
+with an error: review it, copy it over the package's copy and run `bun run fmt`.
+
 ## Tests
 
 `bun run test` runs every scripted solution, grades answers from models scripted to be wrong or

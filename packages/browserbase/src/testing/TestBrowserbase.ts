@@ -181,6 +181,12 @@ const describe = (fake: Fake, row: Row, connect: boolean) => {
     ...(row.contextId === undefined ? {} : { contextId: row.contextId }),
     ...(row.userMetadata === undefined ? {} : { userMetadata: row.userMetadata }),
     ...(connect && fake.connectUrl !== undefined ? { connectUrl: fake.connectUrl } : {}),
+    ...(connect
+      ? {
+          seleniumRemoteUrl: `https://connect.browserbase.test/webdriver/${row.id}`,
+          signingKey: `signing-key-${row.id}`,
+        }
+      : {}),
   };
 };
 
@@ -325,7 +331,12 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
 
       fake.contexts.set(created, fake.now());
 
-      return answer(201, { id: created });
+      return answer(201, {
+        id: created,
+        publicKey: "test-public-key",
+        cipherAlgorithm: "AES-256-CBC",
+        initializationVectorSize: 16,
+      });
     }
     case "GET contexts id": {
       const createdAt = id === undefined ? undefined : fake.contexts.get(id);
