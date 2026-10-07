@@ -1270,7 +1270,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ]);
         assert.isFalse(told.some((words) => words?.startsWith("Row ") === true));
         // Neither told nor taken for the scroll: only the two lists' ten rows each are that.
-        assert.notIncludeMembers(told, ["Carol: above the view", "Dan: also above"]);
+        for (const message of ["Carol: above the view", "Dan: also above"])
+          assert.notInclude(told, message);
         assert.strictEqual(second.changes?.scrolled, 20);
       }),
   );
