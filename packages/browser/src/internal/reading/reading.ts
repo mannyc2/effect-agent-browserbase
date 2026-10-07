@@ -4,13 +4,7 @@
  */
 import { Duration, Effect, Ref, Schedule, Schema } from "effect";
 
-import {
-  type BrowserError,
-  InvalidRequest,
-  NotFound,
-  StaleRef,
-  Timeout,
-} from "../../BrowserError.ts";
+import { type BrowserError, InvalidRequest, NotFound, StaleRef } from "../../BrowserError.ts";
 import type { Image } from "../../Frame.ts";
 import {
   type FindQuery,
@@ -24,10 +18,11 @@ import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext } from "../page/context.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
-import { type SnapshotRequest, SnapshotResultSchema } from "./outline.inpage.ts";
+import type { SnapshotRequest } from "./outline.inpage.ts";
 import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
 
-// What `find` reads back: the elements, and the next ref the page may give.
+// What `snapshot` and `find` read back, each with the next ref the page may give.
+const SnapshotResult = Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite });
 const FindResults = Schema.Struct({ found: Schema.Array(Found), nextRef: Schema.Finite });
 
 // A pattern crosses into the page as its source and flags.
@@ -43,18 +38,11 @@ export const make = Effect.fnUntraced(function* (
   bridge: Bridge,
   screenshot: () => Effect.Effect<Image, BrowserError>,
 ) {
-  const { settings, now, span, owned } = page;
+  const { now, span, owned, within } = page;
   const { evaluate } = bridge;
   // Refs count up across the page's documents, so one never names two elements.
   const nextRef = yield* Ref.make(1);
   const counted = (next: number) => Ref.update(nextRef, (current) => Math.max(current, next));
-
-  const bounded = (operation: string) =>
-    Effect.timeoutOrElse({
-      duration: settings.actionTimeout,
-      orElse: () =>
-        failWith(operation, new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
-    });
 
   const snapshot = (snapshotOptions: SnapshotOptions = {}) =>
     Effect.gen(function* () {
@@ -66,24 +54,17 @@ export const make = Effect.fnUntraced(function* (
       };
 
       const result = yield* evaluate("snapshot", scriptCall("snapshot", request)).pipe(
-        Effect.flatMap(decodeWith("snapshot", SnapshotResultSchema)),
+        Effect.flatMap(decodeWith("snapshot", SnapshotResult)),
       );
 
-      yield* counted(result.nextRef);
-      yield* Effect.annotateCurrentSpan({ chars: result.text.length, truncated: result.truncated });
+      const { text, truncated } = result.snapshot;
 
-      return new Snapshot({
-        url: result.url,
-        title: result.title,
-        text: result.text,
-        truncated: result.truncated,
-        above: result.above,
-        below: result.below,
-        viewport: { width: result.width, height: result.height },
-        scroll: { y: result.scrollY, height: result.scrollHeight },
-      });
+      yield* counted(result.nextRef);
+      yield* Effect.annotateCurrentSpan({ chars: text.length, truncated });
+
+      return result.snapshot;
     }).pipe(
-      bounded("snapshot"),
+      within("snapshot"),
       span("Page.snapshot", { full: snapshotOptions.full ?? false }),
       owned,
     );
@@ -109,7 +90,7 @@ export const make = Effect.fnUntraced(function* (
 
       return result.found;
     }).pipe(
-      bounded("find"),
+      within("find"),
       // The query's words are the caller's, and may be anything; only its shape is traced.
       span("Page.find", { scope: query.scope ?? "viewport", role: query.role ?? "" }),
       owned,
@@ -140,7 +121,7 @@ export const make = Effect.fnUntraced(function* (
 
       return new Text({ ...result, at: now() });
     }).pipe(
-      bounded("text"),
+      within("text"),
       span("Page.text", { scope: scope === "viewport" ? "viewport" : "ref" }),
       owned,
     );

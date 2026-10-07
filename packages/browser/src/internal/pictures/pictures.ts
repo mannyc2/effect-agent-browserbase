@@ -1,12 +1,12 @@
 /**
- * Pictures of a page: screenshots, frames of a stated age, zooms, its screencast and waiting until
- * it is still. A new picture is taken on the page's own protocol session: one call where a device
- * pixel is a CSS pixel and nothing is cropped, and two otherwise, unless Playwright emulates the
- * viewport.
+ * Pictures of a page: screenshots, frames of a stated age, zooms, and its screencast with the clock
+ * that times its frames. A new picture is taken on the page's own protocol session: one call where
+ * a device pixel is a CSS pixel and nothing is cropped, and two otherwise, unless Playwright
+ * emulates the viewport.
  */
 import { Duration, Effect, Option, Schedule, Schema } from "effect";
 
-import { BrowserError, Failed, InvalidRequest, Timeout } from "../../BrowserError.ts";
+import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
 import { type FrameOptions, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
 import type { Bridge } from "../page/bridge.ts";
@@ -65,32 +65,57 @@ const surfaceless = (error: BrowserError) =>
 const untilPainted = <A, R>(capture: Effect.Effect<A, BrowserError, R>) =>
   capture.pipe(Effect.retry({ while: surfaceless, schedule: Schedule.spaced("16 millis") }));
 
-/** Measure this page's clock against the browser's, in a world without the page script. */
-const calibrator = (page: PageContext, bridge: Bridge) =>
-  bridge.bareWorld("calibrate").pipe(
+/**
+ * Measure this page's clock against the browser's, in a world without the page script: no DOM
+ * markers, input, navigation or extra tabs. Each of three probes reads the browser's time between
+ * two stamps of the owner's clock, and the fastest bounds the offset best.
+ */
+const calibrator = (page: PageContext, bridge: Bridge) => {
+  const { native, now, within } = page;
+  const { send } = page.protocol;
+
+  // A round trip to the page like any other read, so traced as one.
+  const probe = (contextId: number) =>
+    Effect.gen(function* () {
+      const hostStart = now();
+
+      const { result, exceptionDetails } = yield* native("calibrate", () =>
+        send("Runtime.evaluate", {
+          contextId,
+          expression: "performance.timeOrigin + performance.now()",
+          returnByValue: true,
+        }),
+      ).pipe(page.span("Page.evaluate", { function: "clock" }, "Trace"));
+
+      const hostEnd = now();
+      const browserTime: unknown = result.value;
+
+      if (exceptionDetails !== undefined || typeof browserTime !== "number")
+        return yield* failWith(
+          "calibrate",
+          new Failed({ detail: "the browser clock probe did not return a timestamp" }),
+        );
+
+      return { hostStart, hostEnd, browserTime };
+    });
+
+  return bridge.bareWorld("calibrate").pipe(
     Effect.flatMap((contextId) =>
-      BrowserClock.calibrate(page.protocol.send, page.clock, contextId).pipe(
-        Effect.mapError(
-          (failure) =>
-            new BrowserError({
-              operation: "calibrate",
-              reason: reasonOf(failure.cause),
-              dispatched: false,
-            }),
-        ),
+      Effect.all([probe(contextId), probe(contextId), probe(contextId)]).pipe(
+        within("calibrate", Duration.seconds(2)),
       ),
     ),
-    Effect.timeoutOrElse({
-      duration: Duration.seconds(4),
-      orElse: () =>
-        Effect.fail(
-          new BrowserError({
-            operation: "calibrate",
-            reason: new Timeout({ millis: 4000 }),
-            dispatched: false,
-          }),
-        ),
-    }),
+    Effect.flatMap((probes) =>
+      Option.match(BrowserClock.estimate(probes), {
+        onNone: () =>
+          failWith(
+            "calibrate",
+            new Failed({ detail: "the browser clock probes did not define a finite interval" }),
+          ),
+        onSome: Effect.succeed,
+      }),
+    ),
+    within("calibrate", Duration.seconds(4)),
     // The fastest probe's round trip: the transport's, plus a trivial script.
     Effect.tap((estimate) =>
       Effect.annotateCurrentSpan("roundTripMillis", Math.round(estimate.roundTripMillis * 10) / 10),
@@ -98,13 +123,14 @@ const calibrator = (page: PageContext, bridge: Bridge) =>
     page.span("Page.calibrateClock", {}, "Debug"),
     page.owned,
   );
+};
 
 // A new picture in CSS pixels. Where a device pixel is not a CSS pixel, or for a crop, it is
 // Playwright's clip over fresh layout metrics: document coordinates from the visual viewport's
 // place, and its pinch scale divided by the device's. Chromium draws such a capture into a
 // running screencast, so the capture leaves out what is painted meanwhile.
 const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controller) => {
-  const { playwright, settings, native } = page;
+  const { playwright, settings, native, within } = page;
   const { send } = page.protocol;
   const actionMillis = Duration.toMillis(settings.actionTimeout);
   // Device pixels per CSS pixel, as the page's layout metrics last gave it. A picture taken in one
@@ -198,13 +224,12 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
           scale: scale / ratio,
         }),
       );
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: settings.actionTimeout,
-        orElse: () => failWith(operation, new Timeout({ millis: actionMillis })),
-      }),
-    );
+    }).pipe(within(operation));
 };
+
+// A duration in milliseconds, or NaN for an input that is no duration.
+const millisOf = (input: Duration.Input) =>
+  Option.match(Duration.fromInput(input), { onNone: () => Number.NaN, onSome: Duration.toMillis });
 
 // The newest screencast frame, if it shows the page as the caller asked: painted at most `maxAge`
 // ago at the earliest its timing allows, and with `after: "input"` after the page's latest input
@@ -215,10 +240,7 @@ const reuse =
   (page: PageContext, viewport: Viewport, capture: Capture.Controller) =>
   (operation: string, options: FrameOptions) =>
     Effect.gen(function* () {
-      const maxAge = Option.match(Duration.fromInput(options.maxAge ?? defaultMaxAge), {
-        onNone: () => Number.NaN,
-        onSome: Duration.toMillis,
-      });
+      const maxAge = millisOf(options.maxAge ?? defaultMaxAge);
 
       if (!(maxAge >= 0))
         return yield* failWith(
@@ -249,7 +271,7 @@ export const make = Effect.fnUntraced(function* (
   bridge: Bridge,
   viewport: Viewport,
 ) {
-  const { id, cdp, clock, playwright, settings, mapping, now, span, owned, lock } = page;
+  const { id, cdp, clock, playwright, settings, mapping, now, span, owned, lock, within } = page;
   const { send } = page.protocol;
   const calibrateClock = calibrator(page, bridge);
   const pageScope = yield* Effect.scope;
@@ -361,22 +383,14 @@ export const make = Effect.fnUntraced(function* (
       )
       .pipe(
         // Waiting behind another operation on this page counts against the deadline too.
-        Effect.timeoutOrElse({
-          duration: settings.actionTimeout,
-          orElse: () =>
-            failWith("zoom", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
-        }),
+        within("zoom"),
         span("Page.zoom"),
         owned,
       );
 
   const captureStats = (options: { readonly window?: Duration.Input | undefined } = {}) => {
     if (options.window === undefined) return capture.stats();
-
-    const millis = Option.match(Duration.fromInput(options.window), {
-      onNone: () => Number.NaN,
-      onSome: Duration.toMillis,
-    });
+    const millis = millisOf(options.window);
 
     return millis > 0 && millis <= Duration.toMillis(Capture.countsKept)
       ? capture.stats(millis)

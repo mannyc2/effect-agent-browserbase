@@ -9,7 +9,7 @@
  * - `near` matches when its words appear, whole and in order, in any of the element's context:
  *   its row, column, label or heading. Replay chooses among candidates by the same rule.
  */
-import type { Context } from "./context.inpage.ts";
+import type { SubjectContext } from "../../BrowserEvent.ts";
 
 /** A string, or a pattern sent to the page as its source and flags. */
 export type Wanted = string | { readonly source: string; readonly flags: string };
@@ -29,7 +29,7 @@ export interface Candidate {
   readonly role: string | null;
   readonly name: () => string;
   readonly text: () => string;
-  readonly context: () => Context;
+  readonly context: () => SubjectContext;
 }
 
 export const match = () => {

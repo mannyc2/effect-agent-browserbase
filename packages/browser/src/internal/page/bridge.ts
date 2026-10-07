@@ -8,53 +8,36 @@
 import { Effect, Semaphore } from "effect";
 
 import { BrowserError, Failed } from "../../BrowserError.ts";
-import {
-  edit,
-  type EditResult,
-  type FocusResult,
-  type TypeableResult,
-} from "../input/edit.inpage.ts";
+import { edit, type Edit } from "../input/edit.inpage.ts";
 import { evidence } from "../input/evidence.inpage.ts";
-import {
-  guard,
-  type InputPlan,
-  type PreparedInput,
-  type PreparedInputResult,
-  type ValidatedInputResult,
-  type ValidationOptions,
-} from "../input/guard.inpage.ts";
-import { type PointResult, targets } from "../input/targets.inpage.ts";
+import { guard, type Guard } from "../input/guard.inpage.ts";
+import { targets, type Targets } from "../input/targets.inpage.ts";
 import { context } from "../reading/context.inpage.ts";
 import { match } from "../reading/match.inpage.ts";
 import { names } from "../reading/names.inpage.ts";
-import { outline, type SnapshotRequest, type SnapshotResult } from "../reading/outline.inpage.ts";
-import { type Readiness, ready } from "../reading/ready.inpage.ts";
+import { outline, type Outline } from "../reading/outline.inpage.ts";
+import { ready } from "../reading/ready.inpage.ts";
 import { subjects, type Subjects } from "../reading/subjects.inpage.ts";
-import { text, type TextRequest, type TextResult } from "../reading/text.inpage.ts";
+import { text, type Texts } from "../reading/text.inpage.ts";
 import { walk } from "../reading/walk.inpage.ts";
 import { contextGone, type PageContext } from "./context.ts";
 
+/** What the script installs: a version, and a function of one of its parts for each call. */
 export interface PageApi {
   readonly version: number;
-  snapshot(request: SnapshotRequest): SnapshotResult;
+  snapshot: Outline["snapshot"];
   find: Subjects["find"];
-  text(request: TextRequest): TextResult;
-  ready(): Promise<Readiness>;
-  point(target: string | { readonly x: number; readonly y: number }, scroll?: boolean): PointResult;
-  scrollPlan(
-    ref: string,
-  ): { readonly x: number; readonly y: number; readonly dx: number; readonly dy: number } | null;
-  viewport(): { readonly width: number; readonly height: number };
-  prepareInput(plan: InputPlan): PreparedInputResult;
-  validateInput(
-    plan: InputPlan,
-    prepared: PreparedInput,
-    options?: ValidationOptions,
-  ): ValidatedInputResult | Promise<ValidatedInputResult>;
-  typeable(ref: string | null): TypeableResult;
-  focus(ref: string, replace: boolean): FocusResult;
-  checkText(ref: string, expected: string): EditResult;
-  select(ref: string, values: ReadonlyArray<string>): EditResult;
+  text: Texts["read"];
+  ready: ReturnType<typeof ready>["check"];
+  point: Targets["point"];
+  scrollPlan: Targets["scrollPlan"];
+  viewport: Outline["viewport"];
+  prepareInput: Guard["prepareInput"];
+  validateInput: Guard["validateInput"];
+  typeable: Edit["typeable"];
+  focus: Edit["focus"];
+  checkText: Edit["checkText"];
+  select: Edit["select"];
 }
 
 declare global {
@@ -79,7 +62,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 7) return installed;
+  if (installed !== undefined && installed.version === 8) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named);
@@ -91,7 +74,7 @@ const install = (
   const edited = makeEdit(named, guarded);
 
   const api: PageApi = {
-    version: 7,
+    version: 8,
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
@@ -133,11 +116,13 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   const { send } = page.protocol;
   const registering = yield* Semaphore.make(1);
   // The main frame's id, which is the page's target id, and whether this session has registered
-  // the script.
+  // the script and has the Page domain on.
   let frameId: string | undefined;
   let registered = false;
-  // The current document's world, forgotten when the main frame commits another document. Only a
-  // commit is a new document: `frameStartedLoading` also fires on `pushState`.
+  let paging = false;
+  // The current document's world, forgotten when the main frame commits another document, and the
+  // commits this session has seen. Only a commit is a new document: `frameStartedLoading` also
+  // fires on `pushState`.
   let world: number | undefined;
   let documents = 0;
 
@@ -146,6 +131,27 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     documents++;
     world = undefined;
   });
+
+  // The Page domain's events, commits among them, reach a session only once it enables the domain.
+  const enablePage = (operation: string) =>
+    Effect.suspend(() =>
+      paging
+        ? Effect.void
+        : native(operation, () => send("Page.enable")).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                paging = true;
+              }),
+            ),
+          ),
+    );
+
+  /**
+   * The main-frame commits seen so far, with the Page domain on so that every later one counts. A
+   * commit within about one round trip of the count can still be missed.
+   */
+  const currentDocument = (operation: string) =>
+    enablePage(operation).pipe(Effect.map(() => documents));
 
   const mainFrame = (operation: string) =>
     Effect.suspend(() =>
@@ -167,7 +173,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     Effect.all(
       [
         mainFrame(operation),
-        native(operation, () => send("Page.enable")),
+        enablePage(operation),
         native(operation, () =>
           send("Page.addScriptToEvaluateOnNewDocument", {
             source: `if (globalThis === globalThis.top) ${installSource};`,
@@ -287,7 +293,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   const evaluate = (operation: string, call: string) =>
     evaluateWithContext(operation, call).pipe(Effect.map(({ value }) => value));
 
-  return { current, bareWorld, evaluate, evaluateIn, evaluateWithContext };
+  return { current, bareWorld, evaluate, evaluateIn, evaluateWithContext, currentDocument };
 });
 
 export type Bridge = Effect.Success<ReturnType<typeof make>>;

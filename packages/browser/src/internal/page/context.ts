@@ -6,6 +6,7 @@
 import {
   Clock,
   Context,
+  Duration,
   Effect,
   Fiber,
   type Option,
@@ -204,6 +205,15 @@ export const make = (options: MakeOptions, lock: Semaphore.Semaphore) => {
         new BrowserError({ operation, reason: reasonOf(cause, timeoutMillis), dispatched: false }),
     });
 
+  /** Fail with `Timeout` once `duration` has passed, the action timeout unless another is given. */
+  const within =
+    (operation: string, duration: Duration.Input = options.settings.actionTimeout) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.timeoutOrElse(effect, {
+        duration,
+        orElse: () => failWith(operation, new Timeout({ millis: Duration.toMillis(duration) })),
+      });
+
   // Actions that have started changing the page and not yet ended, and the latest submitted input
   // or page change. While an action runs no cached paint is current; afterwards only paint from
   // after its latest input is. An action ends after its input was handled, so if that input changed
@@ -217,7 +227,7 @@ export const make = (options: MakeOptions, lock: Semaphore.Semaphore) => {
   // Named, so that the declarations of what holds it need not spell out Playwright's protocol types.
   const protocol: Pick<CDPSession, "send"> = { send };
 
-  return { ...options, lock, now, owned, span, protocol, native, activity, noteInput };
+  return { ...options, lock, now, owned, span, protocol, native, within, activity, noteInput };
 };
 
 export type PageContext = ReturnType<typeof make>;

@@ -59,7 +59,7 @@ const partsOf = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
     ...guard,
     ...Targets.make(page, bridge, viewport, guard, pointer, dispatch),
     ...pointer,
-    ...Keyboard.make(page, dispatch),
+    ...Keyboard.make(page, bridge, dispatch),
     sendMouse: dispatch.sendMouse,
     flush: dispatch.flush,
     settle: settle(page),

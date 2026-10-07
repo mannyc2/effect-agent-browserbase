@@ -36,7 +36,7 @@ export const evidence = (names: Names, placing: ContextReader) => {
   const { clean, isDocument, isInput, isSelect, isTextArea, nameOf, parentOf, roleOf, textOf } =
     names;
 
-  const { headingBefore, textBeside, treeOf } = placing;
+  const { groups, headingBefore, textBeside, treeOf } = placing;
 
   /** A field a submission would send. */
   const isField = (element: Element): element is Field =>
@@ -51,10 +51,6 @@ export const evidence = (names: Names, placing: ContextReader) => {
       : isInput(field) && field.type === "file"
         ? (field.files?.length ?? 0) > 0
         : field.value !== "";
-
-  // Containers whose text usually describes the controls in them: a row, an item, a group or a form.
-  const groups =
-    "tr,li,article,fieldset,form,section,dialog,[role=row],[role=listitem],[role=group],[role=region],[role=dialog],[role=alertdialog]";
 
   const dialogOf = (element: Element): Element | undefined => {
     for (let node: Element | null = element; node !== null; node = parentOf(node))
