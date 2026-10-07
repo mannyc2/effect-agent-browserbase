@@ -34,9 +34,12 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Page.frame({ maxAge, after })` and `Page.FrameOptions`: a frame states how old it may be. The
   newest screencast frame serves when it was painted at most `maxAge` ago (250 ms by default; 0
   always takes a new screenshot), and with `after: "input"` only when painted after the page's
-  latest input. `Page.screenshot` takes the same options.
+  latest input. `Page.screenshot` takes `maxAge` and serves only a frame painted after that input.
 - `CaptureStats.duringPictures`: frames left out because they may have been painted, or arrived,
   while the library took a clipped or scaled picture of the page.
+- `Page.captureStats({ window })` counts over a window of up to the latest minute, gap statistics
+  included; `captureStats()` still counts over the page's life. `CaptureStats.ackBacklog` is the
+  acknowledgements of frames not yet answered, which slow a screencast over a slow connection.
 - Every page span reports its protocol cost on the page's own session: `calls`, `bytesOut`,
   `bytesIn` and `waitedMillis`. A picture's `source` is `frame` or `screenshot`.
 
@@ -56,6 +59,16 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   screencast, crops with the viewport's own proportions included.
 - Each page's own session holds focus emulation, so a tab behind another keeps painting whatever
   else is attached. A capture starts once the browser has confirmed it.
+- Opening a browser measures nothing, where a fresh one used to measure its clock and its paint
+  delay on a private page first. The browser's first capture maps its clock and waits for that one
+  estimate; a later capture starts with the browser's estimate and, once it is ten seconds old,
+  measures again alongside, for later captures. At 72 ms a round trip, opening a browser went from
+  2.2 to 0.6 seconds, and a later capture's start to its first frame from 0.52 to 0.23 seconds.
+- Input never waits for the clock: until a capture has mapped it, Chromium stamps input as it
+  receives it.
+- An estimate of the clock says less as it ages, by up to 100 parts per million of its age. A frame
+  carries its estimate's uncertainty at its paint, and a newer measurement replaces an estimate
+  that its age has made less certain.
 - `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
   SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
   `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
@@ -77,10 +90,18 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Page.currentFrame` is removed: `Page.frame({ after: "input" })` is the nearest, and its 250 ms
   bound is now the frame's age from its paint, not from its delivery, so frames that arrive late
   stand in less often.
-- `ScreenshotOptions.fresh` is removed: `maxAge: 0` takes a new picture. Without
-  `after: "input"`, `Page.screenshot` can serve a frame painted before the page's latest input;
-  `Page.observe` and `Moment.capture` ask for one painted after it.
-- `CaptureStats` has the required count `duringPictures`.
+- `ScreenshotOptions.fresh` is removed: `maxAge: 0` takes a new picture.
+- `Page.screenshot` serves only a frame painted after the page's latest input, so a caller that acts
+  and then looks sees what its action did. `ScreenshotOptions` no longer extends `FrameOptions` and
+  has no `after`; `Page.frame({ maxAge })` reads a frame of a stated age whatever came before it.
+- `CaptureStats` has the required counts `duringPictures` and `ackBacklog`. `outOfOrder` is `late`
+  and `subscriberMissed` is `lost`, so frames that came late read apart from frames a reader lost.
+- `Page.captureStats` is a function: `captureStats()` for the page's life, `captureStats({ window })`
+  for up to the latest minute, which fails with `InvalidRequest` for a longer or empty window.
+- `Browser.captureCalibration`, `CaptureCalibration` with its `delayFor`, and
+  `Browser.ContextOrigin` are removed, with the private startup page that measured them. Nothing in
+  the library, the bench or the demos read them. `Browser.make` takes no `contextOrigin`, and
+  `Cdp.open` no second argument.
 
 ## 0.3.0-beta.0
 

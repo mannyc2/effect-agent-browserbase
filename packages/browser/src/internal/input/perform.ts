@@ -58,11 +58,7 @@ export interface Call {
   readonly input?: boolean | undefined;
 }
 
-export const make = (
-  page: PageContext,
-  sender: Dispatch,
-  calibrateClock: Effect.Effect<BrowserClock.Estimate, BrowserError>,
-) => {
+export const make = (page: PageContext, sender: Dispatch) => {
   const { id, settings, mapping, inputLock, lock, publish, now, noteInput, span, owned } = page;
   const { activity } = page;
   const { inputClocks, flush } = sender;
@@ -122,27 +118,17 @@ export const make = (
         duration: Duration.Duration,
       ) => effect.pipe(Effect.timeoutOrElse({ duration, orElse: () => timedOut(duration) }));
 
-      // Admission waits only on this page: its own unresolved replies and, before the browser's
-      // first input, its clock mapping. It runs under the page lock but before the browser-wide
-      // input lock, so a stalled page cannot delay input on other pages. The run re-checks the
-      // replies under both locks.
+      // Admission waits only on this page's own unresolved replies. It runs under the page lock
+      // but before the browser-wide input lock, so a stalled page cannot delay input on other
+      // pages. The run re-checks the replies under both locks. Input never waits for the clock
+      // mapping: until a capture has measured one, it keeps Chromium's own receipt time.
       let estimate: BrowserClock.Estimate | undefined;
 
       const admit = input.idle.pipe(
-        Effect.andThen(
-          sendsInput
-            ? mapping.current(calibrateClock).pipe(
-                Effect.tap((current) =>
-                  Effect.sync(() => {
-                    estimate = current;
-                  }),
-                ),
-                Effect.mapError(
-                  (error) =>
-                    new BrowserError({ operation: name, reason: error.reason, dispatched: false }),
-                ),
-              )
-            : Effect.void,
+        Effect.tap(() =>
+          Effect.sync(() => {
+            estimate = sendsInput ? mapping.latest() : undefined;
+          }),
         ),
       );
 

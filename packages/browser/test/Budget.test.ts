@@ -52,11 +52,59 @@ const opened = (args: ReadonlyArray<string> = []) =>
     return { proxy, browser };
   });
 
+// The commands from a capture's start to its first frame. The frame's acknowledgement answers it.
+const toFirstFrame = (proxy: Proxy, page: Page) =>
+  Effect.gen(function* () {
+    const before = proxy.commands.length;
+    let first = before;
+
+    yield* page.screencast().pipe(
+      Stream.take(1),
+      Stream.tap(() =>
+        Effect.sync(() => {
+          first = proxy.commands.length;
+        }),
+      ),
+      Stream.runDrain,
+    );
+
+    return proxy.commands
+      .slice(before, first)
+      .filter((command) => command.method !== "Page.screencastFrameAck");
+  });
+
 const framesArrive = (page: Page) =>
   page.latestFrame.pipe(
     Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: Option.isSome }),
     Effect.timeout("10 seconds"),
   );
+
+// Playwright's own connection to the browser and its tab, and the library's session on that tab.
+// Nothing is measured: no page of the library's own opens.
+it.live("opening a browser over CDP costs 33 calls", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+
+    holds(yield* sentBy(proxy, Cdp.open({ endpoint: proxy.endpoint })), 33, 4);
+  }).pipe(Effect.scoped),
+);
+
+it.live("a capture starts in two calls once the browser's clock is mapped", () =>
+  Effect.gen(function* () {
+    const { proxy, browser } = yield* opened();
+    const page = yield* browser.newPage(still("first"));
+
+    // The browser's first capture maps its clock first, in a world of its own: the main frame,
+    // that world and three probes. The page script is registered to read the viewport.
+    holds(yield* toFirstFrame(proxy, page), 10, 9, 1);
+    // Then a capture reads the viewport and starts.
+    holds(yield* toFirstFrame(proxy, page), 2, 2);
+    const other = yield* browser.newPage(still("second"));
+
+    yield* other.snapshot();
+    holds(yield* toFirstFrame(proxy, other), 2, 2);
+  }).pipe(Effect.scoped),
+);
 
 it.live("a picture of a changing page with its screencast running costs no call", () =>
   Effect.gen(function* () {

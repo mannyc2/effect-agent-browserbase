@@ -60,12 +60,13 @@
 - Humanized scrolling to off-screen targets, bounded fallback and approval revalidation; typing
   near 75 WPM with overlapping holds, slower word starts and opt-in corrected prose slips.
   Sampled presentation pauses retain the functional navigation wait.
-- Browser paint mapped onto the host clock with explicit uncertainty through one browser-wide
-  clock mapping, timestamped mouse and raw text-key input, a best-effort startup capture
-  calibration for newly owned sessions, and per-page capture counters for filtering, paint gaps
-  and observed subscriber loss. Screenshot timing has its own provenance; a picture states how old
-  a reused screencast frame may be, and whether it must follow the latest input; borrowed pages
-  receive no probe input.
+- Browser paint mapped onto the host clock with explicit uncertainty, wider as its estimate ages,
+  through one browser-wide clock mapping that the first capture measures, never the opening of a
+  browser; timestamped mouse and raw text-key input once it exists; and per-page capture counters,
+  over a page's life or a window of the latest minute, for filtering, paint gaps, late frames apart
+  from lost ones and the acknowledgement backlog. Screenshot timing has its own provenance; a frame
+  read states how old it may be, and whether it must follow the latest input, which a screenshot
+  always must.
 - Pictures and reads on each page's own protocol session, counted: a picture is one call, or two
   for a crop or another device pixel ratio; the page script is registered once per page session, so
   a document's first read is two calls and a warm read one; the library's own clipped pictures stay

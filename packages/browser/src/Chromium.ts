@@ -93,7 +93,7 @@ export const open = Effect.fn("Chromium.open")(function* (options: Options = {})
 
   return yield* Browser.make(
     context,
-    { id: `chromium-${launched.version()}`, provider: "chromium", contextOrigin: "fresh" },
+    { id: `chromium-${launched.version()}`, provider: "chromium" },
     options,
   );
 });

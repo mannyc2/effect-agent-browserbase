@@ -1,10 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Clock as EffectClock, Duration, Effect, Option } from "effect";
-import { chromium, type CDPSession } from "playwright-core";
+import { Arbitrary, Effect, Option, Schema } from "effect";
 
-import { make as makeBrowser } from "../src/Browser.ts";
-import * as Calibration from "../src/internal/pictures/calibration.ts";
 import * as Clock from "../src/internal/pictures/clock.ts";
+
+const between = (minimum: number, maximum: number) =>
+  Arbitrary.schema(Schema.Finite.check(Schema.isBetween({ minimum, maximum })));
 
 describe("Clock calibration", () => {
   it("keeps the true offset inside the full interval for asymmetric transports", () => {
@@ -72,31 +72,102 @@ describe("Clock calibration", () => {
         sampledAt: 0,
       };
 
-      const mapping = Clock.mapping(Option.some(precise));
+      let now = 0;
+      const mapping = Clock.mapping(() => now);
 
-      const refresh = (offsetMillis: number, uncertaintyMillis: number) =>
-        mapping.refresh(
+      // Each measurement comes ten seconds after the last, when the browser measures again.
+      const renewed = <E>(measure: Effect.Effect<Clock.Estimate, E>) => {
+        now += 10_000;
+
+        return mapping.renew(measure).pipe(Effect.map(() => mapping.latest()));
+      };
+
+      const measured = (offsetMillis: number, uncertaintyMillis: number) =>
+        Effect.suspend(() =>
           Effect.succeed({
             offsetMillis,
             uncertaintyMillis,
             roundTripMillis: uncertaintyMillis * 2,
-            sampledAt: 1,
+            sampledAt: now,
           }),
         );
 
+      assert.isUndefined(mapping.latest());
+      assert.deepStrictEqual(yield* mapping.current(Effect.succeed(precise)), precise);
+      // Within ten seconds of a measurement, the browser measures nothing.
+      yield* mapping.renew(Effect.die("measured again too soon"));
       // A probe delayed behind a busy page agrees with the current estimate but says less.
-      assert.deepStrictEqual(yield* refresh(1060, 75), precise);
+      assert.deepStrictEqual(yield* renewed(measured(1060, 75)), precise);
       // A failed probe keeps the estimate the browser already holds.
-      assert.deepStrictEqual(yield* mapping.refresh(Effect.fail("busy")), precise);
+      assert.deepStrictEqual(yield* renewed(Effect.fail("busy")), precise);
       // A no-worse probe is fresher evidence of the same offset.
-      assert.strictEqual((yield* refresh(1000.5, 1)).offsetMillis, 1000.5);
+      assert.strictEqual((yield* renewed(measured(1000.5, 1)))?.offsetMillis, 1000.5);
       // A measurement that cannot contain the current offset means the clocks moved.
-      assert.strictEqual((yield* refresh(1500, 30)).offsetMillis, 1500);
+      assert.strictEqual((yield* renewed(measured(1500, 30)))?.offsetMillis, 1500);
       assert.strictEqual(
         (yield* mapping.current(Effect.die("an estimate exists"))).offsetMillis,
         1500,
       );
     }),
+  );
+
+  it("says less about the offset the older an estimate is, so a wider, later one can replace it", () => {
+    const sampled = { offsetMillis: 1000, uncertaintyMillis: 1, roundTripMillis: 2, sampledAt: 0 };
+    const later = { ...sampled, uncertaintyMillis: 5, roundTripMillis: 10, sampledAt: 60_000 };
+
+    assert.strictEqual(Clock.uncertaintyAt(sampled, 0), 1);
+    assert.closeTo(Clock.uncertaintyAt(sampled, 60_000), 7, 1e-9);
+    assert.isTrue(Clock.supersedes(later, sampled));
+    assert.isFalse(Clock.supersedes(later, { ...sampled, sampledAt: 50_000 }));
+  });
+
+  // Every measurement's interval holds the true offset, as an honest probe's does, so they agree.
+  it.prop(
+    "keeps whichever of its measurements says most about the offset now",
+    {
+      measurements: Arbitrary.array(
+        Arbitrary.all({
+          error: between(-1, 1),
+          uncertainty: between(0, 40),
+          after: between(10_000, 600_000),
+        }),
+        { minLength: 1, maxLength: 8 },
+      ),
+    },
+    ({ measurements }) => {
+      const offset = 5000;
+      const taken: Array<Clock.Estimate> = [];
+      let now = 0;
+      const mapping = Clock.mapping(() => now);
+
+      for (const { error, uncertainty, after } of measurements) {
+        now += after;
+
+        const measured = {
+          offsetMillis: offset + error * uncertainty,
+          uncertaintyMillis: uncertainty,
+          roundTripMillis: uncertainty * 2,
+          sampledAt: now,
+        };
+
+        taken.push(measured);
+        Effect.runSync(
+          taken.length === 1
+            ? Effect.asVoid(mapping.current(Effect.succeed(measured)))
+            : mapping.renew(Effect.succeed(measured)),
+        );
+        const latest = mapping.latest();
+
+        if (latest === undefined) throw new Error("the browser holds no estimate");
+        const best = Math.min(...taken.map((estimate) => Clock.uncertaintyAt(estimate, now)));
+
+        assert.isAtMost(Clock.uncertaintyAt(latest, now), best + 1e-9);
+        assert.isAtMost(
+          Math.abs(latest.offsetMillis - offset),
+          Clock.uncertaintyAt(latest, now) + 1e-9,
+        );
+      }
+    },
   );
 
   it("ignores invalid probes and cannot calibrate from backward or nonfinite host intervals", () => {
@@ -120,460 +191,4 @@ describe("Clock calibration", () => {
       }),
     );
   });
-});
-
-const fresh = Effect.gen(function* () {
-  const browser = yield* Effect.acquireRelease(
-    Effect.promise(() => chromium.launch()),
-    (native) => Effect.promise(() => native.close()),
-  );
-
-  const context = yield* Effect.promise(() =>
-    browser.newContext({ viewport: { width: 640, height: 400 } }),
-  );
-
-  return context;
-});
-
-interface EmittingCalibrationSession extends CDPSession {
-  emit(event: string | symbol, ...args: ReadonlyArray<unknown>): boolean;
-}
-
-describe("Owned paint calibration", () => {
-  it.live("uses captured JPEG markers, stops before decoding and closes its private page", () =>
-    Effect.gen(function* () {
-      const context = yield* fresh;
-      const createSession = context.newCDPSession.bind(context);
-      const calls: Array<string> = [];
-
-      context.newCDPSession = (target) =>
-        createSession(target).then((cdp) => {
-          const send = cdp.send.bind(cdp);
-
-          const observed: CDPSession["send"] = (method, params) => {
-            calls.push(
-              method === "Runtime.evaluate" &&
-                params !== undefined &&
-                "expression" in params &&
-                typeof params.expression === "string" &&
-                params.expression.includes("OffscreenCanvas")
-                ? "decode"
-                : method,
-            );
-
-            return send(method, params);
-          };
-
-          cdp.send = observed;
-
-          return cdp;
-        });
-      const result = Option.getOrThrow(yield* Calibration.owned(context, yield* EffectClock.Clock));
-
-      assert.strictEqual(result.paintSamples.length, 3);
-      assert.isTrue(result.paintSamples.every((sample) => Number.isFinite(sample.sentAt)));
-      assert.isTrue(result.paintSamples.every((sample) => sample.timestamp > 1_000_000_000_000));
-      assert.isAbove(calls.indexOf("decode"), calls.indexOf("Page.stopScreencast"));
-      assert.strictEqual(calls.filter((method) => method === "Input.dispatchMouseEvent").length, 3);
-      assert.strictEqual(calls.filter((method) => method === "Page.stopScreencast").length, 1);
-      assert.isEmpty(context.pages());
-    }),
-  );
-
-  it.live("closes the unpublished page and measures nothing when its CDP session fails", () =>
-    Effect.gen(function* () {
-      const context = yield* fresh;
-
-      context.newCDPSession = () => Promise.reject(new Error("injected session failure"));
-      const result = yield* Calibration.owned(context, yield* EffectClock.Clock);
-
-      assert.isTrue(Option.isNone(result));
-      assert.isEmpty(context.pages());
-    }),
-  );
-
-  for (const rejectedMethod of [
-    "Page.startScreencast",
-    "Page.screencastFrameAck",
-    "Page.stopScreencast",
-  ] as const)
-    it.live(
-      "measures nothing and closes without replay when " + rejectedMethod + " loses its reply",
-      () =>
-        Effect.gen(function* () {
-          const context = yield* fresh;
-          const createSession = context.newCDPSession.bind(context);
-          const calls: Array<string> = [];
-          let rejected = false;
-
-          context.newCDPSession = (target) =>
-            createSession(target).then((cdp) => {
-              const send = cdp.send.bind(cdp);
-
-              const observed: CDPSession["send"] = (method, params) => {
-                calls.push(method);
-                const response = send(method, params);
-
-                if (method !== rejectedMethod || rejected) return response;
-                rejected = true;
-
-                // Chromium receives the real command. The lost reply must not justify sending
-                // another start or stop, nor leave an unobserved ACK rejection behind.
-                return response.then(() => {
-                  throw new Error("injected lost calibration reply");
-                });
-              };
-
-              cdp.send = observed;
-
-              return cdp;
-            });
-          const result = yield* Calibration.owned(context, yield* EffectClock.Clock);
-
-          assert.isTrue(Option.isNone(result));
-          assert.isTrue(rejected);
-          assert.strictEqual(calls.filter((method) => method === "Page.startScreencast").length, 1);
-          assert.strictEqual(calls.filter((method) => method === "Page.stopScreencast").length, 1);
-          assert.isEmpty(context.pages());
-        }),
-    );
-
-  it.live(
-    "bounds retained JPEGs and pending ACKs when actual frames are delivered in a burst",
-    () =>
-      Effect.gen(function* () {
-        const context = yield* fresh;
-        const createSession = context.newCDPSession.bind(context);
-        const release = Promise.withResolvers<void>();
-        let maximumPending = 0;
-        let pending = 0;
-        let stops = 0;
-        let decoded = false;
-        let replayed = false;
-
-        yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
-        context.newCDPSession = (target) =>
-          createSession(target).then((cdp) => {
-            const send = cdp.send.bind(cdp);
-            const emitter = cdp as EmittingCalibrationSession;
-            const emit = emitter.emit.bind(emitter);
-
-            emitter.emit = (event, ...args) => {
-              if (event === "Page.screencastFrame" && !replayed) {
-                replayed = true;
-                for (let index = 0; index < 40; index++) emit(event, ...args);
-
-                return true;
-              }
-
-              return emit(event, ...args);
-            };
-
-            const observed: CDPSession["send"] = (method, params) => {
-              if (method === "Page.stopScreencast") stops++;
-              if (
-                method === "Runtime.evaluate" &&
-                params !== undefined &&
-                "expression" in params &&
-                typeof params.expression === "string" &&
-                params.expression.includes("OffscreenCanvas")
-              )
-                decoded = true;
-              const response = send(method, params);
-
-              if (method !== "Page.screencastFrameAck") return response;
-              pending++;
-              maximumPending = Math.max(maximumPending, pending);
-
-              return response.then((result) =>
-                release.promise.then(() => {
-                  pending--;
-
-                  return result;
-                }),
-              );
-            };
-
-            cdp.send = observed;
-
-            return cdp;
-          });
-        const result = yield* Calibration.owned(context, yield* EffectClock.Clock);
-
-        // The frame budget stops capture before anything is decoded or measured.
-        assert.isTrue(Option.isNone(result));
-        assert.isTrue(replayed);
-        assert.isAbove(maximumPending, 0);
-        assert.isAtMost(maximumPending, 32);
-        assert.strictEqual(stops, 1);
-        assert.isFalse(decoded);
-        assert.isEmpty(context.pages());
-        release.resolve();
-      }),
-  );
-});
-
-describe("Calibration deadlines", () => {
-  for (const resource of ["page", "session"] as const)
-    it.live("closes a late " + resource + " after its interrupted allocation wait", () =>
-      Effect.gen(function* () {
-        const context = yield* fresh;
-        const live = yield* EffectClock.Clock;
-        const entered = Promise.withResolvers<void>();
-
-        const ownerClock: EffectClock.Clock = {
-          currentTimeMillisUnsafe: () => live.currentTimeMillisUnsafe(),
-          currentTimeMillis: live.currentTimeMillis,
-          currentTimeNanosUnsafe: () => live.currentTimeNanosUnsafe(),
-          currentTimeNanos: live.currentTimeNanos,
-          monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
-          monotonicTimeNanos: live.monotonicTimeNanos,
-          // Only the measurement deadline is shortened, and only once the allocation under test
-          // has begun: a slow page allocation must not end the measurement before the session
-          // wait this case is about. Closing keeps its real bound.
-          sleep: (duration) => {
-            const millis = Duration.toMillis(duration);
-
-            return millis >= 8000
-              ? Effect.promise(() => entered.promise).pipe(
-                  Effect.andThen(live.sleep(Duration.millis(millis / 100))),
-                )
-              : live.sleep(duration);
-          },
-        };
-
-        const gate = Promise.withResolvers<void>();
-        const pageClosed = Promise.withResolvers<void>();
-        const sessionDetached = Promise.withResolvers<void>();
-        const createPage = context.newPage.bind(context);
-        const createSession = context.newCDPSession.bind(context);
-        let closes = 0;
-        let detaches = 0;
-
-        yield* Effect.addFinalizer(() => Effect.sync(() => gate.resolve()));
-        context.newPage = () =>
-          createPage().then((page) => {
-            const close = page.close.bind(page);
-
-            page.close = (options) => {
-              closes++;
-
-              return close(options).then(() => {
-                pageClosed.resolve();
-              });
-            };
-            if (resource === "page") {
-              entered.resolve();
-
-              return gate.promise.then(() => page);
-            }
-
-            return page;
-          });
-        context.newCDPSession = (target) =>
-          createSession(target).then((cdp) => {
-            const detach = cdp.detach.bind(cdp);
-
-            cdp.detach = () => {
-              detaches++;
-
-              return detach().then(
-                () => {
-                  sessionDetached.resolve();
-                },
-                (cause: unknown) => {
-                  sessionDetached.resolve();
-                  throw cause;
-                },
-              );
-            };
-            entered.resolve();
-
-            return gate.promise.then(() => cdp);
-          });
-
-        // A missed measurement deadline yields no measurement; it does not fail the browser.
-        const result = yield* Calibration.owned(context, ownerClock).pipe(
-          Effect.timeout("2 seconds"),
-        );
-
-        assert.isTrue(Option.isNone(result));
-        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("2 seconds"));
-        gate.resolve();
-        yield* Effect.promise(() => pageClosed.promise).pipe(Effect.timeout("2 seconds"));
-        if (resource === "session")
-          yield* Effect.promise(() => sessionDetached.promise).pipe(Effect.timeout("2 seconds"));
-        assert.strictEqual(closes, 1);
-        assert.strictEqual(detaches, resource === "session" ? 1 : 0);
-        assert.isEmpty(context.pages());
-      }),
-    );
-
-  for (const resource of ["close", "detach"] as const)
-    it.live("bounds the finalizer when the private " + resource + " reply never arrives", () =>
-      Effect.gen(function* () {
-        const context = yield* fresh;
-        const live = yield* EffectClock.Clock;
-        const entered = Promise.withResolvers<void>();
-        const gate = Promise.withResolvers<void>();
-        const settled = Promise.withResolvers<void>();
-
-        const ownerClock: EffectClock.Clock = {
-          currentTimeMillisUnsafe: () => live.currentTimeMillisUnsafe(),
-          currentTimeMillis: live.currentTimeMillis,
-          currentTimeNanosUnsafe: () => live.currentTimeNanosUnsafe(),
-          currentTimeNanos: live.currentTimeNanos,
-          monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
-          monotonicTimeNanos: live.monotonicTimeNanos,
-          sleep: (duration) => {
-            const millis = Duration.toMillis(duration);
-
-            // Let real capture finish before accelerating the work and close deadlines; the
-            // one-second cleanup wait is shortened independently so a masked finalizer cannot hide.
-            return millis >= 8000 || millis === 5000
-              ? Effect.promise(() => entered.promise).pipe(
-                  Effect.andThen(live.sleep(Duration.millis(40))),
-                )
-              : live.sleep(Duration.millis(millis === 1000 ? 10 : millis));
-          },
-        };
-
-        let closes = 0;
-        let detaches = 0;
-        const createPage = context.newPage.bind(context);
-        const createSession = context.newCDPSession.bind(context);
-
-        yield* Effect.addFinalizer(() => Effect.sync(() => gate.resolve()));
-        context.newPage = () =>
-          createPage().then((page) => {
-            const close = page.close.bind(page);
-
-            page.close = (options) => {
-              closes++;
-              const response = close(options);
-
-              if (resource !== "close") return response;
-              entered.resolve();
-
-              return response
-                .then(() => gate.promise)
-                .then(() => {
-                  settled.resolve();
-                });
-            };
-
-            return page;
-          });
-        context.newCDPSession = (target) =>
-          createSession(target).then((cdp) => {
-            const detach = cdp.detach.bind(cdp);
-
-            cdp.detach = () => {
-              detaches++;
-              const response = detach();
-
-              if (resource !== "detach") return response;
-              entered.resolve();
-
-              return response.then(
-                () =>
-                  gate.promise.then(() => {
-                    settled.resolve();
-                  }),
-                (cause: unknown) =>
-                  gate.promise.then(() => {
-                    settled.resolve();
-                    throw cause;
-                  }),
-              );
-            };
-
-            return cdp;
-          });
-
-        const outcome = yield* Calibration.owned(context, ownerClock).pipe(
-          Effect.exit,
-          Effect.timeout("3 seconds"),
-        );
-
-        assert.strictEqual(
-          outcome._tag,
-          resource === "close" ? "Failure" : "Success",
-          String(outcome),
-        );
-        assert.strictEqual(closes, 1);
-        assert.strictEqual(detaches, 1);
-        assert.isEmpty(context.pages());
-        gate.resolve();
-        yield* Effect.promise(() => settled.promise).pipe(Effect.timeout("2 seconds"));
-        assert.strictEqual(closes, 1);
-        assert.strictEqual(detaches, 1);
-      }),
-    );
-});
-
-describe("Fresh browser startup", () => {
-  it.live("opens without a capture calibration when the measurement fails", () =>
-    Effect.gen(function* () {
-      const context = yield* fresh;
-      const createSession = context.newCDPSession.bind(context);
-      let injected = false;
-
-      // The first session belongs to the private startup page; its capture never starts.
-      context.newCDPSession = (target) =>
-        createSession(target).then((cdp) => {
-          const send = cdp.send.bind(cdp);
-
-          const observed: CDPSession["send"] = (method, params) => {
-            if (method !== "Page.startScreencast" || injected) return send(method, params);
-            injected = true;
-
-            return Promise.reject(new Error("injected capture failure"));
-          };
-
-          cdp.send = observed;
-
-          return cdp;
-        });
-
-      const browser = yield* makeBrowser(context, {
-        id: "fresh",
-        provider: "test",
-        contextOrigin: "fresh",
-      });
-
-      assert.isTrue(injected);
-      assert.isTrue(Option.isNone(browser.captureCalibration));
-      assert.isEmpty(context.pages());
-      assert.isEmpty(yield* browser.pages);
-
-      const page = yield* browser.newPage("data:text/html,<title>Usable</title>");
-
-      yield* page.click({ x: 10, y: 10 });
-      assert.strictEqual(yield* page.title, "Usable");
-    }),
-  );
-
-  it.live("fails when its private page cannot be closed", () =>
-    Effect.gen(function* () {
-      const context = yield* fresh;
-      const createPage = context.newPage.bind(context);
-
-      context.newPage = () =>
-        createPage().then((page) => {
-          page.close = () => Promise.reject(new Error("injected close failure"));
-
-          return page;
-        });
-
-      const error = yield* makeBrowser(context, {
-        id: "fresh",
-        provider: "test",
-        contextOrigin: "fresh",
-      }).pipe(Effect.flip);
-
-      assert.strictEqual(error.operation, "calibrate");
-      assert.isFalse(error.dispatched);
-    }),
-  );
 });
