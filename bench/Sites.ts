@@ -49,8 +49,8 @@ header{display:flex;justify-content:space-between;padding:16px 24px;background:#
   <button id="adult">Yes, I am 18 or older</button> <button id="minor">No</button>
 </div></div>
 <script>
-  // The banner's and the check's wording and button order, and where the game's card sits, vary
-  // with the seed.
+  // The banner's and the check's wording and button order, where the game's card sits, what the
+  // cards' buttons say and which table the game opens at vary with the seed.
   const random = __benchStream(0xca51), pick = (list) => list[Math.floor(random() * list.length)];
   const layout = { accept: pick(["Accept all", "Allow all cookies", "I agree"]), reject: pick(["Reject all", "Only necessary", "Decline"]), adult: pick(["Yes, I am 18 or older", "I am 18 or older", "Enter (18+)"]), card: Math.floor(random() * 3) };
   window.__bench = { cookies: null, adult: null, layout };
@@ -60,6 +60,8 @@ header{display:flex;justify-content:space-between;padding:16px 24px;background:#
   if (random() < 0.5) $("adult").before($("minor"));
   const games = document.querySelector(".games"), card = $("play").closest(".card");
   card.remove(); games.insertBefore(card, games.children[layout.card] ?? null);
+  layout.play = pick(["Play", "Play now", "Start game"]); layout.table = 1 + Math.floor(random() * 90);
+  for (const button of document.querySelectorAll(".card button")) button.textContent = layout.play;
   const decide = (choice) => { __bench.cookies = choice; $("cookies").remove(); $("gate").style.display = "flex"; };
   $("accept").onclick = () => decide("accepted");
   $("reject").onclick = () => decide("rejected");
@@ -67,8 +69,8 @@ header{display:flex;justify-content:space-between;padding:16px 24px;background:#
   $("minor").onclick = () => { __bench.adult = false; $("gate").querySelector("h2").textContent = "Sorry, you cannot play."; };
   $("play").onclick = () => {
     if (!__bench.adult) return;
-    sessionStorage.setItem("bench-navigation-trigger", "Play");
-    location.href = "/casino/reels";
+    sessionStorage.setItem("bench-navigation-trigger", layout.play);
+    location.href = "/casino/reels?table=" + layout.table;
   };
 </script></body></html>`;
 
@@ -565,7 +567,7 @@ export const CheckoutTruth = Schema.Struct({
 // What an operate page varies with the seed, for its scripted solution; models never see it.
 
 export const LobbyLayout = Schema.Struct({
-  layout: Schema.Struct({ accept: Schema.String, adult: Schema.String }),
+  layout: Schema.Struct({ accept: Schema.String, adult: Schema.String, play: Schema.String }),
 });
 
 export const ReelsLayout = Schema.Struct({

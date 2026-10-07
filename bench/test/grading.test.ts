@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Layer, Stream } from "effect";
+import { Duration, Effect, Exit, Layer, Schema, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
@@ -474,9 +474,11 @@ describe("understanding evidence", () => {
         assert.isBelow(first.receivedAt, lastClick.startedAt);
         assert.isAtLeast(last.receivedAt - first.receivedAt, 500);
         if (name === "navigated") {
+          const { trigger } = yield* Schema.decodeUnknownEffect(NavigationTruth)(outcome.answer);
+
           assert.include(textOf(prompt), "navigated to");
           // The control is named as it was clicked, not by a ref the new page reuses.
-          assert.include(textOf(prompt), 'click button "Play"');
+          assert.include(textOf(prompt), `click button "${trigger}"`);
           assert.notMatch(textOf(prompt), /\be\d+\b/);
 
           const priorClick = events
