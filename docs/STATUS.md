@@ -111,6 +111,31 @@
 and scripted models. `bun run ready` runs all formatting, lint, type, test and build checks without
 paid calls.
 
+## Phases
+
+0.3 is built in four phases, each ending with a pass that deletes what the phase made redundant,
+and each becoming the next beta.
+
+- **Phase 1, cost and replay, is done.** Pictures and reads go on each page's own counted protocol
+  session, the clock is measured on first need, and `Page.find`, `Page.text`, `Plan` and
+  `Page.ready` are in. Its beta, `0.3.0-beta.1`, is prepared in the changelog and the package
+  versions, and not tagged.
+- **Phase 2, identity and lifetime, is under way.** `Supervisor`, the Browserbase release outcomes
+  and `effect-browserbase/testing` have landed.
+
+Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
+`src/testing` counted apart, and the `export` statements of its public modules.
+
+| Package                        | Source lines                   | Test lines      | Top-level exports         |
+| ------------------------------ | ------------------------------ | --------------- | ------------------------- |
+| `effect-browser`               | 8,871 → 11,771                 | 11,064 → 13,624 | 129 → 158                 |
+| `effect-browserbase`           | 807 → 1,007, and 549 `testing` | 611 → 791       | 32 → 36, and 14 `testing` |
+| `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
+
+`effect-browser`'s figures include phase 2's supervisor: 566 source lines, 473 test lines and 7
+exports. Without it, phase 1 leaves the package at 11,205 source lines, against a soft ceiling of
+about 11,000 through phase 4.
+
 ## Not rebuilt yet
 
 0.2 did much that 0.3 does not do yet. A capability inventory of the 0.2 code, the plans, the open
