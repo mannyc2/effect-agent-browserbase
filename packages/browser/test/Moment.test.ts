@@ -1178,6 +1178,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
                 rows(5, (index) => `Player ${index}: ${100 - index * 5}`),
               ) +
                 `<div id="chat" style="height:200px;overflow:auto;overflow-anchor:none;width:220px;float:left">${Array.from({ length: 12 }, (_, index) => `<p>Old message ${index}</p>`).join("")}</div>` +
+                `<div id="held" style="height:200px;overflow:auto;width:220px;float:left">${Array.from({ length: 12 }, (_, index) => `<p>Old note ${index}</p>`).join("")}</div>` +
                 pane(
                   "jump",
                   rows(10, (index) => `Row ${index}`),
@@ -1218,12 +1219,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
             const board = document.querySelector("#board");
             const chat = document.querySelector("#chat");
+            const held = document.querySelector("#held");
             const jump = document.querySelector("#jump");
             const late = document.querySelector("#late");
 
-            if (board === null || chat === null || jump === null || late === null) return;
+            if (board === null || chat === null || held === null || jump === null || late === null)
+              return;
             board.scrollTop = 3;
             chat.scrollTop = 3;
+            held.scrollTop = 3;
             jump.scrollTop = 4000;
             late.scrollTop = 100;
             await pause(20);
@@ -1242,6 +1246,16 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
             }
             chat.lastElementChild?.remove();
             chat.lastElementChild?.remove();
+            // A chat that holds its place, as Chrome's anchoring does by default, keeps what is
+            // prepended above the view, where no viewer sees it.
+            for (const text of ["Carol: above the view", "Dan: also above"]) {
+              const message = document.createElement("p");
+
+              message.textContent = text;
+              held.prepend(message);
+            }
+            held.lastElementChild?.remove();
+            held.lastElementChild?.remove();
           }),
         );
         yield* Effect.sleep(Duration.millis(400));
@@ -1255,7 +1269,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           "Bob: great news",
         ]);
         assert.isFalse(told.some((words) => words?.startsWith("Row ") === true));
-        assert.isAtLeast(second.changes?.scrolled ?? 0, 20);
+        // Neither told nor taken for the scroll: only the two lists' ten rows each are that.
+        assert.notIncludeMembers(told, ["Carol: above the view", "Dan: also above"]);
+        assert.strictEqual(second.changes?.scrolled, 20);
       }),
   );
 
