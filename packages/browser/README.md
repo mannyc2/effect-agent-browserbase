@@ -11,8 +11,8 @@ npx playwright-core install chromium
 
 `Chromium.layer` launches that Chromium without its sandbox, as Playwright does, so an exploit in a
 page's renderer runs with your user's privileges. `Chromium.layer({ sandbox: true })` runs it
-sandboxed; hosts that don't allow unprivileged user namespaces, such as many containers, can't start
-the sandbox.
+sandboxed. Hosts that don't allow unprivileged user namespaces, such as many containers and Ubuntu
+23.10 or later by default, can't start the sandbox; opening then fails and says so.
 
 | Module         | What it holds                                                                        |
 | -------------- | ------------------------------------------------------------------------------------ |

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { assert, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Result } from "effect";
 
 import * as Chromium from "../src/Chromium.ts";
 
@@ -29,10 +29,22 @@ const commandLine = (options: Chromium.Options) =>
     return line;
   }).pipe(Effect.scoped);
 
-it.live("runs Chromium's sandbox only when asked", () =>
+it.live("runs Chromium's sandbox when asked, or refuses to start without it", () =>
   Effect.gen(function* () {
     assert.include(yield* commandLine({}), "--no-sandbox");
     assert.include(yield* commandLine({ sandbox: false }), "--no-sandbox");
-    assert.notInclude(yield* commandLine({ sandbox: true }), "--no-sandbox");
+
+    // A host without unprivileged user namespaces, such as CI's runner, can't start the sandbox.
+    // Asked for it, Chromium must then not start at all, and the error must say why.
+    const asked = Result.match(yield* Effect.result(commandLine({ sandbox: true })), {
+      onSuccess: (line) =>
+        line.includes("--no-sandbox") ? `ran unsandboxed: ${line}` : "sandboxed",
+      onFailure: (error) =>
+        error.message.startsWith("launch failed: Chromium's sandbox could not start")
+          ? "refused"
+          : `failed otherwise: ${error.message}`,
+    });
+
+    assert.oneOf(asked, ["sandboxed", "refused"]);
   }),
 );

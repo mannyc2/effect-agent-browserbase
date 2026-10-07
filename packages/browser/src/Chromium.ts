@@ -10,7 +10,7 @@ import { Effect, Layer } from "effect";
 import { chromium } from "playwright-core";
 
 import * as Browser from "./Browser.ts";
-import { BrowserError } from "./BrowserError.ts";
+import { BrowserError, Failed } from "./BrowserError.ts";
 import { reasonOf } from "./internal/page.ts";
 
 export interface Options extends Browser.Options {
@@ -19,7 +19,8 @@ export interface Options extends Browser.Options {
   /**
    * Run Chromium's sandbox. Defaults to false, as in Playwright, so an exploit in a page's renderer
    * runs with this process's privileges. Hosts that don't allow unprivileged user namespaces, such
-   * as many containers, can't start the sandbox, and opening then fails.
+   * as many containers and Ubuntu 23.10 or later by default, can't start the sandbox; opening then
+   * fails and says so.
    */
   readonly sandbox?: boolean | undefined;
   /** Defaults to 1280x720 CSS pixels at a device scale factor of 1. */
@@ -36,6 +37,22 @@ const launchTimeoutMillis = 180_000;
 const failed = (operation: string, timeoutMillis?: number) => (cause: unknown) =>
   new BrowserError({ operation, reason: reasonOf(cause, timeoutMillis), dispatched: false });
 
+// Playwright puts this in place of Chromium's startup log when the sandbox could not start, in an
+// error that otherwise reads as a closed browser.
+const sandboxFailed = /Chromium sandboxing failed|No usable sandbox/;
+
+const launchFailed = (cause: unknown) =>
+  sandboxFailed.test(String(cause))
+    ? new BrowserError({
+        operation: "launch",
+        reason: new Failed({
+          detail:
+            "Chromium's sandbox could not start on this host: it needs unprivileged user namespaces, and a user other than root",
+        }),
+        dispatched: false,
+      })
+    : failed("launch", launchTimeoutMillis)(cause);
+
 /** Launch Chromium and open a `Browser` over a fresh context. */
 export const open = Effect.fn("Chromium.open")(function* (options: Options = {}) {
   const launched = yield* Effect.acquireRelease(
@@ -50,7 +67,7 @@ export const open = Effect.fn("Chromium.open")(function* (options: Options = {})
             : { executablePath: options.executablePath }),
           ...(options.args === undefined ? {} : { args: [...options.args] }),
         }),
-      catch: failed("launch", launchTimeoutMillis),
+      catch: launchFailed,
     }).pipe(Effect.withSpan("Chromium.launch", {}, { captureStackTrace: false })),
     (browser) => Effect.tryPromise(() => browser.close()).pipe(Effect.ignore),
   );
