@@ -319,99 +319,129 @@ const loop = <E, Extra extends ExtraTools, R>(
     let usage = Usage.empty;
     let idle = 0;
 
-    for (let step = 1; step <= maxSteps; step++) {
-      const response = yield* chat
-        .generateText({
-          prompt: Prompt.fromMessages(next),
-          ...(yield* Tools.batch(toolkit, { endsBatch: ["done", "give_up"] })),
-        })
-        .pipe(
-          Effect.map((turn) => ({ turn })),
-          Effect.catchIf(isUnreadable, (error) => Effect.succeed({ rejected: error.reason })),
-        );
+    /** One model call, its tool calls and the observation after them; the result if it ends. */
+    const takeStep = (step: number) =>
+      Effect.gen(function* () {
+        const response = yield* chat
+          .generateText({
+            prompt: Prompt.fromMessages(next),
+            ...(yield* Tools.batch(toolkit, { endsBatch: ["done", "give_up"] })),
+          })
+          .pipe(
+            Effect.map((turn) => ({ turn })),
+            Effect.catchIf(isUnreadable, (error) => Effect.succeed({ rejected: error.reason })),
+          );
 
-      // A browser that is gone ends the run, but only once the paid turn is reported and the
-      // answer it may have given is kept.
-      const observed = yield* Effect.exit(observe);
+        // A browser that is gone ends the run, but only once the paid turn is reported and the
+        // answer it may have given is kept.
+        const observed = yield* Effect.exit(observe);
 
-      if (Exit.isSuccess(observed))
-        yield* Ref.update(chat.history, (history) =>
-          prunePictures(Prompt.concat(history, [observed.value]), keepPictures),
-        );
+        if (Exit.isSuccess(observed))
+          yield* Ref.update(chat.history, (history) =>
+            prunePictures(Prompt.concat(history, [observed.value]), keepPictures),
+          );
 
-      if ("rejected" in response) {
+        if ("rejected" in response) {
+          yield* Effect.annotateCurrentSpan("rejected", true);
+          if (options.onStep !== undefined) {
+            yield* options.onStep({
+              step,
+              text: "",
+              calls: [],
+              results: [],
+              usage: Usage.empty,
+              rejected: response.rejected.description,
+            });
+          }
+          if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
+          idle = 0;
+          next = [note(unreadable(response.rejected, Object.keys(toolkit.tools)))];
+
+          return Option.none<Result<unknown>>();
+        }
+        const { turn } = response;
+        const stepUsage = Usage.add(Usage.empty, turn.usage);
+
+        usage = Usage.add(usage, turn.usage);
+        yield* Effect.annotateCurrentSpan({
+          toolCalls: turn.toolCalls.length,
+          ...tokens(stepUsage),
+        });
         if (options.onStep !== undefined) {
           yield* options.onStep({
             step,
-            text: "",
-            calls: [],
-            results: [],
-            usage: Usage.empty,
-            rejected: response.rejected.description,
+            text: turn.text,
+            calls: turn.toolCalls.map((call) => ({ name: call.name, params: call.params })),
+            results: turn.toolResults.map((result) => ({
+              name: result.name,
+              result: result.result,
+              isFailure: result.isFailure,
+            })),
+            usage: stepUsage,
+          });
+        }
+
+        const finished = yield* Ref.get(outcome);
+
+        if (Option.isSome(finished)) {
+          const history = yield* Ref.get(chat.history);
+
+          if ("reason" in finished.value) {
+            return yield* new AgentError({
+              reason: new GaveUp({ reason: finished.value.reason }),
+              steps: step,
+            });
+          }
+
+          return Option.some<Result<unknown>>({
+            answer: finished.value.answer,
+            steps: step,
+            usage,
+            history,
           });
         }
         if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
+        const refusals = yield* tools.refusals;
+
+        // With nobody to ask, an agent that keeps meeting refusals stops rather than probing for
+        // a way around them.
+        if (refusals.length >= 3)
+          return yield* new AgentError({ reason: new Refused({ refusals }), steps: step });
+
+        if (turn.toolCalls.length === 0) {
+          idle += 1;
+          if (idle >= 3) {
+            return yield* new AgentError({
+              reason: new GaveUp({ reason: `stopped calling tools: ${turn.text}` }),
+              steps: step,
+            });
+          }
+          next = [note("Continue with the tools, or call done with the answer.")];
+
+          return Option.none<Result<unknown>>();
+        }
         idle = 0;
-        next = [note(unreadable(response.rejected, Object.keys(toolkit.tools)))];
-        continue;
-      }
-      const { turn } = response;
-      const stepUsage = Usage.add(Usage.empty, turn.usage);
+        next = [];
 
-      usage = Usage.add(usage, turn.usage);
-      if (options.onStep !== undefined) {
-        yield* options.onStep({
-          step,
-          text: turn.text,
-          calls: turn.toolCalls.map((call) => ({ name: call.name, params: call.params })),
-          results: turn.toolResults.map((result) => ({
-            name: result.name,
-            result: result.result,
-            isFailure: result.isFailure,
-          })),
-          usage: stepUsage,
-        });
-      }
+        return Option.none<Result<unknown>>();
+      }).pipe(
+        Effect.withSpan("Agent.step", { attributes: { step } }, { captureStackTrace: false }),
+      );
 
-      const finished = yield* Ref.get(outcome);
+    for (let step = 1; step <= maxSteps; step++) {
+      const ended = yield* takeStep(step);
 
-      if (Option.isSome(finished)) {
-        const history = yield* Ref.get(chat.history);
-
-        if ("reason" in finished.value) {
-          return yield* new AgentError({
-            reason: new GaveUp({ reason: finished.value.reason }),
-            steps: step,
-          });
-        }
-
-        return { answer: finished.value.answer, steps: step, usage, history };
-      }
-      if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
-      const refusals = yield* tools.refusals;
-
-      // With nobody to ask, an agent that keeps meeting refusals stops rather than probing for a
-      // way around them.
-      if (refusals.length >= 3)
-        return yield* new AgentError({ reason: new Refused({ refusals }), steps: step });
-
-      if (turn.toolCalls.length === 0) {
-        idle += 1;
-        if (idle >= 3) {
-          return yield* new AgentError({
-            reason: new GaveUp({ reason: `stopped calling tools: ${turn.text}` }),
-            steps: step,
-          });
-        }
-        next = [note("Continue with the tools, or call done with the answer.")];
-        continue;
-      }
-      idle = 0;
-      next = [];
+      if (Option.isSome(ended)) return ended.value;
     }
 
     return yield* new AgentError({ reason: new StepLimit({ steps: maxSteps }), steps: maxSteps });
   });
+
+/** Token counts as OpenTelemetry's GenAI usage attributes. */
+const tokens = (usage: Usage.Usage) => ({
+  "gen_ai.usage.input_tokens": usage.inputTokens,
+  "gen_ai.usage.output_tokens": usage.outputTokens,
+});
 
 /**
  * What the additional tools need: their handlers, and the services their schemas and handlers use.
@@ -455,7 +485,17 @@ export function run<E, Extra extends ExtraTools, R>(
   options: Options<E, Extra, R> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
 ) {
   return loop(options.answer ?? Schema.String, task, options).pipe(
+    Effect.tap((result) =>
+      Effect.annotateCurrentSpan({ steps: result.steps, ...tokens(result.usage) }),
+    ),
     Effect.provideService(Policy.Task, task),
-    Effect.withSpan("Agent.run"),
+    // Each step is a child span: its model call, its tool calls and the observation after them.
+    Effect.withSpan("Agent.run", {
+      attributes: {
+        "gen_ai.operation.name": "invoke_agent",
+        maxSteps: options.maxSteps ?? 30,
+        observation: options.observation ?? "both",
+      },
+    }),
   );
 }

@@ -44,7 +44,7 @@ export const open = Effect.fn("Chromium.open")(function* (options: Options = {})
           ...(options.args === undefined ? {} : { args: [...options.args] }),
         }),
       catch: failed("launch", launchTimeoutMillis),
-    }),
+    }).pipe(Effect.withSpan("Chromium.launch", {}, { captureStackTrace: false })),
     (browser) => Effect.tryPromise(() => browser.close()).pipe(Effect.ignore),
   );
 

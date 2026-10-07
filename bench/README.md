@@ -79,7 +79,9 @@ allocated a session nobody can release (no answer, a 5xx or 408 status, or a suc
 did not decode and whose session the client did not release) stops hosted admission: the run
 requests no further session and records the remaining trials as unrun. A refused create (429 or
 another 4xx) allocated nothing and stops nothing. Browserbase time is not part of
-the model budget.
+the model budget. Each session carries the trial's run, task, trial, arm and trace id as user
+metadata, which Browserbase's dashboard shows, and its trace records the session's id and region
+on `Browserbase.open`, so either finds the other.
 The model remains a caller choice. For the research runs, use `openai/gpt-6-luna`; reasoning defaults
 to `medium` for operate tasks and `none` for understand tasks. `--reasoning` overrides both.
 
@@ -103,13 +105,25 @@ streaming, decisions and raw generated requests before sending them.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
 the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
-model, pinned endpoint with its rates and per-call reservation, browser, humanize, output-token
-limit, budget and concurrency), effective reasoning, status and reason, the answer, model turns
+model, pinned endpoint with its rates and per-call reservation, browser, added latency, humanize,
+output-token limit, budget, concurrency, recording and narration), effective reasoning, status and
+reason, the answer, model turns
 (`steps`) and tool calls (`actions`) once a trial has an outcome, any
 error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
 reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
-provider requests) and elapsed seconds including browser setup and cleanup. The ISO
-start time is a calendar date; elapsed time uses a monotonic clock.
+provider requests), `phases` (seconds opening the browser, in the model's tool calls, and looking
+at the page outside them: the agent's observations, an arm's own pictures and outlines, a moment's
+capture), a latency or hosted run's `protocol` (see below), the fastest round trip to the browser
+its clock calibrations measured (`roundTripMillis`), a hosted trial's Browserbase `region`, the
+trial's `traceId` and elapsed seconds including browser setup and cleanup. The ISO start time is a
+calendar date; elapsed time uses a monotonic clock.
+
+The run ends by saying where graded trials' time went, as means that add up to the mean total:
+model requests, the budget queue, those phases and the rest (the fixture, grading, closing the
+browser and the bench itself). Recording and narration each run a screencast, which lets an
+observation reuse a frame instead of capturing one, recording adds 500 ms to each trial, and
+narration's caption calls overlap the agent's in `requestSeconds`: compare timings only between
+runs made the same way, which `run` records.
 
 `--record` also records each trial for replay, in a directory named after the results file with one
 subdirectory per trial (`checkout-1/`, or `checkout-arm2-1/` with `--arm`). Each page's screencast
@@ -127,6 +141,61 @@ reasoning off. Captions go to the recording; they neither steer nor grade the ag
 share the trial's budget, so a caption call with an unknown charge stops the trial's admission as
 any call does. A malformed caption is skipped. When the agent answers, the narrator finishes the
 caption it is writing and starts no other.
+
+### Traces
+
+The bench and the judges runner export traces over OTLP/HTTP to any collector or backend, such as a
+local Jaeger, when asked; otherwise they export nothing:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_TRACES_EXPORTER=otlp bun run bench
+```
+
+Each trial is a trace of its own, rooted at a `bench.trial` span with its task, arm, seed, browser
+and model and, once it ends, its status, reason and grade; its `traceId` finds it. Each judged case
+is a `bench.judge` trace. `effect-browser`'s README lists the spans inside. `--record` also keeps
+the trial's spans in `recording.json`, on the recording's host clock. A hosted trial's spans hold
+its Browserbase session id, on `Browserbase.open` and in the API requests' URLs, so keep recordings
+and exported traces out of commits; a packed replay leaves the spans out.
+
+### Latency
+
+`--latency <ms>` runs the local Chromium over the DevTools protocol through a proxy that adds that
+many milliseconds to each round trip, half each way, with a fresh 1280×720 context calibrated as a
+new hosted session's is. It costs nothing, so hosted round trips can be measured before paying for
+sessions; it reproduces neither a hosted browser's network nor its machine.
+
+The proxy also reads the protocol. Each command a trial sends becomes a `CDP <method>` client span
+from its sending to its answer reaching the bench, under the innermost span open in the middle of
+it, so a trace shows which commands each operation waited on and whether they went one after
+another. The trial's `protocol` counts its commands and round trips, in all and by the name of that
+span with its methods; commands in flight together share a round trip. The run ends with the span
+names that took the most round trips, and about how long one took. Attribution is by time alone: a
+command sent in the background, such as a screencast frame's acknowledgement, or by an operation
+running alongside another, such as a clock calibration during a page's first outline, lands on the
+innermost span open at the time. Only method names are kept, since parameters can carry typed
+text. The proxy declines the WebSocket compression the bench offers, to read the messages; a round
+trip costs the same, as the proxy adds delay but no bandwidth limit.
+
+At 80 ms, a scripted trial took 43 to 91 round trips. Opening the browser took about 3.4 seconds
+and 25 round trips, 20 of them calibrating the fresh context, and a new page about 9 more. A click
+took two (finding its point, then the mouse events together) and a 120 ms settle. A fresh capture
+took six in a row, five of them Playwright's screenshot, so an observation with an outline and a
+capture took about 0.7 seconds.
+
+### Hosted commands
+
+A hosted trial's browser connects through a relay in the bench: Playwright speaks to a local
+WebSocket, and each message goes on over the session's own connection to Browserbase. The relay
+records commands as the latency proxy does, so a hosted trial has the same `CDP <method>` spans and
+`protocol`, timed on the bench's clock. A command's span is its whole round trip; less the
+trial's `roundTripMillis`, about what the trip itself costs, it is roughly the browser's time on it.
+The relay offers Playwright no compression; the onward connection is the session's. On 7
+October 2026, four scripted trials through it took as long as without it, at 70 to 72 ms a round
+trip and 46 to 60 round trips each. Browserbase's
+session log is no substitute: on 7 October 2026 its entries carried no timestamps, though its API
+reference lists them, it kept about every other DevTools message, it appeared 5 to 20 seconds
+after the session ended, and a session whose page never navigated had none.
 
 ## Arms
 

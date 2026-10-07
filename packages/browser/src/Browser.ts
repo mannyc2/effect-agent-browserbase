@@ -168,6 +168,20 @@ export const make = Effect.fn("Browser.make")(function* (
   const startup =
     info.contextOrigin === "fresh"
       ? yield* Startup.owned(context, clock).pipe(
+          Effect.tap((measured) =>
+            Effect.annotateCurrentSpan({
+              measured: Option.isSome(measured),
+              ...Option.match(measured, {
+                onNone: () => ({}),
+                // The fastest clock probe's: the transport's round trip, plus a trivial script.
+                onSome: ({ clock }) => ({
+                  roundTripMillis: Math.round(clock.roundTripMillis * 10) / 10,
+                }),
+              }),
+            }),
+          ),
+          // Round trips to a private page: what this costs over a remote connection shows here.
+          Effect.withSpan("Browser.calibrate", {}, { captureStackTrace: false }),
           Effect.mapError(
             (error) =>
               new BrowserError({
@@ -331,7 +345,11 @@ export const make = Effect.fn("Browser.make")(function* (
   context.on("page", onPage);
   yield* Effect.addFinalizer(() => Effect.sync(() => context.off("page", onPage)));
   yield* Queue.take(opened).pipe(
-    Effect.flatMap((playwright) => Effect.ignore(register(playwright))),
+    Effect.flatMap((playwright) =>
+      register(playwright).pipe(
+        Effect.ignore({ log: "Debug", message: "a page the site opened could not be tracked" }),
+      ),
+    ),
     Effect.forever,
     Effect.forkScoped,
   );
@@ -343,19 +361,18 @@ export const make = Effect.fn("Browser.make")(function* (
     ),
   );
 
-  const newPage = (url?: string) =>
-    Effect.gen(function* () {
-      const playwright = yield* native("newPage", () => context.newPage());
+  const newPage = Effect.fn("Browser.newPage")(function* (url?: string) {
+    const playwright = yield* native("newPage", () => context.newPage());
 
-      const page = yield* register(playwright).pipe(
-        Effect.onError(() => releaseNative(() => playwright.close())),
-      );
+    const page = yield* register(playwright).pipe(
+      Effect.onError(() => releaseNative(() => playwright.close())),
+    );
 
-      // A rejected or interrupted navigation must not leave the newly allocated blank tab behind.
-      if (url !== undefined) yield* page.goto(url).pipe(Effect.onError(() => page.close));
+    // A rejected or interrupted navigation must not leave the newly allocated blank tab behind.
+    if (url !== undefined) yield* page.goto(url).pipe(Effect.onError(() => page.close));
 
-      return page;
-    });
+    return page;
+  });
 
   const service: Service = {
     id: info.id,

@@ -64,6 +64,20 @@ export class RecordedMoment extends Schema.Class<RecordedMoment>("bench/Recorded
   readyAt: Schema.Finite,
 }) {}
 
+/**
+ * A finished span of the trial's trace: what the time between events went to, such as a model
+ * call, a tool call, a page script's round trip or opening the browser.
+ */
+export class RecordedSpan extends Schema.Class<RecordedSpan>("bench/RecordedSpan")({
+  id: Schema.String,
+  parent: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  start: Schema.Finite,
+  end: Schema.Finite,
+  attributes: Schema.Record(Schema.String, Schema.Unknown),
+  failed: Schema.Boolean,
+}) {}
+
 export class Recording extends Schema.Class<Recording>("bench/Recording")({
   version: Schema.Literal(1),
   task: Schema.Struct({
@@ -90,6 +104,11 @@ export class Recording extends Schema.Class<Recording>("bench/Recording")({
   viewports: Schema.Array(RecordedViewport),
   steps: Schema.Array(RecordedStep),
   moments: Schema.Array(RecordedMoment),
+  /**
+   * The trial's spans, oldest first, on the same host clock; opening the browser comes before
+   * `startedAt`. Absent from recordings made without a trace.
+   */
+  spans: Schema.optional(Schema.Array(RecordedSpan)),
   /** Frames or events the recorder lost; an empty list means it kept everything it received. */
   problems: Schema.Array(Schema.String),
   outcome: Schema.Struct({
