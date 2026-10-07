@@ -165,7 +165,7 @@ const measure = (context: BrowserContext, privatePage: Page, ownerClock: Clock.C
         ),
       );
 
-    const clock = yield* BrowserClock.calibrate(cdp, ownerClock);
+    const clock = yield* BrowserClock.calibrate(cdp.send.bind(cdp), ownerClock);
 
     const frames: Array<EncodedFrame> = [];
     const acknowledgements = new Set<Promise<void>>();

@@ -24,7 +24,8 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const calibrateClock = Pictures.calibrator(page, bridge);
   const input = Actions.make(page, bridge, viewport, calibrateClock);
   const pictures = yield* Pictures.make(page, viewport, calibrateClock);
-  const reading = yield* Reading.make(page, bridge, pictures.screenshot);
+  // An observation reads the page an action left, so its picture follows the latest input.
+  const reading = yield* Reading.make(page, bridge, () => pictures.screenshot({ after: "input" }));
   const navigation = Navigation.make(page, input.perform, input.preparePolicy);
   const { capture } = pictures;
 
@@ -40,7 +41,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     close: Effect.tryPromise(() => playwright.close()).pipe(Effect.ignore),
     snapshot: reading.snapshot,
     screenshot: pictures.screenshot,
-    currentFrame: pictures.currentFrame,
+    frame: pictures.frame,
     zoom: pictures.zoom,
     viewport: viewport.viewportFor("viewport").pipe(
       Effect.timeoutOrElse({

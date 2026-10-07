@@ -534,7 +534,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         yield* pressed;
         // While the action may still change the page, no cached paint is current.
-        const image = yield* page.screenshot();
+        const image = yield* page.screenshot({ after: "input", maxAge: "10 seconds" });
 
         assert.isFalse(yield* reusedBefore(image, Infinity));
         yield* Fiber.join(clicking);
@@ -552,7 +552,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const input = yield* pressed;
 
         yield* Fiber.interrupt(clicking);
-        const image = yield* page.screenshot();
+        const image = yield* page.screenshot({ after: "input", maxAge: "10 seconds" });
 
         assert.isFalse(yield* reusedBefore(image, input));
 
@@ -745,7 +745,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         assert.strictEqual(
           stats.received,
-          stats.accepted + stats.outOfOrder + stats.missingTimestamp + stats.foreignSize,
+          stats.accepted +
+            stats.outOfOrder +
+            stats.missingTimestamp +
+            stats.foreignSize +
+            stats.duringPictures,
         );
         assert.isAbove(stats.accepted, 0);
         assert.strictEqual(count(calls, "Page.startScreencast"), 1);
@@ -802,10 +806,103 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.deepStrictEqual([...new Set(sizes.slice(resized))], ["640x480"]);
         const stats = yield* page.captureStats;
 
-        assert.isAbove(stats.foreignSize, 0);
+        // The library's own crops are left out as they are taken, before any size rule.
+        assert.isAbove(stats.duringPictures, 0);
         assert.strictEqual(
           stats.received,
-          stats.accepted + stats.outOfOrder + stats.missingTimestamp + stats.foreignSize,
+          stats.accepted +
+            stats.outOfOrder +
+            stats.missingTimestamp +
+            stats.foreignSize +
+            stats.duringPictures,
+        );
+      }),
+    );
+
+    it.effect("keeps a crop with the viewport's own shape out of the screencast", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext("fresh");
+
+        // Red, with a green top-left quadrant and a blinking corner, so frames keep arriving. A
+        // crop inside the quadrant is green all over; the viewport is red at three quarters.
+        const page = yield* browser.newPage(
+          "data:text/html," +
+            encodeURIComponent(`<body style="margin:0;background:rgb(255,0,0);overflow:hidden">
+<div style="position:fixed;left:0;top:0;width:400px;height:300px;background:rgb(0,255,0)"></div>
+<div id="blink" style="position:fixed;right:10px;bottom:10px;width:20px;height:20px"></div>
+<script>
+  let turn = 0;
+  setInterval(() => { blink.style.background = turn++ % 2 ? "#00f" : "#ff0"; }, 30);
+</script></body>`),
+        );
+
+        const frames: Array<Frame> = [];
+
+        const reader = yield* page.screencast().pipe(
+          Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+          Effect.forkChild,
+        );
+
+        yield* eventually(Effect.sync(() => frames.length > 0));
+        // Each crop has the 4:3 viewport's proportions, which no size rule can tell apart.
+        for (const region of [
+          { x: 0, y: 0, width: 400, height: 300 },
+          { x: 20, y: 10, width: 200, height: 150 },
+        ])
+          for (let index = 0; index < 3; index++) {
+            yield* page.zoom(region);
+            yield* Effect.sleep("60 millis");
+          }
+        yield* Effect.sleep("200 millis");
+        yield* Fiber.interrupt(reader);
+
+        const greenAtThreeQuarters = yield* Effect.promise(() =>
+          page.playwright.evaluate(
+            async (pictures) =>
+              Promise.all(
+                pictures.map(async (bytes) => {
+                  const bitmap = await createImageBitmap(
+                    new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
+                  );
+
+                  const canvas = new OffscreenCanvas(1, 1).getContext("2d");
+
+                  if (canvas === null) throw new Error("no 2d canvas");
+                  canvas.drawImage(
+                    bitmap,
+                    bitmap.width * 0.75,
+                    bitmap.height * 0.75,
+                    1,
+                    1,
+                    0,
+                    0,
+                    1,
+                    1,
+                  );
+                  const [red = 0, green = 0] = canvas.getImageData(0, 0, 1, 1).data;
+
+                  return green > 160 && red < 100;
+                }),
+              ),
+            frames.map((frame) => Array.from(frame.data)),
+          ),
+        );
+
+        const stats = yield* page.captureStats;
+
+        assert.isAbove(frames.length, 10);
+        assert.deepStrictEqual(
+          greenAtThreeQuarters.filter((green) => green),
+          [],
+        );
+        assert.isAbove(stats.duringPictures, 0);
+        assert.strictEqual(
+          stats.received,
+          stats.accepted +
+            stats.outOfOrder +
+            stats.missingTimestamp +
+            stats.foreignSize +
+            stats.duringPictures,
         );
       }),
     );
@@ -854,7 +951,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.deepStrictEqual([stats.foreignSize, stats.outOfOrder], [2, 1]);
         assert.strictEqual(
           stats.received,
-          stats.accepted + stats.outOfOrder + stats.missingTimestamp + stats.foreignSize,
+          stats.accepted +
+            stats.outOfOrder +
+            stats.missingTimestamp +
+            stats.foreignSize +
+            stats.duringPictures,
         );
       }),
     );
@@ -914,6 +1015,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             outOfOrder: 2,
             missingTimestamp: 2,
             foreignSize: 0,
+            duringPictures: 0,
             subscriberMissed: 0,
             gaps: { count: 2, totalMillis: 100, minMillis: 16, maxMillis: 84, lastMillis: 84 },
           },

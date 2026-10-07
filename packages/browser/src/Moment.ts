@@ -7,8 +7,8 @@
  * `generateText`, or one turn of a `Chat` that follows moment after moment.
  *
  * Frames come from a running screencast, as far back as the browser's `frameHistory` keeps them.
- * The last frame is the page now: the newest frame while `Page.currentFrame` holds it current,
- * else a new screenshot timed by its capture.
+ * The last frame is the page now: the newest frame if it was painted after the page's latest input
+ * and at most 250 ms ago, else a new screenshot timed by its capture.
  *
  * @since 0.3.0
  */
@@ -105,7 +105,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
   // The picture and the outline each take a round trip to the page, so they are taken together.
   const { current, snapshot } = yield* Effect.all(
     {
-      current: page.currentFrame,
+      current: page.frame({ after: "input" }),
       snapshot:
         outline === false
           ? Effect.void

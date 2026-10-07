@@ -1357,7 +1357,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
             cdp.send = ((method, params) =>
               method === "Runtime.evaluate" &&
-              (params as { readonly expression?: string } | undefined)?.expression?.startsWith(
+              (params as { readonly expression?: string } | undefined)?.expression?.includes(
                 "globalThis.__effectBrowser.select(",
               ) === true
                 ? Promise.reject(new Error("Protocol error (Runtime.evaluate): " + failure))

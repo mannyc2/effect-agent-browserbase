@@ -22,7 +22,8 @@ export const make = (
   perform: Perform,
   preparePolicy: Guard["preparePolicy"],
 ) => {
-  const { cdp, playwright, settings, native } = page;
+  const { playwright, settings, native } = page;
+  const { send } = page.protocol;
 
   const navigation = (name: string, run: () => Promise<unknown>, url: string) =>
     perform(
@@ -47,7 +48,7 @@ export const make = (
         ),
     );
 
-  const history = native("back", () => cdp.send("Page.getNavigationHistory"));
+  const history = native("back", () => send("Page.getNavigationHistory"));
 
   // While a traversal swaps documents, Chromium can briefly route this session to the outgoing
   // document, which has become inactive (for instance after it entered the back-forward cache),
@@ -118,7 +119,7 @@ export const make = (
           Effect.gen(function* () {
             yield* marks.sent;
             yield* native("back", () =>
-              cdp.send("Page.navigateToHistoryEntry", { entryId: previous.id }),
+              send("Page.navigateToHistoryEntry", { entryId: previous.id }),
             );
             yield* traversingHistory.pipe(
               Effect.repeat({

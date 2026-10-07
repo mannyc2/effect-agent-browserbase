@@ -22,6 +22,7 @@ import {
 } from "effect";
 import type {
   BrowserContext,
+  CDPSession,
   Dialog,
   Frame as PlaywrightFrame,
   Page as PlaywrightPage,
@@ -103,6 +104,24 @@ export interface Service {
 }
 
 export class Browser extends Context.Service<Browser, Service>()("effect-browser/Browser") {}
+
+/**
+ * A tab behind another stops painting unless a session holds focus emulation on it, so the
+ * library's own session on each page does, for as long as it is attached, whatever else is. A
+ * renderer busy with its first script answers late, so a capture of the page waits for the answer
+ * and registering the page does not.
+ */
+const holdFocus = (cdp: CDPSession) => {
+  const focusing = cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+
+  void focusing.catch(() => undefined);
+
+  return Effect.tryPromise({
+    try: () => focusing,
+    catch: (cause) =>
+      new BrowserError({ operation: "focus", reason: reasonOf(cause), dispatched: false }),
+  }).pipe(Effect.asVoid);
+};
 
 /**
  * Build the service over a context the provider owns. The provider closes the context; this only
@@ -275,6 +294,7 @@ export const make = Effect.fn("Browser.make")(function* (
             recentEvents: recentEvents(id),
             pointer,
             inputLock,
+            focused: holdFocus(cdp),
           });
 
           const onNavigated = (frame: PlaywrightFrame) => {

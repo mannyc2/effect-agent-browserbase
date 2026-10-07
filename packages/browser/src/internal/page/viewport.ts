@@ -1,7 +1,8 @@
 /**
  * The viewport's size in CSS pixels. Playwright knows it only for a context it created; over CDP it
- * reports none, so the page answers. Pointer bounds, page scrolls, crops, capture size and frame
- * reuse all read this one source; the latest answer serves checks that cannot wait for the page.
+ * reports none, so the page answers, and so does a picture taken at one device pixel per CSS
+ * pixel. Pointer bounds, page scrolls, crops, capture size and frame reuse all read this one
+ * source; the latest answer serves checks that cannot wait for the page.
  */
 import { Effect } from "effect";
 
@@ -31,7 +32,12 @@ export const make = (page: PageContext, bridge: Bridge) => {
         : Effect.succeed(known);
     });
 
-  return { knownViewport, viewportFor };
+  /** The size of an unscaled picture of the whole viewport, which is the viewport's own. */
+  const remember = (size: { readonly width: number; readonly height: number }) => {
+    measuredViewport = { width: size.width, height: size.height };
+  };
+
+  return { knownViewport, viewportFor, remember };
 };
 
 export type Viewport = ReturnType<typeof make>;

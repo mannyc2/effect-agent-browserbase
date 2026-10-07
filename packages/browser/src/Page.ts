@@ -92,10 +92,26 @@ export interface ScrollOptions {
   readonly at?: Target | undefined;
 }
 
-export interface ScreenshotOptions {
-  /** Capture a new image even when a screencast frame is available. */
-  readonly fresh?: boolean | undefined;
-  /** A region of the viewport, captured in CSS pixels at the viewport's own scale. */
+/**
+ * How current a picture must be. The newest screencast frame serves when it qualifies, at no cost;
+ * otherwise a new screenshot is taken.
+ */
+export interface FrameOptions {
+  /**
+   * The oldest a reused frame may be, from its paint, at the earliest its timing allows, to now.
+   * Defaults to 250 milliseconds; 0 always takes a new screenshot.
+   */
+  readonly maxAge?: Duration.Input | undefined;
+  /**
+   * `"input"`: reuse only a frame painted after this page's latest input, including input of an
+   * interrupted action, and never while an action is changing the page. For a caller that has
+   * just acted on the page.
+   */
+  readonly after?: "input" | undefined;
+}
+
+export interface ScreenshotOptions extends FrameOptions {
+  /** A region of the viewport, captured in CSS pixels at the viewport's own scale; always new. */
   readonly clip?:
     | { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
     | undefined;
@@ -279,17 +295,13 @@ export interface Page {
   readonly close: Effect.Effect<void>;
 
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
-  /**
-   * A picture of the viewport: the latest screencast frame when no action is changing the page and
-   * it was painted after the latest input and delivered within the last 250 ms, else a new
-   * screenshot.
-   */
+  /** A picture of the viewport, in CSS pixels: a screencast frame that qualifies, or a new one. */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
   /**
-   * The viewport now, with its timing: the newest screencast frame under the same rule as
-   * `screenshot`, else a new screenshot timed by the host interval in which it was taken.
+   * The viewport with its timing: the newest screencast frame if it qualifies, else a new
+   * screenshot timed by the host interval in which it was taken.
    */
-  readonly currentFrame: Effect.Effect<Frame, BrowserError>;
+  readonly frame: (options?: FrameOptions) => Effect.Effect<Frame, BrowserError>;
   /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
   readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
   /**
