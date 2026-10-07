@@ -15,6 +15,30 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   element, shows. What fields hold reads `••••` unless `unmask` is set; secret fields always do.
 - `BrowserEvent.SubjectContext`, `Page.ElementState`, `Page.FindQuery`, `Page.Found`, `Page.Text`
   and `Page.TextOptions`.
+- `Page.frame({ maxAge, after })` and `Page.FrameOptions`: a frame states how old it may be. The
+  newest screencast frame serves when it was painted at most `maxAge` ago (250 ms by default; 0
+  always takes a new screenshot), and with `after: "input"` only when painted after the page's
+  latest input. `Page.screenshot` takes the same options.
+- `CaptureStats.duringPictures`: frames left out because they may have been painted while the
+  library took a clipped or scaled picture of the page.
+- Every page span reports its protocol cost on the page's own session: `calls`, `bytesOut`,
+  `bytesIn` and `waitedMillis`. A picture's `source` is `frame` or `screenshot`.
+
+### Changed
+
+- A picture is taken on the page's own session: one `Page.captureScreenshot` where a device pixel is
+  a CSS pixel and nothing is cropped, and two, with Playwright's clip over the page's layout metrics,
+  for a crop or another device pixel ratio. Over CDP, Browserbase included, the first picture of a
+  document no longer sends Playwright's 335 KB injected script, which took up to a few seconds on
+  Browserbase while screencast frames waited behind it. Where Playwright emulates the viewport, as
+  `Chromium.layer` does, crops are still Playwright's own screenshot, on its own session.
+- The page script is registered once per page session, at the library's first read of the page, so
+  each new document runs it from its start: a document's first read is two calls without the
+  46 KB install, and a warm read one. The clock probe runs in a world of its own.
+- The library's own clipped pictures, such as a zoom, keep their frames out of a running
+  screencast, crops with the viewport's own proportions included.
+- Each page's own session holds focus emulation, so a tab behind another keeps painting whatever
+  else is attached. A capture starts once the browser has confirmed it.
 
 ### Breaking
 
@@ -28,6 +52,13 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   its page then reveals is still redacted, and never read back.
 - `Page.hasText` is removed: `find({ text, scope: "document" })` answers it, within the action
   timeout. `Page.waitForText` waits for the same match.
+- `Page.currentFrame` is removed: `Page.frame({ after: "input" })` is the nearest, and its 250 ms
+  bound is now the frame's age from its paint, not from its delivery, so frames that arrive late
+  stand in less often.
+- `ScreenshotOptions.fresh` is removed: `maxAge: 0` takes a new picture. Without
+  `after: "input"`, `Page.screenshot` can serve a frame painted before the page's latest input;
+  `Page.observe` and `Moment.capture` ask for one painted after it.
+- `CaptureStats` has the required count `duringPictures`.
 
 ## 0.3.0-beta.0
 

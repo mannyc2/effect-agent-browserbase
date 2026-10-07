@@ -56,10 +56,16 @@
 - Browser paint mapped onto the host clock with explicit uncertainty through one browser-wide
   clock mapping, timestamped mouse and raw text-key input, a best-effort startup capture
   calibration for newly owned sessions, and per-page capture counters for filtering, paint gaps
-  and observed subscriber loss. Screenshot timing has its own provenance; a reused screencast
-  frame must postdate the latest input and be recent; borrowed pages receive no probe input.
-- Tracing: agent steps, tool calls, page operations with their phases, captures, page script round
-  trips and opening a browser are Effect spans, with OpenTelemetry's GenAI attributes on the agent
+  and observed subscriber loss. Screenshot timing has its own provenance; a picture states how old
+  a reused screencast frame may be, and whether it must follow the latest input; borrowed pages
+  receive no probe input.
+- Pictures and reads on each page's own protocol session, counted: a picture is one call, or two
+  for a crop or another device pixel ratio; the page script is registered once per page session, so
+  a document's first read is two calls and a warm read one; the library's own clipped pictures stay
+  out of a running screencast; and focus emulation keeps tabs behind painting. A native suite holds
+  these to their call budgets through a counting proxy.
+- Tracing: agent steps, tool calls, page operations with their phases and protocol cost, captures,
+  page script round trips and opening a browser are Effect spans, with OpenTelemetry's GenAI attributes on the agent
   and its tool calls. No span carries typed text, and the application chooses the exporter. The
   bench exports over OTLP on request, records where each trial's time went (`phases`) and can add
   latency to a local browser's DevTools connection (`--latency`) to measure hosted round trips free;
