@@ -269,7 +269,9 @@ from any session, into its running screencast. Readers never receive a frame who
 another shape than its device. Frames of another device size wait, in order: the page's own size
 returning drops them, while the page reporting a viewport of their size, or their lasting a second,
 delivers them as a real resize, so a page that cannot answer, or that measures in other units as
-under browser zoom, is never stalled. A crop with the viewport's own proportions still passes where
+under browser zoom, is never stalled. `foreignSize` therefore also counts some of the page's own
+frames: those of a new size still unconfirmed when another size replaced it, when the capture
+stopped, or beyond the 16 held. A crop with the viewport's own proportions still passes where
 Chromium keeps the device's size during the capture, as in browsers launched through Playwright,
 `Chromium.layer` included.
 Concurrent readers share one native screencast and its quality and size: a reader without options
