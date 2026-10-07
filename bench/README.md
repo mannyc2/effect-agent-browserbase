@@ -38,6 +38,9 @@ tools against `dev`, the default, and compare arms on `eval`.
 | `tumble-win`    | understand | Count paying cascades on a 6×5 canvas slot and read the final multiplier, win and balance |
 | `order-filled`  | understand | Identify the filled order, its quantity, price and status                                 |
 | `navigated`     | understand | Identify the destination URL, title and control that triggered navigation                 |
+| `board-move`    | operate    | Drag a card to the top of a board's Done column and report how many cards Done holds      |
+| `policy-find`   | operate    | Find the returns policy behind header menus that open on hover and report its reference   |
+| `catalog-buy`   | operate    | Add the cheapest tent for two in stock, from a catalogue across three pages, to the cart  |
 
 An operate task gives a model the browser tools (`Agent.run`). An understand task brings the page to
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call:
@@ -378,4 +381,6 @@ ownership and budget admission. Two gates hold every operate task: its page vari
 and an agent that reports the right answer without doing the work fails. No model or hosted
 browser is called.
 
-A new task is an `operate` or `understand` entry in `Tasks.ts`; the tests pick it up.
+A new task is an `operate` or `understand` entry in `Tasks.ts`, or an errand in `Errands.ts`, an
+operate task on an everyday page of its own; `Catalog.ts` lists every task, and the tests pick it
+up.

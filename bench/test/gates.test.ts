@@ -6,7 +6,8 @@ import { Effect, Layer, Stream } from "effect";
 import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
 
-import { frameHistory, tasks } from "../Tasks.ts";
+import { tasks } from "../Catalog.ts";
+import { frameHistory } from "../Tasks.ts";
 import { isolatedTrial } from "../Trial.ts";
 
 /** An agent that reports this answer at once, without looking at the page. */
