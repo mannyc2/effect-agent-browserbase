@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Random } from "effect";
 
-import * as Human from "../src/internal/human.ts";
+import * as Human from "../src/internal/input/human.ts";
 
 interface KeyEvent {
   readonly afterMillis: number;

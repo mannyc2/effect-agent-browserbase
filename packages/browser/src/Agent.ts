@@ -15,12 +15,12 @@ import { AiError, Chat, type LanguageModel, Prompt, Tool, Toolkit } from "effect
 
 import type { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
-import * as Usage from "./internal/usage.ts";
+import * as Usage from "./internal/agent/usage.ts";
 import type { Observation, ObservationMode, Zoom } from "./Page.ts";
 import * as Policy from "./Policy.ts";
 import * as Tools from "./Tools.ts";
 
-export type { Usage } from "./internal/usage.ts";
+export type { Usage } from "./internal/agent/usage.ts";
 
 /** The model used every step it was given without finishing. */
 export class StepLimit extends Schema.TaggedError<StepLimit>()("StepLimit", {
