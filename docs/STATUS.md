@@ -32,8 +32,14 @@
   the bench grades them against the corpus, with paid arms only on opt-in.
 - Moments: `Moment.capture` gathers a page's frames and events over a window that can start where
   the previous moment ended, so consecutive moments neither repeat nor miss an event, and needs
-  only the page. Its timeline names what each action acted on by role and name, from the
-  `Action`'s `subject`, never by ref. The outline is opt-in (`snapshot: true`): in the first
+  only the page. It also carries what visibly changed (`Change`), which the page script notes from
+  the library's first read of a document: text in view that changed, appeared or disappeared,
+  field values and the title, each with before and after values and nearby words such as a table
+  row and column. `Page.changes` reads the same record in one round trip, which a moment takes
+  alongside its picture. `toPrompt` leads with these changes, most notable first, and names an action
+  by role and name, never by ref, only as the cause of a change that followed it within a second;
+  an action on a canvas or frame, and any action before the record began, is still listed as a
+  step. Whether this narrates better than steps is not yet measured. The outline is opt-in (`snapshot: true`): in the first
   paired run, moments with and without it scored 61/80 each on every task but `navigated`, where
   the outline's reused refs misled the model, and it doubled the tokens on `quote-dense`.
   `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call; describing it is

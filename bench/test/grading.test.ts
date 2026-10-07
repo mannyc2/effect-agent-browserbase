@@ -467,9 +467,10 @@ describe("understanding evidence", () => {
         assert.isBelow(first.receivedAt, lastClick.startedAt);
         assert.isAtLeast(last.receivedAt - first.receivedAt, 500);
         if (name === "navigated") {
-          assert.include(textOf(prompt), "navigated to");
-          // The control is named as it was clicked, not by a ref the new page reuses.
-          assert.include(textOf(prompt), 'click button "Play"');
+          assert.include(textOf(prompt), "the tab went to");
+          // The control is named as it was clicked, as a step or as the navigation's cause, not by
+          // a ref the new page reuses.
+          assert.match(textOf(prompt), /click (on )?button "Play"/);
           assert.notMatch(textOf(prompt), /\be\d+\b/);
 
           const priorClick = events

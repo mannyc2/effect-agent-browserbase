@@ -17,6 +17,7 @@ import type { Page as PlaywrightPage } from "playwright-core";
 
 import type { BrowserError, PolicyDenied } from "./BrowserError.ts";
 import type { BrowserEvent } from "./BrowserEvent.ts";
+import type { Changes } from "./Change.ts";
 import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import * as Script from "./internal/pageScript.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
@@ -285,4 +286,10 @@ export interface Page {
   readonly recentFrames: Effect.Effect<ReadonlyArray<Frame>>;
   /** This page's events among the browser's latest `eventHistory`, oldest first. */
   readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
+  /**
+   * What visibly changed after `since`, host monotonic milliseconds on the browser's clock, or
+   * whatever the page still keeps without it: its latest 128 changes, at most 64 of them a minute
+   * old or newer. One round trip; the first read of a document starts its record.
+   */
+  readonly changes: (since?: number) => Effect.Effect<Changes, BrowserError>;
 }

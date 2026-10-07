@@ -45,6 +45,7 @@ import {
   TrackPlanned,
   WheelScrolled,
 } from "../BrowserEvent.ts";
+import { Change, Changes } from "../Change.ts";
 import { Frame, Image, Screenshot } from "../Frame.ts";
 import * as Motion from "../Motion.ts";
 import {
@@ -2054,6 +2055,55 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       Effect.flatMap(decodeWith("hasText", Schema.Boolean)),
     );
 
+  // The read is its own clock probe: a change's age on the page, taken from the middle of the
+  // round trip, places it on the host clock to within half the round trip.
+  const changes = (since?: number) =>
+    Effect.gen(function* () {
+      if (since !== undefined && !Number.isFinite(since))
+        return yield* failWith(
+          "changes",
+          new InvalidRequest({ detail: "since must be a finite host time" }),
+        );
+      const start = now();
+      const maxAge = since === undefined ? 60_000 : Math.max(0, start - since) + 1000;
+
+      const result = yield* evaluate("changes", scriptCall("changes", maxAge)).pipe(
+        Effect.flatMap(decodeWith("changes", Script.ChangesResultSchema)),
+      );
+
+      const sampled = (start + now()) / 2;
+      const host = (pageTime: number) => sampled - (result.now - pageTime);
+      const floor = since ?? Number.NEGATIVE_INFINITY;
+
+      return new Changes({
+        from: Math.max(host(result.from), floor),
+        at: sampled,
+        changes: result.records.flatMap((record) =>
+          host(record.at) > floor
+            ? [
+                new Change({
+                  at: host(record.at),
+                  startedAt: host(record.startedAt),
+                  kind: record.kind,
+                  subject: new Subject({ role: record.role, name: record.name, tag: record.tag }),
+                  context: record.context,
+                  before: record.before ?? undefined,
+                  after: record.after ?? undefined,
+                  count: record.count,
+                }),
+              ]
+            : [],
+        ),
+      });
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: settings.actionTimeout,
+        orElse: () =>
+          failWith("changes", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
+      }),
+      owned,
+    );
+
   const waitForText = (text: string, timeout: Duration.Input = Duration.seconds(10)) =>
     hasText(text).pipe(
       Effect.repeat({ schedule: Schedule.spaced(Duration.millis(250)), until: (found) => found }),
@@ -2139,6 +2189,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     latestFrame: capture.latest,
     recentFrames: capture.recent,
     recentEvents: options.recentEvents,
+    changes,
   };
 
   return page;

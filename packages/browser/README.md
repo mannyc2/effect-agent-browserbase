@@ -2,7 +2,7 @@
 
 Browser automation for [Effect](https://effect.website) agents, over Playwright: page control, a
 compact page outline for models, screencast frames, `effect/ai` browser tools, an agent loop, and
-moments, a picture-and-timeline account of what a page showed at one point in time.
+moments, an account in pictures and words of what a page showed and what changed on it.
 
 ```sh
 npm install effect-browser@beta effect playwright-core
@@ -18,12 +18,13 @@ npx playwright-core install chromium
 | `Snapshot`     | The model-readable outline of a page, with refs for its controls                     |
 | `Frame`        | A screencast frame                                                                   |
 | `BrowserEvent` | Actions, navigations, tabs, dialogs and pointer motion, as they happen               |
+| `Change`       | What visibly changed on a page, with what it said before and after                   |
 | `Motion`       | The replaceable, bounded pointer planner, with a tuned sigma-lognormal default       |
 | `BrowserError` | Typed failures, saying whether input reached the page before the failure             |
 | `Tools`        | The `effect/ai` browser toolkit                                                      |
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
-| `Moment`       | What a page showed and what happened on it over a window, laid out as a model prompt |
+| `Moment`       | What a page showed and what changed on it over a window, laid out as a model prompt  |
 
 `Agent.run` batches each turn's tool calls in order, halting on the first failure or a completed
 `done` / `give_up`. Skipped calls receive a not-executed result. A malformed `done` answer can

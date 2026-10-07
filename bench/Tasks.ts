@@ -392,6 +392,8 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
               frames: [...captured.frames.slice(0, -1), shot],
               snapshot: captured.snapshot,
               events: captured.events,
+              changes: captured.changes,
+              changesFrom: captured.changesFrom,
             });
 
       const last = moment.frames.at(-1);

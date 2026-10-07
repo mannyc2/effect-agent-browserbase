@@ -5,6 +5,7 @@ export * as Agent from "./Agent.ts";
 export * as Browser from "./Browser.ts";
 export * as BrowserError from "./BrowserError.ts";
 export * as BrowserEvent from "./BrowserEvent.ts";
+export * as Change from "./Change.ts";
 export * as Cdp from "./Cdp.ts";
 export * as Chromium from "./Chromium.ts";
 export * as Frame from "./Frame.ts";

@@ -40,6 +40,11 @@
       "types": "./dist/BrowserEvent.d.mts",
       "default": "./dist/BrowserEvent.mjs"
     },
+    "./Change": {
+      "@effect-browser/source": "./src/Change.ts",
+      "types": "./dist/Change.d.mts",
+      "default": "./dist/Change.mjs"
+    },
     "./Cdp": {
       "@effect-browser/source": "./src/Cdp.ts",
       "types": "./dist/Cdp.d.mts",

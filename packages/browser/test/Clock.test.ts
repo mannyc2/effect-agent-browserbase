@@ -140,7 +140,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
                 : [],
             )
             .join("\n"),
-          "-0.5s navigated",
+          "-0.5s the tab went to",
         );
 
         time.monotonic = 7000;

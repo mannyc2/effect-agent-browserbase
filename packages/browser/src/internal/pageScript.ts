@@ -155,6 +155,29 @@ export type TypeableResult =
   | { readonly ok: true; readonly secret: boolean }
   | { readonly error: "stale" | "untypeable"; readonly detail: string };
 
+export type ChangeKind = "text" | "appeared" | "disappeared" | "value" | "title";
+
+/** One settled burst of changes to one element, timed on the page's epoch clock. */
+export interface ChangeRecord {
+  readonly at: number;
+  readonly startedAt: number;
+  readonly kind: ChangeKind;
+  readonly role: string | null;
+  readonly name: string;
+  readonly tag: string;
+  readonly context: string;
+  readonly before: string | null;
+  readonly after: string | null;
+  readonly count: number;
+}
+
+export interface ChangesResult {
+  readonly now: number;
+  /** Where the record is whole: when the recorder started, or the newest change it let go. */
+  readonly from: number;
+  readonly records: ReadonlyArray<ChangeRecord>;
+}
+
 export interface PageApi {
   readonly version: number;
   snapshot(request: SnapshotRequest): SnapshotResult;
@@ -174,6 +197,7 @@ export interface PageApi {
   checkText(ref: string, expected: string): EditResult;
   select(ref: string, values: ReadonlyArray<string>): EditResult;
   hasText(text: string): boolean;
+  changes(maxAgeMillis: number): ChangesResult;
 }
 
 declare global {
@@ -184,7 +208,7 @@ declare global {
 export const install = (): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 5) return installed;
+  if (installed !== undefined && installed.version === 6) return installed;
 
   const byElement = new WeakMap<Element, string>();
   const byRef = new Map<string, WeakRef<Element>>();
@@ -1792,8 +1816,521 @@ export const install = (): PageApi => {
   const hasText = (text: string): boolean =>
     (document.body?.innerText ?? "").toLowerCase().includes(text.toLowerCase());
 
+  // What visibly changes, noted as it happens and settled into bursts: text in view that changed,
+  // appeared or disappeared, a field's value and the title, each with what it said before. The
+  // observer only notes which elements changed; their words are read once a burst settles, or
+  // when the host asks, so a busy page pays little between reads. Changes inside frames, shadow
+  // roots and SVG, and anything drawn rather than written, such as a canvas, are not seen.
+  const epoch = () => performance.timeOrigin + performance.now();
+  const noted: Array<ChangeRecord> = [];
+  // The newest change no longer kept; the record is whole only after it.
+  let forgotten = epoch();
+  let title = document.title;
+  let titleBefore: { readonly title: string; readonly at: number } | undefined;
+
+  const note = (record: ChangeRecord) => {
+    noted.push(record);
+    if (noted.length > 128) forgotten = noted.shift()?.at ?? forgotten;
+  };
+
+  const inlineTags = new Set([
+    "A",
+    "ABBR",
+    "B",
+    "CODE",
+    "EM",
+    "I",
+    "LABEL",
+    "MARK",
+    "S",
+    "SMALL",
+    "SPAN",
+    "STRONG",
+    "SUB",
+    "SUP",
+    "TIME",
+    "U",
+  ]);
+
+  const unwritten = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "svg"]);
+
+  /** How a batch of mutations can be undone in reading, to recover what the page said before it. */
+  interface Undo {
+    readonly data: Map<Node, string>;
+    readonly added: Set<Node>;
+    readonly removed: Map<Node, Array<{ readonly next: Node | null; readonly nodes: Array<Node> }>>;
+  }
+
+  /** A node's words, or with an undo, its words before that batch of mutations. */
+  const wordsOf = (node: Node, undo?: Undo): string => {
+    if (node.nodeType === Node.TEXT_NODE) return undo?.data.get(node) ?? node.nodeValue ?? "";
+    if (!isElement(node) || unwritten.has(node.tagName)) return "";
+    const gap = inlineTags.has(node.tagName) ? "" : " ";
+    let text = "";
+
+    const putBack = (next: Node | null) => {
+      for (const group of undo?.removed.get(node) ?? [])
+        if (group.next === next) for (const removed of group.nodes) text += wordsOf(removed, undo);
+    };
+
+    for (const child of Array.from(node.childNodes)) {
+      putBack(child);
+      if (undo?.added.has(child) !== true) text += wordsOf(child, undo);
+    }
+    putBack(null);
+
+    return `${gap}${text}${gap}`;
+  };
+
+  /** A change shorter than 160 characters as it is, else the part that differs, with some context. */
+  const excerpt = (before: string, after: string): [string, string] => {
+    if (before.length <= 160 && after.length <= 160) return [before, after];
+    let start = 0;
+
+    while (start < before.length && before[start] === after[start]) start++;
+    let end = 0;
+
+    while (
+      end < before.length - start &&
+      end < after.length - start &&
+      before[before.length - 1 - end] === after[after.length - 1 - end]
+    )
+      end++;
+
+    const cut = (text: string) => {
+      const from = Math.max(0, start - 40);
+      const to = Math.min(text.length, text.length - end + 40);
+      const middle = text.slice(from, to);
+
+      return clean(`${from > 0 ? "…" : ""}${middle}${to < text.length ? "…" : ""}`);
+    };
+
+    return [cut(before), cut(after)];
+  };
+
+  const inView = (element: Element): boolean => {
+    if (!element.isConnected || !shown(element)) return false;
+    const rect = element.getBoundingClientRect();
+
+    return (
+      (rect.width > 0 || rect.height > 0) &&
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < window.innerHeight &&
+      rect.left < window.innerWidth
+    );
+  };
+
+  const watched = (element: Element): boolean =>
+    element.closest("head,svg,script,style,noscript,template") === null;
+
+  /** Words beside an element that say what it is: its table row and column, or a label and heading. */
+  const contextOf = (element: Element, role: string | null): string => {
+    const cell = element.closest("td,th,[role=cell],[role=gridcell]");
+    const row = cell?.closest("tr,[role=row]") ?? null;
+
+    if (cell !== null && cell !== undefined && row !== null) {
+      const cells = Array.from(row.children);
+      const index = cells.indexOf(cell);
+      const first = cells[0];
+      const table = row.closest("table,[role=table],[role=grid]");
+
+      const header =
+        table?.querySelector("thead tr, tr:has(> th), [role=row]:has(> [role=columnheader])") ??
+        null;
+
+      const column = header === null || header === row ? undefined : header.children[index];
+      const rowName = first === undefined || first === cell ? "" : clean(textOf(first), 60);
+      const columnName = column === undefined ? "" : clean(textOf(column), 60);
+
+      const parts = [
+        rowName === "" ? "" : `row ${JSON.stringify(rowName)}`,
+        columnName === "" ? "" : `column ${JSON.stringify(columnName)}`,
+      ].filter((part) => part !== "");
+
+      if (parts.length > 0) return parts.join(", ");
+    }
+
+    // Words just before it in its own row, item or block, such as a label; never the whole page.
+    const parent = element.parentElement;
+
+    const scope =
+      element.closest(groups) ??
+      (parent === null || parent === element.ownerDocument.body || parent.tagName === "HTML"
+        ? undefined
+        : parent);
+
+    const beside = scope === undefined ? "" : textBeside(element, scope, true);
+    const near = beside.length > 40 ? `…${beside.slice(-39).trimStart()}` : beside;
+
+    const heading = role === "heading" ? undefined : headingBefore(element, element.ownerDocument);
+
+    return [
+      near === "" ? "" : `beside ${JSON.stringify(near)}`,
+      heading === undefined ? "" : `under ${JSON.stringify(heading)}`,
+    ]
+      .filter((part) => part !== "")
+      .join(", ");
+  };
+
+  const described = (element: Element, kind: ChangeKind) => {
+    const role = roleOf(element);
+
+    return {
+      role,
+      // An element's own words are what changed, not its name.
+      name: role === null || role === "heading" ? "" : nameOf(element, role),
+      tag: element.tagName.toLowerCase(),
+      context: kind === "value" ? "" : contextOf(element, role),
+    };
+  };
+
+  const valueText = (element: Element): string | null => {
+    if (isInput(element)) {
+      if (element.type === "checkbox" || element.type === "radio")
+        return element.checked ? "checked" : "not checked";
+      if (["button", "submit", "reset", "image", "hidden"].includes(element.type)) return null;
+      if (element.type === "file") return `${element.files?.length ?? 0} file(s) chosen`;
+    }
+    if (!isInput(element) && !isTextArea(element) && !isSelect(element)) return null;
+    if (isSecret(element)) return element.value === "" ? "" : "••••";
+    if (isSelect(element))
+      return clean(Array.from(element.selectedOptions, (option) => option.text).join(", "));
+
+    return clean(element.value);
+  };
+
+  interface Burst {
+    readonly before: string | null;
+    readonly startedAt: number;
+    at: number;
+    count: number;
+    /** A field's value at its latest event. */
+    value?: string | null;
+  }
+
+  const texts = new Map<Element, Burst>();
+  const values = new Map<Element, Burst>();
+  const arrived = new Map<Element, number>();
+
+  const departed: Array<{ readonly parent: Node; readonly words: string; readonly at: number }> =
+    [];
+
+  const focusedValues = new WeakMap<Element, string>();
+  const settledValues = new WeakMap<Element, string>();
+  let pendingSince: number | undefined;
+  let latest = 0;
+
+  /** Settle every burst; with an undo, reading the page as it was before those mutations. */
+  const flush = (undo?: Undo) => {
+    pendingSince = undefined;
+    const settled: Array<ChangeRecord> = [];
+
+    const push = (
+      element: Element,
+      kind: ChangeKind,
+      burst: Omit<Burst, "before">,
+      before: string | null,
+      after: string | null,
+    ) => {
+      if (settled.length >= 40) return;
+
+      const [shownBefore, shownAfter] =
+        before === null || after === null ? [before, after] : excerpt(before, after);
+
+      settled.push({
+        at: burst.at,
+        startedAt: burst.startedAt,
+        kind,
+        ...described(element, kind),
+        before: shownBefore === null ? null : clean(shownBefore, 200),
+        after: shownAfter === null ? null : clean(shownAfter, 200),
+        count: burst.count,
+      });
+    };
+
+    if (titleBefore !== undefined) {
+      const at = titleBefore.at;
+
+      if (document.title !== titleBefore.title)
+        settled.push({
+          at,
+          startedAt: at,
+          kind: "title",
+          role: null,
+          name: "",
+          tag: "title",
+          context: "",
+          before: clean(titleBefore.title, 200),
+          after: clean(document.title, 200),
+          count: 1,
+        });
+      titleBefore = undefined;
+      title = document.title;
+    }
+
+    // A replacement inside one parent, such as a re-rendered price, is a change of its text.
+    const replaced = new Set<Element>();
+
+    for (const [element, at] of arrived) {
+      if (!element.isConnected || element.parentNode === null || !watched(element)) continue;
+      const parent = element.parentNode;
+      const siblings = [...arrived.keys()].filter((other) => other.parentNode === parent);
+      const gone = departed.filter((removed) => removed.parent === parent);
+
+      if (siblings.length !== 1 || gone.length !== 1) continue;
+      const [removed] = gone;
+
+      if (removed === undefined) continue;
+      replaced.add(element);
+      departed.splice(departed.indexOf(removed), 1);
+      const after = clean(wordsOf(element, undo), Number.POSITIVE_INFINITY);
+
+      if (after !== removed.words && inView(element))
+        push(
+          element,
+          "text",
+          { startedAt: Math.min(at, removed.at), at, count: 1 },
+          removed.words,
+          after,
+        );
+    }
+
+    for (const [element, burst] of texts) {
+      if (!watched(element) || !inView(element)) continue;
+      // An element inside another that changed is part of that change.
+      let outer = element.parentElement;
+
+      while (outer !== null && !texts.has(outer)) outer = outer.parentElement;
+      if (outer !== null) continue;
+      const after = clean(wordsOf(element, undo), Number.POSITIVE_INFINITY);
+
+      if (after !== burst.before) push(element, "text", burst, burst.before, after);
+    }
+
+    for (const [element, at] of arrived) {
+      if (replaced.has(element) || !watched(element) || !inView(element)) continue;
+      let outer = element.parentElement;
+
+      while (outer !== null && !arrived.has(outer)) outer = outer.parentElement;
+      if (outer !== null) continue;
+      const words = clean(wordsOf(element, undo), Number.POSITIVE_INFINITY);
+
+      if (words !== "") push(element, "appeared", { startedAt: at, at, count: 1 }, null, words);
+    }
+
+    for (const removed of departed) {
+      const parent = removed.parent;
+
+      if (!isElement(parent) || !watched(parent) || !inView(parent) || removed.words === "")
+        continue;
+      push(
+        parent,
+        "disappeared",
+        { startedAt: removed.at, at: removed.at, count: 1 },
+        removed.words,
+        null,
+      );
+    }
+
+    for (const [element, burst] of values) {
+      const after = burst.value ?? null;
+
+      if (after === null || !element.isConnected) continue;
+      settledValues.set(element, after);
+      if (after !== burst.before) push(element, "value", burst, burst.before, after);
+    }
+
+    texts.clear();
+    values.clear();
+    arrived.clear();
+    departed.length = 0;
+    for (const record of settled.toSorted((left, right) => left.at - right.at)) note(record);
+  };
+
+  // A burst settles once the page has been quiet for 150 ms, or a second after it began on a page
+  // that never rests. It settles at the next change after that, reading the page as it was before
+  // that change, or when the host reads the record: the script keeps no timers, which a hidden tab
+  // would delay.
+  const pending = (at: number) => {
+    pendingSince ??= at;
+    latest = at;
+  };
+
+  const settleBy = (at: number, undo?: Undo) => {
+    if (pendingSince !== undefined && (at - latest >= 150 || at - pendingSince >= 1000))
+      flush(undo);
+  };
+
+  // A page that rebuilds itself wholesale is noted up to these bounds, so its cost stays bounded.
+  const maxPending = 200;
+
+  const changed = (element: Element | null, at: number, undo: Undo) => {
+    if (element === null || !watched(element) || element === element.ownerDocument.body) return;
+    const burst = texts.get(element);
+
+    if (burst !== undefined) {
+      burst.at = at;
+      burst.count++;
+    } else if (texts.size < maxPending)
+      texts.set(element, {
+        before: clean(wordsOf(element, undo), Number.POSITIVE_INFINITY),
+        startedAt: at,
+        at,
+        count: 1,
+      });
+  };
+
+  const observer = new MutationObserver((mutations) => {
+    const at = epoch();
+    const undo: Undo = { data: new Map(), added: new Set(), removed: new Map() };
+
+    for (const mutation of mutations) {
+      if (mutation.type === "attributes") continue;
+      if (mutation.type === "characterData") {
+        if (!undo.data.has(mutation.target))
+          undo.data.set(mutation.target, mutation.oldValue ?? "");
+        continue;
+      }
+
+      const removed = Array.from(mutation.removedNodes).filter((node) => {
+        if (!undo.added.has(node)) return true;
+        undo.added.delete(node);
+
+        return false;
+      });
+
+      if (removed.length > 0) {
+        const earlier = undo.removed.get(mutation.target) ?? [];
+
+        earlier.push({ next: mutation.nextSibling, nodes: removed });
+        undo.removed.set(mutation.target, earlier);
+      }
+      for (const node of Array.from(mutation.addedNodes)) undo.added.add(node);
+    }
+
+    settleBy(at, undo);
+    if (document.title !== title && titleBefore === undefined) titleBefore = { title, at };
+
+    for (const mutation of mutations) {
+      const target = mutation.target;
+
+      if (mutation.type === "attributes") {
+        const attribute = mutation.attributeName;
+
+        if (!isElement(target) || attribute === null) continue;
+        const had = mutation.oldValue !== null;
+        const has = target.hasAttribute(attribute);
+
+        if (had === has) continue;
+        // A dialog or details element opens; anything else shows when it loses `hidden`.
+        if (attribute === "open" ? has : !has) {
+          if (!arrived.has(target)) arrived.set(target, at);
+        } else if (!arrived.delete(target) && target.parentNode !== null)
+          departed.push({ parent: target.parentNode, words: clean(wordsOf(target)), at });
+        continue;
+      }
+      if (mutation.type === "characterData") {
+        changed(target.parentElement, at, undo);
+        continue;
+      }
+      if (!isElement(target)) continue;
+      const added = Array.from(mutation.addedNodes);
+      const removed = Array.from(mutation.removedNodes);
+
+      const words = [...added, ...removed].some(
+        (node) => node.nodeType === Node.TEXT_NODE && clean(node.nodeValue) !== "",
+      );
+
+      if (words) {
+        changed(target, at, undo);
+        continue;
+      }
+      for (const node of added)
+        if (isElement(node) && !arrived.has(node) && arrived.size < maxPending)
+          arrived.set(node, at);
+      for (const node of removed) {
+        if (!isElement(node)) continue;
+        // Something that came and went within one burst was never settled on the page.
+        if (arrived.delete(node) || departed.length >= maxPending) continue;
+        departed.push({
+          parent: target,
+          words: clean(wordsOf(node, undo), Number.POSITIVE_INFINITY),
+          at,
+        });
+      }
+    }
+    pending(at);
+  });
+
+  observer.observe(document, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    characterDataOldValue: true,
+    attributeFilter: ["hidden", "open"],
+    attributeOldValue: true,
+  });
+
+  // Typing changes a field's value, not the page's text, so fields report their own values.
+  const fieldOf = (event: Event): Element | undefined => {
+    const target = event.composedPath()[0];
+
+    return target instanceof Node && isElement(target) ? target : undefined;
+  };
+
+  document.addEventListener(
+    "focusin",
+    (event) => {
+      const field = fieldOf(event);
+      const value = field === undefined ? null : valueText(field);
+
+      if (field !== undefined && value !== null) focusedValues.set(field, value);
+    },
+    true,
+  );
+
+  const onValue = (event: Event) => {
+    const field = fieldOf(event);
+    const value = field === undefined ? null : valueText(field);
+
+    if (field === undefined || value === null) return;
+    const at = epoch();
+
+    settleBy(at);
+    const burst = values.get(field);
+
+    if (burst !== undefined) {
+      burst.at = at;
+      burst.count++;
+      burst.value = value;
+    } else
+      values.set(field, {
+        before: settledValues.get(field) ?? focusedValues.get(field) ?? null,
+        startedAt: at,
+        at,
+        count: 1,
+        value,
+      });
+    pending(at);
+  };
+
+  document.addEventListener("input", onValue, true);
+  document.addEventListener("change", onValue, true);
+
+  /** Changes settled in the last `maxAgeMillis`, newest 64 at most, with where the record is whole. */
+  const changes = (maxAgeMillis: number): ChangesResult => {
+    flush();
+    const now = epoch();
+    const recent = noted.filter((record) => record.at > now - maxAgeMillis);
+    const records = recent.slice(-64);
+    const dropped = recent[recent.length - records.length - 1];
+
+    return { now, from: Math.max(forgotten, dropped?.at ?? forgotten), records };
+  };
+
   const api: PageApi = {
-    version: 5,
+    version: 6,
     snapshot,
     point,
     scrollPlan,
@@ -1805,6 +2342,7 @@ export const install = (): PageApi => {
     checkText,
     select,
     hasText,
+    changes,
   };
 
   globalThis.__effectBrowser = api;
@@ -1935,6 +2473,25 @@ export const FocusResultSchema = Schema.Union([
   }),
   EditFailure,
 ]);
+
+const ChangeRecordSchema = Schema.Struct({
+  at: Schema.Finite,
+  startedAt: Schema.Finite,
+  kind: Schema.Literals(["text", "appeared", "disappeared", "value", "title"]),
+  role: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  tag: Schema.String,
+  context: Schema.String,
+  before: Schema.NullOr(Schema.String),
+  after: Schema.NullOr(Schema.String),
+  count: Schema.Int.check(Schema.isGreaterThan(0)),
+});
+
+export const ChangesResultSchema = Schema.Struct({
+  now: Schema.Finite,
+  from: Schema.Finite,
+  records: Schema.Array(ChangeRecordSchema),
+});
 
 export const EditResultSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String }),

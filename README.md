@@ -65,9 +65,13 @@ program.pipe(Effect.provide([Hosted, Model]), Effect.runPromise);
 
 ## A moment
 
-`Moment.capture` gathers a page's screencast frames over a window and its events in between, naming
-what each action acted on (`click button "Play"`), never by ref; `snapshot: true` adds the page's
-outline at the end. `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call:
+`Moment.capture` gathers a page's screencast frames over a window, what visibly changed on it and its
+events in between; `snapshot: true` adds the page's outline at the end. A change is text in view
+that changed, appeared or disappeared, a field's value or the title, with what it said before and
+where it is (`row "Ether", column "1h"`). `Moment.toPrompt` lays a moment out as one message for any
+`effect/ai` call. It leads with what changed, most notable first, and names an action only as its
+cause (`"$61,240" became "$62,010" (beside "Price"), after a click on button "Refresh"`), so a model
+retells what happened rather than the steps taken; `{ actions: "all" }` lists every step as well.
 
 ```ts
 import { LanguageModel, Prompt } from "effect/ai";

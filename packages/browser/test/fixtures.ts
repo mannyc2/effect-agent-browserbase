@@ -78,7 +78,26 @@ const busy = `<!doctype html><title>Busy</title><h1>Busy</h1>
 
 const opensBusy = `<!doctype html><title>Opener</title><a href="/busy" target="_blank">Open a busy tab</a>`;
 
+// A quote whose Refresh button changes its price and 24h change, the first by replacing the
+// span's text node and the second by editing it, with a table, a feed and a hidden notice that
+// tests change from the page's own script.
+const quote = `<!doctype html><title>Quote</title>
+<body style="margin:0;font-family:sans-serif">
+<h1>Bitcoin</h1>
+<p>Price <span id="price">$61,240</span></p>
+<p>24h <span id="change">-1.4%</span></p>
+<button id="refresh" onclick="price.textContent = '$62,010'; change.firstChild.nodeValue = '+0.3%'">Refresh</button>
+<table><thead><tr><th>Coin</th><th>1h</th><th>24h</th></tr></thead>
+<tbody><tr><td>Ether</td><td id="eth1h">0.2%</td><td id="eth24h">1.1%</td></tr></tbody></table>
+<ul id="feed"><li>First post</li></ul>
+<p id="notice" hidden>Saved</p>
+<label>Search <input id="search"></label>
+<div style="height:3000px"></div>
+<p id="below">Below the fold</p>
+</body>`;
+
 const pages: Record<string, string> = {
+  "/quote": quote,
   "/busy": busy,
   "/opens-busy": opensBusy,
   "/form": form,
