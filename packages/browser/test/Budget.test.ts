@@ -80,12 +80,14 @@ const framesArrive = (page: Page) =>
   );
 
 // Playwright's own connection to the browser and its tab, and the library's session on that tab.
-// Nothing is measured: no page of the library's own opens.
+// Nothing is measured: no page of the library's own opens. How many round trips Playwright's
+// commands share depends on how soon Chromium answers each, so only the calls are held.
 it.live("opening a browser over CDP costs 33 calls", () =>
   Effect.gen(function* () {
     const proxy = yield* behindProxy();
+    const sent = yield* sentBy(proxy, Cdp.open({ endpoint: proxy.endpoint }));
 
-    holds(yield* sentBy(proxy, Cdp.open({ endpoint: proxy.endpoint })), 33, 4);
+    assert.strictEqual(sent.length, 33, sent.map((command) => command.method).join(", "));
   }).pipe(Effect.scoped),
 );
 
