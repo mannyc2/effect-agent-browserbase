@@ -182,13 +182,9 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     );
 
   const registeredFrame = (operation: string) =>
-    Effect.suspend(() =>
-      registered
-        ? mainFrame(operation)
-        : registering
-            .withPermits(1)(Effect.suspend(() => (registered ? Effect.void : register(operation))))
-            .pipe(Effect.andThen(mainFrame(operation))),
-    );
+    registering
+      .withPermits(1)(Effect.suspend(() => (registered ? Effect.void : register(operation))))
+      .pipe(Effect.andThen(mainFrame(operation)));
 
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
@@ -279,13 +275,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
 
     return current(operation).pipe(
       Effect.flatMap(attempt),
-      Effect.catchIf(contextGone, () =>
-        Effect.suspend(() => {
-          world = undefined;
-
-          return again;
-        }),
-      ),
+      Effect.catchIf(contextGone, () => again),
     );
   };
 

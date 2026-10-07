@@ -1,7 +1,8 @@
 /**
  * Pictures of a page: screenshots, frames of a stated age, zooms, its screencast and waiting until
- * it is still. Each new picture is taken on the page's own protocol session: one call where a
- * device pixel is a CSS pixel and nothing is cropped, two otherwise.
+ * it is still. A new picture is taken on the page's own protocol session: one call where a device
+ * pixel is a CSS pixel and nothing is cropped, and two otherwise, unless Playwright emulates the
+ * viewport.
  */
 import { Duration, Effect, Option, Schema, Sink, Stream } from "effect";
 

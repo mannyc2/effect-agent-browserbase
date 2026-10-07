@@ -23,13 +23,13 @@ export interface Command {
 
 export interface Proxy {
   /** The browser's DevTools address, through the proxy. */
-  readonly endpoint: string;
+  endpoint: string;
   /** Every command sent, in order. */
-  readonly commands: ReadonlyArray<Command>;
+  readonly commands: Array<Command>;
   /** The size of each answer, by its command's id. */
-  readonly answers: ReadonlyMap<number, number>;
+  readonly answers: Map<number, number>;
   /** Sessions a client attached itself with `Target.attachToTarget`, rather than automatically. */
-  readonly attached: ReadonlySet<string>;
+  readonly attached: Set<string>;
   /** Answer a command with an empty result instead of sending it on. */
   swallow: (command: Command) => boolean;
 }
@@ -101,10 +101,8 @@ const accept = (key: string) =>
   createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
 
 // Relay each connection to the browser, counting what it sends and swallowing what it asks to.
-const relay = (browser: URL, proxy: Proxy & { commands: Array<Command> }) =>
+const relay = (browser: URL, proxy: Proxy) =>
   createServer((client) => {
-    const answers = proxy.answers as Map<number, number>;
-    const attached = proxy.attached as Set<string>;
     const attaching = new Set<number>();
     let upstream: WebSocket | undefined;
     let request = Buffer.alloc(0);
@@ -149,9 +147,9 @@ const relay = (browser: URL, proxy: Proxy & { commands: Array<Command> }) =>
           readonly result?: { readonly sessionId?: string };
         };
 
-        if (id !== undefined) answers.set(id, Buffer.byteLength(data));
+        if (id !== undefined) proxy.answers.set(id, Buffer.byteLength(data));
         if (id !== undefined && attaching.delete(id) && result?.sessionId !== undefined)
-          attached.add(result.sessionId);
+          proxy.attached.add(result.sessionId);
         client.write(frame(data));
       });
       socket.addEventListener("close", () => client.destroy());
@@ -223,7 +221,7 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
     Effect.sync(stop),
   );
 
-  const proxy: Proxy & { commands: Array<Command>; endpoint: string } = {
+  const proxy: Proxy = {
     endpoint: "",
     commands: [],
     answers: new Map(),
@@ -245,5 +243,5 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
 
   proxy.endpoint = `ws://127.0.0.1:${port}${endpoint.pathname}`;
 
-  return proxy as Proxy;
+  return proxy;
 });

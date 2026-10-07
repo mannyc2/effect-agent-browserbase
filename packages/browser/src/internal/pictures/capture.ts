@@ -134,7 +134,7 @@ const settling = Duration.millis(10);
 /**
  * Chromium draws the library's own clipped pictures into the running screencast, with the page's
  * device size and shape when the crop has the viewport's proportions. A frame that may have been
- * painted while one was taken, from its call to its reply, is left out, the page's own included.
+ * painted while one was taken is left out, the page's own included.
  */
 const pictureWindows = (now: () => number) => {
   let windows: ReadonlyArray<Excluded> = [];
