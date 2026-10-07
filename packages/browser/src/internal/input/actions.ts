@@ -75,6 +75,10 @@ const partsOf = (
 
 type Parts = ReturnType<typeof partsOf>;
 
+/** Whether every number given is finite; a number left out is. */
+const finite = (...values: ReadonlyArray<number | undefined>) =>
+  values.every((value) => value === undefined || Number.isFinite(value));
+
 const click = (input: Parts) => {
   const { settings } = input.page;
   const { perform, preparePolicy, targetFor, moveTo, sendMouse, flush, settle } = input;
@@ -82,21 +86,31 @@ const click = (input: Parts) => {
   return (target: Target, clickOptions: ClickOptions = {}) =>
     perform(
       "click",
-      { target: typeof target === "string" ? target : `${target.x},${target.y}` },
+      {
+        target: typeof target === "string" ? target : `${target.x},${target.y}`,
+        options: {
+          button: clickOptions.button,
+          clickCount: clickOptions.clickCount,
+          holdMillis: clickOptions.holdMillis,
+        },
+      },
       settings.actionTimeout,
       Effect.suspend(() =>
-        Number.isFinite(clickOptions.clickCount ?? 1)
+        finite(clickOptions.clickCount, clickOptions.holdMillis)
           ? preparePolicy("click", { target: typeof target === "string" ? target : undefined }, [
               target,
             ])
-          : failWith("click", new InvalidRequest({ detail: "clickCount must be finite" })),
+          : failWith(
+              "click",
+              new InvalidRequest({ detail: "clickCount and holdMillis must be finite" }),
+            ),
       ),
       (marks, approval) =>
         Effect.gen(function* () {
-          if (!Number.isFinite(clickOptions.clickCount ?? 1))
+          if (!finite(clickOptions.clickCount, clickOptions.holdMillis))
             return yield* failWith(
               "click",
-              new InvalidRequest({ detail: "clickCount must be finite" }),
+              new InvalidRequest({ detail: "clickCount and holdMillis must be finite" }),
             );
           const resolved = yield* targetFor("click", target, approval, marks);
           const { point } = resolved;
@@ -238,7 +252,16 @@ const typeText = (input: Parts) => {
   return (text: string, typeOptions: TypeOptions = {}) =>
     perform(
       "type",
-      { target: typeOptions.into, text, secret: true },
+      {
+        target: typeOptions.into,
+        options: {
+          replace: typeOptions.replace,
+          submit: typeOptions.submit,
+          prose: typeOptions.prose,
+        },
+        text,
+        secret: true,
+      },
       Duration.sum(
         settings.actionTimeout,
         Duration.millis(
@@ -407,11 +430,14 @@ const press = (input: Parts) => {
   return (keys: string, pressOptions: PressOptions = {}) =>
     perform(
       "press",
-      { target: keys },
+      { target: keys, options: { times: pressOptions.times, holdMillis: pressOptions.holdMillis } },
       settings.actionTimeout,
       Effect.suspend(() => {
-        if (!Number.isFinite(pressOptions.times ?? 1))
-          return failWith("press", new InvalidRequest({ detail: "times must be finite" }));
+        if (!finite(pressOptions.times, pressOptions.holdMillis))
+          return failWith(
+            "press",
+            new InvalidRequest({ detail: "times and holdMillis must be finite" }),
+          );
         const combination = Keys.normalize(keys);
 
         return combination === undefined
@@ -425,8 +451,11 @@ const press = (input: Parts) => {
       }),
       (marks, approval) =>
         Effect.gen(function* () {
-          if (!Number.isFinite(pressOptions.times ?? 1))
-            return yield* failWith("press", new InvalidRequest({ detail: "times must be finite" }));
+          if (!finite(pressOptions.times, pressOptions.holdMillis))
+            return yield* failWith(
+              "press",
+              new InvalidRequest({ detail: "times and holdMillis must be finite" }),
+            );
           const parts = Keys.parts(keys);
 
           if (parts === undefined)
@@ -485,6 +514,7 @@ const scroll = (input: Parts) => {
             : typeof scrollOptions.at === "string"
               ? scrollOptions.at
               : `${scrollOptions.at.x},${scrollOptions.at.y}`,
+        options: { dx: scrollOptions.dx, dy: scrollOptions.dy },
       },
       settings.actionTimeout,
       valid.pipe(
@@ -546,7 +576,7 @@ const select = (input: Parts) => {
   return (ref: string, values: ReadonlyArray<string>) =>
     perform(
       "select",
-      { target: ref, text: values.join(", ") },
+      { target: ref, options: { values }, text: values.join(", ") },
       settings.actionTimeout,
       preparePolicy("select", { target: ref, text: values.join(", ") }, [ref]),
       (marks, approval) =>
