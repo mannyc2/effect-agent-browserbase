@@ -16,6 +16,12 @@ import { reasonOf } from "./internal/page.ts";
 export interface Options extends Browser.Options {
   /** Defaults to true. */
   readonly headless?: boolean | undefined;
+  /**
+   * Run Chromium's sandbox. Defaults to false, as in Playwright, so an exploit in a page's renderer
+   * runs with this process's privileges. Hosts that don't allow unprivileged user namespaces, such
+   * as many containers, can't start the sandbox, and opening then fails.
+   */
+  readonly sandbox?: boolean | undefined;
   /** Defaults to 1280x720 CSS pixels at a device scale factor of 1. */
   readonly viewport?: { readonly width: number; readonly height: number } | undefined;
   readonly executablePath?: string | undefined;
@@ -37,6 +43,7 @@ export const open = Effect.fn("Chromium.open")(function* (options: Options = {})
       try: () =>
         chromium.launch({
           headless: options.headless ?? true,
+          chromiumSandbox: options.sandbox ?? false,
           timeout: launchTimeoutMillis,
           ...(options.executablePath === undefined
             ? {}

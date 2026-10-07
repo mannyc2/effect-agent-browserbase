@@ -9,6 +9,11 @@ npm install effect-browser@beta effect playwright-core
 npx playwright-core install chromium
 ```
 
+`Chromium.layer` launches that Chromium without its sandbox, as Playwright does, so an exploit in a
+page's renderer runs with your user's privileges. `Chromium.layer({ sandbox: true })` runs it
+sandboxed; hosts that don't allow unprivileged user namespaces, such as many containers, can't start
+the sandbox.
+
 | Module         | What it holds                                                                        |
 | -------------- | ------------------------------------------------------------------------------------ |
 | `Browser`      | The `Browser` service: tabs, recent events and the Playwright context                |
