@@ -4,21 +4,22 @@
  * of the window and at its end.
  *
  * The library's page script keeps a record of a document's main frame from the first time it is
- * asked for changes, so `Changes.from` says where the record is whole. It keeps up to 256 elements
- * and each one's last 32 changes for a minute; on a page busier than that, an element that keeps
- * changing gives way to news, and `Changes.truncated` counts what was not kept. A change counts as
- * visible when what changed was in the viewport as the page rendered it, and neither transparent
- * nor hidden by `visibility`, so a change scrolled away later is still told and one made out of
- * view is not. A removal the record had not watched is judged by what moves into its place, so
- * one out of the flow, or with nothing after it, is not told. Words are what a viewer could read:
- * text inside a hidden part of what changed, or a closed disclosure, is left out. What changes in a scrolling element just
- * after it scrolled is taken for the scroll, not new content, when it looks like a virtual list:
- * sibling rows showing the words of rows beyond them in the way it scrolled, or new words when it
- * scrolled past them all, or rows swapped for others that arrive on the side it scrolled toward.
- * Those are counted in `Changes.scrolled`, and anything else, such as one price or a new message,
- * is told as ever. A list that scrolls with the page itself is not recognised. What the script cannot read is not seen:
- * pictures, a canvas, frames, shadow roots, SVG, and anything shown or hidden by CSS alone, such as
- * a class that reveals a toast.
+ * asked for changes, so `Changes.from` says where the record is whole. It keeps up to 256
+ * elements and each one's last 32 changes for a minute; on a page busier than that, an element
+ * that keeps changing gives way to news, and `Changes.truncated` counts what was not kept. A
+ * change counts as visible when what changed was in the viewport as the page rendered it, and
+ * neither transparent nor hidden by `visibility`, so a change scrolled away later is still told
+ * and one made out of view is not. A removal the record had not watched is judged by what moves
+ * into its place, so one out of the flow, or with nothing after it, is not told. Words are what
+ * a viewer could read: text inside a hidden part of what changed, or a closed disclosure, is
+ * left out. What changes in a scrolling element just after it scrolled is taken for the scroll,
+ * not new content, when it looks like a virtual list: sibling rows showing the words of rows
+ * beyond them in the way it scrolled, or new words when it scrolled past them all, or rows
+ * swapped for others that arrive on the side it scrolled toward. Those are counted in
+ * `Changes.scrolled`, and anything else, such as one price or a new message, is told as ever. A
+ * list that scrolls with the page itself is not recognised. What the script cannot read is not
+ * seen: pictures, a canvas, frames, shadow roots, SVG, and anything shown or hidden by CSS
+ * alone, such as a class that reveals a toast.
  *
  * @since 0.3.0
  */
@@ -62,7 +63,10 @@ export class Change extends Schema.Class<Change>("effect-browser/Change")({
    * that go. What disappeared says what it said as it went. A secret field reads `••••`.
    */
   before: Schema.optional(Schema.String),
-  /** What it said at the end of the window; absent for what disappeared. What came and went says what it showed. */
+  /**
+   * What it said at the end of the window; absent for what disappeared. What came and went says
+   * what it showed.
+   */
   after: Schema.optional(Schema.String),
   /** How many times it changed in the window. */
   count: Schema.Int.check(Schema.isGreaterThan(0)),
