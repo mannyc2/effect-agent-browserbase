@@ -552,10 +552,25 @@ export const gapsWithin = (frames: ReadonlyArray<Frame>, maximumMillis: number) 
 };
 
 const spin = (page: Page) =>
-  truth(page, ReelsLayout).pipe(
-    Effect.flatMap(({ spinAt }) => page.click(spinAt)),
-    Effect.andThen(page.ready({ quietMillis: 400, timeout: Duration.seconds(10) })),
-  );
+  Effect.gen(function* () {
+    const { spinAt } = yield* truth(page, ReelsLayout);
+    const { spins } = yield* truth(page, ReelsTruth);
+
+    yield* page.click(spinAt);
+    yield* page.ready({ quietMillis: 400, timeout: Duration.seconds(10) });
+    // `ready` can take a stalled screencast for a still page while the reels turn, and the game
+    // ignores a click while they do, so the reels' own state says when the spin has ended.
+    yield* truth(page, ReelsTruth).pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced("100 millis"),
+        until: (game) => game.spins > spins && !game.spinning,
+      }),
+      Effect.timeoutOrElse({
+        duration: Duration.seconds(10),
+        orElse: () => Effect.die(`spin ${spins + 1} had not ended after 10 seconds`),
+      }),
+    );
+  });
 
 const casinoPlay = operate({
   name: "casino-play",
