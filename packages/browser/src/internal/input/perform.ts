@@ -27,7 +27,7 @@ export interface InputMarks {
 }
 
 const subjectOf = (target: ResolvedTarget) =>
-  new Subject({ role: target.role, name: target.name, tag: target.tag });
+  new Subject({ role: target.role, name: target.name, tag: target.tag, context: target.context });
 
 /** A subject as span attributes under `prefix`, without a role it does not have. */
 const subjectAttributes = (prefix: string, subject: Subject | undefined) =>

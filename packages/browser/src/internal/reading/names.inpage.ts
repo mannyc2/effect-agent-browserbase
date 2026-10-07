@@ -272,24 +272,22 @@ export const names = () => {
   };
 
   // Autocomplete tokens for a password, a one-time code, or a payment card's number, code or expiry.
-  const secretTokens = new Set([
-    "current-password",
-    "new-password",
-    "one-time-code",
-    "cc-number",
-    "cc-csc",
-    "cc-exp",
-    "cc-exp-month",
-    "cc-exp-year",
-  ]);
+  const secretToken =
+    /(?:^|\s)(?:current-password|new-password|one-time-code|cc-number|cc-csc|cc-exp(?:-month|-year)?)(?=\s|$)/i;
 
-  /** A field the DOM itself marks as secret, by its type or its autocomplete tokens. */
-  const isSecret = (element: Element): boolean =>
-    (isInput(element) && element.type === "password") ||
-    (element.getAttribute("autocomplete") ?? "")
-      .toLowerCase()
-      .split(/\s+/)
-      .some((token) => secretTokens.has(token));
+  // A field once secret stays secret, such as a password its page lets the user reveal.
+  const secrets = new WeakSet<Element>();
+
+  /** A field the DOM marks as secret, by its type or its autocomplete tokens, now or before. */
+  const isSecret = (element: Element): boolean => {
+    if (
+      (isInput(element) && element.type === "password") ||
+      secretToken.test(element.getAttribute("autocomplete") ?? "")
+    )
+      secrets.add(element);
+
+    return secrets.has(element);
+  };
 
   return {
     activeElement,
