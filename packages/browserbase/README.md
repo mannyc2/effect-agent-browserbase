@@ -37,6 +37,9 @@ Browserbase.layer({
 });
 ```
 
+Pages open at Browserbase's default viewport, which was 2560×1440 on 7 October 2026: four times
+the pixels of `Chromium.layer`'s 1280×720. `browserSettings.viewport` sets another.
+
 ## Stored contexts
 
 A context keeps cookies, storage and cache between sessions. A session that loads it with
