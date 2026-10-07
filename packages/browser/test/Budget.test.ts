@@ -1,12 +1,13 @@
 // The protocol budget of each hot-path operation, counted at zero latency through a proxy on a
-// browser reached over CDP, the way a hosted one is. A refactor or a Playwright upgrade that adds a
-// call to one of these operations fails here; the counts, not the timings, are the contract.
+// browser reached over CDP, in the default context without a viewport that a hosted session gives.
+// A refactor or a Playwright upgrade that adds a call or a round trip to one of these operations
+// fails here; the counts, not the timings, are the contract.
 import { assert, it } from "@effect/vitest";
 import { Effect, Option, Schedule, Stream, Tracer } from "effect";
 
 import * as Cdp from "../src/Cdp.ts";
 import type { Page } from "../src/Page.ts";
-import { behindProxy, type Proxy } from "./protocol.ts";
+import { behindProxy, type Command, type Proxy } from "./protocol.ts";
 
 // The commands an operation sends. Screencast acknowledgements answer frames, not the operation.
 const sentBy = <A, E, R>(proxy: Proxy, operation: Effect.Effect<A, E, R>) =>
@@ -20,13 +21,16 @@ const sentBy = <A, E, R>(proxy: Proxy, operation: Effect.Effect<A, E, R>) =>
       .filter((command) => command.method !== "Page.screencastFrameAck");
   });
 
-const methods = (commands: ReadonlyArray<{ readonly method: string }>) =>
-  commands.map((command) => command.method);
+// An operation's calls, and the round trips they take: commands sent together share one. Only the
+// registration uploads a script, the library's own page script (74 KB) once per page session; no
+// other command carries it or Playwright's 335 KB injected script. A failure prints what was sent.
+const holds = (commands: ReadonlyArray<Command>, calls: number, rounds: number, uploads = 0) => {
+  const sent = commands.map((command) => `${command.method} (${command.bytes} B)`).join(", ");
 
-// Playwright's injected script is 335 KB and the library's page script 46 KB; a hot-path command
-// carries neither.
-const small = (commands: ReadonlyArray<{ readonly bytes: number }>) =>
-  commands.every((command) => command.bytes < 2_000);
+  assert.strictEqual(commands.length, calls, sent);
+  assert.strictEqual(new Set(commands.map((command) => command.round)).size, rounds, sent);
+  assert.strictEqual(commands.filter((command) => command.bytes >= 2_000).length, uploads, sent);
+};
 
 const html = (body: string) => `data:text/html,${encodeURIComponent(body)}`;
 
@@ -62,11 +66,8 @@ it.live("a picture of a changing page with its screencast running costs no call"
     yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
     yield* framesArrive(page);
 
-    assert.deepStrictEqual(
-      methods(yield* sentBy(proxy, page.screenshot({ maxAge: "1 second" }))),
-      [],
-    );
-    assert.deepStrictEqual(methods(yield* sentBy(proxy, page.frame({ maxAge: "1 second" }))), []);
+    holds(yield* sentBy(proxy, page.screenshot({ maxAge: "1 second" })), 0, 0);
+    holds(yield* sentBy(proxy, page.frame({ maxAge: "1 second" })), 0, 0);
   }).pipe(Effect.scoped),
 );
 
@@ -76,17 +77,11 @@ it.live("a picture of a still page costs one call, on a new document too", () =>
     const page = yield* browser.newPage(still("one"));
 
     // The page's first picture also learns the viewport, which Playwright does not know over CDP.
-    const first = yield* sentBy(proxy, page.screenshot({ maxAge: 0 }));
-
-    assert.deepStrictEqual(methods(first), ["Page.captureScreenshot", "Page.getLayoutMetrics"]);
+    holds(yield* sentBy(proxy, page.screenshot({ maxAge: 0 })), 2, 2);
 
     yield* page.goto(still("two"));
-    const picture = yield* sentBy(proxy, page.screenshot({ maxAge: 0 }));
-    const frame = yield* sentBy(proxy, page.frame({ maxAge: 0 }));
-
-    assert.deepStrictEqual(methods(picture), ["Page.captureScreenshot"]);
-    assert.deepStrictEqual(methods(frame), ["Page.captureScreenshot"]);
-    assert.isTrue(small([...first, ...picture, ...frame]));
+    holds(yield* sentBy(proxy, page.screenshot({ maxAge: 0 })), 1, 1);
+    holds(yield* sentBy(proxy, page.frame({ maxAge: 0 })), 1, 1);
   }).pipe(Effect.scoped),
 );
 
@@ -96,10 +91,7 @@ it.live("a crop costs two calls", () =>
     const page = yield* browser.newPage(still("crop"));
 
     yield* page.screenshot({ maxAge: 0 });
-    const crop = yield* sentBy(proxy, page.zoom({ x: 10, y: 10, width: 120, height: 90 }));
-
-    assert.deepStrictEqual(methods(crop), ["Page.getLayoutMetrics", "Page.captureScreenshot"]);
-    assert.isTrue(small(crop));
+    holds(yield* sentBy(proxy, page.zoom({ x: 10, y: 10, width: 120, height: 90 })), 2, 2);
   }).pipe(Effect.scoped),
 );
 
@@ -110,40 +102,29 @@ it.live("a picture at another device pixel ratio costs two calls", () =>
 
     // The first picture learns the ratio and the viewport.
     yield* page.screenshot({ maxAge: 0 });
-    const picture = yield* sentBy(proxy, page.screenshot({ maxAge: 0 }));
+    holds(yield* sentBy(proxy, page.screenshot({ maxAge: 0 })), 2, 2);
     const viewport = yield* page.viewport;
     const image = yield* page.screenshot({ maxAge: 0 });
 
-    assert.deepStrictEqual(methods(picture), ["Page.getLayoutMetrics", "Page.captureScreenshot"]);
-    assert.isTrue(small(picture));
     assert.deepStrictEqual([image.width, image.height], [viewport.width, viewport.height]);
   }).pipe(Effect.scoped),
 );
 
-it.live("an outline costs two calls on a new document and one warm", () =>
+it.live("a read costs two calls on a new document, and one warm", () =>
   Effect.gen(function* () {
     const { proxy, browser } = yield* opened();
     const page = yield* browser.newPage(still("one"));
 
-    // The first read registers the page script with the page's own session, once.
-    const registering = yield* sentBy(proxy, page.snapshot());
-
-    assert.deepStrictEqual(methods(registering).toSorted(), [
-      "Page.addScriptToEvaluateOnNewDocument",
-      "Page.createIsolatedWorld",
-      "Page.enable",
-      "Runtime.evaluate",
-      "Target.getTargetInfo",
-    ]);
+    // The first read registers the page script with the page's own session, once: three calls
+    // sent together, then the world and the read.
+    holds(yield* sentBy(proxy, page.snapshot()), 5, 3, 1);
 
     yield* page.goto(still("two"));
-    const first = yield* sentBy(proxy, page.snapshot());
-    const warm = yield* sentBy(proxy, page.snapshot());
-
-    assert.deepStrictEqual(methods(first), ["Page.createIsolatedWorld", "Runtime.evaluate"]);
-    assert.deepStrictEqual(methods(warm), ["Runtime.evaluate"]);
-    assert.isTrue(small([...first, ...warm]));
-    assert.include((yield* page.snapshot()).text, "two");
+    holds(yield* sentBy(proxy, page.snapshot()), 2, 2);
+    holds(yield* sentBy(proxy, page.snapshot()), 1, 1);
+    holds(yield* sentBy(proxy, page.find({ role: "heading" })), 1, 1);
+    holds(yield* sentBy(proxy, page.text()), 1, 1);
+    assert.include((yield* page.text()).text, "two");
   }).pipe(Effect.scoped),
 );
 

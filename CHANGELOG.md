@@ -19,8 +19,8 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   newest screencast frame serves when it was painted at most `maxAge` ago (250 ms by default; 0
   always takes a new screenshot), and with `after: "input"` only when painted after the page's
   latest input. `Page.screenshot` takes the same options.
-- `CaptureStats.duringPictures`: frames left out because they may have been painted while the
-  library took a clipped or scaled picture of the page.
+- `CaptureStats.duringPictures`: frames left out because they may have been painted, or arrived,
+  while the library took a clipped or scaled picture of the page.
 - Every page span reports its protocol cost on the page's own session: `calls`, `bytesOut`,
   `bytesIn` and `waitedMillis`. A picture's `source` is `frame` or `screenshot`.
 
@@ -28,13 +28,14 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 - A picture is taken on the page's own session: one `Page.captureScreenshot` where a device pixel is
   a CSS pixel and nothing is cropped, and two, with Playwright's clip over the page's layout metrics,
-  for a crop or another device pixel ratio. Over CDP, Browserbase included, the first picture of a
-  document no longer sends Playwright's 335 KB injected script, which took up to a few seconds on
-  Browserbase while screencast frames waited behind it. Where Playwright emulates the viewport, as
-  `Chromium.layer` does, crops are still Playwright's own screenshot, on its own session.
+  for a crop or another device pixel ratio. In a context without a viewport, such as the default
+  context `Cdp.open` and Browserbase use, the first picture of a document no longer sends
+  Playwright's 335 KB injected script, which took up to a few seconds on Browserbase while
+  screencast frames waited behind it. Where Playwright emulates the viewport, as `Chromium.layer`
+  does, crops are still Playwright's own screenshot, on its own session.
 - The page script is registered once per page session, at the library's first read of the page, so
-  each new document runs it from its start: a document's first read is two calls without the
-  46 KB install, and a warm read one. The clock probe runs in a world of its own.
+  each new document runs it from its start: a document's first read is two calls, sending no
+  script, and a warm read one. The clock probe runs in a world of its own.
 - The library's own clipped pictures, such as a zoom, keep their frames out of a running
   screencast, crops with the viewport's own proportions included.
 - Each page's own session holds focus emulation, so a tab behind another keeps painting whatever

@@ -844,6 +844,8 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
 
         yield* eventually(Effect.sync(() => frames.length > 0));
+        const zoomed: Array<number> = [];
+
         // Each crop has the 4:3 viewport's proportions, which no size rule can tell apart.
         for (const region of [
           { x: 0, y: 0, width: 400, height: 300 },
@@ -851,7 +853,9 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         ])
           for (let index = 0; index < 3; index++) {
             yield* page.zoom(region);
-            yield* Effect.sleep("60 millis");
+            zoomed.push(yield* browser.now);
+            // Frames of the page itself arrive between crops, past each crop's 50 ms settling.
+            yield* Effect.sleep("150 millis");
           }
         yield* Effect.sleep("200 millis");
         yield* Fiber.interrupt(reader);
@@ -890,11 +894,17 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         const stats = yield* page.captureStats;
 
+        // A crop that gets through says when it was painted and arrived, after its zoom ended.
+        const escaped = frames.flatMap((frame, index) => {
+          const ended = zoomed.findLast((at) => at <= frame.receivedAt) ?? Number.NaN;
+
+          return greenAtThreeQuarters[index] === true
+            ? [`painted ${frame.hostTime - ended} ms, arrived ${frame.receivedAt - ended} ms`]
+            : [];
+        });
+
         assert.isAbove(frames.length, 10);
-        assert.deepStrictEqual(
-          greenAtThreeQuarters.filter((green) => green),
-          [],
-        );
+        assert.deepStrictEqual(escaped, []);
         assert.isAbove(stats.duringPictures, 0);
         assert.strictEqual(
           stats.received,

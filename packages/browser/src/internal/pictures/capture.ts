@@ -127,25 +127,31 @@ const outlasting = Duration.seconds(1);
 // No frame painted during a picture arrives this long after it.
 const excludedFor = Duration.seconds(10);
 
-// Chromium stamps frames from another clock than the one the calibration reads: a crop's last
-// frame maps up to about 2 ms past the picture's reply, so its window stays open a little longer.
-const settling = Duration.millis(10);
+// A crop's last frame is stamped on another clock than the one the calibration reads, a few
+// milliseconds past the picture's reply on an idle machine and later on a slow one, and it arrives
+// later still. A picture's window stays open this long after its reply.
+const settling = Duration.millis(50);
 
 /**
  * Chromium draws the library's own clipped pictures into the running screencast, with the page's
  * device size and shape when the crop has the viewport's proportions. A frame that may have been
- * painted while one was taken is left out, the page's own included.
+ * painted, or that arrives, while one is taken is left out, the page's own included: arrival is on
+ * the host's own clock, so no skew between the browser's clocks can move a crop's frame out.
  */
 const pictureWindows = (now: () => number) => {
   let windows: ReadonlyArray<Excluded> = [];
 
   return {
-    painted: ({ hostTime, timing }: Frame) =>
-      windows.some(
-        (window) =>
-          hostTime + timing.uncertaintyMillis >= window.from &&
-          hostTime - timing.uncertaintyMillis <= window.until + Duration.toMillis(settling),
-      ),
+    painted: ({ hostTime, timing, receivedAt }: Frame) =>
+      windows.some((window) => {
+        const until = window.until + Duration.toMillis(settling);
+
+        return (
+          (hostTime + timing.uncertaintyMillis >= window.from &&
+            hostTime - timing.uncertaintyMillis <= until) ||
+          (receivedAt >= window.from && receivedAt <= until)
+        );
+      }),
     excluding: <A, E, R>(picture: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
         Effect.sync(() => {
