@@ -127,16 +127,16 @@ const outlasting = Duration.seconds(1);
 // No frame painted during a picture arrives this long after it.
 const excludedFor = Duration.seconds(10);
 
-// A crop's last frame is stamped on another clock than the one the calibration reads, a few
-// milliseconds past the picture's reply on an idle machine and later on a slow one, and it arrives
-// later still. A picture's window stays open this long after its reply.
+// Every frame of a crop is painted before Chromium answers the picture, yet each test of it can
+// land past the reply: its stamp, because Chromium stamps frames on another clock than the one the
+// calibration reads (2 to 3 ms late on an idle machine here), and its arrival, because a frame is
+// encoded after it is painted (3 to 6 ms). A frame is kept only when both land this long after.
 const settling = Duration.millis(50);
 
 /**
  * Chromium draws the library's own clipped pictures into the running screencast, with the page's
- * device size and shape when the crop has the viewport's proportions. A frame that may have been
- * painted, or that arrives, while one is taken is left out, the page's own included: arrival is on
- * the host's own clock, so no skew between the browser's clocks can move a crop's frame out.
+ * device size and shape when the crop has the viewport's proportions, and nothing in a frame tells
+ * it apart. A frame painted, or arriving, while one is taken is left out, the page's own included.
  */
 const pictureWindows = (now: () => number) => {
   let windows: ReadonlyArray<Excluded> = [];
