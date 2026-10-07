@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import * as Chromium from "effect-browser/Chromium";
@@ -21,7 +22,7 @@ const record = Effect.fnUntraced(function* (name: string, humanize: boolean) {
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => rmSync(directory, { recursive: true, force: true })),
   );
-  const recorder = Recorder.make(directory);
+  const recorder = yield* Recorder.make(directory);
 
   const outcome = yield* recorder
     .around(task.scripted({ seed: 23, trace: recorder.trace }))
@@ -60,7 +61,7 @@ const record = Effect.fnUntraced(function* (name: string, humanize: boolean) {
     directory,
     filesExist: recording.frames.every((frame) => existsSync(join(directory, frame.file))),
   };
-});
+}, Effect.provide(NodeServices.layer));
 
 describe("recorder", () => {
   it.live("records a humanized operate trial's frames, glides and keys", () =>

@@ -500,58 +500,6 @@ const visionFirst = <A, I, E>(task: string, options: OperateOptions<A, I, E>) =>
     });
   });
 
-/** The middle value, or the mean of the middle two; 0 for none. */
-export const median = (values: ReadonlyArray<number>): number => {
-  const sorted = values.toSorted((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-
-  if (sorted.length === 0) return 0;
-
-  return sorted.length % 2 === 1
-    ? (sorted[middle] ?? 0)
-    : ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
-};
-
-/**
- * Two arms' outcomes on the same task and trial, over the pairs graded in both: the discordant
- * counts are what McNemar's test reads. A pair with an ungraded side says nothing about accuracy.
- */
-export const pairs = (
-  records: ReadonlyArray<{
-    readonly task: string;
-    readonly trial: number;
-    readonly arm: Arm | null;
-    readonly status: string;
-    readonly pass: boolean | null;
-  }>,
-  first: Arm,
-  second: Arm,
-) => {
-  const passed = (arm: Arm) =>
-    new Map(
-      records
-        .filter((record) => record.arm === arm && record.status === "graded")
-        .map((record) => [`${record.task}#${record.trial}`, record.pass === true]),
-    );
-
-  const left = passed(first);
-  const right = passed(second);
-  const counts = { pairs: 0, both: 0, onlyFirst: 0, onlySecond: 0, neither: 0 };
-
-  for (const [key, a] of left) {
-    const b = right.get(key);
-
-    if (b === undefined) continue;
-    counts.pairs += 1;
-    if (a && b) counts.both += 1;
-    else if (a) counts.onlyFirst += 1;
-    else if (b) counts.onlySecond += 1;
-    else counts.neither += 1;
-  }
-
-  return counts;
-};
-
 /** Run an operate task in one arm, to its answer or an `AgentError`, as `Agent.run` does. */
 export const operate = <A, I, E>(arm: Arm, task: string, options: OperateOptions<A, I, E>) =>
   arm === 5

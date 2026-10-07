@@ -1,17 +1,26 @@
 // What both runners share about one scheduled unit of work: its seed, its own browser, and how its
 // exit becomes a durable status. A wrong answer is a result; a broken capture, provider or browser
 // is not, and a refused or unstarted unit is neither.
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-
-import { Cause, Clock, Duration, Effect, Exit, type Layer, Option, Ref, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Duration,
+  Effect,
+  Exit,
+  type Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as Agent from "effect-browser/Agent";
 import type { Browser } from "effect-browser/Browser";
 import { BrowserError } from "effect-browser/BrowserError";
 import { BrowserbaseError } from "effect-browserbase/BrowserbaseError";
 import { AiError } from "effect/ai";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { type Account, type Calls, type Endpoint, type Halt, noCalls, noTiming } from "./Budget.ts";
+import { type Account, type Calls, Endpoint, type Halt, noCalls, noTiming } from "./Budget.ts";
 import { FixtureUnreadable } from "./Sites.ts";
 
 /** The captured evidence cannot support a graded answer, so no model is asked about it. */
@@ -25,44 +34,61 @@ export class EvidenceIncomplete extends Schema.TaggedError<EvidenceIncomplete>()
 }
 
 /** The checkout a result came from; null where git cannot say. */
-export interface Revision {
-  readonly commit: string | null;
+export const Revision = Schema.Struct({
+  commit: Schema.NullOr(Schema.String),
   /** Uncommitted changes make a result unreproducible from `commit` alone. */
-  readonly dirty: boolean | null;
-}
+  dirty: Schema.NullOr(Schema.Boolean),
+});
 
-const git = (...args: ReadonlyArray<string>) =>
-  execFileSync("git", args, {
-    cwd: fileURLToPath(new URL(".", import.meta.url)),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+export type Revision = typeof Revision.Type;
 
-export const revision: Effect.Effect<Revision> = Effect.try(() => ({
-  commit: git("rev-parse", "HEAD"),
-  dirty: git("status", "--porcelain").length > 0,
-})).pipe(Effect.orElseSucceed(() => ({ commit: null, dirty: null })));
+// What git prints, or nothing where it fails, such as outside a checkout.
+const git = Effect.fnUntraced(function* (args: ReadonlyArray<string>) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+  const handle = yield* spawner.spawn(
+    ChildProcess.make("git", args, { cwd: import.meta.dirname, stderr: "ignore" }),
+  );
+
+  const [output, code] = yield* Effect.all(
+    [Stream.mkString(Stream.decodeText(handle.stdout)), handle.exitCode],
+    { concurrency: 2 },
+  );
+
+  return code === 0 ? Option.some(output.trim()) : Option.none();
+}, Effect.scoped);
+
+export const revision: Effect.Effect<Revision, never, ChildProcessSpawner.ChildProcessSpawner> =
+  Effect.all([git(["rev-parse", "HEAD"]), git(["status", "--porcelain"])]).pipe(
+    Effect.map(([commit, status]) => ({
+      commit: Option.getOrNull(commit),
+      dirty: Option.getOrNull(Option.map(status, (changes) => changes.length > 0)),
+    })),
+    Effect.orElseSucceed(() => ({ commit: null, dirty: null })),
+  );
 
 /** The configuration a result depends on, recorded with it. */
-export interface RunInfo {
-  readonly revision: Revision;
-  readonly model: string | null;
+export const RunInfo = Schema.Struct({
+  revision: Revision,
+  model: Schema.NullOr(Schema.String),
   /** The pinned OpenRouter endpoint and its per-call reservation; null without a model. */
-  readonly endpoint: Endpoint | null;
-  readonly browser: string;
+  endpoint: Schema.NullOr(Endpoint),
+  browser: Schema.Literals(["chromium", "browserbase"]),
   /** Added round-trip milliseconds on a local browser's DevTools connection; null for none. */
-  readonly latencyMillis: number | null;
-  readonly humanize: boolean;
-  readonly maxOutputTokens: number;
-  readonly maxUsd: number;
-  readonly concurrency: number;
+  latencyMillis: Schema.NullOr(Schema.Finite),
+  humanize: Schema.Boolean,
+  maxOutputTokens: Schema.Int,
+  maxUsd: Schema.Finite,
+  concurrency: Schema.Int,
   /**
    * Recording and narration each run a screencast, which lets an observation reuse a frame
    * instead of capturing one, and narration adds model calls: their trials time differently.
    */
-  readonly record: boolean;
-  readonly narrateSeconds: number | null;
-}
+  record: Schema.Boolean,
+  narrateSeconds: Schema.NullOr(Schema.Finite),
+});
+
+export type RunInfo = typeof RunInfo.Type;
 
 /** Derivation depends on task identity, never dispatch order or provider random draws. */
 export const trialSeed = (base: number, task: string, trial: number): number => {
@@ -86,31 +112,36 @@ export const isolatedTrial = <A, E, R, E2, R2>(
  * stopped by the budget, `unrun` units never ran to an outcome, and `infrastructure-failed` units
  * failed for a reason other than the model's answer.
  */
-export type Status = "graded" | "infrastructure-failed" | "denied" | "unrun";
+export const Status = Schema.Literals(["graded", "infrastructure-failed", "denied", "unrun"]);
 
-export type Reason =
-  | "answered"
-  | "invalid-output"
-  | "gave-up"
-  | "step-limit"
-  | "evidence-incomplete"
-  | "fixture-unreadable"
-  | "preparation-failed"
-  | "model-setup-failed"
-  | "browser-failed"
-  | "hosted-session-failed"
-  | "provider-failed"
-  | "charge-exceeded-bound"
-  | "timed-out"
-  | "defect"
-  | "other"
-  | "budget-exhausted"
-  | "stopped-after-charge-bound"
-  | "stopped-after-infrastructure"
-  | "stopped-after-uncertain-charge"
-  | "stopped-after-output-failure"
-  | "stopped-after-uncertain-session"
-  | "interrupted";
+export type Status = typeof Status.Type;
+
+export const Reason = Schema.Literals([
+  "answered",
+  "invalid-output",
+  "gave-up",
+  "step-limit",
+  "evidence-incomplete",
+  "fixture-unreadable",
+  "preparation-failed",
+  "model-setup-failed",
+  "browser-failed",
+  "hosted-session-failed",
+  "provider-failed",
+  "charge-exceeded-bound",
+  "timed-out",
+  "defect",
+  "other",
+  "budget-exhausted",
+  "stopped-after-charge-bound",
+  "stopped-after-infrastructure",
+  "stopped-after-uncertain-charge",
+  "stopped-after-output-failure",
+  "stopped-after-uncertain-session",
+  "interrupted",
+]);
+
+export type Reason = typeof Reason.Type;
 
 export interface Classification {
   readonly status: Status;

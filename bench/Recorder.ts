@@ -1,10 +1,16 @@
 // Records one trial into a directory for replay: each page's screencast frames as JPEG files as
 // they arrive, and at the end one recording.json with the events, turns, moments and outcome.
 // Recording starts a screencast on every page, which adds capture load to an operate trial.
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-
-import { Clock, Effect, Schema, Stream, type Tracer } from "effect";
+import {
+  Clock,
+  Effect,
+  FileSystem,
+  Path,
+  type PlatformError,
+  Schema,
+  Stream,
+  type Tracer,
+} from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { RecordedEvent } from "effect-browser/BrowserEvent";
 
@@ -37,16 +43,24 @@ export interface Recorder {
   ) => Effect.Effect<void, BenchError>;
 }
 
-const write = <A>(operation: () => A) =>
-  Effect.try({
-    try: operation,
-    catch: (error) =>
-      new BenchError({
-        message: `could not write the recording: ${error instanceof Error ? error.message : String(error)}`,
-      }),
-  });
+const unwritten = (error: PlatformError.PlatformError | Schema.SchemaError) =>
+  new BenchError({ message: `could not write the recording: ${error.message}` });
 
-export const make = (directory: string): Recorder => {
+/** A recorder writing into `directory`, which it creates. */
+export const make = Effect.fnUntraced(function* (
+  directory: string,
+): Effect.fn.Return<Recorder, never, FileSystem.FileSystem | Path.Path> {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const write = (file: string, data: Uint8Array) =>
+    fs.writeFile(path.join(directory, file), data).pipe(Effect.mapError(unwritten));
+
+  const folder = (name: string) =>
+    fs
+      .makeDirectory(path.join(directory, name), { recursive: true })
+      .pipe(Effect.mapError(unwritten));
+
   let now: Effect.Effect<number> | undefined;
   let startedAt: number | undefined;
   // The epoch clock spans use, read with the host clock, to move spans onto the host clock.
@@ -65,17 +79,14 @@ export const make = (directory: string): Recorder => {
       if (entry._tag === "Moment") {
         const index = moments.length;
 
-        const pictures = yield* write(() => {
-          mkdirSync(join(directory, "moments"), { recursive: true });
+        const pictures = yield* folder("moments").pipe(
+          Effect.andThen(
+            Effect.forEach(entry.moment.frames, (frame, order) => {
+              const file = `moments/${index}-${order}.jpg`;
 
-          return entry.moment.frames.map((frame, order) => {
-            const file = `moments/${index}-${order}.jpg`;
-
-            writeFileSync(join(directory, file), frame.data);
-
-            return { file, hostTime: frame.hostTime };
-          });
-        }).pipe(
+              return write(file, frame.data).pipe(Effect.as({ file, hostTime: frame.hostTime }));
+            }),
+          ),
           Effect.catch((error) =>
             Effect.sync(() => {
               problems.push(error.message);
@@ -126,7 +137,7 @@ export const make = (directory: string): Recorder => {
       let pageCount = 0;
 
       // A failure to write here loses frames, not the trial; finish reports it.
-      yield* write(() => mkdirSync(join(directory, "frames"), { recursive: true })).pipe(
+      yield* folder("frames").pipe(
         Effect.catch((error) => Effect.sync(() => problems.push(error.message))),
       );
       now = browser.now;
@@ -151,22 +162,23 @@ export const make = (directory: string): Recorder => {
           );
 
           yield* page.screencast().pipe(
-            Stream.runForEach((frame) =>
-              write(() => {
-                const file = `frames/${index}-${String(++count).padStart(6, "0")}.jpg`;
+            Stream.runForEach((frame) => {
+              const file = `frames/${index}-${String(++count).padStart(6, "0")}.jpg`;
 
-                writeFileSync(join(directory, file), frame.data);
-                frames.push(
-                  new RecordedFrame({
-                    page: id,
-                    file,
-                    hostTime: frame.hostTime,
-                    width: frame.width,
-                    height: frame.height,
-                  }),
-                );
-              }),
-            ),
+              return write(file, frame.data).pipe(
+                Effect.map(() =>
+                  frames.push(
+                    new RecordedFrame({
+                      page: id,
+                      file,
+                      hostTime: frame.hostTime,
+                      width: frame.width,
+                      height: frame.height,
+                    }),
+                  ),
+                ),
+              );
+            }),
             Effect.catchTag("BenchError", (error) =>
               Effect.sync(() => problems.push(error.message)),
             ),
@@ -230,17 +242,10 @@ export const make = (directory: string): Recorder => {
             problems,
           });
 
-          const json = yield* Schema.encodeEffect(Recording)(recording).pipe(
-            Effect.mapError(
-              (error) =>
-                new BenchError({ message: `could not encode the recording: ${error.message}` }),
-            ),
-          );
+          const json = yield* Schema.encodeEffect(Schema.fromJsonString(Recording))(recording);
 
-          yield* write(() =>
-            writeFileSync(join(directory, "recording.json"), `${JSON.stringify(json)}\n`),
-          );
-        });
+          yield* fs.writeFileString(path.join(directory, "recording.json"), `${json}\n`);
+        }).pipe(Effect.mapError(unwritten));
 
   return { trace, around, finish };
-};
+});

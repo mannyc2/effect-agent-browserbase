@@ -35,7 +35,8 @@ describe("an interrupted bench run", () => {
           process.execPath,
           [
             "--conditions=@effect-browser/source",
-            "run.ts",
+            "bench.ts",
+            "run",
             "--task",
             "tumble-win",
             "--trials",
@@ -62,7 +63,8 @@ describe("an interrupted bench run", () => {
         });
         yield* Effect.sleep("2 seconds");
         child.kill("SIGINT");
-        assert.strictEqual(yield* code, 1);
+        // The run's own interruption, as `runMain` reports one.
+        assert.strictEqual(yield* code, 130);
         // The interruption closed the browser with its trial, which removes its profile.
         assert.deepStrictEqual(readdirSync(temporary), []);
 
