@@ -158,6 +158,7 @@ export type TypeableResult =
 export type ChangeKind = "text" | "appeared" | "disappeared" | "brief" | "value" | "title";
 
 export interface ChangeContext {
+  readonly table: string | null;
   readonly row: string | null;
   readonly column: string | null;
   readonly beside: string | null;
@@ -2211,13 +2212,57 @@ export const install = (): PageApi => {
     return !hidden;
   };
 
-  const noContext: ChangeContext = { row: null, column: null, beside: null, heading: null };
+  const noContext: ChangeContext = {
+    table: null,
+    row: null,
+    column: null,
+    beside: null,
+    heading: null,
+  };
+
+  /** A table's header row and its name, read once per read of the record. */
+  interface TableFacts {
+    readonly header: Element | null;
+    readonly name: string | null;
+  }
+
+  /** What names a table: its label, its caption, or else the heading above it. */
+  const tableName = (table: Element): string | null => {
+    const labelled = (table.getAttribute("aria-labelledby") ?? "").split(/\s+/).flatMap((id) => {
+      const by = id === "" ? null : table.ownerDocument.getElementById(id);
+
+      return by === null ? [] : [textOf(by)];
+    });
+
+    const label = clean(table.getAttribute("aria-label") ?? labelled.join(" "), 60);
+    const caption = table.querySelector(":scope > caption");
+
+    if (label !== "") return label;
+    if (caption !== null && clean(textOf(caption)) !== "") return clean(textOf(caption), 60);
+
+    return headingBefore(table, table.ownerDocument) ?? null;
+  };
+
+  /** Whether an element is pinned to the viewport, where the markup around it says nothing. */
+  const pinned = (element: Element): boolean => {
+    if (!isHtml(element)) return false;
+    let top: HTMLElement = element;
+
+    while (top.offsetParent instanceof HTMLElement) top = top.offsetParent;
+
+    return (
+      top !== element.ownerDocument.body &&
+      top !== element.ownerDocument.documentElement &&
+      getComputedStyle(top).position === "fixed"
+    );
+  };
 
   /**
    * Words beside an element that say what it is: its table row and column, or the words before it
-   * and the heading above it. `headers` keeps each table's header row for one read.
+   * and the heading above it; for a table cell, which table it is in. `tables` keeps what each
+   * table says of itself for one read.
    */
-  const contextOf = (element: Element, headers: Map<Element, Element | null>): ChangeContext => {
+  const contextOf = (element: Element, tables: Map<Element, TableFacts>): ChangeContext => {
     const cell = element.closest("td,th,[role=cell],[role=gridcell]");
     const row = cell?.closest("tr,[role=row]") ?? null;
 
@@ -2226,19 +2271,20 @@ export const install = (): PageApi => {
       const index = cells.indexOf(cell);
       const first = cells[0];
       const table = row.closest("table,[role=table],[role=grid]");
-      let header = table === null ? null : headers.get(table);
+      let facts = table === null ? undefined : tables.get(table);
 
-      if (header === undefined && table !== null) {
-        header = table.querySelector(
-          "thead tr, tr:has(> th), [role=row]:has(> [role=columnheader])",
-        );
-        headers.set(table, header);
+      if (facts === undefined && table !== null) {
+        facts = {
+          header: table.querySelector(
+            "thead tr, tr:has(> th), [role=row]:has(> [role=columnheader])",
+          ),
+          name: tableName(table),
+        };
+        tables.set(table, facts);
       }
 
-      const column =
-        header === null || header === undefined || header === row
-          ? undefined
-          : header.children[index];
+      const header = facts?.header ?? null;
+      const column = header === null || header === row ? undefined : header.children[index];
 
       const rowName = first === undefined || first === cell ? "" : clean(textOf(first), 60);
       const columnName = column === undefined ? "" : clean(textOf(column), 60);
@@ -2246,6 +2292,7 @@ export const install = (): PageApi => {
       if (rowName !== "" || columnName !== "")
         return {
           ...noContext,
+          table: facts?.name ?? null,
           row: rowName === "" ? null : rowName,
           column: columnName === "" ? null : columnName,
         };
@@ -2266,8 +2313,9 @@ export const install = (): PageApi => {
     return {
       ...noContext,
       beside: near === "" ? null : near,
+      // A heading before it in the markup says nothing of what is pinned to the viewport.
       heading:
-        roleOf(element) === "heading"
+        roleOf(element) === "heading" || pinned(element)
           ? null
           : (headingBefore(element, element.ownerDocument) ?? null),
     };
@@ -2560,7 +2608,7 @@ export const install = (): PageApi => {
     track: Track,
     since: number,
     until: number,
-    headers: Map<Element, Element | null>,
+    tables: Map<Element, TableFacts>,
   ): ChangeRecord | undefined => {
     const changed = track.samples.filter((sample) => sample.at > since && sample.at <= until);
     const first = changed[0];
@@ -2607,7 +2655,7 @@ export const install = (): PageApi => {
       // An element's own words are what changed, not its name.
       name: element === null || role === null || role === "heading" ? "" : nameOf(element, role),
       tag: element === null ? "title" : element.tagName.toLowerCase(),
-      context: kind === "value" || where === null ? noContext : contextOf(where, headers),
+      context: kind === "value" || where === null ? noContext : contextOf(where, tables),
       before: shownBefore === null ? null : clean(shownBefore, 200),
       after: shownAfter === null ? null : clean(shownAfter, 200),
       count: changed.length,
@@ -2638,11 +2686,11 @@ export const install = (): PageApi => {
     const after = since ?? Number.NEGATIVE_INFINITY;
     // A window cannot end later than now: what changes after it belongs to the next read.
     const upTo = Math.min(until ?? now, now);
-    const headers = new Map<Element, Element | null>();
+    const tables = new Map<Element, TableFacts>();
     const records: Array<ChangeRecord> = [];
 
     for (const track of tracks.values()) {
-      const folded = fold(track, after, upTo, headers);
+      const folded = fold(track, after, upTo, tables);
 
       if (folded !== undefined) records.push(folded);
     }
@@ -2809,6 +2857,7 @@ const ChangeRecordSchema = Schema.Struct({
   name: Schema.String,
   tag: Schema.String,
   context: Schema.Struct({
+    table: Schema.NullOr(Schema.String),
     row: Schema.NullOr(Schema.String),
     column: Schema.NullOr(Schema.String),
     beside: Schema.NullOr(Schema.String),

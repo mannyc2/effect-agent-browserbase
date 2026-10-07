@@ -220,15 +220,22 @@ const drawn = new Set(["canvas", "iframe", "video", "embed", "object", "svg"]);
 const onDrawn = (event: Action) =>
   event.ok && event.subject !== undefined && drawn.has(event.subject.role ?? event.subject.tag);
 
+/**
+ * An action the record of changes does not cover: one on something drawn, and a scroll, which
+ * moves the view rather than what is in it, so without it a change of picture goes unexplained.
+ */
+const uncovered = (event: Action) => onDrawn(event) || (event.ok && event.name === "scroll");
+
 const quoted = (value: string | undefined) => JSON.stringify(value ?? "");
 
 /** A change's context in words: `row "Ether", column "1h"` or `beside "Price", under "Bitcoin"`. */
-const where = (change: Change, without?: "column") => {
-  const { row, column, beside, heading } = change.context;
+const where = (change: Change, grouped = false) => {
+  const { table, row, column, beside, heading } = change.context;
 
   const parts = [
+    table === undefined || grouped ? "" : `table ${quoted(table)}`,
     row === undefined ? "" : `row ${quoted(row)}`,
-    column === undefined || without === "column" ? "" : `column ${quoted(column)}`,
+    column === undefined || grouped ? "" : `column ${quoted(column)}`,
     beside === undefined ? "" : `beside ${quoted(beside)}`,
     heading === undefined ? "" : `under ${quoted(heading)}`,
   ].filter((part) => part !== "");
@@ -281,8 +288,9 @@ const inFlux = (change: Change) => change.count > 1 || change.earlier !== undefi
 export interface PromptOptions {
   /**
    * How actions appear. By default only those that the record of changes does not cover are
-   * listed, as steps: every action when the moment has no record, those before it began, and those
-   * on something drawn, such as a click on a canvas. `"all"` lists every action, and
+   * listed, as steps: every action when the moment has no record, those before it began, a scroll,
+   * which moves the view, and one on something drawn, such as a click on a canvas. `"all"` lists
+   * every action, and
    * then tells the whole moment in order of time, so a model can see what followed each one.
    */
   readonly actions?: "uncovered" | "all" | undefined;
@@ -311,20 +319,23 @@ const account = (moment: Moment, options: PromptOptions) => {
     (record?.changes ?? []).filter(
       (change) => change.kind === "text" && change.context.column !== undefined,
     ),
-    (change) => change.context.column ?? "",
+    (change) => JSON.stringify([change.context.table, change.context.column]),
   );
 
   const collapsed = new Set<Change>();
 
-  for (const [column, cells] of columns) {
+  for (const cells of columns.values()) {
     const [first] = cells;
 
     if (cells.length < collapsedCells || first === undefined) continue;
+    const { table, column } = first.context;
+    const of = table === undefined ? "" : ` of table ${quoted(table)}`;
+
     for (const cell of cells) collapsed.add(cell);
     lines.push({
       at: first.startedAt,
       rank: 3,
-      text: `${cells.length} cells in column ${quoted(column)} changed, such as ${describe(first, where(first, "column"))}`,
+      text: `${cells.length} cells in column ${quoted(column)}${of} changed, such as ${describe(first, where(first, true))}`,
     });
   }
 
@@ -358,7 +369,7 @@ const account = (moment: Moment, options: PromptOptions) => {
         if (
           event.page === moment.page &&
           !(event.ok && navigating(event)) &&
-          (all || record === undefined || event.at <= record.from || onDrawn(event))
+          (all || record === undefined || event.at <= record.from || uncovered(event))
         )
           lines.push({ at: event.at, rank: 4, text: step(event) });
     }

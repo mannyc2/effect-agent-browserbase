@@ -30,13 +30,15 @@ export type Kind = typeof Kind.Type;
 
 /** Words around a change that say what it is; none for values and titles. */
 export class Context extends Schema.Class<Context>("effect-browser/Change/Context")({
+  /** A table cell's table, named by its label, its caption or the heading above it. */
+  table: Schema.optional(Schema.String),
   /** A table cell's row, named by its first cell. */
   row: Schema.optional(Schema.String),
   /** A table cell's column, named by its header. */
   column: Schema.optional(Schema.String),
   /** The words just before it in its row, item or block, such as a label. */
   beside: Schema.optional(Schema.String),
-  /** The heading above it. */
+  /** The heading above it in the page; none for what is pinned to the viewport, such as a toast. */
   heading: Schema.optional(Schema.String),
 }) {}
 

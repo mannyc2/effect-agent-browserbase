@@ -2204,6 +2204,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               kind: record.kind,
               subject: new Subject({ role: record.role, name: record.name, tag: record.tag }),
               context: new Context({
+                table: text(record.context.table),
                 row: text(record.context.row),
                 column: text(record.context.column),
                 beside: text(record.context.beside),

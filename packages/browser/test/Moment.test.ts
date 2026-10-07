@@ -368,6 +368,35 @@ describe("a moment's account of what changed", () => {
     );
   });
 
+  it("tells a scroll, which moves the view rather than what is in it", () => {
+    const scroll = action(8000, 8600, { name: "scroll", target: "dy 700" });
+
+    assert.deepStrictEqual(
+      account(
+        Moment.toPrompt(
+          new Moment.Moment({
+            ...moment,
+            events: [refresh, scroll],
+            changes: recorded([
+              change({
+                at: 6000,
+                subject: cell,
+                before: "$14.74",
+                after: "$14.81",
+                context: { table: "Spot markets", row: "LINK-USD", column: "Price" },
+              }),
+            ]),
+          }),
+        ),
+      ),
+      [
+        '-4.0s "$14.74" became "$14.81" (table "Spot markets", row "LINK-USD", column "Price")',
+        "-1.4s scroll dy 700",
+        "The text in view last changed at -4.0s.",
+      ],
+    );
+  });
+
   it("tells every step on request, with the changes in order of time", () => {
     assert.deepStrictEqual(account(Moment.toPrompt(moment, { actions: "all" })), [
       '-4.1s click button "Refresh"',
@@ -873,6 +902,56 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           ],
         );
       }),
+  );
+
+  it.effect("names a cell's table, and no heading for what is pinned to the viewport", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/quote");
+
+      // Two tables alike but for their names, and below them news and a corner for alerts.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const tables = ["Spot markets", "Perpetual futures"].map(
+            (name, index) =>
+              `<table${index === 0 ? ` aria-label="${name}"` : ""}><caption>${name}</caption><thead><tr><th>Asset</th><th>Price</th></tr></thead><tbody><tr><td>LINK-USD</td><td id="link${index}">$14.74</td></tr></tbody></table>`,
+          );
+
+          document.body.insertAdjacentHTML(
+            "afterbegin",
+            `${tables.join("")}<h2>Market makers widen weekend spreads</h2><div id="alerts" style="position:fixed;top:10px;right:10px"></div>`,
+          );
+        }),
+      );
+      const first = yield* Moment.capture(page);
+
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const price = document.querySelector("#link1");
+
+          if (price !== null) price.textContent = "$14.81";
+          const alert = document.createElement("div");
+
+          alert.textContent = "Price alert: LINK-USD crossed $14.80";
+          document.querySelector("#alerts")?.append(alert);
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(300));
+      const second = yield* Moment.capture(page, { since: first });
+
+      assert.deepStrictEqual(
+        second.changes?.changes.map((change) => [
+          change.kind,
+          change.after,
+          Object.fromEntries(
+            Object.entries(change.context).filter(([, words]) => words !== undefined),
+          ),
+        ]),
+        [
+          ["appeared", "Price alert: LINK-USD crossed $14.80", {}],
+          ["text", "$14.81", { table: "Perpetual futures", row: "LINK-USD", column: "Price" }],
+        ],
+      );
+    }),
   );
 
   it.effect("tells only the words a viewer can see", () =>
