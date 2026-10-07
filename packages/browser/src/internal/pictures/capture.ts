@@ -121,16 +121,7 @@ const paintGaps = () => {
   };
 };
 
-type Counted =
-  | "received"
-  | "accepted"
-  | "late"
-  | "missingTimestamp"
-  | "foreignSize"
-  | "duringPictures"
-  | "lost";
-
-const none = (): Record<Counted, number> => ({
+const none = () => ({
   received: 0,
   accepted: 0,
   late: 0,
@@ -139,6 +130,8 @@ const none = (): Record<Counted, number> => ({
   duringPictures: 0,
   lost: 0,
 });
+
+type Counted = keyof ReturnType<typeof none>;
 
 /** How far back a window of capture counts can reach. */
 export const countsKept = Duration.minutes(1);
