@@ -1,6 +1,6 @@
 // A run's traces: exported over OTLP when the environment asks for it, and each unit's own spans
 // collected, so its record can say where its time went and its recording can keep them.
-import { Context, Effect, Exit, Layer, Option, Tracer } from "effect";
+import { Context, Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { Otlp, OtlpSerialization } from "effect/observability";
 
@@ -61,7 +61,7 @@ const isTool = (span: Tracer.Span) =>
  * the page between them. Each counts its outermost spans only. Model requests are timed by the
  * budget; the rest of a unit is the fixture, grading, closing the browser and the bench itself.
  */
-export const phases = (spans: ReadonlyArray<Tracer.Span>) => {
+export const phases = (spans: ReadonlyArray<Tracer.Span>): Phases => {
   const byId = new Map(spans.map((span) => [span.spanId, span]));
 
   const parentOf = (span: Tracer.Span) =>
@@ -91,7 +91,14 @@ export const phases = (spans: ReadonlyArray<Tracer.Span>) => {
   };
 };
 
-export type Phases = ReturnType<typeof phases>;
+/** Seconds opening the browser, in the model's tool calls, and looking at the page outside them. */
+export const Phases = Schema.Struct({
+  setupSeconds: Schema.Finite,
+  toolSeconds: Schema.Finite,
+  observeSeconds: Schema.Finite,
+});
+
+export type Phases = typeof Phases.Type;
 
 export const noPhases: Phases = { setupSeconds: 0, toolSeconds: 0, observeSeconds: 0 };
 
@@ -134,22 +141,28 @@ const roundTrips = (sent: ReadonlyArray<Command>) => {
   return count;
 };
 
+const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
 /** The DevTools commands sent while spans of one name were the innermost open. */
-export interface Waited {
+export const Waited = Schema.Struct({
   /** Spans of the name, whether or not they sent anything. */
-  readonly spans: number;
-  readonly commands: number;
-  readonly roundTrips: number;
-  readonly methods: Readonly<Record<string, number>>;
-}
+  spans: Count,
+  commands: Count,
+  roundTrips: Count,
+  methods: Schema.Record(Schema.String, Count),
+});
+
+export type Waited = typeof Waited.Type;
 
 /** What a unit asked of its browser over the DevTools protocol, and where it was waiting. */
-export interface Protocol {
-  readonly commands: number;
-  readonly roundTrips: number;
+export const Protocol = Schema.Struct({
+  commands: Count,
+  roundTrips: Count,
   /** By the innermost span open in the middle of each command; only names that sent any. */
-  readonly bySpan: Readonly<Record<string, Waited>>;
-}
+  bySpan: Schema.Record(Schema.String, Waited),
+});
+
+export type Protocol = typeof Protocol.Type;
 
 const failures = { error: "cdp_error", none: "unanswered" } as const;
 
