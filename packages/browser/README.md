@@ -87,10 +87,10 @@ whether it is in the viewport, and its state (disabled, focused, and checked, ex
 pressed or a heading's level where they apply). A `role` matches ignoring case. A `name` matches
 when it reads the same once spaces are collapsed and case folded, or when a `RegExp` finds itself
 in it. `text` matches the smallest element showing it, and a control or heading for the words
-inside it; `near` matches words of the context. With no rule, `find` returns every element in
-scope that has a role or is a control. There is no ordinal: a caller tells equal elements apart by
-their context, and finding none is an empty result, not a failure. `scope: "document"` reads the
-whole page; the default is the viewport.
+inside it; `near` matches whole words of the context, as replay's choice does. With no rule,
+`find` returns every element in scope that has a role or is a control. There is no ordinal: a
+caller tells equal elements apart by their context, and finding none is an empty result, not a
+failure. `scope: "document"` reads the whole page; the default is the viewport.
 
 `Page.text` reads what the viewport shows, or one element whole with `scope` set to its ref, in one
 call to the page: a line per block, table cells apart by tabs, cut at a line after `maxChars`

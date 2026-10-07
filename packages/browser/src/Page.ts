@@ -138,7 +138,7 @@ export interface FindQuery {
    * element around it.
    */
   readonly text?: string | RegExp | undefined;
-  /** Words in its context (row, column, label or heading), ignoring case and spacing. */
+  /** Whole words in its context (row, column, label or heading), ignoring case and spacing. */
   readonly near?: string | undefined;
   /** Only what a point action at this viewport point would reach: the control there, or else what is painted there. */
   readonly at?: Point | undefined;
