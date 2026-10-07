@@ -279,9 +279,8 @@ status:
 
 An interrupted run (SIGINT, or an interrupted fiber) still records every unit it scheduled: those
 without an outcome are `unrun` with reason `interrupted` and keep what their dispatched calls
-spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside the trials. Playwright exits the process on
-SIGINT once its browsers close, so these records are written synchronously when the signal
-arrives.
+spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside the trials.
+SIGINT interrupts the run: each trial's browser closes with it, and then these records are written.
 
 `pass` is null except for graded units. Summaries report passes over graded units separately from
 infrastructure failures, denials and unrun units. A run exits successfully only when every unit was
