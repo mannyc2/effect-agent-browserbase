@@ -14,7 +14,7 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 - `BrowserbaseClient`: sessions, Live View, stored contexts, extensions, Search and Fetch.
   `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
 - `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
-  `Transport`, `Decode` or `InvalidRequest`.
+  `Transport`, `Decode`, `InvalidRequest` or `ContextHeld`.
 
 The API key travels only in the `x-bb-api-key` header, which logs and traces redact, and the client
 refuses redirects so the key never follows one. Each request attempt has a deadline
@@ -106,8 +106,12 @@ scope, and the lock is released only after the save has settled. `attach` never 
 `open` labels each persisting session with its context in Browserbase's user metadata, as
 `persistsContext`. `reconcile(contextId)` finds the context's running sessions by that label, ends
 them, confirms they ended and, after `contextSettle`, lets the context go: the way out of an
-`Unconfirmed` release. It also ends sessions other processes, or a create whose answer was lost in
-transit, left running, so call it after such a failure too.
+`Unconfirmed` release, and of sessions other processes left running.
+
+A persisting create whose answer is lost may still have made a session nobody can see, which
+would save to the context. `open` then ends the context's sessions itself before it lets the
+context go, and fails with the create's error. When they can't be confirmed ended, it fails with
+`ContextHeld` instead, and the context stays held until `reconcile`.
 
 ## Extensions
 

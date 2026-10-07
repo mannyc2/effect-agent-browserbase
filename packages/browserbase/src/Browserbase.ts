@@ -42,7 +42,7 @@ import {
   type Session,
   type SessionOptions,
 } from "./BrowserbaseClient.ts";
-import { BrowserbaseError, Decode, isTransient } from "./BrowserbaseError.ts";
+import { BrowserbaseError, ContextHeld, Decode, isTransient } from "./BrowserbaseError.ts";
 
 export interface Options extends Browser.Options {
   readonly session?: SessionOptions | undefined;
@@ -137,6 +137,12 @@ const confirm = (client: Service, id: string, settle: Duration.Duration | undefi
     Effect.uninterruptible,
   );
 
+/** A stored context an open writes to, and where its session's release outcome goes. */
+interface Writing {
+  readonly id: string;
+  readonly released: (outcome: Supervisor.Released) => Effect.Effect<unknown>;
+}
+
 /**
  * Hold the context as its only writer in this process, until the scope closes or the session's
  * release reports: one that settles lets the context go at once, while one left unconfirmed keeps
@@ -156,15 +162,77 @@ const holdContext = (id: string) =>
       { interruptible: true },
     );
 
-    return (released: Supervisor.Released) =>
+    const released = (outcome: Supervisor.Released) =>
       Effect.suspend(() => {
         held = "released";
-        if (released._tag === "Settled") return context.lock.release(1);
+        if (outcome._tag === "Settled") return context.lock.release(1);
         context.unconfirmed = true;
 
         return Effect.void;
       });
+
+    return { id, released } satisfies Writing;
   });
+
+/**
+ * After a persisting create that may have made a session nobody can see, end the context's
+ * sessions before the context goes. The open then fails with the create's error, or with
+ * `ContextHeld`, the context held until `reconcile`, when they can't be confirmed ended.
+ */
+const unseen = (
+  client: Service,
+  writing: Writing,
+  settle: Duration.Duration,
+  error: BrowserbaseError,
+) =>
+  endSessions(client, writing.id, settle).pipe(
+    Effect.catch((failure) =>
+      Effect.succeed(new Supervisor.Unconfirmed({ detail: failure.message })),
+    ),
+    Effect.tap(writing.released),
+    Effect.flatMap((outcome) =>
+      Effect.fail(
+        outcome._tag === "Settled"
+          ? error
+          : new BrowserbaseError({
+              operation: "open",
+              reason: new ContextHeld({
+                context: writing.id,
+                detail: `${error.message}, and ${outcome.detail}`,
+              }),
+            }),
+      ),
+    ),
+    Effect.uninterruptible,
+  );
+
+/**
+ * End the stored context's running sessions, found by the label `open` gives them, and confirm
+ * they ended; then wait `settle` for the last save to land.
+ */
+const endSessions = (client: Service, context: string, settle: Duration.Duration) =>
+  Effect.forEach(["RUNNING", "PENDING"], (status) =>
+    client.listSessions({ status, query: `user_metadata['${contextLabel}']:'${context}'` }),
+  ).pipe(
+    Effect.flatMap((found) =>
+      Effect.forEach(found.flat(), (session) => confirm(client, session.id, undefined), {
+        concurrency: 4,
+      }),
+    ),
+    Effect.flatMap((outcomes) => {
+      const unconfirmed = outcomes.find((outcome) => outcome._tag === "Unconfirmed");
+
+      return unconfirmed === undefined
+        ? Effect.sleep(settle).pipe(Effect.as<Supervisor.Released>(new Supervisor.Settled()))
+        : Effect.succeed<Supervisor.Released>(unconfirmed);
+    }),
+  );
+
+/** A create that failed so may still have made its session: its answer is lost or unreadable. */
+const mayHaveCreated = (error: BrowserbaseError) =>
+  error.reason._tag === "Transport" ||
+  error.reason._tag === "Decode" ||
+  (error.reason._tag === "Status" && (error.reason.status >= 500 || error.reason.status === 408));
 
 /** The create request, with a persisting session labelled by its context for `reconcile`. */
 const labelled = (session: SessionOptions | undefined, context: string | undefined) =>
@@ -198,28 +266,27 @@ const connect = (
 /**
  * Create a session and open a `Browser` on it, for as long as the scope is open. If opening
  * fails, the session and context are released then, so a retry in the same scope can take them.
+ * A persisting create that may have made a session nobody can see, its answer lost, is followed
+ * by ending the context's sessions: the open then fails with the create's error and the context
+ * goes, or with `ContextHeld`, keeping the context held, when they can't be confirmed ended.
  */
 export const open = Effect.fn("Browserbase.open")(function* (options: Options = {}) {
   const client = yield* BrowserbaseClient;
   const context = options.session?.browserSettings?.context;
   const persisting = context?.persist === true ? context.id : undefined;
   const local = yield* Scope.fork(yield* Effect.scope);
-
-  const settle =
-    persisting === undefined
-      ? undefined
-      : Duration.fromInputUnsafe(options.contextSettle ?? Duration.seconds(10));
+  const settle = Duration.fromInputUnsafe(options.contextSettle ?? Duration.seconds(10));
 
   return yield* Effect.gen(function* () {
-    const released = persisting === undefined ? undefined : yield* holdContext(persisting);
+    const writing = persisting === undefined ? undefined : yield* holdContext(persisting);
 
-    const { session, release } = yield* Effect.acquireRelease(
+    const created = Effect.acquireRelease(
       Effect.gen(function* () {
         const session = yield* client.createSession(labelled(options.session, persisting));
 
         const release = yield* Effect.cached(
-          confirm(client, session.id, settle).pipe(
-            Effect.tap((outcome) => released?.(outcome) ?? Effect.void),
+          confirm(client, session.id, writing && settle).pipe(
+            Effect.tap((outcome) => writing?.released(outcome) ?? Effect.void),
           ),
         );
 
@@ -227,6 +294,12 @@ export const open = Effect.fn("Browserbase.open")(function* (options: Options = 
       }),
       ({ release }) => release,
     );
+
+    const { session, release } = yield* writing === undefined
+      ? created
+      : created.pipe(
+          Effect.catchIf(mayHaveCreated, (error) => unseen(client, writing, settle, error)),
+        );
 
     yield* Effect.annotateCurrentSpan({ session: session.id, region: session.region });
 
@@ -276,23 +349,6 @@ export const reconcile = Effect.fn("Browserbase.reconcile")(function* (
   yield* client.getContext(contextId);
   const context = writer(contextId);
 
-  const ending = Effect.forEach(["RUNNING", "PENDING"], (status) =>
-    client.listSessions({ status, query: `user_metadata['${contextLabel}']:'${contextId}'` }),
-  ).pipe(
-    Effect.flatMap((found) =>
-      Effect.forEach(found.flat(), (session) => confirm(client, session.id, undefined), {
-        concurrency: 4,
-      }),
-    ),
-    Effect.flatMap((outcomes) => {
-      const unconfirmed = outcomes.find((outcome) => outcome._tag === "Unconfirmed");
-
-      return unconfirmed === undefined
-        ? Effect.sleep(settle).pipe(Effect.as<Supervisor.Released>(new Supervisor.Settled()))
-        : Effect.succeed<Supervisor.Released>(unconfirmed);
-    }),
-  );
-
   // Take the context as a writer would, or adopt the hold an unconfirmed release left.
   const take = Effect.suspend(() => {
     if (!context.unconfirmed) return Effect.asVoid(context.lock.take(1));
@@ -304,7 +360,7 @@ export const reconcile = Effect.fn("Browserbase.reconcile")(function* (
   return yield* Effect.uninterruptibleMask((restore) =>
     restore(take).pipe(
       Effect.andThen(
-        restore(ending).pipe(
+        restore(endSessions(client, contextId, settle)).pipe(
           Effect.onExit((exit) =>
             Exit.isSuccess(exit) && exit.value._tag === "Settled"
               ? context.lock.release(1)
@@ -324,10 +380,15 @@ export interface SuperviseOptions
       "reopen" | "rotateBefore" | "waitTimeout"
     > {}
 
+/** A failure no new try mends: Browserbase refused the key, the request or what it names. */
+const definite = (error: BrowserError | BrowserbaseError) =>
+  error._tag === "BrowserbaseError" && !isTransient(error) && error.reason._tag !== "Decode";
+
 /**
  * Keep Browserbase sessions open as `Supervisor` generations, each a new session made from
  * `session`. Sessions that persist to a stored context are exclusive: a rotation releases the
- * current one, and its context's save settles, before the next one opens.
+ * current one, and its context's save settles, before the next one opens. An open Browserbase
+ * refused, as for a bad key or a context held unconfirmed, is `Down` at once.
  */
 export const supervise = (options: SuperviseOptions = {}) =>
   Supervisor.make({
@@ -340,6 +401,7 @@ export const supervise = (options: SuperviseOptions = {}) =>
     ),
     exclusive: options.session?.browserSettings?.context?.persist === true,
     reopen: options.reopen,
+    definite,
     rotateBefore: options.rotateBefore,
     waitTimeout: options.waitTimeout,
   });

@@ -72,6 +72,19 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("Invali
   }
 }
 
+/**
+ * A session that writes to the stored context may still run, so this process keeps the context
+ * held until `Browserbase.reconcile` confirms the context's sessions ended.
+ */
+export class ContextHeld extends Schema.TaggedError<ContextHeld>()("ContextHeld", {
+  context: Schema.String,
+  detail: Schema.String,
+}) {
+  override get message() {
+    return `context ${this.context} stays held until reconcile: ${this.detail}`;
+  }
+}
+
 export const Reason = Schema.Union([
   Unauthorized,
   NotFound,
@@ -80,6 +93,7 @@ export const Reason = Schema.Union([
   Transport,
   Decode,
   InvalidRequest,
+  ContextHeld,
 ]);
 
 export type Reason = typeof Reason.Type;

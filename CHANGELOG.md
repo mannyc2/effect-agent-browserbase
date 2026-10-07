@@ -42,18 +42,24 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Supervisor`, a new module: a browser kept open across losses and session ends, as generations
   from a provider's `open`. `browser` waits, bounded by `waitTimeout`, for the current generation,
   and every caller shares one open, which runs in the supervisor's scope. A loss is published at
-  once and the next generation opens on the `reopen` schedule; `rotate`, or the time `rotateBefore`
+  once and the next generation opens on the `reopen` schedule, which also retries a failed open
+  unless the provider deems the failure `definite`: that generation is `Down` at once, with its
+  cause, as is `Unavailable` for anyone waiting; `rotate`, or the time `rotateBefore`
   ahead of a generation's `expiresAt`, makes the next generation before it breaks the current one,
   or breaks first when generations are `exclusive`; `retire` stops at once and releases what is
   open. `states` streams each generation's `Opening`, `Reopening`, `Open`, `Lost`, `Down` and
   `Closed`, the last with the release outcome, `Settled` or `Unconfirmed`, as `Generation` values.
   Pages don't carry over between generations.
 - `Browserbase.supervise`: Browserbase sessions as `Supervisor` generations. Sessions that persist
-  to a stored context are exclusive.
+  to a stored context are exclusive. An open Browserbase refused, as for a bad key, an invalid
+  request or a context held unconfirmed, is `Down` at once.
 - `Browserbase.reconcile(contextId)` ends a stored context's running sessions, found by the
   `persistsContext` label `open` puts in their user metadata, confirms they ended, and lets the
-  context go after `contextSettle`: the way out of an `Unconfirmed` release, and of a persisting
-  create whose answer was lost.
+  context go after `contextSettle`: the way out of an `Unconfirmed` release.
+- A persisting create whose answer is lost no longer lets a second writer in: `open` ends the
+  context's sessions, the unseen one among them, before the context goes, and fails with the
+  create's error. When they can't be confirmed ended, it fails with the new reason
+  `BrowserbaseError.ContextHeld`, and the context stays held until `reconcile`.
 - `effect-browserbase/testing`: `TestBrowserbase`, the Browserbase API in memory as an `HttpClient`,
   whose sessions run until released or until their timeout on the Effect `Clock`, with a `Script`
   of lost creates, pending or refused releases and failed status reads; and
