@@ -221,8 +221,8 @@ For recorded human strokes, install the optional `effect-browser-human-strokes` 
 provide it to the layer that builds the browser:
 
 ```ts
-import * as Chromium from "effect-browser/Chromium";
 import * as HumanStrokes from "effect-browser-human-strokes";
+import * as Chromium from "effect-browser/Chromium";
 
 const browser = HumanStrokes.provideTo(Chromium.layer({ humanize: true }));
 ```

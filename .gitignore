@@ -13,3 +13,4 @@ downloads/
 !.env.example
 *.log
 demos/public/replays/
+.vitest/
