@@ -67,6 +67,15 @@ export const revision: Effect.Effect<Revision, never, ChildProcessSpawner.ChildP
     Effect.orElseSucceed(() => ({ commit: null, dirty: null })),
   );
 
+/**
+ * Two families of seeds: `dev` for working on prompts and tools against the pages, and `eval`,
+ * held out for comparing arms. Each eval seed hashes the split in, so it is drawn independently of
+ * the dev seed of the same trial.
+ */
+export const Split = Schema.Literals(["dev", "eval"]);
+
+export type Split = typeof Split.Type;
+
 /** The configuration a result depends on, recorded with it. */
 export const RunInfo = Schema.Struct({
   revision: Revision,
@@ -86,15 +95,17 @@ export const RunInfo = Schema.Struct({
    */
   record: Schema.Boolean,
   narrateSeconds: Schema.NullOr(Schema.Finite),
+  /** Which family of seeds the trials drew from; see `Split`. */
+  split: Split,
 });
 
 export type RunInfo = typeof RunInfo.Type;
 
 /** Derivation depends on task identity, never dispatch order or provider random draws. */
-export const trialSeed = (base: number, task: string, trial: number): number => {
+export const trialSeed = (base: number, task: string, trial: number, split: Split = "dev") => {
   let seed = 2166136261;
 
-  for (const character of `${base}:${task}:${trial}`) {
+  for (const character of `${split === "dev" ? "" : `${split}:`}${base}:${task}:${trial}`) {
     seed = Math.imul(seed ^ character.charCodeAt(0), 16777619) >>> 0;
   }
 
