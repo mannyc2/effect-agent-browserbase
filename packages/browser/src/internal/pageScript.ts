@@ -275,7 +275,21 @@ export const install = (): PageApi => {
   const isElement = (node: Node): node is Element => node.nodeType === Node.ELEMENT_NODE;
   const isDocument = (node: Node): node is Document => node.nodeType === Node.DOCUMENT_NODE;
 
-  /** A label's own words, without the options or values of the controls inside it. */
+  // Controls whose text is a value or a choice, not words of a label around them.
+  const valueRoles = new Set([
+    "combobox",
+    "listbox",
+    "option",
+    "textbox",
+    "searchbox",
+    "spinbutton",
+    "slider",
+  ]);
+
+  /**
+   * A label's own words, without the options or values of the controls inside it, native or
+   * scripted, such as the custom select Browserbase puts in place of a native one.
+   */
   const labelText = (label: Element): string => {
     let text = "";
 
@@ -284,7 +298,8 @@ export const install = (): PageApi => {
         if (child.nodeType === Node.TEXT_NODE) text += child.textContent ?? "";
         else if (
           isElement(child) &&
-          !["SELECT", "TEXTAREA", "INPUT", "SCRIPT", "STYLE"].includes(child.tagName)
+          !["SELECT", "TEXTAREA", "INPUT", "SCRIPT", "STYLE"].includes(child.tagName) &&
+          !valueRoles.has(roleOf(child) ?? "")
         )
           collect(child);
       }
@@ -349,7 +364,11 @@ export const install = (): PageApi => {
     if (labelledBy !== null) {
       const text = labelledBy
         .split(/\s+/)
-        .map((id) => element.ownerDocument.getElementById(id)?.textContent ?? "")
+        .map((id) => {
+          const labelling = element.ownerDocument.getElementById(id);
+
+          return labelling === null ? "" : labelText(labelling);
+        })
         .join(" ");
 
       if (clean(text) !== "") return clean(text);
