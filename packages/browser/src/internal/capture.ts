@@ -89,6 +89,26 @@ const sameShape = (image: Size, device: Size) =>
   Math.abs(image.width * device.height - image.height * device.width) <
   device.width + device.height;
 
+// Paint-time gaps between consecutive delivered frames.
+const paintGaps = () => {
+  let count = 0;
+  let totalMillis = 0;
+  let minMillis: number | null = null;
+  let maxMillis: number | null = null;
+  let lastMillis: number | null = null;
+
+  return {
+    add: (gap: number) => {
+      count++;
+      totalMillis += gap;
+      minMillis = minMillis === null ? gap : Math.min(minMillis, gap);
+      maxMillis = maxMillis === null ? gap : Math.max(maxMillis, gap);
+      lastMillis = gap;
+    },
+    snapshot: () => ({ count, totalMillis, minMillis, maxMillis, lastMillis }),
+  };
+};
+
 // Another capture's frames last only as long as it does; a run of frames that lasts longer is
 // the page's own.
 const outlasting = Duration.seconds(1);
@@ -224,11 +244,7 @@ export const make = (options: Options) =>
     let outOfOrder = 0;
     let missingTimestamp = 0;
     let subscriberMissed = 0;
-    let gapCount = 0;
-    let gapTotal = 0;
-    let gapMin: number | null = null;
-    let gapMax: number | null = null;
-    let gapLast: number | null = null;
+    const gaps = paintGaps();
 
     const now = () => Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6;
 
@@ -237,15 +253,13 @@ export const make = (options: Options) =>
       const current = generation;
 
       if (current === undefined) return;
-      if (current.predecessor !== undefined) {
-        const gap = timestamp - current.predecessor;
+      // Held frames are checked again: frames encoded out of order are dropped, never reordered.
+      if (current.predecessor !== undefined && timestamp <= current.predecessor) {
+        outOfOrder++;
 
-        gapCount++;
-        gapTotal += gap;
-        gapMin = gapMin === null ? gap : Math.min(gapMin, gap);
-        gapMax = gapMax === null ? gap : Math.max(gapMax, gap);
-        gapLast = gap;
+        return;
       }
+      if (current.predecessor !== undefined) gaps.add(timestamp - current.predecessor);
       current.predecessor = timestamp;
       accepted++;
       latest = Option.some(frame);
@@ -572,13 +586,7 @@ export const make = (options: Options) =>
             missingTimestamp,
             foreignSize: sizes.dropped(),
             subscriberMissed,
-            gaps: {
-              count: gapCount,
-              totalMillis: gapTotal,
-              minMillis: gapMin,
-              maxMillis: gapMax,
-              lastMillis: gapLast,
-            },
+            gaps: gaps.snapshot(),
           }),
       ),
     } satisfies Controller;

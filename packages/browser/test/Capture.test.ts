@@ -840,17 +840,22 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Effect.sync(() => fixture.inject(base + 40, half));
         yield* delivered(base + 40);
         // A size the page never reports, as under browser zoom or when it cannot answer in time,
-        // is the page's once it outlasts any capture.
-        yield* Effect.sync(() => fixture.inject(base + 50, quarter));
+        // is the page's once it outlasts any capture. Its frames still never go back in time.
         yield* Effect.sync(() => fixture.inject(base + 60, quarter));
+        yield* Effect.sync(() => fixture.inject(base + 50, quarter));
         yield* delivered(base + 60);
         yield* Fiber.interrupt(reader);
+        const stats = yield* fixture.page.captureStats;
 
         assert.deepStrictEqual(
           frames.map((frame) => frame.timestamp),
-          [base + 20, base + 30, base + 40, base + 50, base + 60],
+          [base + 20, base + 30, base + 40, base + 60],
         );
-        assert.strictEqual((yield* fixture.page.captureStats).foreignSize, 2);
+        assert.deepStrictEqual([stats.foreignSize, stats.outOfOrder], [2, 1]);
+        assert.strictEqual(
+          stats.received,
+          stats.accepted + stats.outOfOrder + stats.missingTimestamp + stats.foreignSize,
+        );
       }),
     );
 
