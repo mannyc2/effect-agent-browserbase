@@ -43,10 +43,10 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   limits came in. Lower one when a change shrinks its file, and never raise one.
 - **Exceptions say why.** A comment that switches a check off gives its reason after ` -- `, as
   in `// oxlint-disable-next-line <rule> -- <why this site is an exception>`. Lint enforces it.
-- **A PR says what it deletes,** the source and test lines it adds and removes
-  (`git diff --shortstat origin/main -- 'packages/*/src'`, then `'packages/*/test'`), the public
-  names it adds and removes, and any check it adds or exception it lowers. A PR that only adds
-  says why.
+- **A PR says what it deletes,** the source and test lines it adds and removes, the public names
+  it adds and removes, and any check it adds or exception it lowers. A PR that only adds says
+  why. `git diff --shortstat origin/main -- 'packages/*/src/*'` counts source lines, and
+  `'packages/*/test/*'` test lines.
 - **Tests earn their place.** A rule over many inputs gets a property test (`it.prop` with
   `effect/Arbitrary`); anything with history gets a model test. Before trusting a new test, plant
   the bug it guards against and watch it fail. Don't pin wording, such as a prompt's exact text.
