@@ -14,4 +14,5 @@ export * as Page from "./Page.ts";
 export * as Plan from "./Plan.ts";
 export * as Policy from "./Policy.ts";
 export * as Snapshot from "./Snapshot.ts";
+export * as Supervisor from "./Supervisor.ts";
 export * as Tools from "./Tools.ts";

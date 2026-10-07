@@ -36,6 +36,7 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
 | `Moment`       | What a page showed and what happened on it over a window, laid out as a model prompt |
 | `Plan`         | A walk recorded from a page's events, replayed on a fresh page by subject            |
+| `Supervisor`   | A browser kept open across losses and session ends, as generations                   |
 
 `Agent.run` batches each turn's tool calls in order, halting on the first failure or a completed
 `done` / `give_up`. Skipped calls receive a not-executed result. A malformed `done` answer can
@@ -409,6 +410,19 @@ action itself. Every sent
 move updates the position, including a partially cancelled glide. A later viewport clamps the
 starting point to its bounds if necessary.
 
+`Supervisor.make` keeps a browser open across losses and session ends, as generations, each a new
+browser from the provider's `open`. Opens run in the supervisor's own scope, so a caller that stops
+waiting never interrupts a half-open browser. `browser` gives the current generation, waiting up to
+`waitTimeout` while one opens. A lost browser is published at once, and the next one opens on the
+`reopen` schedule, which also retries a failed open until it gives up. `rotate`, or the time
+`rotateBefore` ahead of a generation's `expiresAt`, opens the next generation before it releases
+the current one, unless generations are `exclusive`: then the current one is released first.
+`retire` stops reopening at once and releases what is open; closing the scope retires too. `states`
+streams each generation's `Opening`, `Reopening`, `Open`, `Lost`, `Down` and `Closed`, the last with
+the provider's release outcome, `Settled` or `Unconfirmed`, so time open is a subtraction of their
+stamps. Pages don't carry over from one generation to the next. `effect-browserbase`'s
+`Browserbase.supervise` supervises hosted sessions.
+
 Every module is also an entry point, such as `effect-browser/Agent`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.
 
@@ -454,9 +468,9 @@ page's script (`Page.evaluate`) and its registration (`Page.register`). Each pag
 least one call awaited its reply. An operation inside another counts toward both. Calls Playwright
 makes on its own sessions, such as navigation, are not counted. `Chromium.launch`, `Cdp.connect`,
 `Browser.calibrate` and `Browser.newPage`
-cover opening a browser; `Browserbase.open` records its session's id and region, and
-`Browserbase.holdContext` and `Browserbase.release` the waits around a session that saves to a
-stored context. `Browser.calibrate` and `Page.calibrateClock` map the browser's clock onto the
+cover opening a browser; `Browserbase.open` records its session's id and region,
+`Browserbase.release` a release and its outcome, and `Browserbase.holdContext` the wait for a
+stored context another session writes to. `Browser.calibrate` and `Page.calibrateClock` map the browser's clock onto the
 host's with three probes, each a `Page.evaluate` of `clock`, and record the fastest probe's
 `roundTripMillis`: the round trip to the browser.
 

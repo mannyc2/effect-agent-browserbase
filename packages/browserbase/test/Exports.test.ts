@@ -1,5 +1,5 @@
-// The package's entry points are exactly its public modules: the build also emits shared chunks
-// beside them, and only a listed subpath may resolve to one of its files.
+// The package's entry points are exactly its public modules and its test kits: the build also
+// emits shared chunks beside them, and only a listed subpath may resolve to one of its files.
 import { readdirSync, readFileSync } from "node:fs";
 
 import { assert, it } from "@effect/vitest";
@@ -13,11 +13,16 @@ const modules = readdirSync(new URL("../src/", import.meta.url))
   .map((file) => file.slice(0, -3))
   .toSorted();
 
-it("exports the root and each public module, and nothing else", () => {
+it("exports the root, each public module and the test kits, and nothing else", () => {
   assert.deepStrictEqual(
     Object.keys(manifest.exports).toSorted(),
-    [".", ...modules.map((module) => `./${module}`)].toSorted(),
+    [".", "./testing", ...modules.map((module) => `./${module}`)].toSorted(),
   );
+  assert.deepStrictEqual(manifest.exports["./testing"], {
+    "@effect-browser/source": "./src/testing/index.ts",
+    types: "./dist/testing/index.d.mts",
+    default: "./dist/testing/index.mjs",
+  });
 
   for (const module of modules)
     assert.deepStrictEqual(manifest.exports[`./${module}`], {
