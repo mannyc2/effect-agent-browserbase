@@ -6,6 +6,7 @@ import { Argument, Command } from "effect/cli";
 
 import { type Arm, armNames } from "./Arms.ts";
 import * as Results from "./Results.ts";
+import { holm, mcnemar, passHatK, wilson } from "./Stats.ts";
 import { tasks } from "./Tasks.ts";
 import { tally } from "./Trial.ts";
 
@@ -23,44 +24,70 @@ export const median = (values: ReadonlyArray<number>): number => {
     : ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
 };
 
+/** How two arms did on the pages both were graded on. */
+export interface Paired {
+  readonly pairs: number;
+  readonly both: number;
+  readonly onlyFirst: number;
+  readonly onlySecond: number;
+  readonly neither: number;
+}
+
+const noPairs: Paired = { pairs: 0, both: 0, onlyFirst: 0, onlySecond: 0, neither: 0 };
+
 /**
- * Two arms' outcomes on the same task and trial, over the pairs graded in both: the discordant
- * counts are what McNemar's test reads. A pair with an ungraded side says nothing about accuracy.
+ * Two arms' outcomes on the same pages, by task: a trial pairs with the other arm's trial of the
+ * same task and seed, over pairs graded in both. The discordant counts are what McNemar's test
+ * reads; a pair with an ungraded side says nothing about accuracy.
  */
 export const pairs = (
   records: ReadonlyArray<{
     readonly task: string;
-    readonly trial: number;
+    readonly seed: number;
     readonly arm: Arm | null;
     readonly status: string;
     readonly pass: boolean | null;
   }>,
   first: Arm,
   second: Arm,
-) => {
-  const passed = (arm: Arm) =>
-    new Map(
+): ReadonlyMap<string, Paired> => {
+  // A page an arm met twice, in two runs from one base seed, pairs in the order it was met.
+  const passed = (arm: Arm) => {
+    const met = new Map<string, number>();
+
+    return new Map(
       records
         .filter((record) => record.arm === arm && record.status === "graded")
-        .map((record) => [`${record.task}#${record.trial}`, record.pass === true]),
+        .map((record) => {
+          const page = `${record.task}#${record.seed}`;
+          const times = met.get(page) ?? 0;
+
+          met.set(page, times + 1);
+
+          return [`${page}#${times}`, { task: record.task, pass: record.pass === true }];
+        }),
     );
+  };
 
-  const left = passed(first);
   const right = passed(second);
-  const counts = { pairs: 0, both: 0, onlyFirst: 0, onlySecond: 0, neither: 0 };
+  const byTask = new Map<string, Paired>();
 
-  for (const [key, a] of left) {
-    const b = right.get(key);
+  for (const [key, { task, pass: a }] of passed(first)) {
+    const b = right.get(key)?.pass;
 
     if (b === undefined) continue;
-    counts.pairs += 1;
-    if (a && b) counts.both += 1;
-    else if (a) counts.onlyFirst += 1;
-    else if (b) counts.onlySecond += 1;
-    else counts.neither += 1;
+    const counts = byTask.get(task) ?? noPairs;
+
+    byTask.set(task, {
+      pairs: counts.pairs + 1,
+      both: counts.both + (a && b ? 1 : 0),
+      onlyFirst: counts.onlyFirst + (a && !b ? 1 : 0),
+      onlySecond: counts.onlySecond + (!a && b ? 1 : 0),
+      neither: counts.neither + (!a && !b ? 1 : 0),
+    });
   }
 
-  return counts;
+  return byTask;
 };
 
 const mean = (values: ReadonlyArray<number>) =>
@@ -126,15 +153,143 @@ const order = (name: string) => {
   return index === -1 ? tasks.length : index;
 };
 
-/** Tallies by task and arm, where graded trials' time went, and how arms compare on paired trials. */
-export const summary = (records: ReadonlyArray<TrialRecord>): ReadonlyArray<string> => {
-  const names = [...new Set(records.map((record) => record.task))].toSorted(
+const tasksOf = (records: ReadonlyArray<TrialRecord>) =>
+  [...new Set(records.map((record) => record.task))].toSorted(
     (left, right) => order(left) - order(right),
   );
 
-  const armsRun = [...new Set(records.map((record) => record.arm))].toSorted(
+const armsOf = (records: ReadonlyArray<TrialRecord>) =>
+  [...new Set(records.map((record) => record.arm))].toSorted(
     (left, right) => (left ?? 0) - (right ?? 0),
   );
+
+/** How many trials pass^k asks to pass together. */
+export const reliability = 3;
+
+/** One task in one arm: its pass rate, how reliably it passes, and what a pass cost. */
+export const table = (records: ReadonlyArray<TrialRecord>) =>
+  tasksOf(records).flatMap((task) =>
+    armsOf(records).flatMap((arm) => {
+      const subset = records.filter((record) => record.task === task && record.arm === arm);
+      const graded = subset.filter((record) => record.status === "graded");
+      const passed = graded.filter((record) => record.pass === true).length;
+
+      if (subset.length === 0) return [];
+
+      return [
+        {
+          task,
+          arm,
+          graded: graded.length,
+          passed,
+          interval: wilson(passed, graded.length),
+          passHatK: passHatK(passed, graded.length, reliability),
+          usdPerPass:
+            graded.reduce((total, record) => total + record.accounting.knownUsd, 0) / passed,
+          secondsPerPass: graded.reduce((total, record) => total + record.seconds, 0) / passed,
+          infrastructureFailed: subset.filter((record) => record.status === "infrastructure-failed")
+            .length,
+        },
+      ];
+    }),
+  );
+
+/**
+ * Each two arms, compared on the pages both were graded on: per task, McNemar's exact test, with
+ * Holm's correction across the tasks; over all tasks, the test stratified by task, with Holm's
+ * correction across the pairs of arms.
+ */
+export const compare = (records: ReadonlyArray<TrialRecord>) => {
+  const armsRun = armsOf(records).filter((arm) => arm !== null);
+
+  const raw = armsRun.flatMap((first, index) =>
+    armsRun.slice(index + 1).map((second) => {
+      const byTask = pairs(records, first, second);
+
+      const tasksPaired = tasksOf(records).flatMap((task) => {
+        const counts = byTask.get(task);
+
+        return counts === undefined
+          ? []
+          : [{ task, ...counts, p: mcnemar(counts.onlyFirst, counts.onlySecond) }];
+      });
+
+      const adjusted = holm(tasksPaired.map((paired) => paired.p));
+
+      const combined = tasksPaired.reduce(
+        (total, paired) => ({
+          pairs: total.pairs + paired.pairs,
+          both: total.both + paired.both,
+          onlyFirst: total.onlyFirst + paired.onlyFirst,
+          onlySecond: total.onlySecond + paired.onlySecond,
+          neither: total.neither + paired.neither,
+        }),
+        noPairs,
+      );
+
+      return {
+        first,
+        second,
+        byTask: tasksPaired.map((paired, rank) => ({ ...paired, adjusted: adjusted[rank] ?? 1 })),
+        combined: { ...combined, p: mcnemar(combined.onlyFirst, combined.onlySecond) },
+      };
+    }),
+  );
+
+  const adjusted = holm(raw.map((comparison) => comparison.combined.p));
+
+  return raw.map((comparison, rank) => ({
+    ...comparison,
+    combined: { ...comparison.combined, adjusted: adjusted[rank] ?? 1 },
+  }));
+};
+
+const backend = (record: TrialRecord) =>
+  record.run.browser === "browserbase"
+    ? "browserbase"
+    : record.run.latencyMillis === null
+      ? "chromium"
+      : `chromium +${record.run.latencyMillis}ms`;
+
+const fixed = (value: number, digits: number) =>
+  Number.isFinite(value) ? value.toFixed(digits) : "-";
+
+const comparisonLines = (records: ReadonlyArray<TrialRecord>) => [
+  "Estimand: whether one arm passes more often than another on these tasks' pages, paired by task",
+  "and seed. The tasks are fixed, not sampled, so a difference speaks to these pages only.",
+  "",
+  `${"task".padEnd(14)} arm  passed  rate  95% interval  pass^${reliability}  $/pass  s/pass  infra`,
+  ...table(records).map(
+    (row) =>
+      `${row.task.padEnd(14)} ${String(row.arm ?? "-").padStart(3)}  ${`${row.passed}/${row.graded}`.padStart(6)}  ${fixed(row.passed / row.graded, 2).padStart(4)}  ${`${fixed(row.interval.low, 2)}-${fixed(row.interval.high, 2)}`.padEnd(12)}  ${fixed(row.passHatK, 2).padStart(6)}  ${fixed(row.usdPerPass, 4).padStart(6)}  ${fixed(row.secondsPerPass, 1).padStart(6)}  ${row.infrastructureFailed}`,
+  ),
+  ...compare(records).flatMap(({ first, second, byTask, combined }) => [
+    "",
+    `arm ${first} vs arm ${second}, paired by task and seed:`,
+    ...byTask.map(
+      (paired) =>
+        `  ${paired.task.padEnd(14)} ${paired.pairs} pairs: only arm ${first} passed ${paired.onlyFirst}, only arm ${second} ${paired.onlySecond}; exact p ${fixed(paired.p, 3)}, Holm ${fixed(paired.adjusted, 3)}`,
+    ),
+    `  ${"all tasks".padEnd(14)} ${combined.pairs} pairs: only arm ${first} passed ${combined.onlyFirst}, only arm ${second} ${combined.onlySecond}; stratified exact p ${fixed(combined.p, 3)}, Holm across arm pairs ${fixed(combined.adjusted, 3)}`,
+  ]),
+  "",
+  `Infrastructure failures: ${[...new Set(records.map(backend))]
+    .map((name) => {
+      const ran = records.filter((record) => backend(record) === name);
+      const failed = ran.filter((record) => record.status === "infrastructure-failed").length;
+
+      return `${name} ${failed} of ${ran.length} (${fixed((100 * failed) / ran.length, 1)}%)`;
+    })
+    .join("; ")}`,
+];
+
+/**
+ * Tallies by task and arm and where graded trials' time went; with a model, each arm's pass rates,
+ * reliability and cost, and how arms compare on paired trials.
+ */
+export const summary = (records: ReadonlyArray<TrialRecord>): ReadonlyArray<string> => {
+  const names = tasksOf(records);
+  const armsRun = armsOf(records);
 
   const lines = names.flatMap((name) =>
     armsRun.map((arm) =>
@@ -172,15 +327,7 @@ export const summary = (records: ReadonlyArray<TrialRecord>): ReadonlyArray<stri
     );
   }
 
-  for (const [index, arm] of armsRun.entries())
-    for (const other of armsRun.slice(index + 1)) {
-      if (arm === null || other === null) continue;
-      const paired = pairs(records, arm, other);
-
-      lines.push(
-        `arm ${arm} vs arm ${other}: ${paired.pairs} pairs graded in both; both passed ${paired.both}, only arm ${arm} ${paired.onlyFirst}, only arm ${other} ${paired.onlySecond}, neither ${paired.neither}`,
-      );
-    }
+  lines.push("", ...comparisonLines(records));
 
   return lines;
 };
