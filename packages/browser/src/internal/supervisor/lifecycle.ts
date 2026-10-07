@@ -18,12 +18,10 @@ export const Released = Schema.Union([Settled, Unconfirmed]);
 export type Released = typeof Released.Type;
 
 /** Opening, but not after a loss: the first generation, a rotation, or the one after `Down`. */
-export class Opening extends Schema.TaggedClass<Opening>()("Opening", { attempt: Schema.Int }) {}
+export class Opening extends Schema.TaggedClass<Opening>()("Opening", {}) {}
 
 /** Opening after the generation before it was lost. */
-export class Reopening extends Schema.TaggedClass<Reopening>()("Reopening", {
-  attempt: Schema.Int,
-}) {}
+export class Reopening extends Schema.TaggedClass<Reopening>()("Reopening", {}) {}
 
 /** Open: `browser` gives this generation until the next one opens. */
 export class Open extends Schema.TaggedClass<Open>()("Open", {}) {}
@@ -31,7 +29,7 @@ export class Open extends Schema.TaggedClass<Open>()("Open", {}) {}
 /** Lost: its connection dropped, or its browser was closed from the other side. */
 export class Lost extends Schema.TaggedClass<Lost>()("Lost", {}) {}
 
-/** It never opened: its last attempt failed and the reopen schedule gave up. */
+/** It never opened: its last try failed and the reopen schedule gave up. */
 export class Down extends Schema.TaggedClass<Down>()("Down", { detail: Schema.String }) {}
 
 /** It ended. `released` says how its release went; one retired while opening has none. */
@@ -54,13 +52,7 @@ export interface Live<A> {
  * before it breaks the current, and `Down` keeps serving one that a rotation failed to replace.
  */
 export type State<A> =
-  | {
-      readonly _tag: "Opening";
-      readonly number: number;
-      readonly attempt: number;
-      readonly reopen: boolean;
-      readonly serving: Live<A> | undefined;
-    }
+  | { readonly _tag: "Opening"; readonly number: number; readonly serving: Live<A> | undefined }
   | { readonly _tag: "Open"; readonly serving: Live<A> }
   | {
       readonly _tag: "Down";
@@ -71,12 +63,10 @@ export type State<A> =
   | { readonly _tag: "Retired" };
 
 export type Input<A> =
-  /** The open of `number` is about to try. */
-  | { readonly _tag: "Attempt"; readonly number: number }
   | { readonly _tag: "Opened"; readonly live: Live<A> }
   /** The open of `number` failed for good. */
   | { readonly _tag: "Failed"; readonly number: number; readonly detail: string }
-  /** The open of `number` stopped after it had tried. */
+  /** The open of `number` was stopped, as on retiring, before it opened. */
   | { readonly _tag: "Abandoned"; readonly number: number }
   | { readonly _tag: "Lost"; readonly number: number }
   /** A caller asks for the next generation, or the rotation time of `due` came. */
@@ -96,16 +86,13 @@ export interface Step<A> {
   /** Generation numbers and their new states, to publish in this order. */
   readonly events: ReadonlyArray<readonly [number, GenerationState]>;
   readonly commands: ReadonlyArray<Command<A>>;
-  /**
-   * The generation the caller goes on with: for `Attempt`, its own unless it must stop; for
-   * `Rotate`, the one to wait for, unless retired.
-   */
+  /** For `Rotate`, the generation to wait for, unless retired. */
   readonly reply?: number | undefined;
 }
 
 export const start = <A>(): Step<A> => ({
-  state: { _tag: "Opening", number: 1, attempt: 0, reopen: false, serving: undefined },
-  events: [],
+  state: { _tag: "Opening", number: 1, serving: undefined },
+  events: [[1, new Opening()]],
   commands: [{ _tag: "Open", number: 1, after: undefined }],
 });
 
@@ -124,13 +111,8 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
    * release has finished. Otherwise `current` serves until the next one opens.
    */
   const next = (number: number, reopen: boolean, current: Live<A> | undefined, ends: boolean) => ({
-    state: {
-      _tag: "Opening" as const,
-      number,
-      attempt: 0,
-      reopen,
-      serving: ends ? undefined : current,
-    },
+    state: { _tag: "Opening" as const, number, serving: ends ? undefined : current },
+    event: [number, reopen ? new Reopening() : new Opening()] as const,
     commands: [
       ...(ends && current !== undefined ? [release(current)] : []),
       { _tag: "Open" as const, number, after: ends && exclusive ? current?.number : undefined },
@@ -138,19 +120,6 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
   });
 
   switch (input._tag) {
-    case "Attempt": {
-      if (state._tag !== "Opening" || state.number !== input.number) return stay;
-      const attempt = state.attempt + 1;
-
-      return {
-        state: { ...state, attempt },
-        events: [
-          [state.number, state.reopen ? new Reopening({ attempt }) : new Opening({ attempt })],
-        ],
-        commands: [],
-        reply: state.number,
-      };
-    }
     case "Opened": {
       const { live } = input;
 
@@ -199,7 +168,11 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
         true,
       );
 
-      return { state: reopened.state, events, commands: reopened.commands };
+      return {
+        state: reopened.state,
+        events: [...events, reopened.event],
+        commands: reopened.commands,
+      };
     }
     case "Rotate": {
       if (state._tag === "Retired") return stay;
@@ -210,7 +183,12 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
       const number = (state._tag === "Open" ? state.serving.number : state.number) + 1;
       const rotated = next(number, false, state.serving, exclusive);
 
-      return { state: rotated.state, events: [], commands: rotated.commands, reply: number };
+      return {
+        state: rotated.state,
+        events: [rotated.event],
+        commands: rotated.commands,
+        reply: number,
+      };
     }
     case "Retire": {
       const current = servingOf(state);

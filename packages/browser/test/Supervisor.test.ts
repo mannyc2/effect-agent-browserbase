@@ -13,20 +13,13 @@ import * as Chromium from "../src/Chromium.ts";
 import * as Lifecycle from "../src/internal/supervisor/lifecycle.ts";
 import * as Supervisor from "../src/Supervisor.ts";
 
-type Phase = "attempting" | "open" | "lost" | "ended";
+type Phase = "opening" | "open" | "lost" | "ended";
 
 /** The runtime around the transition: its open fiber, watchers and releases, as plain records. */
 interface World {
   readonly exclusive: boolean;
   state: Lifecycle.State<string>;
-  opening:
-    | {
-        readonly number: number;
-        readonly after: number | undefined;
-        attempted: boolean;
-        trying: boolean;
-      }
-    | undefined;
+  opening: { readonly number: number; readonly after: number | undefined } | undefined;
   cancelling: boolean;
   retired: boolean;
   newest: number;
@@ -36,27 +29,23 @@ interface World {
   readonly released: Set<number>;
   readonly watched: Set<number>;
   readonly fired: Set<string>;
-  readonly phases: Map<number, { phase: Phase; attempt: number; tag: string }>;
+  readonly phases: Map<number, { phase: Phase }>;
 }
 
 /** Each change a generation makes after it began: the phases it can make it in, and the next. */
 const moves = {
-  Open: [["attempting"], "open"],
+  Open: [["opening"], "open"],
   Lost: [["open"], "lost"],
-  Down: [["attempting"], "ended"],
-  Closed: [["attempting", "open", "lost"], "ended"],
+  Down: [["opening"], "ended"],
+  Closed: [["opening", "open", "lost"], "ended"],
 } satisfies Record<string, readonly [ReadonlyArray<Phase>, Phase]>;
 
 const advance = (world: World, number: number, state: Lifecycle.GenerationState) => {
   const known = world.phases.get(number);
 
   if (state._tag === "Opening" || state._tag === "Reopening") {
-    assert.strictEqual(state.attempt, (known?.attempt ?? 0) + 1, `generation ${number} counts on`);
-    assert.isTrue(
-      known === undefined || (known.phase === "attempting" && known.tag === state._tag),
-      `generation ${number} attempts only while opening, for one reason`,
-    );
-    world.phases.set(number, { phase: "attempting", attempt: state.attempt, tag: state._tag });
+    assert.isUndefined(known, `generation ${number} begins once`);
+    world.phases.set(number, { phase: "opening" });
 
     return;
   }
@@ -69,11 +58,7 @@ const advance = (world: World, number: number, state: Lifecycle.GenerationState)
     `generation ${number} is not ${state._tag} once ${known.phase}`,
   );
   if (state._tag === "Closed" && state.released === undefined)
-    assert.strictEqual(
-      known.phase,
-      "attempting",
-      "only an open that never finished has no release",
-    );
+    assert.strictEqual(known.phase, "opening", "only an open that never finished has no release");
   known.phase = to;
 };
 
@@ -89,12 +74,7 @@ const apply = (world: World, input: Lifecycle.Input<string>) => {
         assert.isFalse(world.retired, "nothing opens once retired");
         assert.isAbove(command.number, world.newest, "generation numbers only grow");
         world.newest = command.number;
-        world.opening = {
-          number: command.number,
-          after: command.after,
-          attempted: false,
-          trying: false,
-        };
+        world.opening = { number: command.number, after: command.after };
         break;
       case "Watch":
         world.watched.add(command.live.number);
@@ -147,60 +127,38 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
   const actions: Array<readonly [string, () => void]> = [];
   const { opening } = world;
 
+  // The open of a generation tries until it opens or its schedule gives up; a try that fails and
+  // is tried again changes nothing the transition sees. Exclusive ones try only once the
+  // generation before has been released.
   if (opening !== undefined) {
     const ready = opening.after === undefined || !world.releasing.has(opening.after);
 
-    if (!opening.trying && ready)
-      actions.push([
-        "attempt",
-        () => {
-          const { reply } = apply(world, { _tag: "Attempt", number: opening.number });
+    const tried = (input: Lifecycle.Input<string>) => () => {
+      if (world.exclusive)
+        for (const number of world.opened)
+          assert.isTrue(world.released.has(number), `${number} ended before the next tried`);
+      world.opening = undefined;
+      if (input._tag === "Opened") world.opened.add(opening.number);
+      apply(world, input);
+    };
 
-          if (reply === undefined) {
-            if (opening.attempted) apply(world, { _tag: "Abandoned", number: opening.number });
-            world.opening = undefined;
-
-            return;
-          }
-          assert.strictEqual(reply, opening.number);
-          if (world.exclusive)
-            for (const number of world.opened)
-              assert.isTrue(
-                world.released.has(number),
-                `${number} has ended before ${reply} tries`,
-              );
-          opening.attempted = true;
-          opening.trying = true;
-        },
-      ]);
-    if (opening.trying)
+    if (ready)
       actions.push(
         [
           "succeed",
-          () => {
-            world.opening = undefined;
-            world.opened.add(opening.number);
-            apply(world, {
-              _tag: "Opened",
-              live: { number: opening.number, value: `browser ${opening.number}` },
-            });
-          },
+          tried({
+            _tag: "Opened",
+            live: { number: opening.number, value: `browser ${opening.number}` },
+          }),
         ],
-        ["fail", () => (opening.trying = false)],
-        [
-          "give up",
-          () => {
-            world.opening = undefined;
-            apply(world, { _tag: "Failed", number: opening.number, detail: "refused" });
-          },
-        ],
+        ["give up", tried({ _tag: "Failed", number: opening.number, detail: "refused" })],
       );
     if (world.cancelling)
       actions.push([
         "cancel",
         () => {
           world.opening = undefined;
-          if (opening.attempted) apply(world, { _tag: "Abandoned", number: opening.number });
+          apply(world, { _tag: "Abandoned", number: opening.number });
         },
       ]);
   }
@@ -266,7 +224,7 @@ const run = (choices: ReadonlyArray<number>, exclusive: boolean, retireAt: numbe
   const world: World = {
     exclusive,
     state: started.state,
-    opening: { number: 1, after: undefined, attempted: false, trying: false },
+    opening: { number: 1, after: undefined },
     cancelling: false,
     retired: false,
     newest: 1,
@@ -278,6 +236,8 @@ const run = (choices: ReadonlyArray<number>, exclusive: boolean, retireAt: numbe
     fired: new Set(),
     phases: new Map(),
   };
+
+  for (const [number, state] of started.events) advance(world, number, state);
 
   for (const [index, choice] of choices.entries()) {
     if (index === retireAt) retire(world);
@@ -325,16 +285,11 @@ describe("Supervisor's lifecycle", () => {
   );
 });
 
-/** A generation's change as one line, such as `2 Reopening 1` or `1 Closed Settled`. */
+/** A generation's change as one line, such as `2 Reopening` or `1 Closed Settled`. */
 const line = ({ number, state }: Supervisor.Generation) =>
-  [
-    number,
-    state._tag,
-    "attempt" in state ? state.attempt : undefined,
-    state._tag === "Closed" ? (state.released?._tag ?? "none") : undefined,
-  ]
-    .filter((part) => part !== undefined)
-    .join(" ");
+  state._tag === "Closed"
+    ? `${number} Closed ${state.released?._tag ?? "none"}`
+    : `${number} ${state._tag}`;
 
 /** Everything `states` publishes until the supervisor retires, as lines. */
 const record = (supervisor: Supervisor.Supervisor) =>
@@ -381,17 +336,30 @@ describe("Supervisor", () => {
       assert.isFalse(second.context.browser()?.isConnected());
       const lines = yield* Fiber.join(states);
 
-      assert.deepStrictEqual(of(lines, 1), ["1 Opening 1", "1 Open", "1 Lost", "1 Closed Settled"]);
-      assert.deepStrictEqual(of(lines, 2), ["2 Reopening 1", "2 Open", "2 Closed Settled"]);
-      assert.isBelow(lines.indexOf("1 Lost"), lines.indexOf("2 Reopening 1"));
+      assert.deepStrictEqual(of(lines, 1), ["1 Opening", "1 Open", "1 Lost", "1 Closed Settled"]);
+      assert.deepStrictEqual(of(lines, 2), ["2 Reopening", "2 Open", "2 Closed Settled"]);
+      assert.isBelow(lines.indexOf("1 Lost"), lines.indexOf("2 Reopening"));
     }),
   );
 
   it.live("makes the next generation before it breaks the current, unless they are exclusive", () =>
     Effect.gen(function* () {
       for (const exclusive of [false, true]) {
+        // The order in which the provider opened and released its browsers.
+        const order: Array<string> = [];
+
+        const open = Effect.sync(() => order.push("open")).pipe(
+          Effect.andThen(Chromium.open()),
+          Effect.map((browser) => ({
+            browser,
+            release: Effect.sync(() => order.push("release")).pipe(
+              Effect.as(new Supervisor.Settled()),
+            ),
+          })),
+        );
+
         const lines = yield* Effect.gen(function* () {
-          const supervisor = yield* Supervisor.make({ open: local, exclusive });
+          const supervisor = yield* Supervisor.make({ open, exclusive });
           const states = yield* record(supervisor);
           const first = yield* supervisor.browser;
 
@@ -401,10 +369,14 @@ describe("Supervisor", () => {
           return yield* Fiber.join(states);
         }).pipe(Effect.scoped);
 
-        const broken = lines.indexOf("1 Closed Settled");
-
-        if (exclusive) assert.isBelow(broken, lines.indexOf("2 Opening 1"), lines.join(", "));
-        else assert.isBelow(lines.indexOf("2 Open"), broken, lines.join(", "));
+        assert.deepStrictEqual(
+          order.slice(0, 3),
+          exclusive ? ["open", "release", "open"] : ["open", "open", "release"],
+        );
+        if (exclusive)
+          assert.isBelow(lines.indexOf("1 Closed Settled"), lines.indexOf("2 Open"), lines.join());
+        else
+          assert.isBelow(lines.indexOf("2 Open"), lines.indexOf("1 Closed Settled"), lines.join());
       }
     }),
   );
@@ -446,10 +418,11 @@ describe("Supervisor", () => {
       const supervisor = yield* Supervisor.make({ open, reopen: Schedule.spaced("1 hour") });
       const states = yield* record(supervisor);
 
-      yield* published(supervisor, "1 Opening 1");
+      // Let the first try fail, so the reopen waits an hour for the next one.
+      while (attempts === 0) yield* Effect.yieldNow;
       yield* supervisor.retire;
       assert.strictEqual(attempts, 1);
-      assert.deepStrictEqual(yield* Fiber.join(states), ["1 Opening 1", "1 Closed none"]);
+      assert.deepStrictEqual(yield* Fiber.join(states), ["1 Opening", "1 Closed none"]);
       assert.strictEqual((yield* Effect.flip(supervisor.browser)).reason, "retired");
     }),
   );

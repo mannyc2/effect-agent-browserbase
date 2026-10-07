@@ -660,16 +660,11 @@ describe("Browserbase", () => {
   );
 });
 
-/** A generation's change as one line, such as `2 Reopening 1` or `1 Closed Settled`. */
+/** A generation's change as one line, such as `2 Reopening` or `1 Closed Settled`. */
 const line = ({ number, state }: Supervisor.Generation) =>
-  [
-    number,
-    state._tag,
-    "attempt" in state ? state.attempt : undefined,
-    state._tag === "Closed" ? (state.released?._tag ?? "none") : undefined,
-  ]
-    .filter((part) => part !== undefined)
-    .join(" ");
+  state._tag === "Closed"
+    ? `${number} Closed ${state.released?._tag ?? "none"}`
+    : `${number} ${state._tag}`;
 
 describe("Browserbase.supervise", () => {
   it.live("reopens a lost session, and releases each one it opened", () =>
@@ -698,11 +693,11 @@ describe("Browserbase.supervise", () => {
 
         assert.deepStrictEqual(
           lines.filter((one) => one.startsWith("1 ")),
-          ["1 Opening 1", "1 Open", "1 Lost", "1 Closed Settled"],
+          ["1 Opening", "1 Open", "1 Lost", "1 Closed Settled"],
         );
         assert.deepStrictEqual(
           lines.filter((one) => one.startsWith("2 ")),
-          ["2 Reopening 1", "2 Open", "2 Closed Settled"],
+          ["2 Reopening", "2 Open", "2 Closed Settled"],
         );
         assert.deepStrictEqual(
           (yield* kept).map(({ status }) => status),
@@ -736,7 +731,7 @@ describe("Browserbase.supervise", () => {
 
         assert.isBelow(
           lines.indexOf("1 Closed Settled"),
-          lines.indexOf("2 Opening 1"),
+          lines.indexOf("2 Open"),
           lines.join(", "),
         );
         assert.isBelow(

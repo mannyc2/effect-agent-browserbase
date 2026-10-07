@@ -251,19 +251,10 @@ export const make = Effect.fn("Supervisor.make")(function* <E, R>(
     ),
   );
 
-  // Retiring interrupts the open between attempts or during one; the provider releases what an
-  // interrupted attempt had made, as its scope closes.
+  // Retiring interrupts the open between tries or during one; the provider releases what an
+  // interrupted try had made, as its scope closes.
   const openGeneration = (number: number, after: number | undefined) =>
     Effect.uninterruptibleMask((restore) => {
-      let attempted = false;
-
-      const attempt = apply({ _tag: "Attempt", number }).pipe(
-        Effect.flatMap((go) =>
-          go === undefined ? Effect.interrupt : Effect.sync(() => (attempted = true)),
-        ),
-        Effect.andThen(openOnce),
-      );
-
       const previous =
         after === undefined
           ? Effect.void
@@ -271,15 +262,15 @@ export const make = Effect.fn("Supervisor.make")(function* <E, R>(
               Effect.flatMap(Option.match({ onNone: () => Effect.void, onSome: Fiber.await })),
             );
 
-      return restore(previous.pipe(Effect.andThen(Effect.retry(attempt, reopen)))).pipe(
+      return restore(previous.pipe(Effect.andThen(Effect.retry(openOnce, reopen)))).pipe(
         Effect.exit,
         Effect.flatMap((exit) => {
           if (Exit.isSuccess(exit))
             return apply({ _tag: "Opened", live: { number, value: exit.value } });
-          if (!Cause.hasInterruptsOnly(exit.cause))
-            return apply({ _tag: "Failed", number, detail: describe(exit.cause) });
 
-          return attempted ? apply({ _tag: "Abandoned", number }) : Effect.void;
+          return Cause.hasInterruptsOnly(exit.cause)
+            ? apply({ _tag: "Abandoned", number })
+            : apply({ _tag: "Failed", number, detail: describe(exit.cause) });
         }),
       );
     });
