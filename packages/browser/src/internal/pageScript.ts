@@ -1866,7 +1866,10 @@ export const install = (): PageApi => {
   interface Sample {
     readonly track: Track;
     readonly at: number;
-    readonly state: State;
+    /** Until `pending` is settled, this leaves out what may be hidden; see `wordsNow`. */
+    state: State;
+    /** Whether words that may be hidden are still to be judged, once the page has rendered. */
+    pending: boolean;
     /** Whether it was in view when it changed; unknown until the page next renders. */
     seen: boolean | undefined;
     /** Whether scrolling made it, so it is kept as the element's state but not told. */
@@ -1935,6 +1938,7 @@ export const install = (): PageApi => {
       const seen = entry.isIntersecting && shown(entry.target);
 
       for (const sample of waiting.get(entry.target) ?? []) settle(sample, seen);
+      judge(entry.target);
       // What arrived out of view and came into it soon after, such as posts a feed added below
       // as it scrolled, was seen arriving.
       const track = tracks.get(entry.target);
@@ -1956,6 +1960,25 @@ export const install = (): PageApi => {
       if (!tracks.has(entry.target)) unobserve(entry.target);
     }
   });
+
+  /**
+   * Read an element's latest words again, asking the page's style about every child that may be
+   * hidden; its earlier words keep leaving those out. A change that only uncovered what had been
+   * left out is no change.
+   */
+  const judge = (element: Element) => {
+    const track = tracks.get(element);
+    const last = track?.samples.at(-1);
+
+    if (track === undefined || last === undefined || !last.pending) return;
+    last.pending = false;
+    if (!element.isConnected) return;
+    last.state = wordsNow(element, true);
+    if (last.state === stateBefore(track)) {
+      track.samples.pop();
+      if (track.samples.length === 0) drop(track);
+    }
+  };
 
   /** Note whether `element` is in view for `sample`: now if it is watched, else when it renders. */
   const look = (element: Element, sample: Sample) => {
@@ -1997,7 +2020,11 @@ export const install = (): PageApi => {
 
     if (track.kind === "content" && state === null) gone.add(track);
     else gone.delete(track);
-    if (previous === state) {
+    // Words that leave out what may be hidden can match what they replace though the element
+    // changed; the element is judged once rendered, and a match then is no change.
+    const unjudged = state !== null && isElement(track.node) && unsureOf.get(track.node) === true;
+
+    if (previous === state && !unjudged) {
       if (track.samples.length === 0) drop(track);
 
       return;
@@ -2016,6 +2043,7 @@ export const install = (): PageApi => {
       track,
       at,
       state,
+      pending: false,
       seen: track.kind === "title" ? true : undefined,
       scrolled,
     };
@@ -2027,8 +2055,16 @@ export const install = (): PageApi => {
     // Only an element the record watched before it went has a known place on the page.
     const before = track.samples.length > 1 ? visible.get(node) : undefined;
 
-    if (state !== null) look(node, next);
-    else if (before !== undefined) settle(next, before);
+    if (state !== null) {
+      look(node, next);
+      // Words that may be hidden are judged at the element's next report, after the page has
+      // rendered and its style is known, so observing it again asks for one.
+      if (track.kind === "content" && unsureOf.get(node) === true) {
+        next.pending = true;
+        sight.unobserve(node);
+        sight.observe(node);
+      }
+    } else if (before !== undefined) settle(next, before);
     else if (near !== null) look(near, next);
     else if (node.isConnected && track.place !== null) look(track.place, next);
     else settle(next, false);
@@ -2070,7 +2106,11 @@ export const install = (): PageApi => {
       }
       const initial = before();
 
-      if (initial === undefined || initial === state) return;
+      if (
+        initial === undefined ||
+        (initial === state && !(isElement(node) && unsureOf.get(node) === true))
+      )
+        return;
       if (victim !== undefined) {
         drop(victim);
         refused.add(victim.node);
@@ -2149,7 +2189,7 @@ export const install = (): PageApi => {
   };
 
   /** A node's words, or with an undo, its words before that batch of mutations. */
-  const wordsOf = (node: Node, undo?: Undo, scope = classOf(node)): string => {
+  const wordsOf = (node: Node, undo?: Undo, scope = classOf(node), eager = false): string => {
     if (node.nodeType === Node.TEXT_NODE) return undo?.data.get(node) ?? node.nodeValue ?? "";
     if (!isElement(node)) return "";
     const tag = node.tagName;
@@ -2166,11 +2206,12 @@ export const install = (): PageApi => {
         for (const group of removed)
           if (group.next === child)
             for (const gone of group.nodes)
-              if (unhidden(gone) && !hiddenKind(gone, tag, scope)) text += wordsOf(gone, undo);
+              if (unhidden(gone, scope) || (eager && succeeded(gone, group.nodes, node)))
+                text += wordsOf(gone, undo, scope, eager);
       if (child === null) break;
       if (closed && !(isElement(child) && child.tagName === "SUMMARY")) continue;
-      if (undo?.added.has(child) !== true && visibleIn(child, tag, scope))
-        text += wordsOf(child, undo, isElement(child) ? (classOf(child) ?? scope) : scope);
+      if (undo?.added.has(child) !== true && visibleIn(child, scope, eager))
+        text += wordsOf(child, undo, isElement(child) ? (classOf(child) ?? scope) : scope, eager);
     }
 
     return text + gap;
@@ -2180,35 +2221,25 @@ export const install = (): PageApi => {
   const classOf = (node: Node): string | undefined =>
     isElement(node) ? (node.getAttribute("class") ?? undefined) : undefined;
 
-  // What a class hides, judged for each class, parent tag and tag, and kept for two seconds: asking
-  // again in every batch would make a page that rebuilds itself work out its style each time. A
-  // class that changes asks afresh, being another key.
-  let looks = new Map<string, { readonly hidden: boolean; readonly at: number }>();
-
-  /** Whether this batch found children of a removed node's kind hidden where it was. */
-  const hiddenKind = (node: Node, parent: string, scope: string | undefined): boolean =>
-    isElement(node) && looks.get(`${scope}\n${parent}\n${node.tagName}`)?.hidden === true;
+  // Whether the latest `wordsNow` left out words that only the page's style can say are shown.
+  let unsure = false;
 
   /**
-   * Whether a child of `parent` can be seen. One with attributes is asked itself. One without can
-   * still be hidden by a rule on a class above it, such as `.collapsed span`, so under a class it
-   * is asked once for all its kind; elsewhere, most of a page, it is not asked.
+   * Whether a child's words can be told. One that its own attribute or inline style hides is not;
+   * one with no attributes and no class above it, most of a page, is. Any other may be hidden by a
+   * rule, such as `.collapsed span` or `li:nth-child(n+3)`, which only its computed style can say.
+   * Asking that while a page is still changing makes the browser work out its whole style early,
+   * so unless `eager`, such a child is left out for now and marked `unsure`: its element is judged
+   * again once the page has rendered. What may be hidden is never told before it is judged.
    */
-  const visibleIn = (child: Node, parent: string, scope: string | undefined): boolean => {
+  const visibleIn = (child: Node, scope: string | undefined, eager: boolean): boolean => {
     if (!isElement(child)) return true;
-    if (child.attributes.length > 0 || !child.isConnected) return seeable(child);
-    if (scope === undefined) return true;
-    const key = `${scope}\n${parent}\n${child.tagName}`;
-    const now = epoch();
-    let look = looks.get(key);
+    if (!child.isConnected || !seeable(child)) return seeable(child);
+    if (child.attributes.length === 0 && scope === undefined) return true;
+    if (eager) return !concealed(child);
+    unsure = true;
 
-    if (look === undefined || now - look.at > 2000) {
-      if (looks.size > 512) looks.clear();
-      look = { hidden: concealed(child), at: now };
-      looks.set(key, look);
-    }
-
-    return !look.hidden;
+    return false;
   };
 
   /**
@@ -2224,7 +2255,7 @@ export const install = (): PageApi => {
       (out && style.getPropertyValue("clip") !== "auto") ||
       style.clipPath !== "none" ||
       Number.parseFloat(style.fontSize) === 0 ||
-      /^transparent$|,\s*0\)$/.test(style.color) ||
+      /^transparent$|^rgba\([^)]*,\s*0\)$/.test(style.color) ||
       style.transform.startsWith("matrix(0, 0, 0, 0,") ||
       (out && (Number.parseFloat(style.left) < -999 || Number.parseFloat(style.top) < -999)) ||
       (style.overflow !== "visible" &&
@@ -2233,41 +2264,65 @@ export const install = (): PageApi => {
   };
 
   /**
-   * Whether a viewer could see a node's words, so a hidden one's, such as a token in a
-   * `display: none` span, never reach the record. Only an element with attributes can be styled
-   * apart from its parent, so the rest, most of a page, are not asked. A removed element can no
-   * longer say, so only its own attribute and inline style can hide it.
+   * Whether a removed element was succeeded by a shown one in its place, the same tag and class
+   * at the same place among those like it, as a re-render replaces what it renders: then what it
+   * said was shown too.
    */
+  const succeeded = (gone: Node, removed: ReadonlyArray<Node>, parent: Element): boolean => {
+    if (!isElement(gone) || !seeable(gone)) return false;
+
+    const like = (other: Node): other is Element =>
+      isElement(other) &&
+      other.tagName === gone.tagName &&
+      other.getAttribute("class") === gone.getAttribute("class");
+
+    const place = removed.filter(like).indexOf(gone);
+    const heir = Array.from(parent.children).filter(like)[place];
+
+    return heir !== undefined && seeable(heir) && !concealed(heir);
+  };
+
+  /** Whether neither an element's `hidden` attribute nor its inline style hides it. */
   const seeable = (node: Node): boolean =>
-    !isElement(node) || node.attributes.length === 0
-      ? true
-      : node.isConnected
-        ? !concealed(node)
-        : !node.hasAttribute("hidden") &&
-          !(
-            isHtml(node) &&
-            (node.style.display === "none" ||
-              node.style.visibility === "hidden" ||
-              node.style.opacity === "0")
-          );
+    !isElement(node) ||
+    (!node.hasAttribute("hidden") &&
+      !(
+        isHtml(node) &&
+        (node.style.display === "none" ||
+          node.style.visibility === "hidden" ||
+          node.style.opacity === "0")
+      ));
 
   /**
-   * Whether what a batch removed can be read back into what an element said before it. A class
-   * may have hidden it, so one with a class is left out, as is what `seeable` leaves out.
+   * Whether what a batch removed can be read back into what an element said before it. It can no
+   * longer be asked, so one that a class may have hidden, its own or one above it, is left out.
    */
-  const unhidden = (node: Node): boolean =>
-    seeable(node) && !(isElement(node) && node.hasAttribute("class"));
+  const unhidden = (node: Node, scope: string | undefined): boolean =>
+    seeable(node) && !(isElement(node) && (node.hasAttribute("class") || scope !== undefined));
 
-  /** An element's words now; most changed elements hold only text, which is read whole. */
-  const wordsNow = (element: Element): string =>
-    clean(
+  // Elements whose latest words leave out some that may be hidden, to be judged once rendered.
+  const unsureOf = new WeakMap<Element, boolean>();
+
+  /**
+   * An element's words now; most changed elements hold only text, which is read whole. With
+   * `eager`, the page's style is asked about every child that may be hidden.
+   */
+  const wordsNow = (element: Element, eager = false): string => {
+    unsure = false;
+
+    const words = clean(
       unwritten.has(element.tagName)
         ? ""
         : element.childElementCount === 0
           ? element.textContent
-          : wordsOf(element, undefined, scopeOf(element)),
+          : wordsOf(element, undefined, scopeOf(element), eager),
       600,
     );
+
+    unsureOf.set(element, unsure);
+
+    return words;
+  };
 
   /** The class nearest above or on an element, under which its descendants can be hidden. */
   const scopeOf = (element: Element): string | undefined =>
@@ -2619,7 +2674,7 @@ export const install = (): PageApi => {
       );
 
       return clean(
-        wordsOf(element, undo ?? undoOf(byTarget.get(element) ?? []), scopeOf(element)),
+        wordsOf(element, undo ?? undoOf(byTarget.get(element) ?? []), scopeOf(element), true),
         600,
       );
     };
@@ -2773,7 +2828,7 @@ export const install = (): PageApi => {
         return track === undefined ? earlier(row)() : stateOf(track);
       });
 
-      const now = rows.map(wordsNow);
+      const now = rows.map((row) => wordsNow(row));
 
       // How far down the rows each one's words came from; scrolling down moves words up, so a
       // recycled list shows in each row what a row below it showed. A re-sort can move them the
@@ -2871,7 +2926,6 @@ export const install = (): PageApi => {
     scrolls = new WeakMap();
     rests = new WeakMap();
     scrolledAt = Number.NEGATIVE_INFINITY;
-    looks = new Map();
     swept.length = 0;
     sweeps = 0;
     visible = new WeakMap();
@@ -2969,6 +3023,7 @@ export const install = (): PageApi => {
     }
     for (const track of tracks.values())
       if ((track.samples.at(-1)?.at ?? now) < now - retention) drop(track);
+      else if (isElement(track.node)) judge(track.node);
     // A page that has not rendered since, such as a hidden tab, is judged as it stands.
     for (const [element, samples] of waiting) {
       const seen = inView(element);

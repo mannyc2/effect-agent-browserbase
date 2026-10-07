@@ -12,14 +12,18 @@
  * and one made out of view is not. A removal the record had not watched is judged by what moves
  * into its place, so one out of the flow, or with nothing after it, is not told. Words are what
  * a viewer could read: text inside a hidden part of what changed, or a closed disclosure, is
- * left out. What changes in a scrolling element just after it scrolled is taken for the scroll,
+ * left out, and text whose style must say whether it shows waits until the page has rendered to
+ * be told. What changes in a scrolling element just after it scrolled is taken for the scroll,
  * not new content, when it looks like a virtual list: sibling rows showing the words of rows
  * beyond them in the way it scrolled, or new words when it scrolled past them all, or rows
  * swapped for others that arrive on the side it scrolled toward. Those are counted in
- * `Changes.scrolled`, and anything else, such as one price or a new message, is told as ever. A
- * list that scrolls with the page itself is not recognised. What the script cannot read is not
- * seen: pictures, a canvas, frames, shadow roots, SVG, and anything shown or hidden by CSS
- * alone, such as a class that reveals a toast.
+ * `Changes.scrolled`, and anything else, such as one price or a new message, is told as ever.
+ * Known limits: a list that scrolls with the page itself, or sideways, is not recognised, nor
+ * one scrolled down and back within 300 ms; and a re-sort that moves rows the way a list
+ * scrolls, such as a leader dropping to last as it scrolls down, or a chat followed down as it
+ * adds and trims messages, is taken for the scroll. What the script cannot read is not seen:
+ * pictures, a canvas, frames, shadow roots, SVG, and anything shown or hidden by CSS alone, such
+ * as a class that reveals a toast.
  *
  * @since 0.3.0
  */

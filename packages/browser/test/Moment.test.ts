@@ -1010,6 +1010,62 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("tells text in any colour, and never what a rule hides, however it changes", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/quote");
+
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          document.head.insertAdjacentHTML(
+            "beforeend",
+            "<style>.up{color:rgb(0,128,0)}.down{color:red}.shut .note span{display:none}.tags span:nth-child(3){display:none}</style>",
+          );
+          document.body.insertAdjacentHTML(
+            "afterbegin",
+            '<p id="dark">Price <b class="num">$5</b></p><p id="green">Change <b class="up">+1.2%</b></p><p id="red">Change <b class="down">-0.5%</b></p><div id="outer"><p class="note" id="note">Code <span>tok-1</span></p></div><p class="tags" id="tags">Labels: <span>alpha</span> <span>beta</span> <span>gamma</span></p>',
+          );
+        }),
+      );
+      const first = yield* Moment.capture(page);
+
+      const run = (change: () => void) =>
+        Effect.promise(() => page.playwright.evaluate(change)).pipe(
+          Effect.andThen(Effect.sleep(Duration.millis(200))),
+        );
+
+      yield* run(() => {
+        const set = (id: string, html: string) => {
+          const element = document.querySelector(`#${id}`);
+
+          if (element !== null) element.innerHTML = html;
+        };
+
+        set("dark", 'Price <b class="num">$6</b>');
+        set("green", 'Change <b class="up">+1.4%</b>');
+        set("red", 'Change <b class="down">-0.7%</b>');
+        set("note", "Code <span>tok-2</span>");
+        set("tags", "Labels: <span>alpha2</span> <span>beta2</span> <span>gamma-hidden</span>");
+      });
+      // A class far above now hides the code, which then changes at once.
+      yield* run(() => {
+        document.querySelector("#outer")?.classList.add("shut");
+        const note = document.querySelector("#note");
+
+        if (note !== null) note.innerHTML = "Code <span>tok-cached</span>";
+      });
+      const second = yield* Moment.capture(page, { since: first });
+      const told = (second.changes?.changes ?? []).map((change) => [change.before, change.after]);
+
+      assert.includeDeepMembers(told, [
+        ["Price $5", "Price $6"],
+        ["Change +1.2%", "Change +1.4%"],
+        ["Change -0.5%", "Change -0.7%"],
+        ["Labels: alpha beta", "Labels: alpha2 beta2"],
+      ]);
+      assert.notMatch(JSON.stringify(second.changes), /tok-cached|gamma/);
+    }),
+  );
+
   it.effect("takes a list that reuses or replaces its rows as it scrolls for no change", () =>
     Effect.gen(function* () {
       const page = yield* start("/quote");
