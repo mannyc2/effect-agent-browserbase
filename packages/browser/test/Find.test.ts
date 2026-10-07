@@ -5,7 +5,7 @@ import { Browser } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { type FindRequest, match } from "../src/internal/reading/match.inpage.ts";
 import type { Found, Page } from "../src/Page.ts";
-import { roundTrips, Site, SiteLayer } from "./fixtures.ts";
+import { Site, SiteLayer } from "./fixtures.ts";
 
 const { compile, normalize } = match();
 
@@ -276,12 +276,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("takes one call to the page however long the page is", () =>
+  // The budget suite holds `find` to one call to the page, on a long page too.
+  it.effect("finds across a long page, and skips the rows out of view whole", () =>
     Effect.gen(function* () {
       const page = yield* open("/ticker");
-
-      yield* page.find({});
-      const small = yield* roundTrips(page.find({ role: "button" }));
 
       yield* Effect.promise(() =>
         page.playwright.evaluate(() => {
@@ -294,11 +292,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
             );
         }),
       );
-      const large = yield* roundTrips(page.find({ role: "button", scope: "document" }));
 
-      assert.deepStrictEqual([small.calls, small.worlds], [1, 0]);
-      assert.deepStrictEqual([large.calls, large.worlds], [1, 0]);
-      assert.lengthOf(large.value, 2003);
+      assert.lengthOf(yield* page.find({ role: "button", scope: "document" }), 2003);
       // Rows out of view are skipped whole: the outline counts each as one part, not its cells.
       assert.isBelow((yield* page.snapshot()).below, 2100);
     }),

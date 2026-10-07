@@ -4,7 +4,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { Context, Effect, Layer, Tracer } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 const form = `<!doctype html><title>Order</title>
 <body style="margin:0;font-family:sans-serif">
@@ -166,25 +166,3 @@ export const SiteLayer = Layer.effect(
     return Site.of({ url: (path) => `http://127.0.0.1:${port}${path}` });
   }),
 );
-
-/** What an effect sends to the page script, counted by the bridge's spans. */
-export const roundTrips = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    const names: Array<string> = [];
-
-    const tracer = Tracer.make({
-      span: (options) => {
-        names.push(options.name);
-
-        return new Tracer.NativeSpan(options);
-      },
-    });
-
-    const value = yield* effect.pipe(Effect.provideService(Tracer.Tracer, tracer));
-
-    return {
-      value,
-      calls: names.filter((name) => name === "Page.evaluate").length,
-      worlds: names.filter((name) => name === "Page.createWorld").length,
-    };
-  });
