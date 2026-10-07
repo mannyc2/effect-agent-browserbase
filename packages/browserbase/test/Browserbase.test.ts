@@ -1,17 +1,19 @@
-// The client against a fake Browserbase API on loopback, and the provider against a local Chromium
-// that the fake API hands out as the session's CDP endpoint. Nothing reaches Browserbase.
+// The client's requests against an API on loopback; then the provider against the in-memory
+// API, with a local Chromium as each session's DevTools address. Nothing reaches Browserbase.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Redacted } from "effect";
+import { Effect, Fiber, Layer, Redacted, Schedule, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
+import type * as Supervisor from "effect-browser/Supervisor";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { chromium } from "playwright-core";
 
 import * as Browserbase from "../src/Browserbase.ts";
 import { BrowserbaseClient, layer as clientLayer } from "../src/BrowserbaseClient.ts";
+import * as TestBrowserbase from "../src/testing/TestBrowserbase.ts";
 
 interface Received {
   readonly method: string;
@@ -378,6 +380,58 @@ describe("BrowserbaseClient", () => {
   );
 });
 
+/** A local Chromium's DevTools address, which the fake hands out as each session's. */
+const chromiumEndpoint = Effect.gen(function* () {
+  const port = yield* listen(() => undefined).pipe(
+    Effect.map(({ server }) => (server.address() as AddressInfo).port),
+    Effect.scoped,
+  );
+
+  yield* Effect.acquireRelease(
+    Effect.promise(() => chromium.launch({ args: [`--remote-debugging-port=${port}`] })),
+    (local) => Effect.promise(() => local.close()),
+  );
+
+  return `http://127.0.0.1:${port}`;
+});
+
+/** An address with nothing listening, so each connect fails at once and its session is released. */
+const nowhere = listen(() => undefined).pipe(
+  Effect.map(({ origin }) => origin),
+  Effect.scoped,
+);
+
+const kept = Effect.flatMap(TestBrowserbase.TestBrowserbase, (fake) => fake.sessions);
+const asked = Effect.flatMap(TestBrowserbase.TestBrowserbase, (fake) => fake.requests);
+
+const persisting = (id: string) => ({
+  timeout: 3600,
+  browserSettings: { context: { id, persist: true } },
+});
+
+/** Move the test clock on a second at a time until the fiber is done, letting real work run. */
+const finish = <A, E>(fiber: Fiber.Fiber<A, E>) =>
+  Effect.gen(function* () {
+    for (let second = 0; fiber.pollUnsafe() === undefined; second++) {
+      assert.isBelow(second, 600, "it finishes within ten minutes");
+      yield* TestClock.adjust("1 second");
+      yield* TestClock.withLive(Effect.sleep("2 millis"));
+    }
+
+    return yield* Fiber.join(fiber);
+  });
+
+/** Move the test clock on `seconds`, a second at a time, letting real work run. */
+const pass = (seconds: number) =>
+  Effect.forEach(
+    Array.from({ length: seconds }),
+    () =>
+      TestClock.adjust("1 second").pipe(
+        Effect.andThen(TestClock.withLive(Effect.sleep("2 millis"))),
+      ),
+    { discard: true },
+  );
+
 describe("Browserbase", () => {
   it.effect("settles a session create that never answers, without sending it again", () =>
     Effect.gen(function* () {
@@ -417,30 +471,17 @@ describe("Browserbase", () => {
     }),
   );
 
-  it.live("releases a created session whose answer does not decode", () =>
+  it.effect("releases a created session whose answer does not decode", () =>
     Effect.gen(function* () {
-      const api = yield* fakeApi((request) =>
-        request.method === "POST" && request.url === "/v1/sessions"
-          ? { status: 201, body: { id: "s9", status: "RUNNING" } }
-          : { status: 200, body: { ...session("s9"), status: "COMPLETED" } },
-      );
-
-      const error = yield* Browserbase.open().pipe(
-        Effect.scoped,
-        Effect.provide(api.client),
-        Effect.flip,
-      );
+      const error = yield* Browserbase.open().pipe(Effect.scoped, Effect.flip);
 
       assert.deepStrictEqual([error.operation, error.reason._tag], ["createSession", "Decode"]);
-      assert.include(error.message, "session s9 was released");
+      assert.include(error.message, "session session-1 was released");
       assert.deepStrictEqual(
-        api.received.map((request) => [request.method, request.url, request.body]),
-        [
-          ["POST", "/v1/sessions", {}],
-          ["POST", "/v1/sessions/s9", { status: "REQUEST_RELEASE" }],
-        ],
+        (yield* kept).map(({ status, releases }) => [status, releases]),
+        [["COMPLETED", 1]],
       );
-    }),
+    }).pipe(Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Malformed" }] }))),
   );
 
   it.live("keeps the session's connect URL out of a failed connect", () =>
@@ -452,13 +493,14 @@ describe("Browserbase", () => {
 
       const signingKey = "bb-signing-key-0123456789";
 
-      const api = yield* fakeApi(() => ({
-        status: 200,
-        body: session("s1", `${origin}/?signingKey=${signingKey}`),
-      }));
+      const error = yield* Effect.gen(function* () {
+        const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createSession());
 
-      const error = yield* Effect.flip(
-        Browserbase.attach("s1").pipe(Effect.scoped, Effect.provide(api.client)),
+        return yield* Effect.flip(Browserbase.attach(id).pipe(Effect.scoped));
+      }).pipe(
+        Effect.provide(
+          TestBrowserbase.layer({ connectUrl: `${origin}/?signingKey=${signingKey}` }),
+        ),
       );
 
       assert.strictEqual(error._tag, "BrowserError");
@@ -468,116 +510,240 @@ describe("Browserbase", () => {
     }),
   );
 
-  it.live("opens a browser on a new session and releases the session when the scope closes", () =>
+  it.live("opens a browser on a new session, then releases it and confirms it ended", () =>
     Effect.gen(function* () {
-      const port = yield* listen(() => undefined).pipe(
-        Effect.map(({ server }) => (server.address() as AddressInfo).port),
-        Effect.scoped,
-      );
-
-      yield* Effect.acquireRelease(
-        Effect.promise(() => chromium.launch({ args: [`--remote-debugging-port=${port}`] })),
-        (local) => Effect.promise(() => local.close()),
-      );
-
-      const api = yield* fakeApi((request) =>
-        request.method === "POST" && request.url === "/v1/sessions"
-          ? { status: 201, body: session("s1", `http://127.0.0.1:${port}`) }
-          : { status: 200, body: { ...session("s1"), status: "COMPLETED" } },
-      );
+      const connectUrl = yield* chromiumEndpoint;
 
       yield* Effect.gen(function* () {
-        const browser = yield* Browser;
-        const page = yield* browser.page;
+        yield* Effect.gen(function* () {
+          const browser = yield* Browser;
+          const page = yield* browser.page;
 
-        yield* page.goto("data:text/html,<title>Hosted</title><button>Go</button>");
-        assert.deepStrictEqual([browser.id, browser.provider], ["s1", "browserbase"]);
-        assert.include((yield* page.snapshot()).text, 'button "Go"');
+          yield* page.goto("data:text/html,<title>Hosted</title><button>Go</button>");
+          assert.deepStrictEqual([browser.id, browser.provider], ["session-1", "browserbase"]);
+          assert.include((yield* page.snapshot()).text, 'button "Go"');
+        }).pipe(Effect.provide(Browserbase.layer({ session: { timeout: 300 } })));
+
+        assert.deepStrictEqual(yield* asked, [
+          "POST /v1/sessions",
+          "POST /v1/sessions/session-1",
+          "GET /v1/sessions/session-1",
+        ]);
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED"],
+        );
+      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl })));
+    }),
+  );
+
+  it.live("reports an early release as settled, and the scope's close releases nothing more", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          const hosted = yield* Browserbase.open();
+
+          assert.strictEqual((yield* hosted.release)._tag, "Settled");
+          assert.deepStrictEqual(
+            (yield* kept).map(({ status }) => status),
+            ["COMPLETED"],
+          );
+        }).pipe(Effect.scoped);
+
+        assert.deepStrictEqual(
+          (yield* kept).map(({ releases }) => releases),
+          [1],
+        );
+      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl })));
+    }),
+  );
+
+  it.effect("keeps a context held while a release is unconfirmed, until reconcile ends it", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* nowhere;
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
+        const open = Browserbase.open({ session: persisting(id) }).pipe(Effect.scoped, Effect.flip);
+        const first = yield* finish(yield* Effect.forkChild(open));
+
+        assert.strictEqual(first.operation, "connect");
+
+        // The session may still save to the context, so another writer waits.
+        const second = yield* Effect.forkChild(open);
+
+        yield* pass(120);
+        assert.isUndefined(second.pollUnsafe());
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["RUNNING"],
+        );
+
+        const reconciled = yield* finish(yield* Effect.forkChild(Browserbase.reconcile(id)));
+
+        assert.strictEqual(reconciled._tag, "Settled");
+        assert.strictEqual((yield* finish(second)).operation, "connect");
+        assert.deepStrictEqual(
+          (yield* kept).map(({ id, status, userMetadata }) => [
+            id,
+            status,
+            userMetadata?.["persistsContext"],
+          ]),
+          [
+            ["session-1", "COMPLETED", id],
+            ["session-2", "COMPLETED", id],
+          ],
+        );
       }).pipe(
-        Effect.provide(
-          Browserbase.layer({ session: { timeout: 300 } }).pipe(Layer.provide(api.client)),
-        ),
-      );
-
-      assert.deepStrictEqual(
-        api.received.map((request) => [request.method, request.url, request.body]),
-        [
-          ["POST", "/v1/sessions", { timeout: 300 }],
-          ["POST", "/v1/sessions/s1", { status: "REQUEST_RELEASE" }],
-        ],
+        Effect.provide(TestBrowserbase.layer({ connectUrl, releases: [{ _tag: "Pending" }] })),
       );
     }),
   );
 
-  it.live("lets one persisting session at a time write to a context, until its save settles", () =>
+  it.effect("reads a released session's status again until Browserbase answers", () =>
     Effect.gen(function* () {
-      // A port with nothing listening, so each connect fails at once and its session is released.
-      const closed = yield* listen(() => undefined).pipe(
-        Effect.map(({ origin }) => origin),
+      const connectUrl = yield* nowhere;
+
+      const reads = [
+        { _tag: "Refused", status: 500 },
+        { _tag: "Lost" },
+        { _tag: "Refused", status: 503 },
+        { _tag: "Refused", status: 404 },
+      ] as const;
+
+      yield* Effect.gen(function* () {
+        const open = Browserbase.open({ session: persisting("context-reads") }).pipe(
+          Effect.scoped,
+          Effect.flip,
+        );
+
+        yield* finish(yield* Effect.forkChild(open));
+        // The release was confirmed, so the next writer takes the context at once.
+        yield* finish(yield* Effect.forkChild(open));
+        assert.deepStrictEqual(
+          (yield* asked).filter((request) => request === "GET /v1/sessions/session-1").length,
+          reads.length + 1,
+        );
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED", "COMPLETED"],
+        );
+      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl, reads })));
+    }),
+  );
+
+  it.effect("finds and ends a persisting session whose create answer was lost", () =>
+    Effect.gen(function* () {
+      const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
+
+      const error = yield* Browserbase.open({ session: persisting(id) }).pipe(
         Effect.scoped,
+        Effect.flip,
       );
 
-      let created = 0;
-
-      const api = yield* fakeApi((request) => {
-        if (request.method === "POST" && request.url === "/v1/sessions") {
-          created += 1;
-
-          return { status: 201, body: session(`s${created}`, closed) };
-        }
-
-        return {
-          status: 200,
-          body: { ...session(request.url.split("/")[3] ?? ""), status: "COMPLETED" },
-        };
-      });
-
-      const open = (persist: boolean) =>
-        Browserbase.open({
-          session: { browserSettings: { context: { id: "c1", persist } } },
-          contextSettle: "300 millis",
-        }).pipe(Effect.scoped, Effect.flip, Effect.provide(api.client));
-
-      yield* Effect.all([open(true), open(true)], { concurrency: "unbounded" });
-
+      assert.deepStrictEqual([error.operation, error.reason._tag], ["createSession", "Transport"]);
       assert.deepStrictEqual(
-        api.received.map((request) => [request.method, request.url]),
-        [
-          ["POST", "/v1/sessions"],
-          ["POST", "/v1/sessions/s1"],
-          ["GET", "/v1/sessions/s1"],
-          ["POST", "/v1/sessions"],
-          ["POST", "/v1/sessions/s2"],
-          ["GET", "/v1/sessions/s2"],
-        ],
+        (yield* kept).map(({ status }) => status),
+        ["RUNNING"],
       );
-      assert.isAtLeast((api.received[3]?.at ?? 0) - (api.received[2]?.at ?? 0), 290);
-
-      // A session that only reads the context neither waits nor holds it.
-      api.received.length = 0;
-      yield* Effect.all([open(false), open(false)], { concurrency: "unbounded" });
+      assert.strictEqual(
+        (yield* finish(yield* Effect.forkChild(Browserbase.reconcile(id))))._tag,
+        "Settled",
+      );
       assert.deepStrictEqual(
-        api.received.slice(0, 2).map((request) => [request.method, request.url]),
-        [
-          ["POST", "/v1/sessions"],
-          ["POST", "/v1/sessions"],
-        ],
+        (yield* kept).map(({ status }) => status),
+        ["COMPLETED"],
       );
+    }).pipe(Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Lost" }] }))),
+  );
+});
 
-      // A failed open lets its session and context go at once, so a retry in the same scope
-      // takes the context rather than waiting for the scope to close.
-      api.received.length = 0;
+/** A generation's change as one line, such as `2 Reopening 1` or `1 Closed Settled`. */
+const line = ({ number, state }: Supervisor.Generation) =>
+  [
+    number,
+    state._tag,
+    "attempt" in state ? state.attempt : undefined,
+    state._tag === "Closed" ? (state.released?._tag ?? "none") : undefined,
+  ]
+    .filter((part) => part !== undefined)
+    .join(" ");
 
-      const retried = Browserbase.open({
-        session: { browserSettings: { context: { id: "c2", persist: true } } },
-        contextSettle: "300 millis",
-      }).pipe(Effect.flip, Effect.repeat({ times: 1 }), Effect.provide(api.client));
+describe("Browserbase.supervise", () => {
+  it.live("reopens a lost session, and releases each one it opened", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
 
-      yield* retried.pipe(Effect.scoped, Effect.timeout("5 seconds"));
-      assert.deepStrictEqual(
-        api.received.map((request) => request.method),
-        ["POST", "POST", "GET", "POST", "POST", "GET"],
-      );
+      yield* Effect.gen(function* () {
+        const sessions = yield* Browserbase.supervise({ reopen: Schedule.spaced("10 millis") });
+
+        const states = yield* Effect.forkChild(
+          Stream.runCollect(Stream.map(sessions.states, line)),
+        );
+
+        const first = yield* sessions.browser;
+
+        // Our side's connection drops, as it would if the network did.
+        yield* Effect.promise(async () => first.context.browser()?.close());
+        yield* sessions.states.pipe(
+          Stream.filter((generation) => line(generation) === "2 Open"),
+          Stream.runHead,
+        );
+        assert.strictEqual((yield* sessions.browser).id, "session-2");
+        yield* sessions.retire;
+
+        const lines = yield* Fiber.join(states);
+
+        assert.deepStrictEqual(
+          lines.filter((one) => one.startsWith("1 ")),
+          ["1 Opening 1", "1 Open", "1 Lost", "1 Closed Settled"],
+        );
+        assert.deepStrictEqual(
+          lines.filter((one) => one.startsWith("2 ")),
+          ["2 Reopening 1", "2 Open", "2 Closed Settled"],
+        );
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED", "COMPLETED"],
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestBrowserbase.layer({ connectUrl })));
+    }),
+  );
+
+  it.live("rotates sessions that persist to a context by ending the current one first", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const sessions = yield* Browserbase.supervise({
+          session: persisting("context-rotate"),
+          contextSettle: "50 millis",
+        });
+
+        const states = yield* Effect.forkChild(
+          Stream.runCollect(Stream.map(sessions.states, line)),
+        );
+
+        const first = yield* sessions.browser;
+        const second = yield* sessions.rotate;
+
+        assert.deepStrictEqual([first.id, second.id], ["session-1", "session-2"]);
+        yield* sessions.retire;
+
+        const lines = yield* Fiber.join(states);
+
+        assert.isBelow(
+          lines.indexOf("1 Closed Settled"),
+          lines.indexOf("2 Opening 1"),
+          lines.join(", "),
+        );
+        assert.isBelow(
+          (yield* asked).indexOf("GET /v1/sessions/session-1"),
+          (yield* asked).lastIndexOf("POST /v1/sessions"),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestBrowserbase.layer({ connectUrl })));
     }),
   );
 });

@@ -32,13 +32,14 @@ describe("hosted trials", () => {
 
           sent.push({ method: request.method, url: request.url, body });
 
-          // A session without a CDP address fails to open after it was created, so it is released.
+          // A session without a CDP address fails to open after it was created, so it is
+          // released, and reads after that say it ended.
           return HttpClientResponse.fromWeb(
             request,
             new Response(
               JSON.stringify({
                 id: "s1",
-                status: "RUNNING",
+                status: request.method === "GET" ? "COMPLETED" : "RUNNING",
                 region: "us-west-2",
                 keepAlive: false,
                 createdAt: "2026-10-04T12:00:00.000Z",
@@ -99,7 +100,8 @@ describe("hosted trials", () => {
               new Response(
                 JSON.stringify({
                   id: "s1",
-                  status: "RUNNING",
+                  // The release confirms the end by reading the session, which has ended by then.
+                  status: request.method === "GET" ? "COMPLETED" : "RUNNING",
                   region: "us-west-2",
                   keepAlive: false,
                   createdAt: "2026-10-07T12:00:00.000Z",
@@ -140,7 +142,7 @@ describe("hosted trials", () => {
         assert.isTrue(methods.has("Page.navigate"), [...methods].join(", "));
         assert.isTrue(commands.every((command) => command.ended >= command.sent));
         assert.isAbove(commands.filter((command) => command.answer === "result").length, 10);
-        assert.deepStrictEqual(released, ["POST"]);
+        assert.deepStrictEqual(released, ["POST", "GET"]);
       }).pipe(Effect.scoped),
     { timeout: 60_000 },
   );

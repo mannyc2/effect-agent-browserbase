@@ -8,7 +8,16 @@
   `Frame`, `BrowserEvent` and `BrowserError`; `Tools`, `Agent` and `Moment`.
 - `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`. Stored contexts
   and uploaded extensions are managed through the client; `Browserbase.open` lets one persisting
-  session at a time write to each context in a process and holds it until the save settles.
+  session at a time write to each context in a process and holds it until the save settles. A
+  release confirms the session ended and says so, `Settled` or `Unconfirmed`; an unconfirmed one
+  keeps its context held until `Browserbase.reconcile` ends the context's sessions, which `open`
+  labels in their user metadata. `effect-browserbase/testing` holds the Browserbase API in memory,
+  with scripted faults, and the contract checks it passes.
+- Sessions that survive: `Supervisor` keeps a browser open as generations from any provider,
+  reopening a lost one on a schedule, rotating ahead of a session's end (make before break, or
+  break first for sessions saving to one stored context), and stopping at once on `retire`. Each
+  generation's changes stream as `states`, with its release outcome last. `Browserbase.supervise`
+  supervises hosted sessions.
 - `effect-browser-human-strokes`: an optional layer with 32,130 recorded, attributed CC BY 4.0
   pointer strokes, retaining their original sample coordinates and times. The core pointer planner
   uses the tuned two-stroke sigma-lognormal model; browsers capture the motion service once.
