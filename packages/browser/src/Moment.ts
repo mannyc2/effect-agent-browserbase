@@ -117,11 +117,11 @@ export const capture = Effect.fn("Moment.capture")(function* (
         Effect.flatMap((current) =>
           page
             .changes({
-              // A moment that follows another continues its changes exactly where they ended.
-              since:
-                isMoment(options.since) && options.since.changes !== undefined
-                  ? options.since.changes
-                  : start(current.hostTime),
+              // A moment that follows another continues its changes exactly where they ended, or
+              // where its last frame was painted when it has none.
+              since: isMoment(options.since)
+                ? (options.since.changes ?? options.since.frames.at(-1) ?? options.since.at)
+                : start(current.hostTime),
               until: current,
             })
             .pipe(

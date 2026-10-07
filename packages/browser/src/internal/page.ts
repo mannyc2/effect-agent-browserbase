@@ -101,6 +101,19 @@ const isChanges = Schema.is(Changes);
 
 const isFrame = Schema.is(Frame);
 
+/**
+ * A bound already on the page's own clock, which no change of the clock mapping can move: the
+ * cursor of a previous read's changes, or a screencast frame's paint time.
+ */
+const pageTimeOf = (bound: Changes | Frame | number | undefined): number | undefined =>
+  isChanges(bound)
+    ? bound.cursor
+    : isFrame(bound) && bound.timing._tag === "BrowserPaint"
+      ? bound.timing.timestamp
+      : undefined;
+
+const hostTimeOf = (bound: Changes | Frame) => (isChanges(bound) ? bound.at : bound.hostTime);
+
 const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
@@ -2149,11 +2162,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   // so a window that ends at a frame's capture time ends where the picture does.
   const changes = (options: ChangesOptions = {}) =>
     Effect.gen(function* () {
-      const frame = isFrame(options.until) ? options.until : undefined;
       const until = isFrame(options.until) ? options.until.hostTime : options.until;
-      // The changes a previous read returned give its window's end on the page's own clock.
-      const previous = isChanges(options.since) ? options.since : undefined;
-      const since = isChanges(options.since) ? options.since.at : options.since;
+
+      const since =
+        isChanges(options.since) || isFrame(options.since)
+          ? hostTimeOf(options.since)
+          : options.since;
 
       if ([since, until].some((time) => time !== undefined && !Number.isFinite(time)))
         return yield* failWith(
@@ -2169,9 +2183,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         "changes",
         scriptCall(
           "changes",
-          previous?.cursor ?? toPage(since),
-          // A screencast frame's paint time is on the page's clock already, whatever the mapping.
-          frame?.timing._tag === "BrowserPaint" ? frame.timing.timestamp : toPage(until),
+          pageTimeOf(options.since) ?? toPage(since),
+          pageTimeOf(options.until) ?? toPage(until),
         ),
       ).pipe(Effect.flatMap(decodeWith("changes", Script.ChangesResultSchema)));
 

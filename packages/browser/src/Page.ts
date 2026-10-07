@@ -203,9 +203,12 @@ export interface Settings {
 export interface ChangesOptions {
   /**
    * Where the window starts: the changes a previous read returned, which it then continues
-   * exactly, or a time. Defaults to all the record keeps, up to a minute.
+   * exactly; a frame, from its paint time; or a time. Defaults to all the record keeps, up to a
+   * minute. A time is placed on the page's clock by the browser's current clock mapping, which a
+   * new screencast can refresh, so two reads chained by time can miss or repeat changes in a band
+   * as wide as the shift; chain with the changes instead.
    */
-  readonly since?: Changes | number | undefined;
+  readonly since?: Changes | Frame | number | undefined;
   /**
    * Where it ends: a frame, which ends it where the frame's paint did on the page's own clock, or
    * a time. Defaults to now.
