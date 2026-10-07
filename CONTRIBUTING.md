@@ -24,6 +24,7 @@ pinned ones into `.work/toolchain` (linux-x64, checked against pinned digests).
 bun install --frozen-lockfile --ignore-scripts
 bun run patch:tsgo                  # Effect diagnostics in tsc and oxlint
 ./node_modules/.bin/playwright-core install chromium
+./node_modules/.bin/vp hooks enable # format check, lint and typecheck before each commit
 
 bun run ready                       # fmt check, lint, typecheck, test, build
 ```
@@ -34,6 +35,21 @@ bun run ready                       # fmt check, lint, typecheck, test, build
 - Tests live in each package's `test/` and run against a real local Chromium with pages served by
   the test itself. Scripted models stand in for real ones: no test calls a model or a hosted browser.
 - The bench (`bench/`) is the place for evidence about models; its README says how to run it.
+
+## Keeping it small
+
+- **Size.** A module holds at most 600 lines of code and a function at most 150, falling to 100;
+  lint counts code only. The exceptions in `lint/.oxlintrc.json` sit at each file's size when the
+  limits came in. Lower one when a change shrinks its file, and never raise one.
+- **Exceptions say why.** A comment that switches a check off gives its reason after ` -- `, as
+  in `// oxlint-disable-next-line <rule> -- <why this site is an exception>`. Lint enforces it.
+- **A PR says what it deletes,** the source and test lines it adds and removes, the public names
+  it adds and removes, and any check it adds or exception it lowers. A PR that only adds says
+  why. `git diff --shortstat origin/main -- 'packages/*/src/*'` counts source lines, and
+  `'packages/*/test/*'` test lines.
+- **Tests earn their place.** A rule over many inputs gets a property test (`it.prop` with
+  `effect/Arbitrary`); anything with history gets a model test. Before trusting a new test, plant
+  the bug it guards against and watch it fail. Don't pin wording, such as a prompt's exact text.
 
 ## Layout
 
