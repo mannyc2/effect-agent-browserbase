@@ -150,11 +150,17 @@ describe("Clock calibration", () => {
           sampledAt: now,
         };
 
-        taken.push(measured);
+        // Only a measurement the mapping runs counts: within ten seconds it runs none.
+        const measure = Effect.sync(() => {
+          taken.push(measured);
+
+          return measured;
+        });
+
         Effect.runSync(
-          taken.length === 1
-            ? Effect.asVoid(mapping.current(Effect.succeed(measured)))
-            : mapping.renew(Effect.succeed(measured)),
+          mapping.latest() === undefined
+            ? Effect.asVoid(mapping.current(measure))
+            : mapping.renew(measure),
         );
         const latest = mapping.latest();
 
