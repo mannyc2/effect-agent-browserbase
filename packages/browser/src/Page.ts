@@ -199,6 +199,14 @@ export interface Settings {
   readonly guard: InputGuard | undefined;
 }
 
+/** A window of changes, in host monotonic milliseconds on the browser's clock. */
+export interface ChangesOptions {
+  /** Where the window starts; defaults to all the record keeps, up to a minute. */
+  readonly since?: number | undefined;
+  /** Where it ends, such as a frame's capture time; defaults to now. */
+  readonly until?: number | undefined;
+}
+
 export interface Page {
   readonly id: string;
   /** The Playwright page, for anything this API does not cover. Never give it to a model. */
@@ -287,9 +295,9 @@ export interface Page {
   /** This page's events among the browser's latest `eventHistory`, oldest first. */
   readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
   /**
-   * What visibly changed after `since`, host monotonic milliseconds on the browser's clock, or
-   * whatever the page still keeps without it: its latest 128 changes, at most 64 of them a minute
-   * old or newer. One round trip; the first read of a document starts its record.
+   * What visibly changed after `since` and up to `until`, each element folded to what it said at
+   * either end; see `Change`. One round trip. The first read of a document starts its record and
+   * finds nothing; a record nobody reads for two minutes stops, and the next read starts again.
    */
-  readonly changes: (since?: number) => Effect.Effect<Changes, BrowserError>;
+  readonly changes: (options?: ChangesOptions) => Effect.Effect<Changes, BrowserError>;
 }

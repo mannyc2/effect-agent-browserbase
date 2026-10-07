@@ -13,7 +13,7 @@ import {
   Subject,
   TrackEvent,
 } from "../src/BrowserEvent.ts";
-import { Change } from "../src/Change.ts";
+import { Change, Changes, Context } from "../src/Change.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { Frame, Screenshot } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
@@ -225,6 +225,7 @@ it("says when nothing happened, and leaves out an outline the capture left out",
 
 describe("a moment's account of what changed", () => {
   const span = new Subject({ role: null, name: "", tag: "span" });
+  const cell = new Subject({ role: "cell", name: "", tag: "td" });
 
   const action = (
     startedAt: number,
@@ -234,16 +235,24 @@ describe("a moment's account of what changed", () => {
     new Action({ at, startedAt, page: "p1", name: "click", ok: true, dispatched: true, ...fields });
 
   const change = (
-    fields: Partial<ConstructorParameters<typeof Change>[0]> & { readonly at: number },
+    fields: Partial<Omit<ConstructorParameters<typeof Change>[0], "context">> & {
+      readonly at: number;
+      readonly context?: ConstructorParameters<typeof Context>[0];
+    },
   ) =>
     new Change({
       startedAt: fields.at,
       kind: "text",
       subject: span,
-      context: "",
       count: 1,
       ...fields,
+      context: new Context(fields.context ?? {}),
     });
+
+  const recorded = (changes: ReadonlyArray<Change>, from = 0) =>
+    new Changes({ from, at: 10_000, truncated: 0, changes });
+
+  const price = { beside: "Price", heading: "Bitcoin" };
 
   const refresh = action(5800, 5900, {
     target: "e2",
@@ -278,13 +287,8 @@ describe("a moment's account of what changed", () => {
     at: 10_000,
     frames: [shot(10_000, 1)],
     events: [refresh, hover, missed, typed, spin],
-    changes: [
-      change({
-        at: 6000,
-        before: "$61,240",
-        after: "$62,010",
-        context: 'beside "Price", under "Bitcoin"',
-      }),
+    changes: recorded([
+      change({ at: 6000, before: "$61,240", after: "$62,010", context: price }),
       change({
         at: 6000,
         kind: "title",
@@ -299,70 +303,136 @@ describe("a moment's account of what changed", () => {
         after: "Saved",
       }),
       change({
-        at: 8000,
-        before: "$62,010",
-        after: "$62,100",
-        context: 'beside "Price", under "Bitcoin"',
+        at: 9000,
+        startedAt: 7000,
+        before: "+0.3%",
+        after: "-0.1%",
+        count: 3,
+        context: { beside: "24h", heading: "Bitcoin" },
       }),
       change({
         at: 8500,
+        startedAt: 8200,
         kind: "value",
         subject: new Subject({ role: "textbox", name: "Search", tag: "input" }),
         before: "",
         after: "bitcoin",
         count: 7,
       }),
-      change({
-        at: 9000,
-        startedAt: 8700,
-        before: "$62,100",
-        after: "$61,900",
-        count: 3,
-        context: 'beside "Price", under "Bitcoin"',
-      }),
-    ],
+      change({ at: 9200, kind: "brief", after: "Copied", context: price }),
+    ]),
   });
 
   const account = (prompt: Prompt.Prompt) => {
     const [text = ""] = texts(prompt);
 
-    return text.slice(text.indexOf("What changed")).split("\n").slice(1, -2);
+    return text
+      .slice(text.search(/What (changed|happened)/))
+      .split("\n")
+      .slice(1, -2);
   };
 
-  it("leads with what changed, most notable first, and names actions as its causes", () => {
+  it("leads with news, then what keeps changing, and leaves the steps out", () => {
     assert.deepStrictEqual(account(Moment.toPrompt(moment)), [
-      '-4.0s "$61,240" became "$62,010", then "$62,100", then "$61,900" (beside "Price", under "Bitcoin") (it changed 5 times), after a click on button "Refresh"',
-      '-4.0s the title "Quote" became "Quote, refreshed", after a click on button "Refresh"',
-      '-3.5s status appeared, reading "Saved", after a click on button "Refresh"',
-      '-1.5s textbox "Search" now reads "bitcoin"',
-      // A click on a canvas can change only its pixels, which no change records.
-      "-0.5s click canvas at (300, 320)",
-      "The text in view last changed at -1.0s.",
-    ]);
-  });
-
-  it("lists every action as a step on request, or none at all", () => {
-    const all = account(Moment.toPrompt(moment, { actions: "all" }));
-
-    assert.deepStrictEqual(all.slice(4, -1), [
-      '-4.1s click button "Refresh"',
-      '-2.9s hover link "Help"',
-      "-2.5s click (failed: e9 is not on the page any more)",
-      '-1.4s type "bitcoin"',
-      "-0.5s click canvas at (300, 320)",
-    ]);
-    assert.include(all[0], 'after a click on button "Refresh"');
-
-    assert.deepStrictEqual(account(Moment.toPrompt(moment, { actions: "none" })), [
-      '-4.0s "$61,240" became "$62,010", then "$62,100", then "$61,900" (beside "Price", under "Bitcoin") (it changed 5 times)',
+      '-4.0s "$61,240" became "$62,010" (beside "Price", under "Bitcoin")',
       '-4.0s the title "Quote" became "Quote, refreshed"',
       '-3.5s status appeared, reading "Saved"',
-      '-1.5s textbox "Search" now reads "bitcoin"',
-      "The text in view last changed at -1.0s.",
+      '-1.8s textbox "Search" now reads "bitcoin"',
+      '-0.8s "Copied" appeared and went away again (beside "Price", under "Bitcoin")',
+      '-3.0s "+0.3%" became "-0.1%" (beside "24h", under "Bitcoin") (it changed 3 times)',
+      "The text in view last changed at -0.8s.",
     ]);
   });
 
-  it("says where its record begins, lists the steps before it, and keeps look-alikes apart", () => {
+  it("tells every step on request, with the changes in order of time", () => {
+    assert.deepStrictEqual(account(Moment.toPrompt(moment, { actions: "all" })), [
+      '-4.1s click button "Refresh"',
+      '-4.0s "$61,240" became "$62,010" (beside "Price", under "Bitcoin")',
+      '-4.0s the title "Quote" became "Quote, refreshed"',
+      '-3.5s status appeared, reading "Saved"',
+      '-3.0s "+0.3%" became "-0.1%" (beside "24h", under "Bitcoin") (it changed 3 times)',
+      '-2.9s hover link "Help"',
+      "-2.5s click (failed: e9 is not on the page any more)",
+      '-1.8s textbox "Search" now reads "bitcoin"',
+      '-1.4s type "bitcoin"',
+      '-0.8s "Copied" appeared and went away again (beside "Price", under "Bitcoin")',
+      "-0.5s click canvas at (300, 320)",
+      "The text in view last changed at -0.8s.",
+    ]);
+  });
+
+  it("credits no action with a change, such as a tick just after a click that did nothing", () => {
+    const menu = action(6000, 6100, {
+      target: "e4",
+      subject: new Subject({ role: "button", name: "Menu", tag: "button" }),
+    });
+
+    const [text = ""] = texts(
+      Moment.toPrompt(
+        new Moment.Moment({
+          ...moment,
+          events: [menu],
+          changes: recorded([
+            change({
+              at: 7700,
+              startedAt: 6300,
+              subject: cell,
+              before: "$61,200",
+              after: "$61,230",
+              count: 3,
+              earlier: 5600,
+              context: { row: "Bitcoin", column: "Price" },
+            }),
+          ]),
+        }),
+      ),
+    );
+
+    assert.include(
+      text,
+      '-3.7s "$61,200" became "$61,230" (row "Bitcoin", column "Price") (it changed 3 times)\n',
+    );
+    assert.notInclude(text, "Menu");
+  });
+
+  it("puts news before cells that changed together, and says what it could not keep", () => {
+    const ticks = Array.from({ length: 30 }, (_, row) =>
+      change({
+        at: 6000 + row * 10,
+        subject: cell,
+        before: "0.1%",
+        after: "0.2%",
+        context: { row: `Coin ${row}`, column: "1h" },
+      }),
+    );
+
+    const placed = change({
+      at: 7300,
+      kind: "appeared",
+      subject: new Subject({ role: "status", name: "", tag: "div" }),
+      after: "Order placed",
+    });
+
+    const busy = new Moment.Moment({
+      ...moment,
+      events: [],
+      changes: new Changes({
+        from: 0,
+        at: 10_000,
+        truncated: 40,
+        changes: [...ticks, placed],
+      }),
+    });
+
+    assert.deepStrictEqual(account(Moment.toPrompt(busy)), [
+      '-2.7s status appeared, reading "Order placed"',
+      '-4.0s 30 cells in column "1h" changed, such as "0.1%" became "0.2%" (row "Coin 0")',
+      "The text in view last changed at -2.7s.",
+      "The page changed too much to keep: at least 40 more changes are not told.",
+    ]);
+  });
+
+  it("says where its record begins, and lists the steps before it", () => {
     const partial = new Moment.Moment({
       page: "p1",
       from: 5000,
@@ -372,12 +442,20 @@ describe("a moment's account of what changed", () => {
         refresh,
         action(6600, 6700, { name: "hover", target: "e3", subject: hover.subject }),
       ],
-      changesFrom: 6500,
-      changes: [
-        change({ at: 8000, before: "1", after: "2", context: 'row "Ether", column "1h"' }),
-        change({ at: 9000, before: "5", after: "6", context: 'row "Ether", column "1h"' }),
-        change({ at: 9500, kind: "disappeared", before: "First post", context: 'under "Feed"' }),
-      ],
+      changes: recorded(
+        [
+          change({ at: 8000, before: "1", after: "2", context: { row: "Ether", column: "1h" } }),
+          change({ at: 9000, before: "5", after: "6", context: { row: "Bitcoin", column: "1h" } }),
+          change({
+            at: 9500,
+            kind: "disappeared",
+            subject: new Subject({ role: "listitem", name: "", tag: "li" }),
+            before: "First post",
+            context: { heading: "Feed" },
+          }),
+        ],
+        6500,
+      ),
     });
 
     const [text = ""] = texts(Moment.toPrompt(partial));
@@ -386,7 +464,7 @@ describe("a moment's account of what changed", () => {
       text,
       [
         '-2.0s "1" became "2" (row "Ether", column "1h")',
-        '-1.0s "5" became "6" (row "Ether", column "1h")',
+        '-1.0s "5" became "6" (row "Bitcoin", column "1h")',
         '-0.5s "First post" disappeared (under "Feed")',
         // Before the record began, a step is all there is to tell; after it, a hover that changed
         // nothing is left out.
@@ -397,7 +475,7 @@ describe("a moment's account of what changed", () => {
     );
 
     const [still = ""] = texts(
-      Moment.toPrompt(new Moment.Moment({ ...partial, events: [], changes: [] })),
+      Moment.toPrompt(new Moment.Moment({ ...partial, events: [], changes: recorded([], 6500) })),
     );
 
     assert.include(
@@ -542,8 +620,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const timeline = text.slice(text.indexOf("What happened"));
 
       assert.match(text, /\[ref=e\d+\]/);
-      // The new document's record had only begun, so the click is told as the navigation's cause.
-      assert.include(timeline, 'after a click on link "Next page"');
+      // The new document's record had only begun, so the click is told as a step.
+      assert.include(timeline, 'click link "Next page"');
       assert.notMatch(timeline, /\be\d+\b/);
     }),
   );
@@ -575,8 +653,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("tells what a click changed on the page, and the click only as its cause", () =>
+  it.effect("tells what a click changed on the page, up to any time, and not the click", () =>
     Effect.gen(function* () {
+      const browser = yield* Browser;
       const page = yield* start("/quote");
       // The first read of a document starts its record, so this moment knows no earlier changes.
       const first = yield* Moment.capture(page);
@@ -585,8 +664,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       if (ref === undefined) return yield* Effect.die("the quote has no Refresh button");
       yield* page.click(ref);
       // The page's own script then moves the price twice more, well after the click.
+      const moved: Array<number> = [];
+
       for (const price of ["$62,100", "$61,900"]) {
-        yield* Effect.sleep(Duration.millis(1200));
+        yield* Effect.sleep(Duration.millis(600));
         yield* Effect.promise(() =>
           page.playwright.evaluate((text) => {
             const element = document.querySelector("#price");
@@ -594,38 +675,52 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
             if (element !== null) element.textContent = text;
           }, price),
         );
+        yield* Effect.sleep(Duration.millis(200));
+        moved.push(yield* browser.now);
       }
-      yield* Effect.sleep(Duration.millis(200));
       const second = yield* Moment.capture(page, { since: first });
 
-      assert.deepStrictEqual(first.changes, []);
-      assert.isAbove(first.changesFrom ?? -Infinity, first.from);
-      assert.isUndefined(second.changesFrom);
-      assert.deepStrictEqual(
-        second.changes?.map((change) => [change.kind, change.before, change.after, change.context]),
-        [
-          ["text", "$61,240", "$62,010", 'beside "Price", under "Bitcoin"'],
-          ["text", "-1.4%", "+0.3%", 'beside "24h", under "Bitcoin"'],
-          ["text", "$62,010", "$62,100", 'beside "Price", under "Bitcoin"'],
-          ["text", "$62,100", "$61,900", 'beside "Price", under "Bitcoin"'],
-        ],
-      );
-      for (const change of second.changes ?? []) {
-        assert.isAbove(change.at, second.from);
+      assert.deepStrictEqual(first.changes?.changes, []);
+      assert.isAbove(first.changes?.from ?? -Infinity, first.from);
+      // The record began as the first moment was read, just after its picture.
+      assert.isAtMost(second.changes?.from ?? Infinity, first.at + 1000);
+
+      const told = (changes: Changes | undefined) =>
+        changes?.changes.map((change) => [
+          change.kind,
+          change.before,
+          change.after,
+          change.count,
+          change.context.beside,
+          change.context.heading,
+        ]);
+
+      assert.deepStrictEqual(told(second.changes), [
+        ["text", "$61,240", "$61,900", 3, "Price", "Bitcoin"],
+        ["text", "-1.4%", "+0.3%", 1, "24h", "Bitcoin"],
+      ]);
+      for (const change of second.changes?.changes ?? []) {
+        assert.isAbove(change.startedAt, second.from);
         assert.isAtMost(change.at, second.at);
       }
+
+      // A window can end at any time, such as a delayed frame's, and says what was shown then.
+      assert.deepStrictEqual(told(yield* page.changes({ since: first.at, until: moved[0] })), [
+        ["text", "$61,240", "$62,100", 2, "Price", "Bitcoin"],
+        ["text", "-1.4%", "+0.3%", 1, "24h", "Bitcoin"],
+      ]);
 
       const [text = ""] = texts(Moment.toPrompt(second));
 
       assert.match(
         text,
-        /\n-\d\.\ds "\$61,240" became "\$62,010", then "\$62,100", then "\$61,900" \(beside "Price", under "Bitcoin"\), after a click on button "Refresh"\n/,
+        /\n-\d\.\ds "\$61,240" became "\$61,900" \(beside "Price", under "Bitcoin"\) \(it changed 3 times\)\n/,
       );
       assert.match(
         text,
-        /\n-\d\.\ds "-1\.4%" became "\+0\.3%" .*after a click on button "Refresh"\n/,
+        /\n-\d\.\ds "-1\.4%" became "\+0\.3%" \(beside "24h", under "Bitcoin"\)\n/,
       );
-      assert.notMatch(text, /\n-\d\.\ds click/);
+      assert.notInclude(text, "Refresh");
     }),
   );
 
@@ -636,10 +731,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         const page = yield* start("/quote");
         const first = yield* Moment.capture(page);
 
-        // Each step is its own burst, well apart, so none is taken for another's cause.
         const step = (change: () => void) =>
           Effect.promise(() => page.playwright.evaluate(change)).pipe(
-            Effect.andThen(Effect.sleep(Duration.millis(300))),
+            Effect.andThen(Effect.sleep(Duration.millis(100))),
           );
 
         yield* step(() => {
@@ -666,20 +760,20 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         const second = yield* Moment.capture(page, { since: first });
 
         assert.deepStrictEqual(
-          second.changes?.map((change) => [
+          second.changes?.changes.map((change) => [
             change.kind,
             change.subject.role ?? change.subject.tag,
             change.before ?? null,
             change.after ?? null,
-            change.context,
+            change.context.row ?? change.context.heading ?? null,
           ]),
           [
-            ["title", "title", "Quote", "Quote, refreshed", ""],
-            ["text", "td", "0.2%", "0.5%", 'row "Ether", column "1h"'],
-            ["appeared", "li", null, "Second post", 'under "Bitcoin"'],
-            ["disappeared", "ul", "First post", null, 'under "Bitcoin"'],
-            ["appeared", "p", null, "Saved", 'under "Bitcoin"'],
-            ["value", "textbox", "", "bitcoin", ""],
+            ["text", "td", "0.2%", "0.5%", "Ether"],
+            ["title", "title", "Quote", "Quote, refreshed", null],
+            ["appeared", "li", null, "Second post", "Bitcoin"],
+            ["disappeared", "li", "First post", null, "Bitcoin"],
+            ["appeared", "p", null, "Saved", "Bitcoin"],
+            ["value", "textbox", "", "bitcoin", null],
           ],
         );
 
@@ -688,6 +782,134 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.include(text, 'textbox "Search" now reads "bitcoin"');
         assert.notInclude(text, "Changed below");
       }),
+  );
+
+  it.effect(
+    "judges a change in view when it happened: one scrolled away, a toast that came and went",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* start("/quote");
+        const first = yield* Moment.capture(page);
+
+        const run = (change: () => void) =>
+          Effect.promise(() => page.playwright.evaluate(change)).pipe(
+            Effect.andThen(Effect.sleep(Duration.millis(300))),
+          );
+
+        yield* run(() => {
+          const toast = document.createElement("div");
+
+          toast.id = "toast";
+          toast.textContent = "Order placed";
+          document.body.prepend(toast);
+        });
+        yield* run(() => document.querySelector("#toast")?.remove());
+        yield* run(() => {
+          const price = document.querySelector("#price");
+
+          if (price !== null) price.textContent = "$62,500";
+        });
+        // Scrolled down, the page sheds what is now above the viewport, which no one saw go.
+        yield* run(() => window.scrollTo(0, 2000));
+        yield* run(() => document.querySelector("h1")?.remove());
+        const second = yield* Moment.capture(page, { since: first });
+
+        assert.deepStrictEqual(
+          second.changes?.changes.map((change) => [change.kind, change.before, change.after]),
+          [
+            ["brief", undefined, "Order placed"],
+            ["text", "$61,240", "$62,500"],
+          ],
+        );
+      }),
+  );
+
+  it.effect("keeps news on a page that never rests, and counts what it could not keep", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/quote");
+
+      // More ticking cells than the record keeps, each changing every 50 ms.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const table = document.createElement("table");
+
+          table.style.fontSize = "4px";
+          table
+            .createTHead()
+            .insertRow()
+            .append(
+              ...Array.from({ length: 9 }, (_, column) =>
+                Object.assign(document.createElement("th"), {
+                  textContent: column === 0 ? "Coin" : `C${column}`,
+                }),
+              ),
+            );
+          for (let row = 0; row < 40; row++) {
+            const line = table.insertRow();
+
+            line.insertCell().textContent = `R${row}`;
+            for (let column = 0; column < 8; column++) line.insertCell().textContent = "0";
+          }
+          document.body.prepend(table);
+          let tick = 0;
+
+          setInterval(() => {
+            tick++;
+            for (const cell of table.querySelectorAll("td:not(:first-child)"))
+              cell.textContent = String(tick);
+          }, 50);
+        }),
+      );
+      const first = yield* Moment.capture(page);
+
+      yield* Effect.sleep(Duration.millis(500));
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const placed = document.createElement("p");
+
+          placed.setAttribute("role", "status");
+          placed.textContent = "Order placed";
+          document.body.prepend(placed);
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(500));
+      const second = yield* Moment.capture(page, { since: first });
+      const changes = second.changes?.changes ?? [];
+
+      assert.isAbove(second.changes?.truncated ?? 0, 0);
+      assert.isTrue(
+        changes.some((change) => change.kind === "appeared" && change.after === "Order placed"),
+      );
+      assert.isAbove(changes.length, 200);
+
+      const [text = ""] = texts(Moment.toPrompt(second));
+      const placed = text.indexOf('status appeared, reading "Order placed"');
+
+      assert.isAbove(placed, -1);
+      assert.isBelow(placed, text.indexOf(" cells in column "));
+      assert.include(text, "The page changed too much to keep");
+    }),
+  );
+
+  it.effect("keeps no record of a page until it is asked for changes", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/quote");
+
+      // A snapshot installs the page script; the record still begins with the first read.
+      yield* page.snapshot();
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const price = document.querySelector("#price");
+
+          if (price !== null) price.textContent = "$1";
+        }),
+      );
+      yield* Effect.sleep(Duration.millis(200));
+      const read = yield* page.changes();
+
+      assert.deepStrictEqual(read.changes, []);
+      assert.strictEqual(read.from, read.at);
+    }),
   );
 
   it.effect("rejects fewer than one frame, and a window that is not a finite duration", () =>

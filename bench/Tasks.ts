@@ -342,6 +342,9 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
             Effect.fail(new EvidenceIncomplete({ detail: "no screencast frame arrived" })),
         }),
       );
+      // A page keeps a record of what changed from its first read, so the moment can tell what the
+      // setup changed.
+      yield* page.changes().pipe(Effect.ignore);
       yield* spec.setup(page);
       const { frameAfter } = yield* truth(page, FrameTruth);
       const browser = yield* Browser;
@@ -393,7 +396,6 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
               snapshot: captured.snapshot,
               events: captured.events,
               changes: captured.changes,
-              changesFrom: captured.changesFrom,
             });
 
       const last = moment.frames.at(-1);

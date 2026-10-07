@@ -155,9 +155,16 @@ export type TypeableResult =
   | { readonly ok: true; readonly secret: boolean }
   | { readonly error: "stale" | "untypeable"; readonly detail: string };
 
-export type ChangeKind = "text" | "appeared" | "disappeared" | "value" | "title";
+export type ChangeKind = "text" | "appeared" | "disappeared" | "brief" | "value" | "title";
 
-/** One settled burst of changes to one element, timed on the page's epoch clock. */
+export interface ChangeContext {
+  readonly row: string | null;
+  readonly column: string | null;
+  readonly beside: string | null;
+  readonly heading: string | null;
+}
+
+/** One element's changes over a read's window, timed on the page's epoch clock. */
 export interface ChangeRecord {
   readonly at: number;
   readonly startedAt: number;
@@ -165,16 +172,19 @@ export interface ChangeRecord {
   readonly role: string | null;
   readonly name: string;
   readonly tag: string;
-  readonly context: string;
+  readonly context: ChangeContext;
   readonly before: string | null;
   readonly after: string | null;
   readonly count: number;
+  readonly earlier: number | null;
 }
 
 export interface ChangesResult {
   readonly now: number;
-  /** Where the record is whole: when the recorder started, or the newest change it let go. */
+  /** Where the record is whole: when it started, or a minute ago. */
   readonly from: number;
+  /** Changes in the window the record did not keep. */
+  readonly truncated: number;
   readonly records: ReadonlyArray<ChangeRecord>;
 }
 
@@ -197,7 +207,7 @@ export interface PageApi {
   checkText(ref: string, expected: string): EditResult;
   select(ref: string, values: ReadonlyArray<string>): EditResult;
   hasText(text: string): boolean;
-  changes(maxAgeMillis: number): ChangesResult;
+  changes(since: number | null, until: number | null): ChangesResult;
 }
 
 declare global {
@@ -208,7 +218,7 @@ declare global {
 export const install = (): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 6) return installed;
+  if (installed !== undefined && installed.version === 7) return installed;
 
   const byElement = new WeakMap<Element, string>();
   const byRef = new Map<string, WeakRef<Element>>();
@@ -1816,21 +1826,200 @@ export const install = (): PageApi => {
   const hasText = (text: string): boolean =>
     (document.body?.innerText ?? "").toLowerCase().includes(text.toLowerCase());
 
-  // What visibly changes, noted as it happens and settled into bursts: text in view that changed,
-  // appeared or disappeared, a field's value and the title, each with what it said before. The
-  // observer only notes which elements changed; their words are read once a burst settles, or
-  // when the host asks, so a busy page pays little between reads. Changes inside frames, shadow
-  // roots and SVG, and anything drawn rather than written, such as a canvas, are not seen.
+  // What visibly changed, kept per element, so a read can say what each one said at any time in the
+  // last minute. The record starts with a document's first read, so a page that is never asked pays
+  // nothing, and stops once nobody has read it for two minutes. While it runs, the observer notes
+  // only the words of what changed, which a text change hands over almost free. Whether a change
+  // was in view comes from an IntersectionObserver as the page renders, so it is judged when the
+  // change happened and forces no layout. Context, which takes a walk of the page, is read only for
+  // what a read returns. Changes inside frames, shadow roots and SVG, a reveal by CSS alone, and
+  // anything drawn rather than written, such as a canvas, are not seen.
   const epoch = () => performance.timeOrigin + performance.now();
-  const noted: Array<ChangeRecord> = [];
-  // The newest change no longer kept; the record is whole only after it.
-  let forgotten = epoch();
-  let title = document.title;
-  let titleBefore: { readonly title: string; readonly at: number } | undefined;
 
-  const note = (record: ChangeRecord) => {
-    noted.push(record);
-    if (noted.length > 128) forgotten = noted.shift()?.at ?? forgotten;
+  /** An element's words, or `null` while it is not on the page; a field's `null` is unknown. */
+  type State = string | null;
+
+  interface Sample {
+    readonly track: Track;
+    readonly at: number;
+    readonly state: State;
+    /** Whether it was in view when it changed; unknown until the page next renders. */
+    seen: boolean | undefined;
+  }
+
+  interface Track {
+    node: Node;
+    readonly kind: "content" | "value" | "title";
+    /** Where a removed element was, which gives its context. */
+    place: Element | null;
+    /** What it said before its oldest kept sample, known since `known`. */
+    initial: State;
+    known: number;
+    readonly samples: Array<Sample>;
+  }
+
+  // A busy page is kept to these bounds. An element that changed often gives way first to one the
+  // record has not seen change, then one never in view, then one that has gone, so news is kept on
+  // a page that never rests. Whatever gives way or is never kept is counted, never silently lost.
+  const maxTracks = 256;
+  const maxSamples = 32;
+  const retention = 60_000;
+  const tracks = new Map<Node, Track>();
+  const busy = new Set<Track>();
+  const blind = new Set<Track>();
+  const gone = new Set<Track>();
+  const refused = new WeakSet<Node>();
+  const leaves = new WeakSet<Element>();
+  const lost: Array<number> = [];
+  let losses = 0;
+  let started: number | undefined;
+  let lastRead = 0;
+  let title = "";
+
+  const forget = (at: number, count = 1) => {
+    for (let index = 0; index < Math.min(count, 1024); index++) lost[losses++ % 1024] = at;
+  };
+
+  // Whether each observed element is in view, as the page last rendered it.
+  let visible = new WeakMap<Element, boolean>();
+  const waiting = new Map<Element, Array<Sample>>();
+
+  const unobserve = (element: Element) => {
+    sight.unobserve(element);
+    visible.delete(element);
+  };
+
+  const settle = (sample: Sample, seen: boolean) => {
+    if (sample.seen !== undefined) return;
+    sample.seen = seen;
+    if (seen) blind.delete(sample.track);
+    else if (sample.track.samples.every((each) => each.seen === false)) blind.add(sample.track);
+  };
+
+  const sight = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      visible.set(entry.target, entry.isIntersecting);
+      for (const sample of waiting.get(entry.target) ?? []) settle(sample, entry.isIntersecting);
+      waiting.delete(entry.target);
+      if (!tracks.has(entry.target)) unobserve(entry.target);
+    }
+  });
+
+  /** Note whether `element` is in view for `sample`: now if it is watched, else when it renders. */
+  const look = (element: Element, sample: Sample) => {
+    const known = visible.get(element);
+
+    if (known !== undefined && tracks.has(element)) {
+      settle(sample, known);
+
+      return;
+    }
+    sight.observe(element);
+    const list = waiting.get(element);
+
+    if (list === undefined) waiting.set(element, [sample]);
+    else list.push(sample);
+  };
+
+  const drop = (track: Track) => {
+    tracks.delete(track.node);
+    busy.delete(track);
+    blind.delete(track);
+    gone.delete(track);
+    if (isElement(track.node)) unobserve(track.node);
+  };
+
+  /** A new state for a track. A removed element's place is in view if what took it is. */
+  const sample = (track: Track, at: number, state: State, near: Element | null = null) => {
+    // One batch of mutations counts once, as it left the element: a move is no change.
+    if (track.samples.at(-1)?.at === at) track.samples.pop();
+    const last = track.samples.at(-1);
+    const previous = last === undefined ? track.initial : last.state;
+
+    if (track.kind === "content" && state === null) gone.add(track);
+    else gone.delete(track);
+    if (previous === state) {
+      if (track.samples.length === 0) drop(track);
+
+      return;
+    }
+    if (track.samples.length >= maxSamples) {
+      const oldest = track.samples.shift();
+
+      if (oldest !== undefined) {
+        track.initial = oldest.state;
+        track.known = oldest.at;
+        forget(oldest.at);
+      }
+    }
+    const next: Sample = { track, at, state, seen: track.kind === "title" ? true : undefined };
+
+    track.samples.push(next);
+    if (track.samples.length >= 4) busy.add(track);
+    if (track.kind === "title" || !isElement(track.node)) return;
+    const node = track.node;
+    // Only an element the record watched before it went has a known place on the page.
+    const before = track.samples.length > 1 ? visible.get(node) : undefined;
+
+    if (state !== null) look(node, next);
+    else if (before !== undefined) settle(next, before);
+    else look(near ?? track.place ?? node, next);
+  };
+
+  /**
+   * Note what `node` says now. On its first change, `before` says what it said before, or
+   * `undefined` when it is not worth keeping; a full record keeps it only in place of one that
+   * changed often or has gone.
+   */
+  const record = (
+    node: Node,
+    kind: Track["kind"],
+    at: number,
+    state: State,
+    before: () => State | undefined,
+    place: Element | null = null,
+    near: Element | null = null,
+  ) => {
+    let track = tracks.get(node);
+
+    if (track === undefined) {
+      // A title or a field the user changed is always kept.
+      const victim =
+        tracks.size < maxTracks || kind !== "content"
+          ? undefined
+          : refused.has(node)
+            ? null
+            : (busy.values().next().value ??
+              blind.values().next().value ??
+              gone.values().next().value ??
+              null);
+
+      if (victim === null) {
+        refused.add(node);
+        forget(at);
+
+        return;
+      }
+      const initial = before();
+
+      if (initial === undefined || initial === state) return;
+      if (victim !== undefined) {
+        drop(victim);
+        refused.add(victim.node);
+        for (const old of victim.samples) forget(old.at);
+      }
+      track = {
+        node,
+        kind,
+        place,
+        initial,
+        known: refused.has(node) ? at : Number.NEGATIVE_INFINITY,
+        samples: [],
+      };
+      tracks.set(node, track);
+    }
+    if (place !== null) track.place = place;
+    sample(track, at, state, near);
   };
 
   const inlineTags = new Set([
@@ -1861,26 +2050,68 @@ export const install = (): PageApi => {
     readonly removed: Map<Node, Array<{ readonly next: Node | null; readonly nodes: Array<Node> }>>;
   }
 
+  const undoOf = (mutations: ReadonlyArray<MutationRecord>): Undo => {
+    const undo: Undo = { data: new Map(), added: new Set(), removed: new Map() };
+
+    for (const mutation of mutations) {
+      if (mutation.type === "attributes") continue;
+      if (mutation.type === "characterData") {
+        if (!undo.data.has(mutation.target))
+          undo.data.set(mutation.target, mutation.oldValue ?? "");
+        continue;
+      }
+
+      const removed = Array.from(mutation.removedNodes).filter((node) => {
+        if (!undo.added.has(node)) return true;
+        undo.added.delete(node);
+
+        return false;
+      });
+
+      if (removed.length > 0) {
+        const earlier = undo.removed.get(mutation.target) ?? [];
+
+        earlier.push({ next: mutation.nextSibling, nodes: removed });
+        undo.removed.set(mutation.target, earlier);
+      }
+      for (const node of Array.from(mutation.addedNodes)) undo.added.add(node);
+    }
+
+    return undo;
+  };
+
   /** A node's words, or with an undo, its words before that batch of mutations. */
   const wordsOf = (node: Node, undo?: Undo): string => {
     if (node.nodeType === Node.TEXT_NODE) return undo?.data.get(node) ?? node.nodeValue ?? "";
-    if (!isElement(node) || unwritten.has(node.tagName)) return "";
-    const gap = inlineTags.has(node.tagName) ? "" : " ";
-    let text = "";
+    if (!isElement(node)) return "";
+    const tag = node.tagName;
 
-    const putBack = (next: Node | null) => {
-      for (const group of undo?.removed.get(node) ?? [])
-        if (group.next === next) for (const removed of group.nodes) text += wordsOf(removed, undo);
-    };
+    if (unwritten.has(tag)) return "";
+    const gap = inlineTags.has(tag) ? "" : " ";
+    const removed = undo?.removed.get(node);
+    let text = gap;
 
-    for (const child of Array.from(node.childNodes)) {
-      putBack(child);
+    for (let child = node.firstChild; ; child = child.nextSibling) {
+      if (removed !== undefined)
+        for (const group of removed)
+          if (group.next === child) for (const gone of group.nodes) text += wordsOf(gone, undo);
+      if (child === null) break;
       if (undo?.added.has(child) !== true) text += wordsOf(child, undo);
     }
-    putBack(null);
 
-    return `${gap}${text}${gap}`;
+    return text + gap;
   };
+
+  /** An element's words now; most changed elements hold only text, which is read whole. */
+  const wordsNow = (element: Element): string =>
+    clean(
+      unwritten.has(element.tagName)
+        ? ""
+        : element.childElementCount === 0
+          ? element.textContent
+          : wordsOf(element),
+      600,
+    );
 
   /** A change shorter than 160 characters as it is, else the part that differs, with some context. */
   const excerpt = (before: string, after: string): [string, string] => {
@@ -1921,11 +2152,27 @@ export const install = (): PageApi => {
     );
   };
 
-  const watched = (element: Element): boolean =>
-    element.closest("head,svg,script,style,noscript,template") === null;
+  const unseen = new WeakMap<Element, boolean>();
 
-  /** Words beside an element that say what it is: its table row and column, or a label and heading. */
-  const contextOf = (element: Element, role: string | null): string => {
+  /** Whether the page shows what is in an element, as far as words go; asked once per element. */
+  const watched = (element: Element): boolean => {
+    let hidden = unseen.get(element);
+
+    if (hidden === undefined) {
+      hidden = element.closest("head,svg,script,style,noscript,template") !== null;
+      unseen.set(element, hidden);
+    }
+
+    return !hidden;
+  };
+
+  const noContext: ChangeContext = { row: null, column: null, beside: null, heading: null };
+
+  /**
+   * Words beside an element that say what it is: its table row and column, or the words before it
+   * and the heading above it. `headers` keeps each table's header row for one read.
+   */
+  const contextOf = (element: Element, headers: Map<Element, Element | null>): ChangeContext => {
     const cell = element.closest("td,th,[role=cell],[role=gridcell]");
     const row = cell?.closest("tr,[role=row]") ?? null;
 
@@ -1934,21 +2181,29 @@ export const install = (): PageApi => {
       const index = cells.indexOf(cell);
       const first = cells[0];
       const table = row.closest("table,[role=table],[role=grid]");
+      let header = table === null ? null : headers.get(table);
 
-      const header =
-        table?.querySelector("thead tr, tr:has(> th), [role=row]:has(> [role=columnheader])") ??
-        null;
+      if (header === undefined && table !== null) {
+        header = table.querySelector(
+          "thead tr, tr:has(> th), [role=row]:has(> [role=columnheader])",
+        );
+        headers.set(table, header);
+      }
 
-      const column = header === null || header === row ? undefined : header.children[index];
+      const column =
+        header === null || header === undefined || header === row
+          ? undefined
+          : header.children[index];
+
       const rowName = first === undefined || first === cell ? "" : clean(textOf(first), 60);
       const columnName = column === undefined ? "" : clean(textOf(column), 60);
 
-      const parts = [
-        rowName === "" ? "" : `row ${JSON.stringify(rowName)}`,
-        columnName === "" ? "" : `column ${JSON.stringify(columnName)}`,
-      ].filter((part) => part !== "");
-
-      if (parts.length > 0) return parts.join(", ");
+      if (rowName !== "" || columnName !== "")
+        return {
+          ...noContext,
+          row: rowName === "" ? null : rowName,
+          column: columnName === "" ? null : columnName,
+        };
     }
 
     // Words just before it in its own row, item or block, such as a label; never the whole page.
@@ -1963,27 +2218,17 @@ export const install = (): PageApi => {
     const beside = scope === undefined ? "" : textBeside(element, scope, true);
     const near = beside.length > 40 ? `…${beside.slice(-39).trimStart()}` : beside;
 
-    const heading = role === "heading" ? undefined : headingBefore(element, element.ownerDocument);
-
-    return [
-      near === "" ? "" : `beside ${JSON.stringify(near)}`,
-      heading === undefined ? "" : `under ${JSON.stringify(heading)}`,
-    ]
-      .filter((part) => part !== "")
-      .join(", ");
-  };
-
-  const described = (element: Element, kind: ChangeKind) => {
-    const role = roleOf(element);
-
     return {
-      role,
-      // An element's own words are what changed, not its name.
-      name: role === null || role === "heading" ? "" : nameOf(element, role),
-      tag: element.tagName.toLowerCase(),
-      context: kind === "value" ? "" : contextOf(element, role),
+      ...noContext,
+      beside: near === "" ? null : near,
+      heading:
+        roleOf(element) === "heading"
+          ? null
+          : (headingBefore(element, element.ownerDocument) ?? null),
     };
   };
+
+  const secrets = new WeakSet<Element>();
 
   const valueText = (element: Element): string | null => {
     if (isInput(element)) {
@@ -1993,283 +2238,179 @@ export const install = (): PageApi => {
       if (element.type === "file") return `${element.files?.length ?? 0} file(s) chosen`;
     }
     if (!isInput(element) && !isTextArea(element) && !isSelect(element)) return null;
-    if (isSecret(element)) return element.value === "" ? "" : "••••";
+    // A field once secret stays masked, such as a password its page lets the user reveal.
+    if (isSecret(element)) secrets.add(element);
+    if (secrets.has(element)) return element.value === "" ? "" : "••••";
     if (isSelect(element))
       return clean(Array.from(element.selectedOptions, (option) => option.text).join(", "));
 
     return clean(element.value);
   };
 
-  interface Burst {
-    readonly before: string | null;
-    readonly startedAt: number;
-    at: number;
-    count: number;
-    /** A field's value at its latest event. */
-    value?: string | null;
-  }
+  /** The nearest element beside a removed node, which takes its place on the page. */
+  const neighbour = (node: Node | null, forward: boolean): Element | null =>
+    node === null || isElement(node)
+      ? node
+      : node instanceof CharacterData
+        ? forward
+          ? node.nextElementSibling
+          : node.previousElementSibling
+        : null;
 
-  const texts = new Map<Element, Burst>();
-  const values = new Map<Element, Burst>();
-  const arrived = new Map<Element, number>();
+  const noElements: ReadonlyArray<Element> = [];
 
-  const departed: Array<{ readonly parent: Node; readonly words: string; readonly at: number }> =
-    [];
+  // One mutation that adds or removes more elements than this, such as a list rebuilt wholesale,
+  // is followed for its first ones and the rest are counted.
+  const maxNodes = 64;
 
-  const focusedValues = new WeakMap<Element, string>();
-  const settledValues = new WeakMap<Element, string>();
-  let pendingSince: number | undefined;
-  let latest = 0;
+  /** The elements among added or removed nodes; text among them makes `target` an owner. */
+  const elementsOf = (
+    nodes: NodeList,
+    target: Element,
+    owners: Set<Element>,
+  ): ReadonlyArray<Element> => {
+    let elements: Array<Element> | undefined;
 
-  /** Settle every burst; with an undo, reading the page as it was before those mutations. */
-  const flush = (undo?: Undo) => {
-    pendingSince = undefined;
-    const settled: Array<ChangeRecord> = [];
+    for (let index = 0; index < Math.min(nodes.length, maxNodes); index++) {
+      const node = nodes.item(index);
 
-    const push = (
-      element: Element,
-      kind: ChangeKind,
-      burst: Omit<Burst, "before">,
-      before: string | null,
-      after: string | null,
-    ) => {
-      if (settled.length >= 40) return;
-
-      const [shownBefore, shownAfter] =
-        before === null || after === null ? [before, after] : excerpt(before, after);
-
-      settled.push({
-        at: burst.at,
-        startedAt: burst.startedAt,
-        kind,
-        ...described(element, kind),
-        before: shownBefore === null ? null : clean(shownBefore, 200),
-        after: shownAfter === null ? null : clean(shownAfter, 200),
-        count: burst.count,
-      });
-    };
-
-    if (titleBefore !== undefined) {
-      const at = titleBefore.at;
-
-      if (document.title !== titleBefore.title)
-        settled.push({
-          at,
-          startedAt: at,
-          kind: "title",
-          role: null,
-          name: "",
-          tag: "title",
-          context: "",
-          before: clean(titleBefore.title, 200),
-          after: clean(document.title, 200),
-          count: 1,
-        });
-      titleBefore = undefined;
-      title = document.title;
+      if (node === null) continue;
+      if (isElement(node)) (elements ??= []).push(node);
+      else if (
+        node.nodeType === Node.TEXT_NODE &&
+        !owners.has(target) &&
+        (tracks.has(target) || refused.has(target) || /\S/.test(node.nodeValue ?? ""))
+      )
+        owners.add(target);
     }
 
-    // A replacement inside one parent, such as a re-rendered price, is a change of its text.
-    const replaced = new Set<Element>();
-
-    for (const [element, at] of arrived) {
-      if (!element.isConnected || element.parentNode === null || !watched(element)) continue;
-      const parent = element.parentNode;
-      const siblings = [...arrived.keys()].filter((other) => other.parentNode === parent);
-      const gone = departed.filter((removed) => removed.parent === parent);
-
-      if (siblings.length !== 1 || gone.length !== 1) continue;
-      const [removed] = gone;
-
-      if (removed === undefined) continue;
-      replaced.add(element);
-      departed.splice(departed.indexOf(removed), 1);
-      const after = clean(wordsOf(element, undo), Number.POSITIVE_INFINITY);
-
-      if (after !== removed.words && inView(element))
-        push(
-          element,
-          "text",
-          { startedAt: Math.min(at, removed.at), at, count: 1 },
-          removed.words,
-          after,
-        );
-    }
-
-    for (const [element, burst] of texts) {
-      if (!watched(element) || !inView(element)) continue;
-      // An element inside another that changed is part of that change.
-      let outer = element.parentElement;
-
-      while (outer !== null && !texts.has(outer)) outer = outer.parentElement;
-      if (outer !== null) continue;
-      const after = clean(wordsOf(element, undo), Number.POSITIVE_INFINITY);
-
-      if (after !== burst.before) push(element, "text", burst, burst.before, after);
-    }
-
-    for (const [element, at] of arrived) {
-      if (replaced.has(element) || !watched(element) || !inView(element)) continue;
-      let outer = element.parentElement;
-
-      while (outer !== null && !arrived.has(outer)) outer = outer.parentElement;
-      if (outer !== null) continue;
-      const words = clean(wordsOf(element, undo), Number.POSITIVE_INFINITY);
-
-      if (words !== "") push(element, "appeared", { startedAt: at, at, count: 1 }, null, words);
-    }
-
-    for (const removed of departed) {
-      const parent = removed.parent;
-
-      if (!isElement(parent) || !watched(parent) || !inView(parent) || removed.words === "")
-        continue;
-      push(
-        parent,
-        "disappeared",
-        { startedAt: removed.at, at: removed.at, count: 1 },
-        removed.words,
-        null,
-      );
-    }
-
-    for (const [element, burst] of values) {
-      const after = burst.value ?? null;
-
-      if (after === null || !element.isConnected) continue;
-      settledValues.set(element, after);
-      if (after !== burst.before) push(element, "value", burst, burst.before, after);
-    }
-
-    texts.clear();
-    values.clear();
-    arrived.clear();
-    departed.length = 0;
-    for (const record of settled.toSorted((left, right) => left.at - right.at)) note(record);
-  };
-
-  // A burst settles once the page has been quiet for 150 ms, or a second after it began on a page
-  // that never rests. It settles at the next change after that, reading the page as it was before
-  // that change, or when the host reads the record: the script keeps no timers, which a hidden tab
-  // would delay.
-  const pending = (at: number) => {
-    pendingSince ??= at;
-    latest = at;
-  };
-
-  const settleBy = (at: number, undo?: Undo) => {
-    if (pendingSince !== undefined && (at - latest >= 150 || at - pendingSince >= 1000))
-      flush(undo);
-  };
-
-  // A page that rebuilds itself wholesale is noted up to these bounds, so its cost stays bounded.
-  const maxPending = 200;
-
-  const changed = (element: Element | null, at: number, undo: Undo) => {
-    if (element === null || !watched(element) || element === element.ownerDocument.body) return;
-    const burst = texts.get(element);
-
-    if (burst !== undefined) {
-      burst.at = at;
-      burst.count++;
-    } else if (texts.size < maxPending)
-      texts.set(element, {
-        before: clean(wordsOf(element, undo), Number.POSITIVE_INFINITY),
-        startedAt: at,
-        at,
-        count: 1,
-      });
+    return elements ?? noElements;
   };
 
   const observer = new MutationObserver((mutations) => {
     const at = epoch();
-    const undo: Undo = { data: new Map(), added: new Set(), removed: new Map() };
 
-    for (const mutation of mutations) {
-      if (mutation.type === "attributes") continue;
-      if (mutation.type === "characterData") {
-        if (!undo.data.has(mutation.target))
-          undo.data.set(mutation.target, mutation.oldValue ?? "");
-        continue;
-      }
+    if (at - lastRead > 120_000) {
+      stop();
 
-      const removed = Array.from(mutation.removedNodes).filter((node) => {
-        if (!undo.added.has(node)) return true;
-        undo.added.delete(node);
-
-        return false;
-      });
-
-      if (removed.length > 0) {
-        const earlier = undo.removed.get(mutation.target) ?? [];
-
-        earlier.push({ next: mutation.nextSibling, nodes: removed });
-        undo.removed.set(mutation.target, earlier);
-      }
-      for (const node of Array.from(mutation.addedNodes)) undo.added.add(node);
+      return;
     }
+    const owners = new Set<Element>();
+    const parents = new Set<Element>();
+    const arrivals = new Set<Node>();
+    let byTarget: Map<Node | null, Array<MutationRecord>> | undefined;
+    let undo: Undo | undefined;
 
-    settleBy(at, undo);
-    if (document.title !== title && titleBefore === undefined) titleBefore = { title, at };
+    // What an element said before this batch, unless it arrived in it, so its arrival tells it.
+    // An element of text alone, such as a cell, is undone from its own mutations, else from all.
+    const earlier = (element: Element) => () => {
+      for (let up: Element | null = element; up !== null; up = up.parentElement)
+        if (arrivals.has(up)) return undefined;
+      if (element.childElementCount > 0) undo ??= undoOf(mutations);
+      byTarget ??= Map.groupBy(mutations, (mutation) =>
+        mutation.type === "characterData" ? mutation.target.parentNode : mutation.target,
+      );
+
+      return clean(wordsOf(element, undo ?? undoOf(byTarget.get(element) ?? [])), 600);
+    };
 
     for (const mutation of mutations) {
       const target = mutation.target;
 
-      if (mutation.type === "attributes") {
-        const attribute = mutation.attributeName;
-
-        if (!isElement(target) || attribute === null) continue;
-        const had = mutation.oldValue !== null;
-        const has = target.hasAttribute(attribute);
-
-        if (had === has) continue;
-        // A dialog or details element opens; anything else shows when it loses `hidden`.
-        if (attribute === "open" ? has : !has) {
-          if (!arrived.has(target)) arrived.set(target, at);
-        } else if (!arrived.delete(target) && target.parentNode !== null)
-          departed.push({ parent: target.parentNode, words: clean(wordsOf(target)), at });
-        continue;
-      }
       if (mutation.type === "characterData") {
-        changed(target.parentElement, at, undo);
+        if (target.parentElement !== null) owners.add(target.parentElement);
         continue;
       }
       if (!isElement(target)) continue;
-      const added = Array.from(mutation.addedNodes);
-      const removed = Array.from(mutation.removedNodes);
+      if (mutation.type === "attributes") {
+        const attribute = mutation.attributeName;
 
-      const words = [...added, ...removed].some(
-        (node) => node.nodeType === Node.TEXT_NODE && clean(node.nodeValue) !== "",
-      );
+        if (attribute === null || (mutation.oldValue !== null) === target.hasAttribute(attribute))
+          continue;
 
-      if (words) {
-        changed(target, at, undo);
+        // A dialog or details element opens; anything else shows when it loses `hidden`.
+        const showing =
+          attribute === "open" ? target.hasAttribute("open") : !target.hasAttribute("hidden");
+
+        const words = wordsNow(target);
+
+        if (words !== "" && watched(target))
+          record(
+            target,
+            "content",
+            at,
+            showing ? words : null,
+            () => (showing ? null : words),
+            target.parentElement,
+          );
         continue;
       }
-      for (const node of added)
-        if (isElement(node) && !arrived.has(node) && arrived.size < maxPending)
-          arrived.set(node, at);
-      for (const node of removed) {
-        if (!isElement(node)) continue;
-        // Something that came and went within one burst was never settled on the page.
-        if (arrived.delete(node) || departed.length >= maxPending) continue;
-        departed.push({
-          parent: target,
-          words: clean(wordsOf(node, undo), Number.POSITIVE_INFINITY),
-          at,
-        });
+
+      // An element that held only text before this batch and after it, such as a ticking cell, had
+      // only its text changed, which needs none of its nodes read: each costs this world a wrapper.
+      if (leaves.has(target) && target.childElementCount === 0) {
+        owners.add(target);
+        continue;
+      }
+      parents.add(target);
+      const arrived = elementsOf(mutation.addedNodes, target, owners);
+      const left = elementsOf(mutation.removedNodes, target, owners);
+
+      for (const node of arrived) arrivals.add(node);
+      forget(at, Math.max(mutation.addedNodes.length, mutation.removedNodes.length) - maxNodes);
+      if (arrived.length + left.length === 0 || !watched(target)) continue;
+
+      // What took another's place in one step, such as a re-rendered price, changed its words.
+      const replaced = Math.min(arrived.length, left.length);
+
+      for (let index = 0; index < arrived.length; index++) {
+        const node = arrived[index];
+        const old = index < replaced ? left[index] : undefined;
+
+        if (node === undefined) continue;
+        const track = old === undefined ? undefined : tracks.get(old);
+
+        if (track !== undefined && old !== undefined) {
+          tracks.delete(old);
+          unobserve(old);
+          track.node = node;
+          tracks.set(node, track);
+          sample(track, at, wordsNow(node));
+        } else if (old !== undefined && refused.has(old)) {
+          refused.add(node);
+          forget(at);
+        } else {
+          const words = wordsNow(node);
+
+          if (words !== "" || old !== undefined)
+            record(node, "content", at, words, () => (old === undefined ? null : wordsNow(old)));
+        }
+      }
+
+      for (const node of left.slice(replaced)) {
+        const words = wordsNow(node);
+
+        const near =
+          neighbour(mutation.nextSibling, true) ?? neighbour(mutation.previousSibling, false);
+
+        if (words !== "" || tracks.has(node))
+          record(node, "content", at, null, () => words, target, near ?? target);
       }
     }
-    pending(at);
-  });
 
-  observer.observe(document, {
-    subtree: true,
-    childList: true,
-    characterData: true,
-    characterDataOldValue: true,
-    attributeFilter: ["hidden", "open"],
-    attributeOldValue: true,
+    for (const owner of owners)
+      if (owner.isConnected && owner !== document.body && watched(owner))
+        record(owner, "content", at, wordsNow(owner), earlier(owner));
+    for (const parent of parents)
+      if (parent.childElementCount === 0) leaves.add(parent);
+      else leaves.delete(parent);
+
+    if (document.title !== title) {
+      const before = title;
+
+      title = document.title;
+      record(document, "title", at, clean(title, 200), () => clean(before, 200));
+    }
   });
 
   // Typing changes a field's value, not the page's text, so fields report their own values.
@@ -2279,58 +2420,155 @@ export const install = (): PageApi => {
     return target instanceof Node && isElement(target) ? target : undefined;
   };
 
-  document.addEventListener(
-    "focusin",
-    (event) => {
-      const field = fieldOf(event);
-      const value = field === undefined ? null : valueText(field);
+  const focusedValues = new WeakMap<Element, string>();
 
-      if (field !== undefined && value !== null) focusedValues.set(field, value);
-    },
-    true,
-  );
+  const onFocus = (event: Event) => {
+    const field = fieldOf(event);
+    const value = field === undefined ? null : valueText(field);
+
+    if (field !== undefined && value !== null) focusedValues.set(field, value);
+  };
 
   const onValue = (event: Event) => {
     const field = fieldOf(event);
     const value = field === undefined ? null : valueText(field);
 
-    if (field === undefined || value === null) return;
-    const at = epoch();
-
-    settleBy(at);
-    const burst = values.get(field);
-
-    if (burst !== undefined) {
-      burst.at = at;
-      burst.count++;
-      burst.value = value;
-    } else
-      values.set(field, {
-        before: settledValues.get(field) ?? focusedValues.get(field) ?? null,
-        startedAt: at,
-        at,
-        count: 1,
-        value,
-      });
-    pending(at);
+    if (field !== undefined && value !== null)
+      record(field, "value", epoch(), value, () => focusedValues.get(field) ?? null);
   };
 
-  document.addEventListener("input", onValue, true);
-  document.addEventListener("change", onValue, true);
+  const start = () => {
+    observer.observe(document, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      characterDataOldValue: true,
+      attributeFilter: ["hidden", "open"],
+      attributeOldValue: true,
+    });
+    document.addEventListener("focusin", onFocus, true);
+    document.addEventListener("input", onValue, true);
+    document.addEventListener("change", onValue, true);
+    title = document.title;
+    started = epoch();
+  };
 
-  /** Changes settled in the last `maxAgeMillis`, newest 64 at most, with where the record is whole. */
-  const changes = (maxAgeMillis: number): ChangesResult => {
-    flush();
+  const stop = () => {
+    observer.disconnect();
+    sight.disconnect();
+    visible = new WeakMap();
+    document.removeEventListener("focusin", onFocus, true);
+    document.removeEventListener("input", onValue, true);
+    document.removeEventListener("change", onValue, true);
+    tracks.clear();
+    busy.clear();
+    blind.clear();
+    gone.clear();
+    waiting.clear();
+    started = undefined;
+  };
+
+  /** One element's changes after `since`, up to `until`, if it changed in view in between. */
+  const fold = (
+    track: Track,
+    since: number,
+    until: number,
+    headers: Map<Element, Element | null>,
+  ): ChangeRecord | undefined => {
+    const changed = track.samples.filter((sample) => sample.at > since && sample.at <= until);
+    const first = changed[0];
+    const last = changed.at(-1);
+
+    if (
+      first === undefined ||
+      last === undefined ||
+      !changed.some((sample) => sample.seen === true)
+    )
+      return undefined;
+    const prior = track.samples.findLast((sample) => sample.at <= since);
+
+    // What it said at `since`; `undefined` when the record let that go.
+    const start =
+      prior === undefined ? (track.known <= since ? track.initial : undefined) : prior.state;
+
+    const words = [start, ...changed.map((sample) => sample.state)].filter(
+      (state): state is string => typeof state === "string",
+    );
+
+    const [kind, before, after]: [ChangeKind, string | null, string | null] =
+      track.kind !== "content"
+        ? [track.kind, start ?? null, last.state]
+        : last.state !== null
+          ? [start === null ? "appeared" : "text", start ?? null, last.state]
+          : start === null
+            ? ["brief", null, words.at(-1) ?? null]
+            : ["disappeared", words.at(-1) ?? null, null];
+
+    const [shownBefore, shownAfter] =
+      before === null || after === null ? [before, after] : excerpt(before, after);
+
+    const node = track.node;
+    const element = isElement(node) ? node : null;
+    const role = element === null ? null : roleOf(element);
+    const where = element?.isConnected === true ? element : track.place;
+
+    return {
+      at: last.at,
+      startedAt: first.at,
+      kind,
+      role,
+      // An element's own words are what changed, not its name.
+      name: element === null || role === null || role === "heading" ? "" : nameOf(element, role),
+      tag: element === null ? "title" : element.tagName.toLowerCase(),
+      context: kind === "value" || where === null ? noContext : contextOf(where, headers),
+      before: shownBefore === null ? null : clean(shownBefore, 200),
+      after: shownAfter === null ? null : clean(shownAfter, 200),
+      count: changed.length,
+      earlier: prior?.at ?? null,
+    };
+  };
+
+  /** What changed after `since`, up to `until`, page epoch times, oldest first. */
+  const changes = (since: number | null, until: number | null): ChangesResult => {
     const now = epoch();
-    const recent = noted.filter((record) => record.at > now - maxAgeMillis);
-    const records = recent.slice(-64);
-    const dropped = recent[recent.length - records.length - 1];
 
-    return { now, from: Math.max(forgotten, dropped?.at ?? forgotten), records };
+    lastRead = now;
+    if (started === undefined) {
+      start();
+
+      return { now, from: now, truncated: 0, records: [] };
+    }
+    for (const track of tracks.values())
+      if ((track.samples.at(-1)?.at ?? now) < now - retention) drop(track);
+    // A page that has not rendered since, such as a hidden tab, is judged as it stands.
+    for (const [element, samples] of waiting) {
+      const seen = inView(element);
+
+      for (const pending of samples) settle(pending, seen);
+    }
+    waiting.clear();
+
+    const after = since ?? Number.NEGATIVE_INFINITY;
+    const upTo = until ?? now;
+    const headers = new Map<Element, Element | null>();
+    const records: Array<ChangeRecord> = [];
+
+    for (const track of tracks.values()) {
+      const folded = fold(track, after, upTo, headers);
+
+      if (folded !== undefined) records.push(folded);
+    }
+
+    return {
+      now,
+      from: Math.max(started, now - retention),
+      truncated: lost.filter((at) => at > after && at <= upTo).length,
+      records: records.toSorted((left, right) => left.startedAt - right.startedAt),
+    };
   };
 
   const api: PageApi = {
-    version: 6,
+    version: 7,
     snapshot,
     point,
     scrollPlan,
@@ -2477,19 +2715,26 @@ export const FocusResultSchema = Schema.Union([
 const ChangeRecordSchema = Schema.Struct({
   at: Schema.Finite,
   startedAt: Schema.Finite,
-  kind: Schema.Literals(["text", "appeared", "disappeared", "value", "title"]),
+  kind: Schema.Literals(["text", "appeared", "disappeared", "brief", "value", "title"]),
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   tag: Schema.String,
-  context: Schema.String,
+  context: Schema.Struct({
+    row: Schema.NullOr(Schema.String),
+    column: Schema.NullOr(Schema.String),
+    beside: Schema.NullOr(Schema.String),
+    heading: Schema.NullOr(Schema.String),
+  }),
   before: Schema.NullOr(Schema.String),
   after: Schema.NullOr(Schema.String),
   count: Schema.Int.check(Schema.isGreaterThan(0)),
+  earlier: Schema.NullOr(Schema.Finite),
 });
 
 export const ChangesResultSchema = Schema.Struct({
   now: Schema.Finite,
   from: Schema.Finite,
+  truncated: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   records: Schema.Array(ChangeRecordSchema),
 });
 

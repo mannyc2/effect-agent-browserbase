@@ -452,7 +452,8 @@ describe("understanding evidence", () => {
           assert.deepStrictEqual(current.data, selected.at(-1)?.data);
           assert.isAtLeast(current.hostTime - current.timing.uncertaintyMillis, reached.receivedAt);
         } else assert.isAtLeast(paintTime(final), frameAfter);
-        assert.include(textOf(prompt), "click");
+        // The trigger is told as a step, or by what it changed where the page recorded that.
+        assert.match(textOf(prompt), /click|appeared|became/);
 
         const lastClick = events.findLast(
           (event) => event._tag === "Action" && event.name === "click",
@@ -468,9 +469,9 @@ describe("understanding evidence", () => {
         assert.isAtLeast(last.receivedAt - first.receivedAt, 500);
         if (name === "navigated") {
           assert.include(textOf(prompt), "the tab went to");
-          // The control is named as it was clicked, as a step or as the navigation's cause, not by
-          // a ref the new page reuses.
-          assert.match(textOf(prompt), /click (on )?button "Play"/);
+          // The new document's record had only begun, so the control is told as a step, named as
+          // it was clicked, not by a ref the new page reuses.
+          assert.include(textOf(prompt), 'click button "Play"');
           assert.notMatch(textOf(prompt), /\be\d+\b/);
 
           const priorClick = events

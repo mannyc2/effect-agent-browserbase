@@ -45,10 +45,11 @@ import {
   TrackPlanned,
   WheelScrolled,
 } from "../BrowserEvent.ts";
-import { Change, Changes } from "../Change.ts";
+import { Change, Changes, Context } from "../Change.ts";
 import { Frame, Image, Screenshot } from "../Frame.ts";
 import * as Motion from "../Motion.ts";
 import {
+  type ChangesOptions,
   type ClickOptions,
   InputRequest,
   Observation,
@@ -2055,44 +2056,52 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       Effect.flatMap(decodeWith("hasText", Schema.Boolean)),
     );
 
-  // The read is its own clock probe: a change's age on the page, taken from the middle of the
-  // round trip, places it on the host clock to within half the round trip.
-  const changes = (since?: number) =>
+  // Times cross between the host and the page on the browser's clock mapping, the one frames use,
+  // so a window that ends at a frame's capture time ends where the picture does.
+  const changes = (options: ChangesOptions = {}) =>
     Effect.gen(function* () {
-      if (since !== undefined && !Number.isFinite(since))
+      const { since, until } = options;
+
+      if ([since, until].some((time) => time !== undefined && !Number.isFinite(time)))
         return yield* failWith(
           "changes",
-          new InvalidRequest({ detail: "since must be a finite host time" }),
+          new InvalidRequest({ detail: "since and until must be finite host times" }),
         );
-      const start = now();
-      const maxAge = since === undefined ? 60_000 : Math.max(0, start - since) + 1000;
+      const estimate = yield* mapping.current(calibrateClock);
 
-      const result = yield* evaluate("changes", scriptCall("changes", maxAge)).pipe(
-        Effect.flatMap(decodeWith("changes", Script.ChangesResultSchema)),
-      );
+      const toPage = (time: number | undefined) =>
+        time === undefined ? null : time + estimate.offsetMillis;
 
-      const sampled = (start + now()) / 2;
-      const host = (pageTime: number) => sampled - (result.now - pageTime);
-      const floor = since ?? Number.NEGATIVE_INFINITY;
+      const result = yield* evaluate(
+        "changes",
+        scriptCall("changes", toPage(since), toPage(until)),
+      ).pipe(Effect.flatMap(decodeWith("changes", Script.ChangesResultSchema)));
+
+      const host = (pageTime: number) => BrowserClock.toHostTime(estimate, pageTime);
+      const text = (value: string | null) => value ?? undefined;
 
       return new Changes({
-        from: Math.max(host(result.from), floor),
-        at: sampled,
-        changes: result.records.flatMap((record) =>
-          host(record.at) > floor
-            ? [
-                new Change({
-                  at: host(record.at),
-                  startedAt: host(record.startedAt),
-                  kind: record.kind,
-                  subject: new Subject({ role: record.role, name: record.name, tag: record.tag }),
-                  context: record.context,
-                  before: record.before ?? undefined,
-                  after: record.after ?? undefined,
-                  count: record.count,
-                }),
-              ]
-            : [],
+        from: Math.max(host(result.from), since ?? Number.NEGATIVE_INFINITY),
+        at: Math.min(host(result.now), until ?? Number.POSITIVE_INFINITY),
+        truncated: result.truncated,
+        changes: result.records.map(
+          (record) =>
+            new Change({
+              at: host(record.at),
+              startedAt: host(record.startedAt),
+              kind: record.kind,
+              subject: new Subject({ role: record.role, name: record.name, tag: record.tag }),
+              context: new Context({
+                row: text(record.context.row),
+                column: text(record.context.column),
+                beside: text(record.context.beside),
+                heading: text(record.context.heading),
+              }),
+              before: text(record.before),
+              after: text(record.after),
+              count: record.count,
+              earlier: record.earlier === null ? undefined : host(record.earlier),
+            }),
         ),
       });
     }).pipe(
