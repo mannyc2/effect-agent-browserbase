@@ -315,23 +315,3 @@ export const journal = <Key>(keys: ReadonlyArray<Key>) =>
       ),
     };
   });
-
-/**
- * Run `record` synchronously when the process receives SIGINT, while the scope is open. It runs
- * before listeners registered earlier, such as Playwright's, which exits the process once its
- * browsers close and would otherwise race the run's own interruption.
- */
-export const onSigint = (record: Effect.Effect<void>) =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      const listener = () => Effect.runSync(record);
-
-      process.prependListener("SIGINT", listener);
-
-      return listener;
-    }),
-    (listener) =>
-      Effect.sync(() => {
-        process.off("SIGINT", listener);
-      }),
-  );
