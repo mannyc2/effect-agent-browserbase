@@ -231,6 +231,10 @@ export interface Batch<T extends Record<string, Tool.Any>> {
  * One turn of tool calls over a toolkit with handlers. Calls run one at a time in the order the
  * model made them. The first failure, or a successful call named in `endsBatch`, stops the batch:
  * every later call answers as not executed. Build a new batch for each turn.
+ *
+ * Each call, run or not, is a span of its own, `Tools.<name>`, with OpenTelemetry's GenAI tool
+ * attributes. It keeps a browser tool's parameters without the text it types, and only the names
+ * of another tool's parameters, which may hold anything.
  */
 export function batch<T extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<T>,
@@ -253,29 +257,58 @@ export function batch<T extends Record<string, Tool.Any>>(
         params: Tool.ParametersEncoded<T[Name]>,
         id?: string,
       ) =>
-        Effect.map(
-          Ref.get(halted),
-          Option.match({
-            onSome: (reason) => Stream.succeed(failedResult("Not executed: " + reason)),
-            onNone: () =>
-              toolkit.handle(name, params, id).pipe(
+        Effect.map(Ref.get(halted), (halt) => {
+          const tool = String(name);
+          const kept = traced(tool, params);
+
+          const call = Option.isSome(halt)
+            ? Stream.succeed(failedResult("Not executed: " + halt.value)).pipe(
+                Stream.tap(() => Effect.annotateCurrentSpan("executed", false)),
+              )
+            : toolkit.handle(name, params, id).pipe(
+                // effect/ai puts the raw parameters on the span around the call, which is this one.
+                Effect.ensuring(Effect.annotateCurrentSpan("parameters", kept)),
                 Stream.unwrap,
                 Stream.catchCause((cause) => failedCall(toolkit.tools[name], cause)),
                 Stream.tap((result) =>
                   result.preliminary
                     ? Effect.void
                     : result.isFailure
-                      ? Ref.set(halted, Option.some(`${String(name)} failed.`))
-                      : ends.has(String(name))
-                        ? Ref.set(halted, Option.some(`${String(name)} ended the batch.`))
+                      ? Ref.set(halted, Option.some(`${tool} failed.`)).pipe(
+                          Effect.andThen(Effect.annotateCurrentSpan("error.type", "tool_error")),
+                        )
+                      : ends.has(tool)
+                        ? Ref.set(halted, Option.some(`${tool} ended the batch.`))
                         : Effect.void,
                 ),
-              ),
-          }),
-        ),
+              );
+
+          return call.pipe(
+            Stream.withSpan(`Tools.${tool}`, {
+              attributes: {
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": tool,
+                "gen_ai.tool.type": "function",
+                ...(id === undefined ? {} : { "gen_ai.tool.call.id": id }),
+                parameters: kept,
+              },
+              captureStackTrace: false,
+            }),
+          );
+        }),
     },
   }));
 }
+
+/** What a span keeps of a call's parameters: a browser tool's without typed text, else names. */
+const traced = (tool: string, params: unknown): unknown =>
+  typeof params !== "object" || params === null
+    ? params
+    : !Object.hasOwn(BrowserToolkit.tools, tool)
+      ? Object.keys(params)
+      : "text" in params
+        ? { ...params, text: Page.redacted }
+        : params;
 
 const failedResult = (reason: string) => {
   const result: typeof Tool.ExecutionFailure.Type = { type: "execution-interrupted", reason };
@@ -309,6 +342,7 @@ const failedCall = <Called extends Tool.Any, E>(tool: Called, cause: Cause.Cause
             : "The call failed and may have taken effect: ") + detail,
         ),
       ),
+      Effect.tap(() => (rejected ? Effect.annotateCurrentSpan("executed", false) : Effect.void)),
     ),
   );
 };

@@ -50,10 +50,18 @@ export interface RunInfo {
   /** The pinned OpenRouter endpoint and its per-call reservation; null without a model. */
   readonly endpoint: Endpoint | null;
   readonly browser: string;
+  /** Added round-trip milliseconds on a local browser's DevTools connection; null for none. */
+  readonly latencyMillis: number | null;
   readonly humanize: boolean;
   readonly maxOutputTokens: number;
   readonly maxUsd: number;
   readonly concurrency: number;
+  /**
+   * Recording and narration each run a screencast, which lets an observation reuse a frame
+   * instead of capturing one, and narration adds model calls: their trials time differently.
+   */
+  readonly record: boolean;
+  readonly narrateSeconds: number | null;
 }
 
 /** Derivation depends on task identity, never dispatch order or provider random draws. */

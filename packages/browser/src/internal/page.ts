@@ -15,6 +15,7 @@ import {
   Schedule,
   Schema,
   Semaphore,
+  Sink,
   Stream,
 } from "effect";
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
@@ -78,6 +79,16 @@ import * as Url from "./url.ts";
 
 const subjectOf = (target: ResolvedTarget) =>
   new Subject({ role: target.role, name: target.name, tag: target.tag });
+
+/** A subject as span attributes under `prefix`, without a role it does not have. */
+const subjectAttributes = (prefix: string, subject: Subject | undefined) =>
+  subject === undefined
+    ? {}
+    : {
+        ...(subject.role === null ? {} : { [`${prefix}.role`]: subject.role }),
+        [`${prefix}.name`]: subject.name,
+        [`${prefix}.tag`]: subject.tag,
+      };
 
 const messageOf = (cause: unknown): string =>
   cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "unknown error";
@@ -181,6 +192,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
+  // The main frame keeps its id from one document to the next, so it is looked up once.
+  const mainFrame = yield* Ref.make(Option.none<string>());
   const nextRef = yield* Ref.make(1);
   // Actions that have started changing the page and not yet ended, and the latest submitted input
   // or page change. While an action runs no cached paint is current; afterwards only paint from
@@ -197,6 +210,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   // Deadlines and pacing guard the browser-wide input lock, so page operations run on the
   // owner's clock; a caller's clock, such as a TestClock, cannot stall or stretch them.
   const owned = Effect.provideService(Clock.Clock, clock);
+
+  // This page's spans name it. Fine-grained ones carry a level below the default Info, so an
+  // application keeps only the coarse ones by raising `Tracer.MinimumTraceLevel`.
+  const span = (
+    name: string,
+    attributes: Record<string, unknown> = {},
+    level?: "Debug" | "Trace",
+  ) =>
+    Effect.withSpan(
+      name,
+      { attributes: { page: id, ...attributes }, ...(level === undefined ? {} : { level }) },
+      { captureStackTrace: false },
+    );
 
   const input = Input.make();
   const inputClocks = new WeakMap<Input.Run, BrowserClock.Estimate>();
@@ -376,14 +402,22 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
-      const tree = yield* native(operation, () => cdp.send("Page.getFrameTree"));
-
-      const created = yield* native(operation, () =>
-        cdp.send("Page.createIsolatedWorld", {
-          frameId: tree.frameTree.frame.id,
-          worldName: "effect-browser",
-        }),
+      const lookup = native(operation, () => cdp.send("Page.getFrameTree")).pipe(
+        Effect.map((tree) => tree.frameTree.frame.id),
+        Effect.tap((id) => Ref.set(mainFrame, Option.some(id))),
       );
+
+      const isolate = (frameId: string) =>
+        native(operation, () =>
+          cdp.send("Page.createIsolatedWorld", { frameId, worldName: "effect-browser" }),
+        );
+
+      // A remembered id that no longer names the main frame is looked up again.
+      const created = yield* Option.match(yield* Ref.get(mainFrame), {
+        onNone: () => Effect.flatMap(lookup, isolate),
+        onSome: (frameId) =>
+          isolate(frameId).pipe(Effect.catch(() => Effect.flatMap(lookup, isolate))),
+      });
 
       const installed = yield* native(operation, () =>
         cdp.send("Runtime.evaluate", {
@@ -402,7 +436,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       yield* Ref.set(world, Option.some(created.executionContextId));
 
       return created.executionContextId;
-    });
+    }).pipe(span("Page.createWorld", {}, "Debug"));
 
   const evaluateIn = (operation: string, call: string, contextId: number) =>
     native(operation, () =>
@@ -427,6 +461,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               }),
             ),
       ),
+      // One round trip to the page. Its arguments can hold typed text, so only the call is named.
+      span("Page.evaluate", { function: call.split("(")[0] }, "Trace"),
     );
 
   // Ordinary reads can recreate a document's world. Approval validation deliberately cannot.
@@ -470,6 +506,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           }),
         ),
     }),
+    // The fastest probe's round trip: the transport's, plus a trivial script.
+    Effect.tap((estimate) =>
+      Effect.annotateCurrentSpan("roundTripMillis", Math.round(estimate.roundTripMillis * 10) / 10),
+    ),
+    span("Page.calibrateClock", {}, "Debug"),
     Effect.provideService(Clock.Clock, clock),
   );
 
@@ -673,6 +714,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           ),
         );
 
+      // How long admission and the locks kept the action waiting, once it held them.
+      let queuedMillis: number | undefined;
+
       // Admission and lock waits end at the action's deadline, undispatched. Holding the locks
       // starts a full deadline of its own, so contention never truncates input under way.
       // Locks are always taken page first, then browser-wide, and the browser-wide one is never
@@ -680,8 +724,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const dispatch = <Value>(action: Effect.Effect<Value, BrowserError>) =>
         Effect.gen(function* () {
           const held = yield* Deferred.make<void>();
+          const asked = now();
 
-          const acquired = Deferred.succeed(held, undefined).pipe(
+          const acquired = Effect.sync(() => {
+            queuedMillis = Math.round(now() - asked);
+          }).pipe(
+            Effect.andThen(Deferred.succeed(held, undefined)),
             Effect.andThen(bounded(action, timeout)),
           );
 
@@ -706,8 +754,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         guard === undefined
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
-              const plan = yield* bounded(lock.withPermits(1)(prepare), settings.actionTimeout);
+              const plan = yield* bounded(
+                lock.withPermits(1)(prepare),
+                settings.actionTimeout,
+              ).pipe(span("Page.prepare", {}, "Debug"));
 
+              // A hold lasts as long as this span; a judge's model call is its child.
               yield* guard(plan.request).pipe(
                 Effect.mapError(
                   (reason) => new BrowserError({ operation: name, reason, dispatched: false }),
@@ -725,6 +777,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                       }),
                     ),
                 }),
+                span("Page.guard"),
               );
 
               return yield* dispatch(
@@ -746,6 +799,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           if (touched) changing -= 1;
           const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
+
+          // What the Action records, less its text: only a revealed text's length.
+          yield* Effect.annotateCurrentSpan({
+            dispatched,
+            ...(queuedMillis === undefined ? {} : { queuedMillis }),
+            ...(info.text !== undefined && revealed ? { chars: info.text.length } : {}),
+            ...subjectAttributes("subject", subject),
+            ...subjectAttributes("to", to),
+            ...Option.match(failure, {
+              onNone: () => ({}),
+              onSome: (error) => ({ "error.type": error.reason._tag }),
+            }),
+          });
 
           publish(
             new Action({
@@ -783,7 +849,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           return yield* exit;
         }),
       );
-    }).pipe(owned);
+    }).pipe(span(`Page.${name}`, info.target === undefined ? {} : { target: info.target }), owned);
 
   const failWith = (operation: string, reason: Reason) =>
     Effect.fail(new BrowserError({ operation, reason, dispatched: false }));
@@ -1097,6 +1163,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       );
 
       if (samples.at(-1)?.x !== to.x || samples.at(-1)?.y !== to.y) return yield* invalid;
+      yield* Effect.annotateCurrentSpan("samples", samples.length);
       const run = marks.input;
 
       // Admit the whole motion before starting its clock. Dense original samples must not be
@@ -1156,7 +1223,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             ),
           ),
       );
-    });
+    }).pipe(span("Page.move", {}, "Debug"));
 
   const wheel = Effect.fnUntraced(function* (
     operation: string,
@@ -1191,9 +1258,13 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     Effect.andThen(
       Effect.tryPromise(() =>
         playwright.waitForLoadState("domcontentloaded", { timeout: 5_000 }),
-      ).pipe(Effect.ignore),
+      ).pipe(
+        // A document still loading after 5 seconds, or a closed page, is the next look's to show.
+        Effect.catch(() => Effect.annotateCurrentSpan("loaded", false)),
+      ),
     ),
     Effect.andThen(presentationPause("action")),
+    span("Page.settle", {}, "Debug"),
   );
 
   const click = (target: Target, clickOptions: ClickOptions = {}) =>
@@ -1889,6 +1960,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       );
 
       yield* Ref.set(nextRef, result.nextRef);
+      yield* Effect.annotateCurrentSpan({ chars: result.text.length, truncated: result.truncated });
 
       return new Snapshot({
         url: result.url,
@@ -1906,6 +1978,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         orElse: () =>
           failWith("snapshot", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
       }),
+      span("Page.snapshot", { full: snapshotOptions.full ?? false }),
       owned,
     );
 
@@ -1930,6 +2003,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         latest.height === viewport.height,
     );
   });
+
+  /** Where a picture came from: a frame the screencast had delivered, or a new capture. */
+  const sourceOf = (reused: Option.Option<Frame>) =>
+    Option.isSome(reused) ? "screencast" : "capture";
 
   const takeScreenshot = (screenshotOptions: ScreenshotOptions) =>
     Effect.gen(function* () {
@@ -1961,15 +2038,20 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           ? Option.none<Frame>()
           : yield* currentPaint;
 
-      return Option.isSome(reusable)
+      const image = Option.isSome(reusable)
         ? reusable.value.image
         : yield* takeScreenshot(screenshotOptions);
-    });
+
+      yield* Effect.annotateCurrentSpan({ source: sourceOf(reusable), bytes: image.data.length });
+
+      return image;
+    }).pipe(span("Page.screenshot"), owned);
 
   // A new screenshot has no paint time, only the host interval in which it was taken.
   const currentFrame = Effect.gen(function* () {
     const reusable = yield* currentPaint;
 
+    yield* Effect.annotateCurrentSpan("source", sourceOf(reusable));
     if (Option.isSome(reusable)) return reusable.value;
     const startedAt = now();
     const image = yield* takeScreenshot({});
@@ -1986,7 +2068,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       width: image.width,
       height: image.height,
     });
-  }).pipe(owned);
+  }).pipe(span("Page.currentFrame"), owned);
 
   const zoom = (requested: Region) =>
     lock
@@ -2025,6 +2107,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           orElse: () =>
             failWith("zoom", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
         }),
+        span("Page.zoom"),
         owned,
       );
 
@@ -2053,6 +2136,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             at: now(),
           }),
       ),
+      span("Page.observe", { mode: observeOptions.mode ?? "both" }),
+      owned,
     );
 
   const hasText = (text: string) =>
@@ -2135,6 +2220,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         orElse: () => failWith("waitForText", new NotFound({ target: JSON.stringify(text) })),
       }),
       Effect.asVoid,
+      span("Page.waitForText"),
       owned,
     );
 
@@ -2145,9 +2231,21 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   ) => {
     const quiet = stillOptions.quietMillis ?? 600;
 
-    return screencast().pipe(
-      Stream.timeout(Duration.millis(quiet)),
-      Stream.runDrain,
+    const still = <E>(frames: Stream.Stream<Frame, E>) =>
+      frames.pipe(Stream.timeout(Duration.millis(quiet)), Stream.runDrain);
+
+    // A running capture's silence already means the page is still. A new capture's first frame
+    // can take longer than `quiet`, over half a second from a hosted browser, so the quiet counts
+    // from that frame; Chrome sends one as a capture starts, even of a still page.
+    return capture.active.pipe(
+      Effect.flatMap((running) =>
+        running
+          ? still(screencast())
+          : Stream.peel(screencast(), Sink.take(1)).pipe(
+              Effect.flatMap(([, rest]) => still(rest)),
+              Effect.scoped,
+            ),
+      ),
       Effect.timeoutOrElse({
         duration: stillOptions.timeout ?? Duration.seconds(15),
         orElse: () =>
@@ -2158,6 +2256,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             }),
           ),
       }),
+      span("Page.waitForStill"),
       owned,
     );
   };

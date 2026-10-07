@@ -5,7 +5,9 @@ import { Recording } from "bench/Recording.ts";
 import { Schema } from "effect";
 import type { RecordedEvent } from "effect-browser/BrowserEvent";
 
-const { frames: _frames, ...kept } = Recording.fields;
+// A recording's trace spans stay out of what is published: the player does not read them, and a
+// hosted run's carry its Browserbase session id in the API requests' URLs.
+const { frames: _frames, spans: _spans, ...kept } = Recording.fields;
 
 export class Replay extends Schema.Class<Replay>("demos/Replay")({
   ...kept,

@@ -17,6 +17,7 @@ import { FetchHttpClient } from "effect/http";
 
 import { corpus, type Case } from "../packages/browser/test/consequence-corpus.ts";
 import { type Account, BenchError, ledger, modelRunner } from "./Budget.ts";
+import * as Trace from "./Trace.ts";
 import { revision } from "./Trial.ts";
 
 const help = `Usage: bun run judges -- [options]
@@ -408,7 +409,14 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
           appendFileSync(cases, JSON.stringify(graded) + "\n");
 
           return graded;
-        }),
+        }).pipe(
+          // Each judged case is a trace of its own, around the judge's model call if it makes one.
+          Effect.withSpan(
+            "bench.judge",
+            { root: true, attributes: { arm, case: item.id, kind: item.kind } },
+            { captureStackTrace: false },
+          ),
+        ),
       { concurrency: arm === "structure" ? 1 : chosen.concurrency },
     );
 
@@ -456,6 +464,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url))
           ),
         ),
       ),
+      Effect.provide(Trace.layer),
     ),
   ).catch((error: unknown) => {
     console.error(error);

@@ -156,6 +156,30 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("names a select by its label alone when a script wraps it in a custom select", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      // Browserbase's markup for a select in a label, on every page a hosted session navigates to.
+      yield* Effect.promise(() =>
+        page.playwright.setContent(`<label id="l">Country <div class="bb-custom-select-container">
+          <span role="combobox" aria-labelledby="l" tabindex="0"><span>Choose a country</span></span>
+          <select id="country" tabindex="-1"><option value="">Choose a country</option><option value="US">United States</option></select>
+          <div role="listbox"><div role="option">Choose a country</div><div role="option">United States</div></div>
+        </div></label>
+        <label>I agree to the <a href="#terms">terms</a> <input type="checkbox"></label>`),
+      );
+      const snapshot = yield* page.snapshot();
+      // The native select is the line with options; the scripted opener has the same name.
+      const select = /combobox "Country" \[ref=(e\d+)\][^\n]*options=/.exec(snapshot.text)?.[1];
+
+      assert.isDefined(select, snapshot.text);
+      assert.strictEqual(yield* page.select(select ?? "", ["United States"]), "United States");
+      refOf(snapshot, "checkbox", "I agree to the terms");
+      assert.notInclude(snapshot.text, "Country Choose");
+    }),
+  );
+
   it.effect("refuses to type where a space or letter could activate the focused control", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");

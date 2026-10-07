@@ -212,6 +212,9 @@ prompt.
 - `onStep` sees each model call and its tool calls; failing stops the run with that error, which is
   how a caller enforces a budget. Services it uses become requirements of the run. A run fails
   with `AgentError | AiError | BrowserError`, plus `onStep`'s error.
+- Agent steps, tool calls, page actions with their phases, captures and opening the browser are
+  Effect spans, without typed text. Provide an exporter, such as `effect/observability`'s OTLP
+  layer, to see them; the [package README](packages/browser/README.md#tracing) lists them.
 
 ## Development
 

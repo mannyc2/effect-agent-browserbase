@@ -308,3 +308,52 @@ starting point to its bounds if necessary.
 
 Every module is also an entry point, such as `effect-browser/Agent`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.
+
+## Tracing
+
+Operations are spans in Effect's tracer, so an application that installs an exporter sees them in
+its own traces; the library installs none. For the agent in the repository's README, with
+`effect/observability` provided outermost so that opening the browser is traced too:
+
+```ts
+import { Effect, Layer } from "effect";
+import { FetchHttpClient } from "effect/http";
+import { Otlp, OtlpSerialization } from "effect/observability";
+
+// Exports to OTEL_EXPORTER_OTLP_ENDPOINT when OTEL_TRACES_EXPORTER=otlp is set.
+const Observability = Otlp.layerFromConfig({ resource: { serviceName: "my-agent" } }).pipe(
+  Layer.provide(OtlpSerialization.layerJson),
+  Layer.provide(FetchHttpClient.layer),
+);
+
+program.pipe(
+  Effect.provide([Chromium.layer(), Model]),
+  Effect.provide(Observability),
+  Effect.runPromise,
+);
+```
+
+`Agent.run` carries OpenTelemetry's GenAI agent attributes, its steps and its token usage. Each step
+is an `Agent.step` span around its model call (`effect/ai`'s `LanguageModel.generateText`, whose
+provider request is its HTTP child), its tool calls and the observation after them. A tool call is a
+`Tools.<name>` span with the GenAI tool attributes; `effect/ai` runs tool calls inside the model
+call's span, so read a model call's own time from its HTTP child. Every page operation is a
+`Page.<name>` span, such as `Page.click`, `Page.type` or `Page.navigate`, with what its `Action`
+records except text: the target, the subject's role, name and tag, whether input was dispatched,
+`queuedMillis` spent waiting for admission and the locks, and a failure's reason as `error.type`.
+`Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
+a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
+`Page.observe`, `Page.snapshot`, `Page.screenshot` (its `source` a reused screencast frame or a new
+capture), `Page.zoom` and the waits are spans, and so is each round trip to the page's script
+(`Page.evaluate`). `Chromium.launch`, `Cdp.connect`, `Browser.calibrate` and `Browser.newPage`
+cover opening a browser; `Browserbase.open` records its session's id and region, and
+`Browserbase.holdContext` and `Browserbase.release` the waits around a session that saves to a
+stored context. `Browser.calibrate` and `Page.calibrateClock` map the browser's clock onto the
+host's with three probes, each a `Page.evaluate` of `clock`, and record the fastest probe's
+`roundTripMillis`: the round trip to the browser.
+
+Spans never carry typed text. A tool span keeps a browser tool's parameters with `text` replaced by
+`redacted`, and only the names of any other tool's parameters, which may hold anything; a script
+round trip is named by its function alone. `Page.evaluate` spans are at `Trace` level and the phases
+inside an action at `Debug`: set `Tracer.MinimumTraceLevel` to `"Info"` to keep only the coarser
+spans.

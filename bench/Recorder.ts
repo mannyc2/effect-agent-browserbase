@@ -4,7 +4,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { Effect, Schema, Stream } from "effect";
+import { Clock, Effect, Schema, Stream, type Tracer } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { RecordedEvent } from "effect-browser/BrowserEvent";
 
@@ -13,11 +13,13 @@ import {
   plain,
   RecordedFrame,
   RecordedMoment,
+  RecordedSpan,
   RecordedStep,
   RecordedViewport,
   Recording,
   type Trace,
 } from "./Recording.ts";
+import { timed } from "./Trace.ts";
 
 /** How long a recording continues after the trial, so it ends on the page's settled paint. */
 export const tailMillis = 500;
@@ -27,9 +29,11 @@ export interface Recorder {
   readonly trace: (entry: Trace) => Effect.Effect<void>;
   /** Record the trial's browser while `work` runs. */
   readonly around: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R | Browser>;
-  /** Write recording.json; a trial that never ran has nothing to write. */
+  /** Write recording.json, with the trial's spans when traced; a trial that never ran writes none. */
   readonly finish: (
-    details: Pick<Recording, "task" | "run" | "outcome">,
+    details: Pick<Recording, "task" | "run" | "outcome"> & {
+      readonly spans?: ReadonlyArray<Tracer.Span> | undefined;
+    },
   ) => Effect.Effect<void, BenchError>;
 }
 
@@ -45,6 +49,8 @@ const write = <A>(operation: () => A) =>
 export const make = (directory: string): Recorder => {
   let now: Effect.Effect<number> | undefined;
   let startedAt: number | undefined;
+  // The epoch clock spans use, read with the host clock, to move spans onto the host clock.
+  let epoch = 0n;
   let endedAt = Number.NaN;
   const events: Array<RecordedEvent> = [];
   const frames: Array<RecordedFrame> = [];
@@ -124,6 +130,7 @@ export const make = (directory: string): Recorder => {
         Effect.catch((error) => Effect.sync(() => problems.push(error.message))),
       );
       now = browser.now;
+      epoch = yield* Clock.currentTimeNanos;
       startedAt = yield* browser.now;
 
       // Each page's frames, from the moment its opening event is read until it closes.
@@ -194,13 +201,25 @@ export const make = (directory: string): Recorder => {
       );
     }).pipe(Effect.scoped);
 
-  const finish = (details: Pick<Recording, "task" | "run" | "outcome">) =>
+  const finish = ({
+    spans,
+    ...details
+  }: Pick<Recording, "task" | "run" | "outcome"> & {
+    readonly spans?: ReadonlyArray<Tracer.Span> | undefined;
+  }) =>
     startedAt === undefined
       ? Effect.void
       : Effect.gen(function* () {
           const recording = new Recording({
             version: 1,
             ...details,
+            ...(spans === undefined
+              ? {}
+              : {
+                  spans: timed(spans, { epoch, host: startedAt ?? Number.NaN }).map(
+                    (span) => new RecordedSpan({ ...span, attributes: { ...span.attributes } }),
+                  ),
+                }),
             startedAt: startedAt ?? Number.NaN,
             endedAt,
             events,

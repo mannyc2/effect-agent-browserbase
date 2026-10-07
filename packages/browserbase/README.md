@@ -22,6 +22,9 @@ and its caller can stop. Only `GET` requests are retried, twice, after a transie
 create that fails in transit is not resent, because it may have created the session. Connect URLs and the Live View debugger URL are `Redacted`: keep them away from
 models and logs. A failed connect names only the connect URL's scheme, host and port.
 
+`open` and `attach` record the session's id and region on their spans, so a trace finds its
+session in Browserbase's dashboard (`https://browserbase.com/sessions/<id>`).
+
 ## Session settings
 
 `session` takes Browserbase's session create request. Anything left unset takes Browserbase's

@@ -126,7 +126,8 @@ const command = <A>(run: () => Promise<A>): Effect.Effect<A, ClockCalibrationFai
 export const calibrate = (
   cdp: CDPSession,
   clock: Clock.Clock,
-  contextId: number,
+  // The page's main world when absent.
+  contextId?: number,
 ): Effect.Effect<Estimate, ClockCalibrationFailure> =>
   Effect.gen(function* () {
     const probes: Array<Probe> = [];
@@ -134,12 +135,19 @@ export const calibrate = (
     for (let index = 0; index < 3; index++) {
       const hostStart = Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
 
+      // A round trip to the page's script like any other, so traced as one.
       const response = yield* command(() =>
         cdp.send("Runtime.evaluate", {
-          contextId,
+          ...(contextId === undefined ? {} : { contextId }),
           expression: "performance.timeOrigin + performance.now()",
           returnByValue: true,
         }),
+      ).pipe(
+        Effect.withSpan(
+          "Page.evaluate",
+          { attributes: { function: "clock" }, level: "Trace" },
+          { captureStackTrace: false },
+        ),
       );
 
       const hostEnd = Number(clock.monotonicTimeNanosUnsafe()) / 1e6;

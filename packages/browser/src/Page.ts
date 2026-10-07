@@ -282,7 +282,10 @@ export interface Page {
     text: string,
     timeout?: Duration.Input,
   ) => Effect.Effect<void, BrowserError>;
-  /** Wait until the screen stops changing, such as reels coming to rest. Needs no running screencast. */
+  /**
+   * Wait until the screen stops changing, such as reels coming to rest: no frame for `quietMillis`
+   * (600 by default). Needs no running screencast; one it starts counts from its first frame.
+   */
   readonly waitForStill: (options?: {
     readonly quietMillis?: number;
     readonly timeout?: Duration.Input;
