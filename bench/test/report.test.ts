@@ -21,7 +21,7 @@ const record = (fields: {
   readonly answer?: unknown;
 }) =>
   new Results.TrialRecord({
-    version: 1,
+    version: 2,
     task: fields.task,
     kind: "operate",
     arm: fields.arm ?? null,
@@ -47,6 +47,7 @@ const record = (fields: {
     status: fields.status ?? "graded",
     reason: fields.reason ?? "answered",
     pass: fields.pass === undefined ? true : fields.pass,
+    onPage: null,
     detail: "The shop issued CONF-48213; the answer reported CONF-48213.",
     error: null,
     diagnostic: null,

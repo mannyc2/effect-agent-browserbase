@@ -101,6 +101,7 @@ const boardMove = operate({
 
         return {
           pass: done[0] === target && moved.length === 0 && answer.done === done.length,
+          onPage: done[0] === target && moved.length === 0,
           detail: `Done holds ${done.length === 0 ? "nothing" : done.join(", ")}${moved.length === 0 ? "" : `; other cards moved in ${moved.join(", ")}`}. The answer reported ${answer.done}.`,
         };
       }),
@@ -172,6 +173,7 @@ const policyFind = operate({
     truth(page, PolicyTruth).pipe(
       Effect.map((shown) => ({
         pass: shown.page === "returns" && answer.code === shown.code,
+        onPage: shown.page === "returns",
         detail: `The tab shows the ${shown.page} page${shown.code === null ? "" : `, reference ${shown.code}`}. The answer reported ${answer.code === "" ? "no code" : answer.code}.`,
       })),
     ),
@@ -277,6 +279,7 @@ const catalogBuy = operate({
             shopped.cart.length === 1 &&
             only?.name === wanted?.name &&
             Math.abs(answer.total - shopped.total) < 0.005,
+          onPage: shopped.cart.length === 1 && only?.name === wanted?.name,
           detail: `The cart holds ${shopped.cart.length === 0 ? "nothing" : shopped.cart.map((item) => item.name).join(", ")}; the cheapest tent for two in stock is the ${wanted?.name ?? "none"}. The answer reported $${answer.total}, the cart $${shopped.total.toFixed(2)}.`,
         };
       }),
