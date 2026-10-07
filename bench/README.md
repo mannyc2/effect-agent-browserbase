@@ -62,9 +62,10 @@ native filtering, paint gaps and observed subscriber loss.
 
 The `board-*` tasks ask what changed on a page that stays the same page, as a narrator must. They
 share one question, one answer and one grader, which judges what an answer says rather than how it
-says it: an asset counts by its ticker, with or without "-USD", or by its name; a table by a word
-that names it alone, such as "spot" or "perps"; prices are numbers within half the last displayed
-digit; an alert counts when it names its asset and level, however worded. A field for something
+says it: an asset counts by its ticker, with or without "-USD", or by its name, though a ticker
+that is also a word, such as LINK, only in capitals within a sentence; a table by a word that names it alone, such as
+"spot" or "perps"; prices are numbers within half the last displayed digit; an alert counts when
+it names its asset and level and no other, however worded, so a hedge between two fails. A field for something
 that did not happen, such as the asset when no price changed, is not graded. The board never marks
 what changed and keeps no trace of a former price or a removed alert, and each seed moves another
 price or raises another alert. `board-tick` and `board-flash` keep their evidence in the pictures:

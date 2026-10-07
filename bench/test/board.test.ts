@@ -7,7 +7,7 @@ import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
 
 import { BoardTruth, origin, routes, serve, truth } from "../Sites.ts";
-import { type BoardAnswer, frameHistory, gradeBoard, tasks } from "../Tasks.ts";
+import { assetsIn, type BoardAnswer, frameHistory, gradeBoard, tasks } from "../Tasks.ts";
 
 const tick: BoardAnswer = {
   priceChanged: true,
@@ -57,13 +57,28 @@ describe("board grading", () => {
     "Price alert: BTC-USD crossed $64,000.00",
     "An alert said Bitcoin had crossed 64000",
     "btc crossed $64,000",
+    "Bitcoin crossed 64,000 about 1.4 seconds before the moment; see the link in the alert",
   ])
     it(`accepts the alert told as "${notice}"`, () =>
       assert.isTrue(gradeBoard({ ...alert, notice }, alert).pass));
 
-  for (const notice of ["Price alert: BTC-USD crossed $65,000.00", "Price alert: ETH-USD crossed"])
+  for (const notice of [
+    "Price alert: BTC-USD crossed $65,000.00",
+    "Price alert: ETH-USD crossed",
+    "BTC-USD crossed $64,000 or $65,000",
+    "BTC-USD or ETH-USD crossed $64,000",
+  ])
     it(`rejects the alert told as "${notice}"`, () =>
       assert.isFalse(gradeBoard({ ...alert, notice }, alert).pass));
+
+  it("reads a ticker that is also a word only where it names the asset", () => {
+    assert.deepStrictEqual(assetsIn("LINK crossed $15.00"), ["LINK"]);
+    assert.deepStrictEqual(assetsIn("link-usd, Chainlink"), ["LINK"]);
+    assert.deepStrictEqual(assetsIn("SOL-USD, with a link to the chart, dot points, etc."), [
+      "SOL",
+    ]);
+    assert.deepStrictEqual(assetsIn("sol, btc and Eth"), ["BTC", "ETH"]);
+  });
 
   it("rejects a change or a notice where nothing happened", () => {
     assert.isTrue(gradeBoard(nothing, nothing).pass);

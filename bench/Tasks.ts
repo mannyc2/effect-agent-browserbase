@@ -938,18 +938,28 @@ const assetNames: ReadonlyArray<readonly [RegExp, string]> = [
 
 const assetCodes = new Set(assetNames.map(([, code]) => code));
 
-/** The board's assets a phrase names, by ticker with or without its "-USD", or by name. */
+/** Tickers that are also English words, such as "link" or "etc.", count only in capitals. */
+const wordlike = new Set(["ADA", "DOT", "ETC", "LINK", "SOL"]);
+
+/**
+ * The board's assets a phrase names: by name, by ticker with its "-USD", or by the bare ticker,
+ * which for a ticker that is also a word must be written in capitals, as "LINK" and not "link".
+ */
 export const assetsIn = (text: string): ReadonlyArray<string> => {
   const coded = assetNames.reduce(
     (result, [name, code]) => result.replace(name, ` ${code} `),
     text,
   );
 
-  const words = coded.toUpperCase().match(/[A-Z]+/g) ?? [];
+  const named = (coded.match(/[A-Za-z]+(?:-USDT?)?/gi) ?? []).flatMap((word) => {
+    const base = word.replace(/-?USDT?$/i, "");
+    const code = base.toUpperCase();
+    const meant = base !== word || base === code || !wordlike.has(code);
 
-  return [...new Set(words.map((word) => word.replace(/USDT?$/, "")))]
-    .filter((word) => assetCodes.has(word))
-    .toSorted();
+    return assetCodes.has(code) && meant ? [code] : [];
+  });
+
+  return [...new Set(named)].toSorted();
 };
 
 const tableWords: ReadonlyArray<readonly [string, RegExp]> = [
@@ -977,10 +987,11 @@ const sameSet = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
 
 /**
  * Grades what a model says changed on the board against what did. Phrasing never fails an answer:
- * an asset counts by its ticker, with or without "-USD", or by its name; a table by a word that
- * names it alone, such as "spot" or "perps"; prices are numbers within half the last displayed
- * digit; a notice counts when it names the alert's asset and its level, however worded. Fields
- * for something that did not happen, such as the asset when no price changed, are not graded.
+ * an asset counts by its ticker, with or without "-USD", or by its name, though a ticker that is
+ * also a word, such as LINK, only in capitals within a sentence; a table by a word that names it alone, such as
+ * "spot" or "perps"; prices are numbers within half the last displayed digit; a notice counts
+ * when it names the alert's asset and its level and no other, however worded. Fields for
+ * something that did not happen, such as the asset when no price changed, are not graded.
  */
 export const gradeBoard = (answer: BoardAnswer, expected: BoardAnswer): Grade => {
   const wrong: Array<string> = [];
@@ -988,7 +999,9 @@ export const gradeBoard = (answer: BoardAnswer, expected: BoardAnswer): Grade =>
   if (answer.priceChanged !== expected.priceChanged)
     wrong.push(expected.priceChanged ? "missed the price change" : "reported a price change");
   else if (expected.priceChanged) {
-    if (!sameSet(assetsIn(answer.asset), assetsIn(expected.asset))) wrong.push("asset");
+    // The asset field holds nothing but the asset, so its case cannot make a word of it.
+    if (!sameSet(assetsIn(answer.asset.toUpperCase()), assetsIn(expected.asset)))
+      wrong.push("asset");
     if (!sameSet(tablesIn(answer.table), tablesIn(expected.table))) wrong.push("table");
     if (!samePrice(answer.priceBefore, expected.priceBefore)) wrong.push("price before");
     if (!samePrice(answer.priceAfter, expected.priceAfter)) wrong.push("price after");
@@ -999,9 +1012,16 @@ export const gradeBoard = (answer: BoardAnswer, expected: BoardAnswer): Grade =>
   else if (expected.noticeShown) {
     const figures = numbersIn(answer.notice);
 
+    // Every figure near the level must be the level, so a hedge between two levels fails.
+    const level = (figure: number) => {
+      const near = figures.filter((other) => other >= figure / 2 && other <= figure * 2);
+
+      return near.length > 0 && near.every((other) => other === figure);
+    };
+
     if (
       !sameSet(assetsIn(answer.notice), assetsIn(expected.notice)) ||
-      !numbersIn(expected.notice).every((figure) => figures.includes(figure))
+      !numbersIn(expected.notice).every(level)
     )
       wrong.push("notice");
   }
