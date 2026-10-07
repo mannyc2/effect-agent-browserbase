@@ -15,6 +15,22 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   element, shows. What fields hold reads `••••` unless `unmask` is set; secret fields always do.
 - `BrowserEvent.SubjectContext`, `Page.ElementState`, `Page.FindQuery`, `Page.Found`, `Page.Text`
   and `Page.TextOptions`.
+- `Plan`, a new module: a walk recorded once from a page's events and replayed on a fresh page, by
+  subject, with no model call. `Plan.fromEvents` keeps a page's completed actions with their
+  subjects and options, its navigations with the address asked for and the one reached, and typed
+  text as named input slots, never the text. `Plan.replay(page, plan, { settle, inputs })` waits
+  for `Page.ready` before each step that acts, finds the one element the step's subject names by
+  role, name and context with `Plan.locate`, and acts on it. It stops at the first step it cannot
+  take with a `Plan.ReplayError`: `Missing`, `Ambiguous` (there is no ordinal), `Drifted`, or the
+  step's `BrowserError`. A plan is version 1, so a plan 0.2 stored does not decode.
+- `Page.ready({ quietMillis, timeout })`: in one call to the page, repeated, whether it is ready to
+  be shown: its document parsed and painted since, nothing that ends animating in view, its fonts
+  and the images in view loaded, and something shown. With `quietMillis`, the screen must also
+  stay still, counted from the first frame of a capture the wait starts.
+- `FindQuery.at`: what a point action at a viewport point would reach.
+- `BrowserEvent.ActionOptions` and `Action.options`, the rest of what an action was asked, such as a
+  click's count or `submit` on `type`; `BrowserEvent.Box`, with `Action.box` and
+  `ResolvedTarget.box` for what an action at a point found there.
 - `Page.frame({ maxAge, after })` and `Page.FrameOptions`: a frame states how old it may be. The
   newest screencast frame serves when it was painted at most `maxAge` ago (250 ms by default; 0
   always takes a new screenshot), and with `after: "input"` only when painted after the page's
@@ -56,6 +72,8 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   its page then reveals is still redacted, and never read back.
 - `Page.hasText` is removed: `find({ text, scope: "document" })` answers it, within the action
   timeout. `Page.waitForText` waits for the same match.
+- `Page.waitForStill` is removed: `Page.ready({ quietMillis })` waits for the same stillness, after
+  the page's own evidence. Without `quietMillis`, `ready` does not wait for the screen to be still.
 - `Page.currentFrame` is removed: `Page.frame({ after: "input" })` is the nearest, and its 250 ms
   bound is now the frame's age from its paint, not from its delivery, so frames that arrive late
   stand in less often.

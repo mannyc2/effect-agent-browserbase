@@ -88,23 +88,11 @@ export const context = (names: Names) => {
       );
       read.headings.set(scope, headings);
     }
-    // Headings are in tree order, so those before the target come first.
-    let before = 0;
-
-    for (let after = headings.length; before < after;) {
-      const middle = (before + after) >> 1;
-      const heading = headings[middle];
-
-      if (
-        heading !== undefined &&
-        (heading.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-      )
-        before = middle + 1;
-      else after = middle;
-    }
-    for (let index = before - 1; index >= 0; index--) {
-      const heading = headings[index];
-      const text = heading === undefined || !shown(heading) ? "" : clean(textOf(heading), 120);
+    // Headings are in tree order, so the nearest before the target is the last one before it.
+    for (const heading of headings.toReversed()) {
+      if ((heading.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING) === 0)
+        continue;
+      const text = shown(heading) ? clean(textOf(heading), 120) : "";
 
       if (text !== "") return text;
     }
