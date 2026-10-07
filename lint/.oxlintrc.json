@@ -236,7 +236,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 265, "skipBlankLines": true, "skipComments": true }
+          { "max": 215, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },
@@ -245,7 +245,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 244, "skipBlankLines": true, "skipComments": true }
+          { "max": 239, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },
@@ -254,7 +254,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 235, "skipBlankLines": true, "skipComments": true }
+          { "max": 207, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },

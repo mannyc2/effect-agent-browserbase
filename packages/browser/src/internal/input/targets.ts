@@ -36,6 +36,7 @@ const resolvedTarget = (result: Script.ResolvedPoint): ResolvedTarget =>
     tag: result.tag,
     role: result.role,
     name: result.name,
+    context: result.context,
     cursor: result.cursor,
     ...(result.href === undefined ? {} : { href: result.href }),
   });
