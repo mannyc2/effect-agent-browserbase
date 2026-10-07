@@ -1,0 +1,680 @@
+{
+  "source": "https://docs.browserbase.com/reference/api/openapi.v1.yaml",
+  "operations": {
+    "Contexts_create": {
+      "method": "post",
+      "path": "/v1/contexts",
+      "parameters": [],
+      "requestBody": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "publicKey": {
+              "type": "string"
+            },
+            "cipherAlgorithm": {
+              "type": "string"
+            },
+            "initializationVectorSize": {
+              "type": "integer",
+              "format": "uint8"
+            }
+          },
+          "required": ["id", "publicKey", "cipherAlgorithm", "initializationVectorSize"]
+        }
+      }
+    },
+    "Contexts_delete": {
+      "method": "delete",
+      "path": "/v1/contexts/{id}",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "responses": {
+        "204": null
+      }
+    },
+    "Contexts_get": {
+      "method": "get",
+      "path": "/v1/contexts/{id}",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "responses": {
+        "200": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "projectId": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": ["id", "createdAt", "updatedAt", "projectId"]
+        }
+      }
+    },
+    "Sessions_create": {
+      "method": "post",
+      "path": "/v1/sessions",
+      "parameters": [],
+      "requestBody": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "extensionId": {
+            "type": "string"
+          },
+          "browserSettings": {
+            "type": "object",
+            "properties": {
+              "context": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "persist": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["id"]
+              },
+              "extensionId": {
+                "type": "string"
+              },
+              "viewport": {
+                "type": "object",
+                "properties": {
+                  "width": {
+                    "type": "integer"
+                  },
+                  "height": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "blockAds": {
+                "type": "boolean"
+              },
+              "solveCaptchas": {
+                "type": "boolean"
+              },
+              "recordSession": {
+                "type": "boolean"
+              },
+              "logSession": {
+                "type": "boolean"
+              },
+              "advancedStealth": {
+                "type": "boolean",
+                "deprecated": true
+              },
+              "verified": {
+                "type": "boolean"
+              },
+              "captchaImageSelector": {
+                "type": "string"
+              },
+              "captchaInputSelector": {
+                "type": "string"
+              },
+              "os": {
+                "type": "string",
+                "enum": ["windows", "mac", "linux", "mobile", "tablet"]
+              },
+              "allowedDomains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "ignoreCertificateErrors": {
+                "type": "boolean"
+              }
+            }
+          },
+          "timeout": {
+            "type": "integer",
+            "maximum": 21600,
+            "minimum": 60,
+            "x-stainless-param": "api_timeout"
+          },
+          "keepAlive": {
+            "type": "boolean"
+          },
+          "proxies": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["browserbase"]
+                        },
+                        "geolocation": {
+                          "type": "object",
+                          "properties": {
+                            "city": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string",
+                              "maxLength": 2,
+                              "minLength": 2,
+                              "pattern": "^[A-Za-z]{2}$"
+                            },
+                            "country": {
+                              "type": "string",
+                              "maxLength": 2,
+                              "minLength": 2,
+                              "pattern": "^[A-Za-z]{2}$"
+                            }
+                          },
+                          "required": ["country"]
+                        },
+                        "domainPattern": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["external"]
+                        },
+                        "server": {
+                          "type": "string"
+                        },
+                        "domainPattern": {
+                          "type": "string"
+                        },
+                        "username": {
+                          "type": "string"
+                        },
+                        "password": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "server"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["none"]
+                        },
+                        "domainPattern": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type"]
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "proxySettings": {
+            "type": "object",
+            "properties": {
+              "caCertificates": {
+                "type": "array",
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "default": []
+              }
+            }
+          },
+          "region": {
+            "type": "string",
+            "default": "us-west-2",
+            "enum": ["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]
+          },
+          "userMetadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {}
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "allOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "startedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "endedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expiresAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["PENDING", "RUNNING", "ERROR", "TIMED_OUT", "COMPLETED"]
+                },
+                "proxyBytes": {
+                  "type": "integer"
+                },
+                "keepAlive": {
+                  "type": "boolean"
+                },
+                "contextId": {
+                  "type": "string"
+                },
+                "region": {
+                  "type": "string",
+                  "enum": ["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]
+                },
+                "userMetadata": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {}
+                }
+              },
+              "required": [
+                "id",
+                "createdAt",
+                "updatedAt",
+                "projectId",
+                "status",
+                "proxyBytes",
+                "keepAlive",
+                "region",
+                "startedAt",
+                "expiresAt"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "connectUrl": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "seleniumRemoteUrl": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "signingKey": {
+                  "type": "string"
+                }
+              },
+              "required": ["connectUrl", "seleniumRemoteUrl", "signingKey"]
+            }
+          ]
+        }
+      }
+    },
+    "Sessions_get": {
+      "method": "get",
+      "path": "/v1/sessions/{id}",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "responses": {
+        "200": {
+          "allOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "startedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "endedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expiresAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["PENDING", "RUNNING", "ERROR", "TIMED_OUT", "COMPLETED"]
+                },
+                "proxyBytes": {
+                  "type": "integer"
+                },
+                "keepAlive": {
+                  "type": "boolean"
+                },
+                "contextId": {
+                  "type": "string"
+                },
+                "region": {
+                  "type": "string",
+                  "enum": ["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]
+                },
+                "userMetadata": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {}
+                }
+              },
+              "required": [
+                "id",
+                "createdAt",
+                "updatedAt",
+                "projectId",
+                "status",
+                "proxyBytes",
+                "keepAlive",
+                "region",
+                "startedAt",
+                "expiresAt"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "connectUrl": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "seleniumRemoteUrl": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "signingKey": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Sessions_list": {
+      "method": "get",
+      "path": "/v1/sessions",
+      "parameters": [
+        {
+          "name": "status",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": ["PENDING", "RUNNING", "ERROR", "TIMED_OUT", "COMPLETED"]
+          }
+        },
+        {
+          "name": "q",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": null,
+      "responses": {
+        "200": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "endedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "status": {
+                "type": "string",
+                "enum": ["PENDING", "RUNNING", "ERROR", "TIMED_OUT", "COMPLETED"]
+              },
+              "proxyBytes": {
+                "type": "integer"
+              },
+              "keepAlive": {
+                "type": "boolean"
+              },
+              "contextId": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string",
+                "enum": ["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]
+              },
+              "userMetadata": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {}
+              }
+            },
+            "required": [
+              "id",
+              "createdAt",
+              "updatedAt",
+              "projectId",
+              "status",
+              "proxyBytes",
+              "keepAlive",
+              "region",
+              "startedAt",
+              "expiresAt"
+            ]
+          }
+        }
+      }
+    },
+    "Sessions_update": {
+      "method": "post",
+      "path": "/v1/sessions/{id}",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["REQUEST_RELEASE"]
+          }
+        },
+        "required": ["status"]
+      },
+      "responses": {
+        "200": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "projectId": {
+              "type": "string"
+            },
+            "startedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "endedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "expiresAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["PENDING", "RUNNING", "ERROR", "TIMED_OUT", "COMPLETED"]
+            },
+            "proxyBytes": {
+              "type": "integer"
+            },
+            "keepAlive": {
+              "type": "boolean"
+            },
+            "contextId": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string",
+              "enum": ["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]
+            },
+            "userMetadata": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {}
+            }
+          },
+          "required": [
+            "id",
+            "createdAt",
+            "updatedAt",
+            "projectId",
+            "status",
+            "proxyBytes",
+            "keepAlive",
+            "region",
+            "startedAt",
+            "expiresAt"
+          ]
+        }
+      }
+    }
+  }
+}

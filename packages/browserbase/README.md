@@ -137,7 +137,9 @@ Browserbase, for free. Sessions run until released or until their timeout on the
 status reads, in turn. `connectUrl` gives each session a DevTools address, such as a local
 Chromium's. It keeps sessions and stored contexts only, and fails a test that calls anything else.
 `BrowserbaseContract.checks` are what this package relies on Browserbase to do, each an Effect over
-`BrowserbaseClient`; the fake passes them.
+`BrowserbaseClient`; the fake passes them. Its answers also have the shapes Browserbase's published
+API reference gives them, which the package's tests check against a copy of it, except that a
+session has a `connectUrl` only when the script gives one.
 
 ```ts
 it.effect("leaves the context held while a release is pending", () =>
