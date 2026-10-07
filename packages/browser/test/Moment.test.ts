@@ -391,7 +391,7 @@ describe("a moment's account of what changed", () => {
       ),
       [
         '-4.0s "$14.74" became "$14.81" (table "Spot markets", row "LINK-USD", column "Price")',
-        "-1.4s scroll dy 700",
+        "-1.4s the view scrolled",
         "The text in view last changed at -4.0s.",
       ],
     );

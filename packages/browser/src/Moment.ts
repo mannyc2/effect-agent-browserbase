@@ -371,7 +371,15 @@ const account = (moment: Moment, options: PromptOptions) => {
           !(event.ok && navigating(event)) &&
           (all || record === undefined || event.at <= record.from || uncovered(event))
         )
-          lines.push({ at: event.at, rank: 4, text: step(event) });
+          lines.push({
+            at: event.at,
+            rank: 4,
+            // Told for what it did to the view, a scroll needs none of the step's coordinates.
+            text:
+              !all && event.ok && event.name === "scroll"
+                ? `${event.subject === undefined ? "the view" : named(event.subject, undefined)} scrolled`
+                : step(event),
+          });
     }
 
   // Steps, and the whole moment when every step is told, read best in order of time.
