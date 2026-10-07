@@ -60,7 +60,7 @@ const defaultMaxAge = Duration.millis(250);
 export const calibrator = (page: PageContext, bridge: Bridge) =>
   bridge.bareWorld("calibrate").pipe(
     Effect.flatMap((contextId) =>
-      BrowserClock.calibrate(page.send, page.clock, contextId).pipe(
+      BrowserClock.calibrate(page.protocol.send, page.clock, contextId).pipe(
         Effect.mapError(
           (failure) =>
             new BrowserError({
@@ -95,7 +95,8 @@ export const calibrator = (page: PageContext, bridge: Bridge) =>
 // place, and its pinch scale divided by the device's. Chromium draws such a capture into a
 // running screencast, so the capture leaves out what is painted meanwhile.
 const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controller) => {
-  const { playwright, settings, send, native } = page;
+  const { playwright, settings, native } = page;
+  const { send } = page.protocol;
   const actionMillis = Duration.toMillis(settings.actionTimeout);
   // Device pixels per CSS pixel, as the page's layout metrics last gave it. A picture taken in one
   // call is checked by its size, so a page whose ratio changes is measured again.
@@ -233,7 +234,8 @@ export const make = Effect.fnUntraced(function* (
   viewport: Viewport,
   calibrateClock: Effect.Effect<BrowserClock.Estimate, BrowserError>,
 ) {
-  const { id, cdp, clock, playwright, settings, mapping, send, now, span, owned, lock } = page;
+  const { id, cdp, clock, playwright, settings, mapping, now, span, owned, lock } = page;
+  const { send } = page.protocol;
 
   // Input and capture share the owner's monotonic clock; caller-provided clocks cannot move it.
   // Registration measures nothing: a page that is busy while it opens, such as a popup running

@@ -22,7 +22,8 @@ export const make = (
   perform: Perform,
   preparePolicy: Guard["preparePolicy"],
 ) => {
-  const { send, playwright, settings, native } = page;
+  const { playwright, settings, native } = page;
+  const { send } = page.protocol;
 
   const navigation = (name: string, run: () => Promise<unknown>, url: string) =>
     perform(

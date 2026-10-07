@@ -3,7 +3,7 @@
 import { createServer } from "node:net";
 
 import { assert, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Layer, Option, Stream } from "effect";
+import { Duration, Effect, Exit, Layer, Option, Scope, Stream } from "effect";
 import { chromium } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
@@ -184,4 +184,38 @@ it.live("keeps a page behind painting with its own focus emulation", () =>
     assert.isAbove(yield* behind(false), 20);
     assert.strictEqual(yield* behind(true), 0);
   }),
+);
+
+// The page script's registration belongs to a session, and its world to the page. A connection that
+// comes later, as after a reconnect, registers again; once the first connection has gone, every
+// later document still runs the script from its start.
+it.live("reads every later document after another connection takes over a page", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+    const still = (title: string) => `data:text/html,<title>${title}</title><h1>${title}</h1>`;
+    const earlier = yield* Scope.make();
+    const first = yield* Cdp.open({ endpoint: proxy.endpoint }).pipe(Scope.provide(earlier));
+    const opened = yield* first.newPage(still("one"));
+
+    assert.include((yield* opened.snapshot()).text, "one");
+
+    const later = yield* Cdp.open({ endpoint: proxy.endpoint });
+    const page = (yield* later.pages).find((each) => each.playwright.url() === still("one"));
+
+    assert.isDefined(page);
+    if (page === undefined) return;
+    assert.include((yield* page.snapshot()).text, "one");
+    yield* Scope.close(earlier, Exit.void);
+    yield* page.goto(still("two"));
+
+    const before = proxy.commands.length;
+    const text = (yield* page.snapshot()).text;
+    const read = proxy.commands.slice(before);
+
+    assert.include(text, "two");
+    assert.deepStrictEqual(
+      read.map((command) => command.method),
+      ["Page.createIsolatedWorld", "Runtime.evaluate"],
+    );
+  }).pipe(Effect.scoped),
 );

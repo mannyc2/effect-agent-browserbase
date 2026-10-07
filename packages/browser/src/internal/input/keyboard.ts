@@ -11,7 +11,8 @@ import * as Keys from "./keys.ts";
 import type * as Replies from "./replies.ts";
 
 export const make = (page: PageContext, dispatch: Dispatch) => {
-  const { cdp, send, playwright, native } = page;
+  const { cdp, playwright, native } = page;
+  const { send } = page.protocol;
   const { stamp, inputCall, dispatchKey, dispatchText } = dispatch;
 
   // A multi-key action stops before its next key once the page has moved to another document.

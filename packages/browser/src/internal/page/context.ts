@@ -214,7 +214,10 @@ export const make = (options: MakeOptions, lock: Semaphore.Semaphore) => {
     activity.inputAt = Math.max(activity.inputAt, now());
   };
 
-  return { ...options, lock, now, owned, span, send, native, activity, noteInput };
+  // Named, so that the declarations of what holds it need not spell out Playwright's protocol types.
+  const protocol: Pick<CDPSession, "send"> = { send };
+
+  return { ...options, lock, now, owned, span, protocol, native, activity, noteInput };
 };
 
 export type PageContext = ReturnType<typeof make>;

@@ -125,7 +125,8 @@ export const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): strin
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
 export const make = Effect.fnUntraced(function* (page: PageContext) {
-  const { cdp, send, native, span } = page;
+  const { cdp, native, span } = page;
+  const { send } = page.protocol;
   const registering = yield* Semaphore.make(1);
   // The main frame's id, which is the page's target id, and whether this session has registered
   // the script.
