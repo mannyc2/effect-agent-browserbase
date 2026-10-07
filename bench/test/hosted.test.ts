@@ -1,4 +1,4 @@
-// Hosted trials against an in-memory Browserbase API; nothing reaches Browserbase.
+// Hosted trials against effect-browserbase's in-memory Browserbase; nothing reaches Browserbase.
 import { assert, describe, it } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Layer, Redacted } from "effect";
 import { Browser } from "effect-browser/Browser";
@@ -10,54 +10,59 @@ import {
   Status,
   Transport,
 } from "effect-browserbase/BrowserbaseError";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { TestBrowserbase } from "effect-browserbase/testing";
+import { HttpClient } from "effect/http";
 
 import * as Latency from "../Latency.ts";
 import * as Relay from "../Relay.ts";
 import { hostedBrowser, hostedSessionSeconds, trialTimeout } from "../run.ts";
 import { uncertainAllocation } from "../Trial.ts";
 
+/**
+ * The package's fake Browserbase as the client's `HttpClient`, keeping the body of every request
+ * the client sends, beside the fake's handle.
+ */
+const recorded = (script: TestBrowserbase.Script = {}) =>
+  Effect.gen(function* () {
+    const { http, handle } = yield* TestBrowserbase.make(script);
+
+    const sent: Array<{ readonly method: string; readonly url: string; readonly body: unknown }> =
+      [];
+
+    const client = BrowserbaseClient.layer({
+      apiKey: Redacted.make(TestBrowserbase.apiKey),
+      baseUrl: "https://api.browserbase.test",
+    }).pipe(
+      Layer.provide(
+        Layer.succeed(
+          HttpClient.HttpClient,
+          http.pipe(
+            HttpClient.tapRequest((request) =>
+              Effect.sync(() =>
+                sent.push({
+                  method: request.method,
+                  url: request.url,
+                  body:
+                    request.body._tag === "Uint8Array"
+                      ? (JSON.parse(new TextDecoder().decode(request.body.body)) as unknown)
+                      : undefined,
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return { client, handle, sent };
+  });
+
 describe("hosted trials", () => {
   it.effect("create sessions whose own timeout outlasts the trial that owns them", () =>
     Effect.gen(function* () {
-      const sent: Array<{ readonly method: string; readonly url: string; readonly body: unknown }> =
-        [];
-
-      const http = HttpClient.make((request) =>
-        Effect.sync(() => {
-          const body =
-            request.body._tag === "Uint8Array"
-              ? (JSON.parse(new TextDecoder().decode(request.body.body)) as unknown)
-              : undefined;
-
-          sent.push({ method: request.method, url: request.url, body });
-
-          // A session without a CDP address fails to open after it was created, so it is
-          // released, and reads after that say it ended.
-          return HttpClientResponse.fromWeb(
-            request,
-            new Response(
-              JSON.stringify({
-                id: "s1",
-                status: request.method === "GET" ? "COMPLETED" : "RUNNING",
-                region: "us-west-2",
-                keepAlive: false,
-                createdAt: "2026-10-04T12:00:00.000Z",
-                expiresAt: "2026-10-04T12:15:00.000Z",
-              }),
-              {
-                status:
-                  request.method === "POST" && request.url.endsWith("/v1/sessions") ? 201 : 200,
-              },
-            ),
-          );
-        }),
-      );
-
-      const client = BrowserbaseClient.layer({
-        apiKey: Redacted.make("test-key"),
-        baseUrl: "https://browserbase.test",
-      }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, http)));
+      // The fake's sessions hand out no DevTools address here, so the browser fails to open after
+      // its session was made, and the session is released.
+      const { client, handle, sent } = yield* recorded();
 
       const failure = yield* Layer.build(hostedBrowser(false)).pipe(
         Effect.scoped,
@@ -67,19 +72,19 @@ describe("hosted trials", () => {
 
       assert.strictEqual(failure._tag, "BrowserbaseError");
       assert.isAbove(hostedSessionSeconds, Duration.toSeconds(trialTimeout));
-      assert.deepInclude(sent[0], {
-        method: "POST",
-        url: "https://browserbase.test/v1/sessions",
-        body: {
-          timeout: hostedSessionSeconds,
-          browserSettings: { viewport: { width: 1280, height: 720 } },
-        },
+      const [create] = sent;
+
+      assert.strictEqual(create?.method, "POST");
+      assert.isTrue(create?.url.endsWith("/v1/sessions"), create?.url);
+      assert.deepStrictEqual(create?.body, {
+        timeout: hostedSessionSeconds,
+        browserSettings: { viewport: { width: 1280, height: 720 } },
       });
-      assert.deepInclude(sent[1], {
-        method: "POST",
-        url: "https://browserbase.test/v1/sessions/s1",
-        body: { status: "REQUEST_RELEASE" },
-      });
+      // Released once, and ended, as the release's own read confirmed.
+      assert.deepStrictEqual(
+        (yield* handle.sessions).map(({ status, releases }) => ({ status, releases })),
+        [{ status: "COMPLETED", releases: 1 }],
+      );
     }),
   );
 
@@ -89,36 +94,7 @@ describe("hosted trials", () => {
       Effect.gen(function* () {
         // The session's address is a local Chromium's, so the whole hosted path runs for free.
         const endpoint = yield* Latency.chromiumEndpoint;
-        const released: Array<string> = [];
-
-        const http = HttpClient.make((request) =>
-          Effect.sync(() => {
-            if (request.url.endsWith("/v1/sessions/s1")) released.push(request.method);
-
-            return HttpClientResponse.fromWeb(
-              request,
-              new Response(
-                JSON.stringify({
-                  id: "s1",
-                  // The release confirms the end by reading the session, which has ended by then.
-                  status: request.method === "GET" ? "COMPLETED" : "RUNNING",
-                  region: "us-west-2",
-                  keepAlive: false,
-                  createdAt: "2026-10-07T12:00:00.000Z",
-                  expiresAt: "2026-10-07T12:15:00.000Z",
-                  connectUrl: endpoint.href,
-                }),
-                { status: request.url.endsWith("/v1/sessions") ? 201 : 200 },
-              ),
-            );
-          }),
-        );
-
-        const client = BrowserbaseClient.layer({
-          apiKey: Redacted.make("test-key"),
-          baseUrl: "https://browserbase.test",
-        }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, http)));
-
+        const { client, handle } = yield* recorded({ connectUrl: endpoint.href });
         const commands: Array<Latency.Command> = [];
 
         yield* Effect.gen(function* () {
@@ -142,7 +118,15 @@ describe("hosted trials", () => {
         assert.isTrue(methods.has("Page.navigate"), [...methods].join(", "));
         assert.isTrue(commands.every((command) => command.ended >= command.sent));
         assert.isAbove(commands.filter((command) => command.answer === "result").length, 10);
-        assert.deepStrictEqual(released, ["POST", "GET"]);
+
+        const [session] = yield* handle.sessions;
+
+        assert.deepInclude(session, { status: "COMPLETED", releases: 1 });
+        // The release asked for the end, then read the session to confirm it.
+        assert.deepStrictEqual(
+          (yield* handle.requests).filter((request) => request.endsWith(`/${session?.id}`)),
+          [`POST /v1/sessions/${session?.id}`, `GET /v1/sessions/${session?.id}`],
+        );
       }).pipe(Effect.scoped),
     { timeout: 60_000 },
   );
