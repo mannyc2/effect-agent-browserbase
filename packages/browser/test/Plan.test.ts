@@ -145,6 +145,13 @@ describe("Plan's choice of a subject", () => {
     },
   );
 
+  it("prefers a field read the same to its words found in another field", () => {
+    const same = buy({ label: "ETH $3,105" }, "e1");
+    const elsewhere = buy({ heading: "ETH $3,105 today" }, "e2");
+
+    assert.strictEqual(shape(decide(same.subject, [elsewhere, same])), "One e1");
+  });
+
   it.prop(
     "reports nothing missing while something has the role and name",
     { recorded: context, found: candidates },

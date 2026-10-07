@@ -143,6 +143,16 @@ describe("Find's rules", () => {
     },
   );
 
+  it.prop(
+    "hold near for whole words only, so BTC is not in WBTC",
+    { near: word, letter: pattern(/^[a-z0-9]$/) },
+    ({ near, letter }) => {
+      assert.isTrue(rules({ near })(candidate({ context: { row: `${letter} ${near}` } })));
+      assert.isFalse(rules({ near })(candidate({ context: { row: `${letter}${near}` } })));
+      assert.isFalse(rules({ near })(candidate({ context: { row: `${near}${letter}` } })));
+    },
+  );
+
   // Words from two letters, so the rules hold and fail about as often.
   const short = pattern(/^[ab]{1,2}$/);
 
@@ -259,8 +269,13 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ["dialog", "Offer"],
       ] as const)
         assert.lengthOf(yield* page.find({ role, name }), 1, `${role} ${name}`);
+      assert.lengthOf(yield* page.find({ text: "Saved" }), 1);
       assert.lengthOf(yield* page.find({ text: "The top of the story" }), 0);
       assert.lengthOf(yield* page.find({ role: "button", name: "At the bottom" }), 0);
+      // What is pinned to the viewport sits under no heading of the story behind it.
+      const [accept] = yield* page.find({ role: "button", name: "Accept" });
+
+      assert.isUndefined(accept?.subject.context.heading);
 
       const [bottom] = yield* page.find({ name: "At the bottom", scope: "document" });
 

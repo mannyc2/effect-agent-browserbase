@@ -41,6 +41,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.isTrue(short.truncated);
       assert.isAtMost(short.text.length, 20);
+      // It is cut at a line.
+      for (const line of short.text.split("\n")) assert.include(lines, line);
     }),
   );
 
