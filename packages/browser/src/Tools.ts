@@ -654,7 +654,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
           text !== undefined
             ? tab.waitForText(text)
             : still === true
-              ? tab.waitForStill()
+              ? tab.ready({ quietMillis: 600 })
               : Effect.sleep(Duration.seconds(Math.min(Math.max(seconds ?? 1, 0), 30))),
         false,
       ),

@@ -332,7 +332,7 @@ const slowFirstFrame = Effect.fnUntraced(function* () {
 
   yield* page.goto(
     "data:text/html," +
-      encodeURIComponent(`<body style="margin:0;height:100vh">
+      encodeURIComponent(`<body style="margin:0;height:100vh"><p>Painting</p>
 <script>
   const started = performance.now();
   let turn = 0;
@@ -600,11 +600,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         }),
     );
 
-    it.effect("waits for the first frame before counting the page still", () =>
+    it.effect("counts the page still only from the first frame of a capture it starts", () =>
       Effect.gen(function* () {
         const page = yield* slowFirstFrame();
 
-        yield* page.waitForStill({ quietMillis: 400, timeout: Duration.seconds(10) });
+        yield* page.ready({ quietMillis: 400, timeout: Duration.seconds(10) });
 
         assert.isTrue(
           yield* Effect.promise(() =>
@@ -634,7 +634,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 </script></body>`),
         );
         // Waiting for the screen to settle runs and stops a capture; its frames stay retained.
-        yield* page.waitForStill({ quietMillis: 300 });
+        yield* page.ready({ quietMillis: 300 });
         const retained = yield* page.recentFrames;
 
         assert.isAbove(retained.length, 1);

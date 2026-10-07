@@ -51,19 +51,12 @@ export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: 
     return label !== null && label.control !== null;
   };
 
+  // The states that hold, in the order `stateOf` gives them, after a heading's level.
   const states = (element: Element, role: string | null): string => {
-    const state = stateOf(element, role);
+    const { level, ...flags } = stateOf(element, role);
+    const held = Object.entries(flags).flatMap(([name, value]) => (value === true ? [name] : []));
 
-    return [
-      state.level === undefined ? "" : `level=${state.level}`,
-      state.disabled ? "disabled" : "",
-      state.checked === true ? "checked" : "",
-      state.expanded === true ? "expanded" : "",
-      state.selected === true ? "selected" : "",
-      state.pressed === true ? "pressed" : "",
-      state.focused ? "focused" : "",
-    ]
-      .filter((name) => name !== "")
+    return [...(level === undefined ? [] : [`level=${level}`]), ...held]
       .map((name) => ` [${name}]`)
       .join("");
   };
