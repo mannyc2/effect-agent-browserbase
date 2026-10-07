@@ -57,6 +57,23 @@
                 "preferSchemaOverJson": "suggestion"
               }
             }
+          },
+          {
+            // The bench is also a command-line program, on Effect's command-line and process
+            // modules, which Effect 4 marks unstable too. An override replaces the list above.
+            "include": ["**/bench/**/*.ts"],
+            "options": {
+              "allowedUnstableApis": [
+                "effect/ai",
+                "effect/Arbitrary",
+                "effect/cli",
+                "effect/http",
+                "effect/observability",
+                "effect/process",
+                "@effect/ai-openrouter",
+                "@effect/ai-typesafe"
+              ]
+            }
           }
         ]
       }

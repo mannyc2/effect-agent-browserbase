@@ -7,7 +7,8 @@ can be done and graded without a model.
 The pages (`Sites.ts`) are served at `https://bench.test` by request interception, so a local
 Chromium and a hosted browser load them the same way, with no tunnel. Each page keeps its truth in
 `window.__bench` for grading; models never see it. Each trial derives its fixture seed from the base seed, task and trial number,
-so changing concurrency does not change its page data.
+so changing concurrency does not change its page data. The same seed seeds the trial's Effect
+`Random`, which humanized pointer paths and typing draw from.
 
 | Task            | Kind       | What the model must do                                                                    |
 | --------------- | ---------- | ----------------------------------------------------------------------------------------- |
@@ -61,15 +62,19 @@ native filtering, paint gaps and observed subscriber loss.
 From this directory:
 
 ```sh
-bun run bench                       # scripted solutions in local Chromium, at no cost
-bun run bench -- --help
+bun run bench run                   # scripted solutions in local Chromium, at no cost
+bun run bench run --help
+bun run bench report ../.work/bench/<results>.jsonl
 
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
-  bun run bench -- --model <openrouter-model-id> --trials 3 --concurrency 4 --seed 23
+  bun run bench run --model <openrouter-model-id> --trials 3 --concurrency 4 --seed 23
 
 EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... \
-  bun run bench -- --browser browserbase
+  bun run bench run --browser browserbase
 ```
+
+The command line is `effect/cli` (`bench.ts`), run by `NodeRuntime.runMain`. Its opt-ins are read
+through `Config`, and its files written through `FileSystem`.
 
 Model calls and Browserbase sessions cost money, so each needs its environment variable. Trials run
 with bounded concurrency (`--concurrency`, default 4) and separate browsers. Every Browserbase trial gets a
@@ -103,8 +108,8 @@ can add fees outside this token budget; a receipt whose charge exceeds its reser
 all further admission. Only non-streaming chat completions are budgeted: the client refuses
 streaming, decisions and raw generated requests before sending them.
 
-Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
-the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
+Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git),
+a `TrialRecord` (`Results.ts`, `version` 1) that `report` decodes again: the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
 model, pinned endpoint with its rates and per-call reservation, browser, added latency, humanize,
 output-token limit, budget, concurrency, recording and narration), effective reasoning, status and
 reason, the answer, model turns
@@ -148,7 +153,7 @@ The bench and the judges runner export traces over OTLP/HTTP to any collector or
 local Jaeger, when asked; otherwise they export nothing:
 
 ```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_TRACES_EXPORTER=otlp bun run bench
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_TRACES_EXPORTER=otlp bun run bench run
 ```
 
 Each trial is a trace of its own, rooted at a `bench.trial` span with its task, arm, seed, browser
@@ -224,7 +229,7 @@ the model. Arm 1 keeps the halt too, although the tools ran every call before ba
 
 ```sh
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
-  bun run bench -- --model openai/gpt-6-luna --task checkout --arm 1 --arm 2 --arm 5 --trials 20
+  bun run bench run --model openai/gpt-6-luna --task checkout --arm 1 --arm 2 --arm 5 --trials 20
 ```
 
 The first paired run, on 2026-10-06, used `openai/gpt-6-luna` (medium reasoning for operate tasks,
@@ -277,14 +282,16 @@ status:
   the ledger stops admitting calls, after a charge above its bound, it keeps the first reason,
   and every later unit is `unrun` with that reason, never `denied`.
 
-An interrupted run (SIGINT, or an interrupted fiber) still records every unit it scheduled: those
-without an outcome are `unrun` with reason `interrupted` and keep what their dispatched calls
-spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside the trials.
-SIGINT interrupts the run: each trial's browser closes with it, and then these records are written.
+An interrupted run (SIGINT or SIGTERM, or an interrupted fiber) still records every unit it
+scheduled: those without an outcome are `unrun` with reason `interrupted` and keep what their
+dispatched calls spent or reserved. The bench also writes its ledger to a `.ledger.json` file beside
+the trials. A signal interrupts the run: each trial's browser closes with it, these records are
+written, and the bench exits with code 130.
 
 `pass` is null except for graded units. Summaries report passes over graded units separately from
 infrastructure failures, denials and unrun units. A run exits successfully only when every unit was
-graded with settled charges; a free run also needs every answer to pass.
+graded with settled charges; a free run also needs every answer to pass. `report` prints the same
+summary for any results files, from their records alone.
 
 The runner retains only closed failure categories and safe response-shape counts for provider
 errors. They omit response text, arbitrary descriptions and provider identifiers. These categories

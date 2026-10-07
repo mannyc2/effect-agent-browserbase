@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
+import { NodeServices } from "@effect/platform-node";
 import { Clock, type Config, Console, DateTime, Effect, Layer, Schema } from "effect";
 import { Browser, make as makeBrowser } from "effect-browser/Browser";
 import { PolicyDenied } from "effect-browser/BrowserError";
@@ -464,7 +465,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url))
           ),
         ),
       ),
-      Effect.provide(Trace.layer),
+      Effect.provide([Trace.layer, NodeServices.layer]),
     ),
   ).catch((error: unknown) => {
     console.error(error);

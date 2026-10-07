@@ -6,7 +6,7 @@ import { Effect, Exit, Layer, Stream } from "effect";
 import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel, type Prompt, type Response, Tool } from "effect/ai";
 
-import { type Arm, pairs } from "../Arms.ts";
+import type { Arm } from "../Arms.ts";
 import { noCalls } from "../Budget.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
 import { classify, isolatedTrial } from "../Trial.ts";
@@ -217,42 +217,4 @@ describe("understand arms", () => {
       assert.strictEqual(batched.outcome.status, "graded");
     }),
   );
-});
-
-describe("pairs", () => {
-  it("counts only pairs graded in both arms", () => {
-    const record = (
-      task: string,
-      trial: number,
-      arm: Arm,
-      status: string,
-      pass: boolean | null,
-    ) => ({
-      task,
-      trial,
-      arm,
-      status,
-      pass,
-    });
-
-    const counts = pairs(
-      [
-        record("a", 1, 1, "graded", true),
-        record("a", 1, 5, "graded", true),
-        record("a", 2, 1, "graded", false),
-        record("a", 2, 5, "graded", true),
-        record("b", 1, 1, "graded", true),
-        record("b", 1, 5, "graded", false),
-        record("b", 2, 1, "graded", false),
-        record("b", 2, 5, "graded", false),
-        record("c", 1, 1, "graded", true),
-        record("c", 1, 5, "infrastructure-failed", null),
-        record("c", 2, 1, "unrun", null),
-      ],
-      5,
-      1,
-    );
-
-    assert.deepStrictEqual(counts, { pairs: 4, both: 1, onlyFirst: 1, onlySecond: 1, neither: 1 });
-  });
 });

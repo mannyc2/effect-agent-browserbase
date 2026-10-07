@@ -31,10 +31,10 @@ export interface Section {
 }
 
 const scripted = (task: string, humanize: boolean) =>
-  `bun run bench -- --task ${task} --record${humanize ? " --humanize" : ""}`;
+  `bun run bench run --task ${task} --record${humanize ? " --humanize" : ""}`;
 
 const agent = (task: string) =>
-  `EFFECT_BROWSER_BENCH_LIVE=1 bun run bench -- --task ${task} --model openai/gpt-6-luna --humanize --record --narrate 5`;
+  `EFFECT_BROWSER_BENCH_LIVE=1 bun run bench run --task ${task} --model openai/gpt-6-luna --humanize --record --narrate 5`;
 
 const casinoCheck =
   "The game itself must have counted exactly five finished spins, and the credits reported must match the balance on screen.";
@@ -194,13 +194,13 @@ export const sections: ReadonlyArray<Section> = [
             id: "chart-trade-model-a",
             label: "Model A",
             record:
-              "EFFECT_BROWSER_BENCH_LIVE=1 bun run bench -- --task chart-trade --record --humanize --model <id>",
+              "EFFECT_BROWSER_BENCH_LIVE=1 bun run bench run --task chart-trade --record --humanize --model <id>",
           },
           {
             id: "chart-trade-model-b",
             label: "Model B",
             record:
-              "EFFECT_BROWSER_BENCH_LIVE=1 bun run bench -- --task chart-trade --record --humanize --model <id>",
+              "EFFECT_BROWSER_BENCH_LIVE=1 bun run bench run --task chart-trade --record --humanize --model <id>",
           },
           { id: "chart-trade-human", label: "Script", record: scripted("chart-trade", true) },
         ],

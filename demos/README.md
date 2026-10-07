@@ -9,7 +9,7 @@ Replays are made in three steps, from the repository root:
 
 ```sh
 # 1. Record. Scripted runs are free; model runs need the bench's opt-ins.
-cd bench && bun run bench -- --task checkout --record --humanize
+cd bench && bun run bench run --task checkout --record --humanize
 
 # 2. Pack one trial's recording into public/replays/<id>/ (needs ffmpeg).
 cd ../demos && bun run pack -- ../.work/bench/<results>/checkout-1 checkout-human

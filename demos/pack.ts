@@ -1,4 +1,4 @@
-// Packs one bench recording (`bun run bench -- --record`) for the player: its shown frames become
+// Packs one bench recording (`bun run bench run --record`) for the player: its shown frames become
 // one H.264 video at their recorded times, and replay.json keeps everything else.
 //
 //   bun run pack -- <recording directory> <replay id>
