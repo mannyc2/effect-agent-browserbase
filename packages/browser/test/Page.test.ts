@@ -4,6 +4,7 @@ import { runInNewContext } from "node:vm";
 
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Exit, Fiber, Layer, Schedule, Scope, Stream } from "effect";
+import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
@@ -455,6 +456,48 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       );
       assert.deepStrictEqual([image.data[0], image.data[1]], [0xff, 0xd8]);
       assert.deepStrictEqual([detail.width, detail.height], [200, 100]);
+    }),
+  );
+
+  // Chromium has no surface to copy until a page paints its first frame, as just after a
+  // navigation, and says "Unable to capture screenshot" until then.
+  it.effect("takes a picture again once a page that has not painted yet has", () =>
+    Effect.gen(function* () {
+      const native = (yield* Browser).context.browser();
+
+      if (native === null) return yield* Effect.die("the test requires local Chromium");
+
+      const context = yield* Effect.acquireRelease(
+        Effect.promise(() => native.newContext({ viewport: { width: 1280, height: 720 } })),
+        (context) => Effect.promise(() => context.close()),
+      );
+
+      const createSession = context.newCDPSession.bind(context);
+      let captures = 0;
+
+      context.newCDPSession = async (target) => {
+        const cdp = await createSession(target);
+        const send = cdp.send.bind(cdp);
+
+        const unpainted: CDPSession["send"] = (method, params) => {
+          if (method === "Page.captureScreenshot" && ++captures === 1)
+            return Promise.reject(
+              new Error("Protocol error (Page.captureScreenshot): Unable to capture screenshot"),
+            );
+
+          return send(method, params);
+        };
+
+        cdp.send = unpainted;
+
+        return cdp;
+      };
+
+      const browser = yield* makeBrowser(context, { id: "unpainted", provider: "test" });
+      const page = yield* browser.newPage((yield* Site).url("/chart"));
+      const image = yield* page.screenshot({ maxAge: 0 });
+
+      assert.deepStrictEqual([image.width, image.height, captures], [1280, 720, 2]);
     }),
   );
 
