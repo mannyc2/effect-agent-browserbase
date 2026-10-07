@@ -277,6 +277,66 @@ const centreOf = (page: Page, image: Image) =>
 
 // Chromium's screencast can miss a page's final paint. The relay withholds native frames on
 // request, so the newest delivered frame shows an animation the page has already finished.
+// The first frames of each capture reach the host 600 ms after it starts, as a hosted browser's
+// do: they are acknowledged, so the capture runs on, but never delivered. The page animates for
+// 1.5 seconds after loading and then sets `window.done`.
+const slowFirstFrame = Effect.fnUntraced(function* () {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+  const context = yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+    (context) => Effect.promise(() => context.close()),
+  );
+
+  const createSession = context.newCDPSession.bind(context);
+
+  context.newCDPSession = async (target) => {
+    const cdp = await createSession(target);
+    const emitter = cdp as EmittingSession;
+    const emit = emitter.emit.bind(emitter);
+    const send = cdp.send.bind(cdp);
+    let startedAt = Number.NEGATIVE_INFINITY;
+
+    cdp.send = ((method: string, params?: object) => {
+      if (method === "Page.startScreencast") startedAt = performance.now();
+
+      return send(method as never, params as never);
+    }) as typeof cdp.send;
+    emitter.emit = (event, ...args) => {
+      if (event !== "Page.screencastFrame" || performance.now() - startedAt >= 600)
+        return emit(event, ...args);
+      void send("Page.screencastFrameAck", { sessionId: (args[0] as RawFrame).sessionId }).catch(
+        () => {},
+      );
+
+      return true;
+    };
+
+    return cdp;
+  };
+
+  const browser = yield* makeBrowser(context, { id: "slow-first-frame", provider: "test" });
+  const page = yield* browser.newPage();
+
+  yield* page.goto(
+    "data:text/html," +
+      encodeURIComponent(`<body style="margin:0;height:100vh">
+<script>
+  const started = performance.now();
+  let turn = 0;
+  (function draw() {
+    if (performance.now() - started > 1500) { window.done = true; return; }
+    document.body.style.background = "hsl(" + (turn++ % 360) + ",80%,40%)";
+    requestAnimationFrame(draw);
+  })();
+</script></body>`),
+  );
+
+  return page;
+});
+
 const withheldFinalPaint = Effect.fnUntraced(function* () {
   const native = (yield* Browser).context.browser();
 
@@ -528,6 +588,20 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.isAbove(pixel.red, 200);
           assert.isBelow(pixel.green, 60);
         }),
+    );
+
+    it.effect("waits for the first frame before counting the page still", () =>
+      Effect.gen(function* () {
+        const page = yield* slowFirstFrame();
+
+        yield* page.waitForStill({ quietMillis: 400, timeout: Duration.seconds(10) });
+
+        assert.isTrue(
+          yield* Effect.promise(() =>
+            page.playwright.evaluate(() => (window as unknown as { done?: boolean }).done === true),
+          ),
+        );
+      }),
     );
 
     it.effect("makes a moment's last frame the page now, after a stopped capture and input", () =>
