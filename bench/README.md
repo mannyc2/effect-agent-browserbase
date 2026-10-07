@@ -383,6 +383,23 @@ and Jev `jev-1.13.0`, for $0.018 in all:
   the case's truth names another risk. The 6 `secret` labels that every arm adds are forms that
   submit a filled password or card: structure says so, while the truth names only the main risk.
 
+## Browserbase contract
+
+`effect-browserbase/testing` exports the in-memory Browserbase its tests and the bench's hosted
+tests run on (`TestBrowserbase`), and the checks it is held to (`BrowserbaseContract.checks`):
+what the package relies on Browserbase to do. `bun run bench contract` runs those checks against
+Browserbase itself, so a fake that has drifted from the service shows:
+
+```sh
+EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... bun run bench contract
+```
+
+Each check prints `held`, `BROKEN` with what Browserbase did instead, or `unrun` with the
+operation and reason when Browserbase could not be asked; a failed call's own text is left out,
+since it can carry session ids. Checks that move the test clock, such as a session ending at its
+timeout, run against the fake only. A run opens two sessions of a few seconds each and a stored
+context, and exits with an error unless every check held.
+
 ## Tests
 
 `bun run test` runs every scripted solution, grades answers from models scripted to be wrong or
