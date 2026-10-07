@@ -326,9 +326,8 @@
     },
     {
       // The latency proxy and the hosted relay speak WebSocket over Node's sockets on host
-      // timers, until a shared testing wire replaces them. The judges runner moves onto the
-      // bench's command line next.
-      "files": ["**/bench/Latency.ts", "**/bench/Relay.ts", "**/bench/judges.ts"],
+      // timers, until a shared testing wire replaces them.
+      "files": ["**/bench/Latency.ts", "**/bench/Relay.ts"],
       "rules": {
         "effecttsgo/async-function": "off",
         "effecttsgo/crypto-random-uuid": "off",

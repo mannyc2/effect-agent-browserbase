@@ -5,7 +5,6 @@ import { OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import {
   Cause,
   Clock,
-  Config,
   Console,
   DateTime,
   Duration,
@@ -27,7 +26,7 @@ import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
 import { type Arm, armNames, arms } from "./Arms.ts";
-import { BenchError, efforts, modelRunner, noCalls, noTiming, refuse } from "./Budget.ts";
+import { BenchError, efforts, modelRunner, noCalls, noTiming, optedIn, refuse } from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import * as Latency from "./Latency.ts";
 import * as Recorder from "./Recorder.ts";
@@ -80,13 +79,6 @@ export const errorText = (cause: Cause.Cause<unknown>) => {
 
   return error instanceof Error ? error.name : "Trial failed";
 };
-
-/** A paid opt-in, on only when its variable is exactly "1". */
-const optIn = (name: string) =>
-  Config.String(name).pipe(
-    Config.map((value) => value === "1"),
-    Config.withDefault(false),
-  );
 
 const atLeast = (minimum: number) => Schema.Finite.check(Schema.isGreaterThanOrEqualTo(minimum));
 
@@ -194,9 +186,9 @@ export const command = Command.make(
       return yield* refuse("--arm needs --model: the scripted solutions have no arms");
     if (latency !== undefined && hosted)
       return yield* refuse("--latency slows a local chromium; a hosted browser has its own");
-    if (model !== undefined && !(yield* optIn("EFFECT_BROWSER_BENCH_LIVE")))
+    if (model !== undefined && !(yield* optedIn("EFFECT_BROWSER_BENCH_LIVE")))
       return yield* refuse("model calls cost money: set EFFECT_BROWSER_BENCH_LIVE=1 to make them");
-    if (hosted && !(yield* optIn("EFFECT_BROWSER_BENCH_HOSTED")))
+    if (hosted && !(yield* optedIn("EFFECT_BROWSER_BENCH_HOSTED")))
       return yield* refuse("Browserbase sessions cost money: set EFFECT_BROWSER_BENCH_HOSTED=1");
 
     const fs = yield* FileSystem.FileSystem;

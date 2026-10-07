@@ -35,7 +35,7 @@
   `Policy` adds judges over `effect/ai` (`reviewer` on a `LanguageModel`, `decider` on a
   `DecisionModel` such as Jev) and `make`, a guard that denies a risk the task does not ask for and
   fails closed on input with facts when its judge fails; `Agent.run` provides the task and ends
-  after three refusals in a row. The judges are tested with scripted models; `bun run judges` in
+  after three refusals in a row. The judges are tested with scripted models; `bun run bench judges` in
   the bench grades them against the corpus, with paid arms only on opt-in.
 - Moments: `Moment.capture` gathers a page's frames and events over a window that can start where
   the previous moment ended, so consecutive moments neither repeat nor miss an event, and needs
