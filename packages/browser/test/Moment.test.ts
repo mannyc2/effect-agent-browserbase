@@ -958,6 +958,20 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   it.effect("tells only the words a viewer can see", () =>
     Effect.gen(function* () {
       const page = yield* start("/quote");
+
+      // A rule on a class hides plain spans, and a disclosure is closed.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          document.head.insertAdjacentHTML(
+            "beforeend",
+            "<style>.collapsed span{display:none}</style>",
+          );
+          document.body.insertAdjacentHTML(
+            "afterbegin",
+            '<p class="collapsed" id="folded">Fee $1 <span>token-1</span></p><div id="box">Box</div>',
+          );
+        }),
+      );
       const first = yield* Moment.capture(page);
 
       yield* Effect.promise(() =>
@@ -971,16 +985,26 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
           item.innerHTML = 'Third post<span style="display:none"> draft notes</span>';
           document.querySelector("#feed")?.append(item);
+          const folded = document.querySelector("#folded");
+
+          if (folded !== null) folded.innerHTML = "Fee $2 <span>token-2</span>";
+          const box = document.querySelector("#box");
+
+          if (box !== null)
+            box.innerHTML =
+              "<p>Box 2</p><details><summary>More</summary><p>closed-secret</p></details>";
         }),
       );
       yield* Effect.sleep(Duration.millis(300));
       const second = yield* Moment.capture(page, { since: first });
 
-      assert.deepStrictEqual(
-        second.changes?.changes.map((change) => [change.kind, change.before, change.after]),
+      assert.sameDeepMembers(
+        (second.changes?.changes ?? []).map((change) => [change.kind, change.before, change.after]),
         [
           ["appeared", undefined, "Third post"],
           ["text", "$61,240", "$13"],
+          ["text", "Fee $1", "Fee $2"],
+          ["text", "Box", "Box 2 More"],
         ],
       );
     }),
@@ -1070,6 +1094,113 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       );
       assert.isAbove(second.changes?.scrolled ?? 0, 0);
     }),
+  );
+
+  it.effect(
+    "tells a re-sort and new messages while scrolling, not a list that jumps or renders late",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* start("/quote");
+
+        // A leaderboard, a chat that does not hold its place, and two lists that reuse ten rows:
+        // one rendering as it scrolls, the other 150 ms after scrolling stops.
+        yield* Effect.promise(() =>
+          page.playwright.evaluate(() => {
+            const pane = (id: string, body: string) =>
+              `<div id="${id}" style="height:200px;overflow:auto;width:220px;float:left">${body}<div style="height:4000px"></div></div>`;
+
+            const rows = (count: number, line: (index: number) => string) =>
+              Array.from(
+                { length: count },
+                (_, index) => `<div class="row">${line(index)}</div>`,
+              ).join("");
+
+            document.body.insertAdjacentHTML(
+              "afterbegin",
+              pane(
+                "board",
+                rows(5, (index) => `Player ${index}: ${100 - index * 5}`),
+              ) +
+                `<div id="chat" style="height:200px;overflow:auto;overflow-anchor:none;width:220px;float:left">${Array.from({ length: 12 }, (_, index) => `<p>Old message ${index}</p>`).join("")}</div>` +
+                pane(
+                  "jump",
+                  rows(10, (index) => `Row ${index}`),
+                ) +
+                pane(
+                  "late",
+                  rows(10, (index) => `Row ${index}`),
+                ),
+            );
+
+            for (const id of ["jump", "late"]) {
+              const view = document.querySelector(`#${id}`);
+              let timer: ReturnType<typeof setTimeout> | undefined;
+
+              const render = () =>
+                view?.querySelectorAll(".row").forEach((row, index) => {
+                  row.textContent = `Row ${Math.floor(view.scrollTop / 20) + index}`;
+                });
+
+              view?.addEventListener("scroll", () => {
+                if (id === "jump") render();
+                else {
+                  clearTimeout(timer);
+                  timer = setTimeout(render, 150);
+                }
+              });
+            }
+          }),
+        );
+        const first = yield* Moment.capture(page);
+
+        yield* Effect.promise(() =>
+          page.playwright.evaluate(async () => {
+            const pause = (millis: number) =>
+              new Promise((resolve) => {
+                setTimeout(resolve, millis);
+              });
+
+            const board = document.querySelector("#board");
+            const chat = document.querySelector("#chat");
+            const jump = document.querySelector("#jump");
+            const late = document.querySelector("#late");
+
+            if (board === null || chat === null || jump === null || late === null) return;
+            board.scrollTop = 3;
+            chat.scrollTop = 3;
+            jump.scrollTop = 4000;
+            late.scrollTop = 100;
+            await pause(20);
+            // The last player's score jumps and the board re-sorts by rewriting its rows.
+            const scores = [200, 100, 95, 90, 85];
+
+            board.querySelectorAll(".row").forEach((row, index) => {
+              row.textContent = `Player ${(index + 4) % 5}: ${scores[index]}`;
+            });
+            // Two messages arrive at the chat's top as its two oldest are trimmed.
+            for (const text of ["Alice: deal closed", "Bob: great news"]) {
+              const message = document.createElement("p");
+
+              message.textContent = text;
+              chat.prepend(message);
+            }
+            chat.lastElementChild?.remove();
+            chat.lastElementChild?.remove();
+          }),
+        );
+        yield* Effect.sleep(Duration.millis(400));
+        const second = yield* Moment.capture(page, { since: first });
+        const told = second.changes?.changes.map((change) => change.after ?? change.before) ?? [];
+
+        assert.includeMembers(told, [
+          "Player 4: 200",
+          "Player 0: 100",
+          "Alice: deal closed",
+          "Bob: great news",
+        ]);
+        assert.isFalse(told.some((words) => words?.startsWith("Row ") === true));
+        assert.isAtLeast(second.changes?.scrolled ?? 0, 20);
+      }),
   );
 
   it.effect("keeps every change in an order book that scrolls as it ticks", () =>

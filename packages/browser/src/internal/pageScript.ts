@@ -2149,7 +2149,7 @@ export const install = (): PageApi => {
   };
 
   /** A node's words, or with an undo, its words before that batch of mutations. */
-  const wordsOf = (node: Node, undo?: Undo): string => {
+  const wordsOf = (node: Node, undo?: Undo, scope = classOf(node)): string => {
     if (node.nodeType === Node.TEXT_NODE) return undo?.data.get(node) ?? node.nodeValue ?? "";
     if (!isElement(node)) return "";
     const tag = node.tagName;
@@ -2157,18 +2157,58 @@ export const install = (): PageApi => {
     if (unwritten.has(tag)) return "";
     const gap = inlineTags.has(tag) ? "" : " ";
     const removed = undo?.removed.get(node);
+    // A closed disclosure shows only its summary.
+    const closed = tag === "DETAILS" && !node.hasAttribute("open");
     let text = gap;
 
     for (let child = node.firstChild; ; child = child.nextSibling) {
       if (removed !== undefined)
         for (const group of removed)
           if (group.next === child)
-            for (const gone of group.nodes) if (unhidden(gone)) text += wordsOf(gone, undo);
+            for (const gone of group.nodes)
+              if (unhidden(gone) && !hiddenKind(gone, tag, scope)) text += wordsOf(gone, undo);
       if (child === null) break;
-      if (undo?.added.has(child) !== true && seeable(child)) text += wordsOf(child, undo);
+      if (closed && !(isElement(child) && child.tagName === "SUMMARY")) continue;
+      if (undo?.added.has(child) !== true && visibleIn(child, tag, scope))
+        text += wordsOf(child, undo, isElement(child) ? (classOf(child) ?? scope) : scope);
     }
 
     return text + gap;
+  };
+
+  /** An element's own class attribute, if it has one. */
+  const classOf = (node: Node): string | undefined =>
+    isElement(node) ? (node.getAttribute("class") ?? undefined) : undefined;
+
+  // What a class hides, judged for each class, parent tag and tag, and kept for two seconds: asking
+  // again in every batch would make a page that rebuilds itself work out its style each time. A
+  // class that changes asks afresh, being another key.
+  let looks = new Map<string, { readonly hidden: boolean; readonly at: number }>();
+
+  /** Whether this batch found children of a removed node's kind hidden where it was. */
+  const hiddenKind = (node: Node, parent: string, scope: string | undefined): boolean =>
+    isElement(node) && looks.get(`${scope}\n${parent}\n${node.tagName}`)?.hidden === true;
+
+  /**
+   * Whether a child of `parent` can be seen. One with attributes is asked itself. One without can
+   * still be hidden by a rule on a class above it, such as `.collapsed span`, so under a class it
+   * is asked once for all its kind; elsewhere, most of a page, it is not asked.
+   */
+  const visibleIn = (child: Node, parent: string, scope: string | undefined): boolean => {
+    if (!isElement(child)) return true;
+    if (child.attributes.length > 0 || !child.isConnected) return seeable(child);
+    if (scope === undefined) return true;
+    const key = `${scope}\n${parent}\n${child.tagName}`;
+    const now = epoch();
+    let look = looks.get(key);
+
+    if (look === undefined || now - look.at > 2000) {
+      if (looks.size > 512) looks.clear();
+      look = { hidden: concealed(child), at: now };
+      looks.set(key, look);
+    }
+
+    return !look.hidden;
   };
 
   /**
@@ -2225,9 +2265,13 @@ export const install = (): PageApi => {
         ? ""
         : element.childElementCount === 0
           ? element.textContent
-          : wordsOf(element),
+          : wordsOf(element, undefined, scopeOf(element)),
       600,
     );
+
+  /** The class nearest above or on an element, under which its descendants can be hidden. */
+  const scopeOf = (element: Element): string | undefined =>
+    element.closest("[class]")?.getAttribute("class") ?? undefined;
 
   /** A change shorter than 160 characters as it is, else the part that differs, with some context. */
   const excerpt = (before: string, after: string): [string, string] => {
@@ -2470,10 +2514,50 @@ export const install = (): PageApi => {
   // each other's words, or rows both added and removed under one parent, is the scroll, not new
   // content. Their states are still kept, so what follows is told from what they showed, and the
   // record counts them; a single change or a net arrival, such as a new message, is told as ever.
-  let scrolled: { readonly element: Element; readonly at: number } | undefined;
+  interface Scroll {
+    readonly element: Element;
+    readonly at: number;
+    /** Where the burst of scrolling began, and how far it has moved since: down is positive. */
+    readonly from: number;
+    readonly distance: number;
+  }
+
+  // Each element's latest burst of scrolling, and where it last rested, so a burst knows where it
+  // began; several can scroll at once.
+  let scrolls = new WeakMap<Element, Scroll>();
+  let rests = new WeakMap<Element, number>();
+  let scrolledAt = Number.NEGATIVE_INFINITY;
+
+  /** How long after a scroll a list may render it: a debounced one waits for scrolling to stop. */
+  const scrollMillis = 300;
 
   const onScroll = (event: Event) => {
-    if (event.target instanceof Element) scrolled = { element: event.target, at: epoch() };
+    const element = event.target;
+
+    if (!(element instanceof Element)) return;
+    const at = epoch();
+    const top = element.scrollTop;
+
+    const burst = scrolls.get(element);
+
+    const from =
+      burst !== undefined && at - burst.at < scrollMillis ? burst.from : (rests.get(element) ?? 0);
+
+    rests.set(element, top);
+    scrolls.set(element, { element, at, from, distance: top - from });
+    scrolledAt = at;
+  };
+
+  /** The element around `node` that scrolled just now, if any. */
+  const scrollOf = (node: Element, at: number): Scroll | undefined => {
+    if (at - scrolledAt >= scrollMillis) return undefined;
+    for (let up: Element | null = node; up !== null; up = up.parentElement) {
+      const scroll = scrolls.get(up);
+
+      if (scroll !== undefined && at - scroll.at < scrollMillis) return scroll;
+    }
+
+    return undefined;
   };
 
   const swept: Array<number> = [];
@@ -2501,9 +2585,26 @@ export const install = (): PageApi => {
     const owners = new Set<Element>();
     const parents = new Set<Element>();
     const arrivals = new Set<Node>();
-    const scroller = scrolled !== undefined && at - scrolled.at < 100 ? scrolled.element : null;
     const swaps = new Map<Element, Array<() => void>>();
-    const swapped = new Map<Element, { arrived: number; left: Array<Element> }>();
+    const swapped = new Map<Element, { arrived: Array<Element>; left: Array<Element> }>();
+
+    // Rows a list adds as it scrolls arrive on the side the view moved toward: below it as it
+    // scrolls down. New messages a chat adds at its top while it scrolls down are not that.
+    const towards = (rows: ReadonlyArray<Element>, scroll: Scroll): boolean => {
+      const distance = scroll.distance;
+      const box = scroll.element.getBoundingClientRect();
+      const middle = box.top + box.height / 2;
+
+      return (
+        distance !== 0 &&
+        rows.every((row) => {
+          const rect = row.getBoundingClientRect();
+
+          return distance > 0 ? rect.top >= middle : rect.bottom <= middle;
+        })
+      );
+    };
+
     let byTarget: Map<Node | null, Array<MutationRecord>> | undefined;
     let undo: Undo | undefined;
 
@@ -2517,7 +2618,10 @@ export const install = (): PageApi => {
         mutation.type === "characterData" ? mutation.target.parentNode : mutation.target,
       );
 
-      return clean(wordsOf(element, undo ?? undoOf(byTarget.get(element) ?? [])), 600);
+      return clean(
+        wordsOf(element, undo ?? undoOf(byTarget.get(element) ?? []), scopeOf(element)),
+        600,
+      );
     };
 
     /** Tell the elements one mutation added to or removed from `target`. */
@@ -2613,10 +2717,10 @@ export const install = (): PageApi => {
       if (arrived.length + left.length === 0 || !watched(target)) continue;
       // Elements that came with new words of their parent are told by the parent's change.
       if (owners.has(target) && wordy(mutation)) continue;
-      if (scroller?.contains(target) === true) {
-        const sums = swapped.get(target) ?? { arrived: 0, left: [] };
+      if (scrollOf(target, at) !== undefined) {
+        const sums = swapped.get(target) ?? { arrived: [], left: [] };
 
-        sums.arrived += arrived.length;
+        sums.arrived.push(...arrived);
         sums.left.push(...left);
         swapped.set(target, sums);
         swaps.set(target, [
@@ -2631,12 +2735,19 @@ export const install = (): PageApi => {
     // Rows both added and removed under one parent of a scrolled element are its scroll.
     for (const [target, steps] of swaps) {
       const sums = swapped.get(target);
+      const scroll = scrollOf(target, at);
 
-      if (sums === undefined || sums.arrived < 2 || sums.left.length < 2) {
+      if (
+        sums === undefined ||
+        scroll === undefined ||
+        sums.arrived.length < 2 ||
+        sums.left.length < 2 ||
+        !towards(sums.arrived, scroll)
+      ) {
         for (const step of steps) step();
         continue;
       }
-      sweep(at, Math.max(sums.arrived, sums.left.length));
+      sweep(at, Math.max(sums.arrived.length, sums.left.length));
       for (const node of sums.left) {
         const track = tracks.get(node);
 
@@ -2646,16 +2757,16 @@ export const install = (): PageApi => {
 
     // Sibling rows of a scrolled element that took each other's words are its scroll.
     const rewritten =
-      scroller === null
+      at - scrolledAt >= scrollMillis
         ? []
-        : [
-            ...Map.groupBy(
-              [...owners].filter((owner) => scroller.contains(owner)),
-              (owner) => owner.parentElement,
-            ).values(),
-          ].filter((rows) => rows.length >= 3);
+        : [...Map.groupBy(owners, (owner) => owner.parentElement)].filter(
+            ([parent, rows]) =>
+              rows.length >= 3 && parent !== null && scrollOf(parent, at) !== undefined,
+          );
 
-    for (const rows of rewritten) {
+    for (const [parent, rows] of rewritten) {
+      if (parent === null) continue;
+
       const before = rows.map((row) => {
         const track = tracks.get(row);
 
@@ -2663,9 +2774,31 @@ export const install = (): PageApi => {
       });
 
       const now = rows.map(wordsNow);
-      const moved = now.filter((words) => before.includes(words)).length;
 
-      if (moved * 2 < rows.length) continue;
+      // How far down the rows each one's words came from; scrolling down moves words up, so a
+      // recycled list shows in each row what a row below it showed. A re-sort can move them the
+      // other way, and a list that jumped far shows only new words, having moved past them all.
+      const shifts = now.flatMap((words, index) => {
+        const from = before.indexOf(words);
+
+        return from === -1 || from === index ? [] : [from - index];
+      });
+
+      const counts = Map.groupBy(shifts, (shift) => shift);
+
+      const [shift = 0, same = []] =
+        [...counts].toSorted((a, b) => b[1].length - a[1].length)[0] ?? [];
+
+      const distance = scrollOf(parent, at)?.distance ?? 0;
+      const height = rows[0]?.getBoundingClientRect().height ?? 0;
+
+      const recycled =
+        distance !== 0 &&
+        (shifts.length === 0
+          ? Math.abs(distance) >= rows.length * height
+          : same.length * 2 >= rows.length && Math.sign(shift) === Math.sign(distance));
+
+      if (!recycled) continue;
       sweep(at, rows.length);
       rows.forEach((row, index) => {
         owners.delete(row);
@@ -2735,7 +2868,10 @@ export const install = (): PageApi => {
     observer.disconnect();
     sight.disconnect();
     // A new record starts afresh: it owes nothing to what the last one could not keep.
-    scrolled = undefined;
+    scrolls = new WeakMap();
+    rests = new WeakMap();
+    scrolledAt = Number.NEGATIVE_INFINITY;
+    looks = new Map();
     swept.length = 0;
     sweeps = 0;
     visible = new WeakMap();
