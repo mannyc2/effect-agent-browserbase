@@ -14,6 +14,12 @@ page's renderer runs with your user's privileges. `Chromium.layer({ sandbox: tru
 sandboxed. Hosts that don't allow unprivileged user namespaces, such as many containers and Ubuntu
 23.10 or later by default, can't start the sandbox; opening then fails and says so.
 
+`Chromium.layer` leaves signals to your program: Playwright's own handlers, which close every
+browser and, on SIGINT, exit before any finalizer runs, are off. Run the program with
+`NodeRuntime.runMain` from `@effect/platform-node`, which interrupts it on SIGINT and SIGTERM, so
+the browser closes with its scope. A signal that ends the process outright still takes Chromium
+with it, since its pipe closes, but leaves Playwright's temporary profile behind.
+
 | Module         | What it holds                                                                        |
 | -------------- | ------------------------------------------------------------------------------------ |
 | `Browser`      | The `Browser` service: tabs, recent events and the Playwright context                |

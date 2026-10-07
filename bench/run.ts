@@ -48,7 +48,6 @@ import {
   isolatedTrial,
   journal,
   notAdmitted,
-  onSigint,
   type Reason,
   revision,
   type RunInfo,
@@ -434,8 +433,6 @@ const main = Effect.gen(function* () {
     }
     yield* ledgerSnapshot(true);
   }).pipe(Effect.ignore({ log: "Error", message: "could not record the interrupted run" }));
-
-  yield* onSigint(interrupted);
 
   yield* Console.log(`Running ${jobs.length} trials, ${concurrency} at a time; results in ${file}`);
 

@@ -1,6 +1,6 @@
 // The real command line, interrupted the way an operator does it; scripted and free.
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,13 +17,19 @@ const exited = (child: ChildProcess) =>
 
 describe("an interrupted bench run", () => {
   it.live(
-    "records every scheduled trial and the ledger before it exits",
+    "records every scheduled trial and the ledger, and leaves no browser files behind",
     () =>
       Effect.gen(function* () {
-        const out = yield* Effect.acquireRelease(
+        const root = yield* Effect.acquireRelease(
           Effect.sync(() => mkdtempSync(join(tmpdir(), "bench-interrupt-"))),
           (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
         );
+
+        const out = join(root, "out");
+        // The run's own temporary directory, where Playwright keeps each browser's profile.
+        const temporary = join(root, "tmp");
+
+        mkdirSync(temporary);
 
         const child = spawn(
           process.execPath,
@@ -39,7 +45,11 @@ describe("an interrupted bench run", () => {
             "--out",
             out,
           ],
-          { cwd: bench, stdio: ["ignore", "pipe", "ignore"] },
+          {
+            cwd: bench,
+            env: { ...process.env, TMPDIR: temporary },
+            stdio: ["ignore", "pipe", "ignore"],
+          },
         );
 
         const code = exited(child);
@@ -52,8 +62,9 @@ describe("an interrupted bench run", () => {
         });
         yield* Effect.sleep("2 seconds");
         child.kill("SIGINT");
-        // Playwright's own SIGINT handler may exit with 130 once its browsers close.
-        assert.notStrictEqual(yield* code, 0);
+        assert.strictEqual(yield* code, 1);
+        // The interruption closed the browser with its trial, which removes its profile.
+        assert.deepStrictEqual(readdirSync(temporary), []);
 
         const files = readdirSync(out);
         const results = files.find((name) => name.endsWith("-scripted.jsonl"));
