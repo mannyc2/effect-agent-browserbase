@@ -190,7 +190,9 @@ WebSocket, and each message goes on over the session's own connection to Browser
 records commands as the latency proxy does, so a hosted trial has the same `CDP <method>` spans and
 `protocol`, timed on the bench's clock. A command's span is its whole round trip; less the
 trial's `roundTripMillis`, about what the trip itself costs, it is roughly the browser's time on it.
-The relay offers Playwright no compression; the onward connection is the session's. Browserbase's
+The relay offers Playwright no compression; the onward connection is the session's. On 7
+October 2026, four scripted trials through it took as long as without it, at 70 to 72 ms a round
+trip and 46 to 60 round trips each. Browserbase's
 session log is no substitute: on 7 October 2026 its entries carried no timestamps, though its API
 reference lists them, it kept about every other DevTools message, it appeared 5 to 20 seconds
 after the session ended, and a session whose page never navigated had none.

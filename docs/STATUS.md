@@ -58,7 +58,7 @@
   latency to a local browser's DevTools connection (`--latency`) to measure hosted round trips free;
   there it also traces each DevTools command under the span that was open when it was sent. Hosted
   sessions carry their trial in Browserbase's user metadata, and connect through a relay in the
-  bench that traces their commands the same way (not yet run on a paid session).
+  bench that traces their commands the same way.
 - `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,
   navigation and forms, graded against seeded page truth and captured evidence. Trials run with
   separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
