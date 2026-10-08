@@ -1,7 +1,6 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import { assert, layer } from "@effect/vitest";
 import { Clock, Duration, Effect, Fiber, Random, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
@@ -24,11 +23,15 @@ interface Dispatch {
   settledAt?: number;
 }
 
-// Its pages open performed by one presenter with `motion`, unless they open plain.
+// Its pages open performed by one presenter with `motion`, unless they open plain. With `held`,
+// Chromium's replies to input wait until the test releases them. The browser, its presenter and the
+// recorded times all keep the clock the fixture is made on.
 const setup = Effect.fnUntraced(function* (
   motion: Motion.Service,
-  replyDelayMillis = 0,
-  performed = true,
+  {
+    performed = true,
+    held = false,
+  }: { readonly performed?: boolean; readonly held?: boolean } = {},
 ) {
   const native = (yield* Browser).context.browser();
   const clock = yield* Clock.Clock;
@@ -44,11 +47,14 @@ const setup = Effect.fnUntraced(function* (
   const createSession = context.newCDPSession.bind(context);
   const dispatches: Array<Dispatch> = [];
   const moved = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
   let outstanding = 0;
   let maximumOutstanding = 0;
 
-  // Chromium receives each original command immediately. Only its returned receipt is delayed,
-  // reproducing a remote connection without replacing input dispatch or native browser behavior.
+  if (!held) released.resolve();
+
+  // Chromium receives each original command immediately. Only its returned receipt is held,
+  // as a remote connection's would be, without replacing input dispatch or native browser behavior.
   context.newCDPSession = async (target) => {
     const session = await createSession(target);
     const send = session.send.bind(session);
@@ -66,7 +72,7 @@ const setup = Effect.fnUntraced(function* (
       return send(method, params)
         .then(async (result) => {
           if (input.type === "mouseMoved") moved.resolve();
-          if (replyDelayMillis > 0) await sleep(replyDelayMillis);
+          await released.promise;
 
           return result;
         })
@@ -100,6 +106,7 @@ const setup = Effect.fnUntraced(function* (
     open,
     dispatches,
     moved: moved.promise,
+    release: () => released.resolve(),
     maximumOutstanding: () => maximumOutstanding,
   };
 });
@@ -150,8 +157,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
                 return [{ ...to, afterMillis: 0 }];
               }),
           },
-          0,
-          false,
+          { performed: false },
         );
 
         const page = yield* plain.open;
@@ -356,73 +362,80 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    for (const replyDelayMillis of [70, 320]) {
-      it.effect(
-        `submits every dense original sample on schedule with ${replyDelayMillis}ms replies`,
-        () =>
-          Effect.gen(function* () {
-            let original: ReadonlyArray<Motion.Sample> = [];
+    // The browser runs on a test clock that moves only when the test says, and Chromium's replies
+    // wait until the test releases them: each sample's time is then exact, and so is never waiting
+    // for a reply, however loaded the machine.
+    it.effect("submits every dense original sample at its own millisecond, before any reply", () =>
+      Effect.gen(function* () {
+        let original: ReadonlyArray<Motion.Sample> = [];
+        const clock = yield* TestClock.make();
 
-            const fixture = yield* setup(
-              {
-                plan: (from, to) =>
-                  Effect.sync(() => {
-                    original = Array.from({ length: 270 }, (_, index) => ({
-                      x: from.x + ((to.x - from.x) * (index + 1)) / 270,
-                      y: from.y + ((to.y - from.y) * (index + 1)) / 270,
-                      afterMillis: Math.floor(index / 3),
-                    }));
+        const fixture = yield* setup(
+          {
+            plan: (from, to) =>
+              Effect.sync(() => {
+                original = Array.from({ length: 270 }, (_, index) => ({
+                  x: from.x + ((to.x - from.x) * (index + 1)) / 270,
+                  y: from.y + ((to.y - from.y) * (index + 1)) / 270,
+                  afterMillis: Math.floor(index / 3),
+                }));
 
-                    return original;
-                  }),
-              },
-              replyDelayMillis,
-            );
+                return original;
+              }),
+          },
+          { held: true },
+        ).pipe(Effect.provideService(Clock.Clock, clock));
 
-            const page = yield* fixture.open;
+        const page = yield* fixture.open;
 
-            // A capture maps the browser's clock, so each sample carries the time it was meant for.
-            yield* page.screencast().pipe(Stream.take(1), Stream.runDrain);
-            yield* page.hover({ x: 670, y: 490 });
-            const events = yield* fixture.browser.recentEvents;
-            const plan = events.find((event) => event._tag === "TrackPlanned");
-            const terminal = events.find((event) => event._tag === "TrackPerformed");
+        const moves = () =>
+          fixture.dispatches.filter((dispatch) => dispatch.input.type === "mouseMoved");
 
-            const moves = fixture.dispatches.filter(
-              (dispatch) => dispatch.input.type === "mouseMoved",
-            );
+        // A capture maps the browser's clock, so each sample carries the time it was meant for.
+        yield* page.screencast().pipe(Stream.take(1), Stream.runDrain);
+        const hovering = yield* page.hover({ x: 670, y: 490 }).pipe(Effect.forkChild);
 
-            assert.isDefined(plan);
-            assert.isDefined(terminal);
-            if (plan === undefined || terminal === undefined) return;
-            assert.deepStrictEqual(plan.samples, original);
-            assert.deepStrictEqual(
-              moves.map(({ input }) => ({ x: input.x, y: input.y })),
-              original.map(({ x, y }) => ({ x, y })),
-            );
-            assert.isTrue(terminal.complete);
-            assert.strictEqual(terminal.dispatched, original.length);
-            assert.isAbove(fixture.maximumOutstanding(), 64);
-            assert.isAtMost(fixture.maximumOutstanding(), Motion.maximumSamples + 64);
+        // Equal offsets are intentional: neither coalescing nor pacing by replies is permitted.
+        // Each millisecond's three samples go out once it has come, and the next three only after.
+        for (let millis = 0; millis < 90; millis++) {
+          yield* Effect.sleep("1 millis").pipe(
+            Effect.repeat({ until: () => moves().length >= 3 * (millis + 1) }),
+            Effect.timeout("10 seconds"),
+          );
+          assert.strictEqual(moves().length, 3 * (millis + 1));
+          yield* clock.adjust("1 millis");
+        }
+        assert.strictEqual(fixture.maximumOutstanding(), original.length);
+        fixture.release();
+        yield* Fiber.join(hovering);
 
-            // The 65th sample must pass the old receipt ceiling before even the first reply.
-            // Equal offsets are intentional: neither coalescing nor reply pacing is permitted.
-            assert.isBelow(moves[64]?.at ?? Infinity, moves[0]?.settledAt ?? 0);
-            for (const [index, sample] of original.entries()) {
-              const dispatch = moves[index];
-              const timestamp = dispatch?.input.timestamp;
+        const events = yield* fixture.browser.recentEvents;
+        const plan = events.find((event) => event._tag === "TrackPlanned");
+        const terminal = events.find((event) => event._tag === "TrackPerformed");
 
-              assert.isDefined(dispatch);
-              assert.isDefined(timestamp);
-              if (dispatch === undefined || timestamp === undefined) continue;
-              assert.isAtLeast(dispatch.at, plan.at + sample.afterMillis - 2);
-              assert.isBelow(dispatch.at - plan.at - sample.afterMillis, 100);
-              if (index > 0)
-                assert.isAtLeast(timestamp, moves[index - 1]?.input.timestamp ?? Infinity);
-            }
-          }),
-      );
-    }
+        assert.isDefined(plan);
+        assert.isDefined(terminal);
+        if (plan === undefined || terminal === undefined) return;
+        assert.deepStrictEqual(plan.samples, original);
+        assert.deepStrictEqual(
+          moves().map(({ input }) => ({ x: input.x, y: input.y })),
+          original.map(({ x, y }) => ({ x, y })),
+        );
+        assert.isTrue(terminal.complete);
+        assert.strictEqual(terminal.dispatched, original.length);
+        for (const [index, sample] of original.entries()) {
+          const dispatch = moves()[index];
+          const timestamp = dispatch?.input.timestamp;
+
+          assert.isDefined(dispatch);
+          assert.isDefined(timestamp);
+          if (dispatch === undefined || timestamp === undefined) continue;
+          assert.strictEqual(dispatch.at - plan.at, sample.afterMillis);
+          if (index > 0)
+            assert.isAtLeast(timestamp, moves()[index - 1]?.input.timestamp ?? Infinity);
+        }
+      }),
+    );
 
     it.effect("clips cancellation to the native submitted prefix and resumes from that point", () =>
       Effect.gen(function* () {

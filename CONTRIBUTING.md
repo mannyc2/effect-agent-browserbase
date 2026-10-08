@@ -30,6 +30,8 @@ bun run patch:tsgo                  # Effect diagnostics in tsc and oxlint
 bun run ready                       # fmt check, lint, typecheck, test, build
 ```
 
+- A plain `bun install` runs `patch:tsgo` itself, as the repository's `postinstall`; an install
+  with `--ignore-scripts`, as CI's is, runs no script, so run it after.
 - `bun run fmt` formats. `oxlint -c lint/.oxlintrc.json --fix <files>` fixes the stylistic rules
   that `fmt` leaves alone. Fix a lint finding or Effect diagnostic rather than suppress it.
 - Read `node_modules/effect/AGENTS.md` before writing Effect code.
@@ -66,5 +68,6 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   code is MIT; its bundled stroke data is CC BY 4.0, with attribution in its README and
   `LICENSE-data`.
 - `bench`: private graded tasks, depending on `effect-browser` and `effect-browserbase`.
-- `tools/`: the pinned-toolchain installer. Releases are `.github/workflows/publish.yml`; see
+- `tools/`: the pinned-toolchain installer, and `check-packed.sh`, which checks the packed
+  packages in a clean consumer. Releases are `.github/workflows/publish.yml`; see
   `docs/RELEASING.md`.

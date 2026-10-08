@@ -2,8 +2,9 @@
 
 `effect-browser`, `effect-browserbase` and `effect-browser-human-strokes` are released together,
 at one version, by `.github/workflows/publish.yml`. The workflow runs on a `v<version>` tag on
-`main`, runs `bun run ready`, packs the three packages and publishes them through npm trusted
-publishing: no npm token, and npm signs provenance for each package. Ordinary CI never publishes,
+`main`, runs `bun run ready`, packs the three packages, checks the archives in a clean consumer and
+publishes them through npm trusted publishing: no npm token, and npm signs provenance for each
+package. Ordinary CI never publishes,
 and preparing or testing a release does not authorize publishing, tagging or changing account
 settings.
 
@@ -64,9 +65,15 @@ The owner does this once, in npm and GitHub settings.
    gh workflow run publish.yml --ref v0.3.0-beta.0 -f dry-run=false
    ```
 
-   The dry run checks the tag, runs `bun run ready`, packs, and runs `npm publish --dry-run` on
-   each archive. With `dry-run=false` the publish job then waits for approval in the `npm`
+   The dry run checks the tag, runs `bun run ready`, packs, checks the archives in a clean
+   consumer, and runs `npm publish --dry-run` on each archive. With `dry-run=false` the publish job then waits for approval in the `npm`
    environment and publishes the archives the build job checked.
+
+The clean-consumer check is `tools/check-packed.sh`. It installs the archives outside the
+repository, with the peers npm picks for their ranges, and has TypeScript check every entry point's
+declarations with `skipLibCheck: false` and Node import each one: `bun run ready` cannot see a
+declaration or an import that only the workspace satisfies. Run it before tagging: without
+arguments it builds and packs the packages itself, under `$TMPDIR`.
 
 The tag must be on `main` and name the version all three packages carry. A prerelease
 `x.y.z-alpha.N`, `-beta.N` or `-rc.N` goes to the dist-tag of that name; only a plain `x.y.z` goes

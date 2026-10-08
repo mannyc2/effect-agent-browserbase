@@ -316,7 +316,14 @@ describe("a window", () => {
     },
     ({ events, frames, cuts }) => {
       const [a = 0, b = 0, c = 0] = cuts.toSorted(byTime);
-      const tracks = { events: eventsAt(events), frames: framesAt(frames) };
+
+      // Each cut has a frame on it and an event that is not the presentation track's, of every two
+      // there, so every input tries the boundary.
+      const tracks = {
+        events: eventsAt([...events, ...cuts, ...cuts]),
+        frames: framesAt([...frames, ...cuts]),
+      };
+
       const first = within({ since: a, until: b }, tracks.events, tracks.frames);
       const second = within({ since: b, until: c }, tracks.events, tracks.frames);
 

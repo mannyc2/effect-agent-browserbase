@@ -2,7 +2,18 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Arbitrary, Deferred, Duration, Effect, Exit, Fiber, Schedule, Schema } from "effect";
+import {
+  Arbitrary,
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Schedule,
+  Schema,
+} from "effect";
+import { TestClock } from "effect/testing";
 import type { CDPSession } from "playwright-core";
 
 import * as Agent from "../src/Agent.ts";
@@ -409,11 +420,14 @@ describe("A page's lane", () => {
   );
 });
 
+// A lane on the test's clock, as a page's is on its browser's: a test on the test clock measures
+// its waits exactly.
 const laneOf = Effect.gen(function* () {
   const scope = yield* Effect.scope;
+  const clock = yield* Clock.Clock;
 
   return Lane.make({
-    now: () => performance.now(),
+    now: () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6,
     actionTimeout: Duration.seconds(5),
     documentAt: () => 0,
     gone: (operation) =>
@@ -521,7 +535,8 @@ describe("Shared reads", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("a turn not given in time fails Busy, and at once when asked to fail fast", () =>
+  // On the test clock, the wait ends at its bound to the millisecond, however loaded the machine.
+  it.effect("a turn not given in time fails Busy, and at once when asked to fail fast", () =>
     Effect.gen(function* () {
       const lane = yield* laneOf;
       const held = yield* Deferred.make<void>();
@@ -533,18 +548,26 @@ describe("Shared reads", () => {
         )(Deferred.await(held))
         .pipe(Effect.forkChild);
 
-      yield* settle;
-      const waited = yield* Effect.flip(lane.write("press", Duration.millis(50))(Effect.void));
+      yield* Effect.yieldNow;
+
+      const pressing = yield* Effect.flip(
+        lane.write("press", Duration.millis(50))(Effect.void),
+      ).pipe(Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("49 millis");
+      assert.isUndefined(pressing.pollUnsafe());
+      yield* TestClock.adjust("1 millis");
+      const waited = yield* Fiber.join(pressing);
       const fast = yield* Effect.flip(failFast(lane.read("snapshot")(Effect.void)));
 
-      for (const [error, least, most] of [
-        [waited, 50, 1000],
-        [fast, 0, 0],
+      for (const [error, millis] of [
+        [waited, 50],
+        [fast, 0],
       ] as const) {
         assert.strictEqual(error.reason._tag, "Busy");
         if (error.reason._tag === "Busy") {
-          assert.isAtLeast(error.reason.waitedMillis, least);
-          assert.isAtMost(error.reason.waitedMillis, most);
+          assert.strictEqual(error.reason.waitedMillis, millis);
           assert.strictEqual(error.reason.ahead, 1);
         }
         assert.deepStrictEqual(consequence(error), { lost: "nothing", repeat: "safe" });

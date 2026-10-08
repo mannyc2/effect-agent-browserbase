@@ -3,13 +3,13 @@
  * read takes its turn on the page and shares its work with identical reads, as `lane.ts`
  * describes. The viewport's text as it was last read is kept, for `Page.state`.
  */
-import { Duration, Effect, Ref, Schedule, Schema } from "effect";
+import { Duration, Effect, Ref, Schema } from "effect";
 
 import { InvalidRequest, NotFound, StaleRef } from "../../BrowserError.ts";
 import { type FindQuery, Found, Text, type TextOptions } from "../../Page.ts";
 import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { decodeWith, failWith, type PageContext } from "../page/context.ts";
+import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import * as Url from "../page/url.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
 import type { SnapshotRequest } from "./outline.inpage.ts";
@@ -132,20 +132,44 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
     ).pipe(span("Page.text", { scope: scope === "viewport" ? "viewport" : "ref" }), owned);
   };
 
-  const waitForText = (text: string, timeout: Duration.Input = Duration.seconds(10)) =>
-    find({ text, scope: "document" }).pipe(
-      Effect.repeat({
-        schedule: Schedule.spaced(Duration.millis(250)),
-        until: (found) => found.length > 0,
-      }),
-      Effect.timeoutOrElse({
-        duration: timeout,
-        orElse: () => failWith("waitForText", new NotFound({ target: JSON.stringify(text) })),
-      }),
-      Effect.asVoid,
-      span("Page.waitForText"),
-      owned,
-    );
+  // One call, which the page answers once `find` matches the text or at the deadline. It follows the
+  // action in flight, as a read does, but holds no later one back while it waits, and it waits on
+  // in a document that replaces the one it began in.
+  const waitForText = (text: string, timeout: Duration.Input = Duration.seconds(10)) => {
+    const missing = () => failWith("waitForText", new NotFound({ target: JSON.stringify(text) }));
+
+    const look = Effect.gen(function* () {
+      const request: FindRequest = {
+        role: null,
+        name: null,
+        text,
+        near: null,
+        at: null,
+        scope: "document",
+        firstRef: yield* Ref.get(nextRef),
+      };
+
+      // JSON has no infinity; the deadline here ends a wait without one in any case.
+      const millis = Math.min(Duration.toMillis(timeout), Number.MAX_SAFE_INTEGER);
+
+      const result = yield* evaluate(
+        "waitForText",
+        scriptCall("waitForText", request, millis),
+      ).pipe(Effect.flatMap(decodeWith("waitForText", FindResults)));
+
+      yield* counted(result.nextRef);
+      if (result.found.length === 0) return yield* missing();
+    });
+
+    return lane
+      .read("waitForText")(Effect.void)
+      .pipe(
+        Effect.andThen(Effect.retry(look, { while: contextGone })),
+        Effect.timeoutOrElse({ duration: timeout, orElse: missing }),
+        span("Page.waitForText"),
+        owned,
+      );
+  };
 
   /** The viewport's text as it was last read, if after `since`, as a document began. */
   const viewedSince = (since: number) =>

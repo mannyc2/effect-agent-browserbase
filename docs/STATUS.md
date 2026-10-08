@@ -305,8 +305,10 @@ deleting the hand-written tools, `Page.observe` and its observation types paid f
 bench's copy of the agent's loop, 280 lines outside the package, did. Phase 4's contexts,
 resume and keep added 32 source lines and 73 test lines there, the supervisor's `keep`, and the
 rest to `effect-browserbase`: 294 source lines, 27 in `testing`, 557 test lines and 5 exports, the
-new `ContextLease` and `verifyContext`. Without them, phase 1 leaves the package at 11,431 source
-lines, against a soft ceiling of about 11,000 through phase 4.
+new `ContextLease` and `verifyContext`. Phase 4's release hygiene added 38 source lines and 119
+test lines, most of them `waitForText` as one call and tests of promises that planted bugs broke.
+Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
+11,000 through phase 4.
 
 ## Not rebuilt yet
 
@@ -327,7 +329,9 @@ The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` a
 `beta` dist-tag. 0.3 is not released. It will be released by plain npm trusted publishing from
 `.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase` and
 `effect-browser-human-strokes`; [RELEASING.md](RELEASING.md) has the steps, and
-[CHANGELOG.md](../CHANGELOG.md) lists what each release changes.
+[CHANGELOG.md](../CHANGELOG.md) lists what each release changes. Before it publishes, the workflow
+installs the packed archives in a clean consumer, typechecks every entry point's declarations with
+`skipLibCheck: false` and imports each one, with `tools/check-packed.sh`, which runs locally too.
 
 ## History
 
