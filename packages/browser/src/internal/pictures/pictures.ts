@@ -254,10 +254,11 @@ const millisOf = (input: Duration.Input) =>
 
 // The newest screencast frame, if it shows the page as the caller asked: painted at most `maxAge`
 // ago at the earliest its timing allows, after the current document began, and with
-// `after: "input"` after the page's latest input while no action is changing the page. It must
-// have the viewport's size, as a new picture would. A screencast sends only changes and can miss a
-// final paint, so a frame is only ever as current as its age, and a page that keeps painting while
-// the next document loads leaves its own frames newest when the navigation returns.
+// `after: "input"` after the page's latest input, which a read asks in its turn, once the action
+// in flight has ended. It must have the viewport's size, as a new picture would. A screencast sends
+// only changes and can miss a final paint, so a frame is only ever as current as its age, and a
+// page that keeps painting while the next document loads leaves its own frames newest when the
+// navigation returns.
 const reuse =
   (page: PageContext, viewport: Viewport, capture: Capture.Controller) =>
   (operation: string, options: FrameOptions) =>
@@ -279,7 +280,7 @@ const reuse =
         return (
           page.now() - earliest <= maxAge &&
           earliest > activity.documentAt &&
-          (options.after !== "input" || (activity.changing === 0 && earliest > activity.inputAt)) &&
+          (options.after !== "input" || earliest > activity.inputAt) &&
           frame.width === known?.width &&
           frame.height === known.height
         );
@@ -294,7 +295,7 @@ export const make = Effect.fnUntraced(function* (
   bridge: Bridge,
   viewport: Viewport,
 ) {
-  const { id, clock, settings, mapping, now, span, owned, lock, within } = page;
+  const { id, clock, settings, mapping, now, span, owned, lane, within } = page;
   const calibrateClock = calibrator(page, bridge);
 
   // A failure from a capture connection is already the capture's own.
@@ -333,27 +334,33 @@ export const make = Effect.fnUntraced(function* (
 
   const picture = camera(page, viewport, capture);
   const reusable = reuse(page, viewport, capture);
+  // Pictures in flight are shared, never kept: their callers say how old one may be.
+  const screenshots = lane.shared<Image>("screenshot", false);
+  const frames = lane.shared<Frame>("frame", false);
 
-  // A caller that acts and then looks must see what its action did, so a screenshot reuses only a
-  // frame painted after the page's latest input.
+  // A caller that acts and then looks must see what its action did, so a screenshot waits for the
+  // action in flight and reuses only a frame painted after the page's latest input.
   const screenshot = (options: ScreenshotOptions = {}) =>
-    Effect.gen(function* () {
-      const reused =
-        options.clip === undefined
-          ? yield* reusable("screenshot", { maxAge: options.maxAge, after: "input" })
-          : Option.none<Frame>();
+    screenshots(
+      JSON.stringify([millisOf(options.maxAge ?? defaultMaxAge), options.clip, options.quality]),
+      Effect.gen(function* () {
+        const reused =
+          options.clip === undefined
+            ? yield* reusable("screenshot", { maxAge: options.maxAge, after: "input" })
+            : Option.none<Frame>();
 
-      const image = Option.isSome(reused)
-        ? reused.value.image
-        : yield* picture("screenshot", options.quality ?? 80, options.clip);
+        const image = Option.isSome(reused)
+          ? reused.value.image
+          : yield* picture("screenshot", options.quality ?? 80, options.clip);
 
-      yield* Effect.annotateCurrentSpan({ source: sourceOf(reused), bytes: image.data.length });
+        yield* Effect.annotateCurrentSpan({ source: sourceOf(reused), bytes: image.data.length });
 
-      return image;
-    }).pipe(span("Page.screenshot"), owned);
+        return image;
+      }),
+    ).pipe(span("Page.screenshot"), owned);
 
   // A new screenshot has no paint time, only the host interval in which it was taken.
-  const frame = (options: FrameOptions = {}) =>
+  const taken = (options: FrameOptions) =>
     Effect.gen(function* () {
       const reused = yield* reusable("frame", options);
 
@@ -375,11 +382,32 @@ export const make = Effect.fnUntraced(function* (
         height: image.height,
         ...bridge.frameTag(),
       });
-    }).pipe(span("Page.frame"), owned);
+    });
+
+  // A frame of a stated age that the screencast has costs nothing and waits for no action; one
+  // that must follow the latest input, or a new screenshot, waits for the action in flight.
+  const frame = (options: FrameOptions = {}) =>
+    (options.after === "input"
+      ? Effect.succeed(Option.none<Frame>())
+      : reusable("frame", options)
+    ).pipe(
+      Effect.flatMap(
+        Option.match({
+          onSome: (reused) => Effect.as(Effect.annotateCurrentSpan("source", "frame"), reused),
+          onNone: () =>
+            frames(
+              JSON.stringify([millisOf(options.maxAge ?? defaultMaxAge), options.after]),
+              taken(options),
+            ),
+        }),
+      ),
+      span("Page.frame"),
+      owned,
+    );
 
   const zoom = (requested: Region) =>
-    lock
-      .withPermits(1)(
+    lane
+      .read("zoom")(
         Effect.gen(function* () {
           const region = yield* Schema.decodeEffect(Region)(requested).pipe(
             Effect.mapError((error) =>
@@ -398,14 +426,9 @@ export const make = Effect.fnUntraced(function* (
           const image = yield* picture("zoom", 80, region);
 
           return new Zoom({ page: id, region, image });
-        }),
+        }).pipe(within("zoom")),
       )
-      .pipe(
-        // Waiting behind another operation on this page counts against the deadline too.
-        within("zoom"),
-        span("Page.zoom"),
-        owned,
-      );
+      .pipe(span("Page.zoom"), owned);
 
   const captureStats = (options: { readonly window?: Duration.Input | undefined } = {}) => {
     if (options.window === undefined) return capture.stats();

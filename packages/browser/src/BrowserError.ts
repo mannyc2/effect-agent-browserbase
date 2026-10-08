@@ -21,6 +21,31 @@ export class Timeout extends Schema.TaggedError<Timeout>()("Timeout", {
   }
 }
 
+/**
+ * The operation waited its turn behind others on its page and was not given one in time, or was
+ * asked to fail fast: the page may be well, only busy.
+ */
+export class Busy extends Schema.TaggedError<Busy>()("Busy", {
+  waitedMillis: Schema.Finite,
+  /** The operations ahead of it: those holding the page and those asked before it. */
+  ahead: Schema.Int,
+}) {
+  override get message() {
+    const others = this.ahead === 1 ? "operation" : "operations";
+
+    return `the page was busy: it waited ${this.waitedMillis} ms behind ${this.ahead} other ${others}`;
+  }
+}
+
+/** The browser has as many pages open as `maxPages` allows, and none closed in time. */
+export class Limit extends Schema.TaggedError<Limit>()("Limit", {
+  maxPages: Schema.Int,
+}) {
+  override get message() {
+    return `the browser already has ${this.maxPages} pages open, as many as it allows`;
+  }
+}
+
 /** A ref from an earlier snapshot no longer names an element on the page. */
 export class StaleRef extends Schema.TaggedError<StaleRef>()("StaleRef", {
   ref: Schema.String,
@@ -132,6 +157,8 @@ export class Failed extends Schema.TaggedError<Failed>()("Failed", {
 
 export const Reason = Schema.Union([
   Timeout,
+  Busy,
+  Limit,
   StaleRef,
   NotFound,
   NotActionable,
@@ -178,6 +205,7 @@ export const consequence = ({ reason, dispatched }: BrowserError): Consequence =
         lost: reason.cause === "page" || reason.cause === "crashed" ? "page" : "session",
         repeat,
       };
+    case "Busy":
     case "Timeout":
     case "Failed":
     case "NavigationFailed":
@@ -188,6 +216,7 @@ export const consequence = ({ reason, dispatched }: BrowserError): Consequence =
     case "NotFound":
     case "NotActionable":
     case "InvalidRequest":
+    case "Limit":
     case "PolicyDenied":
     case "PolicyTimeout":
       return { lost: "nothing", repeat: "pointless" };

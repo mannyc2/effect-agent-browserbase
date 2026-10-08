@@ -154,6 +154,6 @@ export const make = () => {
     return run;
   });
 
-  /** `idle` lets a caller wait for this page's replies before taking a browser-wide lock. */
+  /** `idle` lets an action wait, in its page's turn, for the page's earlier replies. */
   return { idle, begin };
 };

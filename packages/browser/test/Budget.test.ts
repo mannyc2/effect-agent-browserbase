@@ -213,6 +213,58 @@ it.live("a read costs two calls on a new document, and one warm", () =>
   }).pipe(Effect.scoped),
 );
 
+// Reads asked together share the page's turn, so they go out in one round, and identical ones
+// share one call and its result. The first read of changes registers the recorder and maps the
+// clock, so it comes first.
+it.live("identical reads asked together cost one call between them", () =>
+  Effect.gen(function* () {
+    const { proxy, browser } = yield* opened();
+    const page = yield* browser.newPage(still("joined"));
+
+    yield* page.snapshot();
+    yield* page.changes();
+
+    const reads = Effect.all(
+      [page.snapshot(), page.snapshot(), page.text(), page.text(), page.changes(), page.changes()],
+      { concurrency: "unbounded" },
+    );
+
+    holds(yield* sentBy(proxy, reads), 3, 1);
+  }).pipe(Effect.scoped),
+);
+
+// A read whose caller gave up, as the consumer's did at its own 5 s limit, finishes, and the next
+// caller to ask the same gets it free, until input moves the page on.
+it.live(
+  "a read its caller gave up costs the next caller nothing, until the page's next input",
+  () =>
+    Effect.gen(function* () {
+      const { proxy, browser } = yield* opened();
+      const page = yield* browser.newPage(still("kept"));
+
+      // The page's own script keeps it busy for a second, so a read's caller gives up first.
+      const abandoned = Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          setTimeout(() => {
+            const until = Date.now() + 1000;
+
+            while (Date.now() < until);
+          }, 0);
+        }),
+      ).pipe(
+        Effect.andThen(page.text().pipe(Effect.timeout("100 millis"), Effect.ignore)),
+        Effect.andThen(Effect.sleep("1500 millis")),
+      );
+
+      yield* page.text();
+      yield* abandoned;
+      holds(yield* sentBy(proxy, page.text()), 0, 0);
+      yield* abandoned;
+      yield* page.press("Shift");
+      holds(yield* sentBy(proxy, page.text()), 1, 1);
+    }).pipe(Effect.scoped),
+);
+
 // The change record costs a page nothing until something reads its changes: no registration, no
 // call. The first read registers the recorder beside the read, in one round trip, and every later
 // read is one call; a moment of a page on air adds that one call to its free picture.

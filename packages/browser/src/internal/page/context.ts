@@ -1,19 +1,9 @@
 /**
- * What a page's parts share: the browser state they act on, the page's own lock and clock, and
- * how they call the browser and report its failures. The assembly in `page.ts` builds one context
- * per page.
+ * What a page's parts share: the browser state they act on, the page's own lane, pointer and
+ * clock, and how they call the browser and report its failures. The assembly in `page.ts` builds
+ * one context per page.
  */
-import {
-  Clock,
-  Context,
-  Duration,
-  Effect,
-  Fiber,
-  type Option,
-  type Ref,
-  Schema,
-  type Semaphore,
-} from "effect";
+import { Clock, Context, Duration, Effect, Fiber, Option, Ref, Schema, type Scope } from "effect";
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
 import type { CaptureSource } from "../../Browser.ts";
@@ -22,6 +12,7 @@ import type { BrowserEvent } from "../../BrowserEvent.ts";
 import type * as Motion from "../../Motion.ts";
 import type { Point, Settings } from "../../Page.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
+import * as Lane from "./lane.ts";
 import * as Url from "./url.ts";
 
 /** Why a page is gone. */
@@ -41,8 +32,6 @@ export interface MakeOptions {
   readonly clock: Clock.Clock;
   /** The browser's epoch mapping: its first capture measures it, and later ones renew it. */
   readonly mapping: BrowserClock.Mapping;
-  readonly pointer: Ref.Ref<Option.Option<Point>>;
-  readonly inputLock: Semaphore.Semaphore;
   readonly publish: (event: BrowserEvent) => number;
   /** This page's retained events, oldest first. */
   readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
@@ -145,11 +134,11 @@ export const decodeWith =
       Effect.mapError((error) => undispatched(operation, new Failed({ detail: error.message }))),
     );
 
-export const make = (options: MakeOptions, lock: Semaphore.Semaphore) => {
+export const make = (options: MakeOptions, scope: Scope.Scope) => {
   const { id, clock } = options;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
-  // Deadlines and pacing guard the browser-wide input lock, so page operations run on the
-  // owner's clock; a caller's clock, such as a TestClock, cannot stall or stretch them.
+  // Deadlines and pacing guard the page's lane, so page operations run on the owner's clock; a
+  // caller's clock, such as a TestClock, cannot stall or stretch them.
   const owned = Effect.provideService(Clock.Clock, clock);
 
   // This page's spans name it and report what the operation cost on the protocol. Fine-grained
@@ -244,22 +233,51 @@ export const make = (options: MakeOptions, lock: Semaphore.Semaphore) => {
         orElse: () => failWith(operation, new Timeout({ millis: Duration.toMillis(duration) })),
       });
 
-  // Actions that have started changing the page and not yet ended, and the latest submitted input
-  // or page change. While an action runs no cached paint is current; afterwards only paint from
-  // after its latest input is. An action ends after its input was handled, so if that input changed
-  // the page, newer paint follows; a lost final paint is bounded by recency instead. Paint from
-  // before the current document began, when the page's own session saw the main frame commit it,
-  // shows a page the tab has left, so no read reuses it, whatever it asks.
-  const activity = { changing: 0, inputAt: 0, documentAt: Number.NEGATIVE_INFINITY };
+  // The latest submitted input or page change. A read that must follow it waits for the action in
+  // flight, so only paint from after its latest input is current. An action ends after its input
+  // was handled, so if that input changed the page, newer paint follows; a lost final paint is
+  // bounded by recency instead. Paint from before the current document began, when the page's own
+  // session saw the main frame commit it, shows a page the tab has left, so no read reuses it,
+  // whatever it asks.
+  const activity = { inputAt: 0, documentAt: Number.NEGATIVE_INFINITY };
 
   const noteInput = () => {
     activity.inputAt = Math.max(activity.inputAt, now());
   };
 
+  const lane = Lane.make({
+    now,
+    actionTimeout: options.settings.actionTimeout,
+    documentAt: () => activity.documentAt,
+    gone: (operation) =>
+      new BrowserError({
+        operation,
+        reason: new Closed({ cause: options.closedBy() }),
+        dispatched: false,
+      }),
+    scope,
+  });
+
+  // Where this page's latest move left its pointer, which is where its next glide starts. Its lane
+  // orders the page's input, and Chromium keeps a pointer per page too.
+  const pointer = Ref.makeUnsafe(Option.none<Point>());
+
   // Named, so that the declarations of what holds it need not spell out Playwright's protocol types.
   const protocol: Pick<CDPSession, "send"> = { send };
 
-  return { ...options, lock, now, owned, span, protocol, native, within, activity, noteInput };
+  return {
+    ...options,
+    lane,
+    pointer,
+    now,
+    owned,
+    span,
+    protocol,
+    native,
+    within,
+    activity,
+    noteInput,
+  };
 };
 
 export type PageContext = ReturnType<typeof make>;

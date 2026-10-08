@@ -141,9 +141,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* second.hover(secondTarget).pipe(Effect.provideService(Motion.Motion, late));
 
         assert.strictEqual(lateCalls, 0);
+        // Each page's pointer starts mid-viewport.
         assert.deepStrictEqual(planned, [
           { from: { x: 400, y: 300 }, to: firstTarget },
-          { from: firstTarget, to: secondTarget },
+          { from: { x: 400, y: 300 }, to: secondTarget },
         ]);
         assert.strictEqual(fixture.dispatches.length, 4);
 

@@ -1,18 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { assert, layer } from "@effect/vitest";
-import {
-  Clock,
-  Duration,
-  Effect,
-  Fiber,
-  Option,
-  Random,
-  Ref,
-  Schedule,
-  Semaphore,
-  Stream,
-} from "effect";
+import { Clock, Duration, Effect, Fiber, Random, Schedule, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
@@ -236,8 +225,6 @@ const setup = Effect.fnUntraced(function* (
     clock,
     mapping,
     motion: yield* Motion.Motion,
-    pointer: yield* Ref.make(Option.none<Page.Point>()),
-    inputLock: yield* Semaphore.make(1),
     publish: (event) => {
       track.push(event);
 
@@ -584,11 +571,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
+    // Printable keys go as trusted key pairs and the rest is inserted; under a guard, the approved
+    // field takes the whole text in one insertion. Neither submits.
     it.effect("types plain text through trusted keys and inserts newlines without submitting", () =>
       Effect.gen(function* () {
         const requests: Array<Page.InputRequest> = [];
+        const plain = yield* setup(0, { humanize: false });
 
-        const relay = yield* setup(0, {
+        const guarded = yield* setup(0, {
           humanize: false,
           guard: (request) =>
             Effect.sync(() => {
@@ -596,45 +586,42 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             }),
         });
 
-        yield* Effect.promise(() => relay.page.playwright.locator("textarea").focus());
-        yield* relay.page.type("aé\n💡b");
-        assert.strictEqual(
-          yield* Effect.promise(() => relay.page.playwright.locator("textarea").inputValue()),
-          "aé\n💡b",
-        );
-        const events = yield* keys(relay.page);
-
-        assert.deepStrictEqual(
-          events.filter((event) => event.type === "keydown").map((event) => event.key),
-          ["a", "b"],
-        );
-        assert.isTrue(events.every((event) => event.trusted));
-        assert.strictEqual(
-          relay.dispatches.filter((dispatch) => dispatch.method === "Input.dispatchKeyEvent")
-            .length,
-          4,
-        );
-        assert.strictEqual(
-          relay.dispatches.filter((dispatch) => dispatch.method === "Input.insertText").length,
-          3,
-        );
-        assert.strictEqual(
-          yield* Effect.promise(() =>
+        const submissions = (relay: typeof plain) =>
+          Effect.promise(() =>
             relay.page.playwright.evaluate(() => (window as unknown as RecordedWindow).submissions),
-          ),
-          0,
-        );
+          );
+
+        for (const [relay, keyDowns, keyEvents, insertions] of [
+          [plain, ["a", "b"], 4, 3],
+          [guarded, [], 0, 1],
+        ] as const) {
+          yield* Effect.promise(() => relay.page.playwright.locator("textarea").focus());
+          yield* relay.page.type("aé\n💡b");
+          assert.strictEqual(
+            yield* Effect.promise(() => relay.page.playwright.locator("textarea").inputValue()),
+            "aé\n💡b",
+          );
+          const events = yield* keys(relay.page);
+
+          assert.deepStrictEqual(
+            events.filter((event) => event.type === "keydown").map((event) => event.key),
+            [...keyDowns],
+          );
+          assert.isTrue(events.every((event) => event.trusted));
+          assert.deepStrictEqual(
+            ["Input.dispatchKeyEvent", "Input.insertText"].map(
+              (method) => relay.dispatches.filter((dispatch) => dispatch.method === method).length,
+            ),
+            [keyEvents, insertions],
+          );
+          assert.strictEqual(yield* submissions(relay), 0);
+        }
         assert.isFalse(requests[0]?.facts.includes("form-submit"));
 
-        yield* Effect.promise(() => relay.page.playwright.locator("input").focus());
-        yield* relay.page.type("", { submit: true });
+        yield* Effect.promise(() => guarded.page.playwright.locator("input").focus());
+        yield* guarded.page.type("", { submit: true });
         assert.isTrue(requests[1]?.facts.includes("form-submit"));
-        assert.strictEqual(
-          yield* Effect.promise(() =>
-            relay.page.playwright.evaluate(() => (window as unknown as RecordedWindow).submissions),
-          ),
-          1,
-        );
+        assert.strictEqual(yield* submissions(guarded), 1);
       }),
     );
 
