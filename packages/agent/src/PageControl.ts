@@ -431,7 +431,7 @@ const filterOptions = (seen: Observation, filter: string): Observation => {
   };
 };
 
-/** `BrowserActions` and `BrowserControl` over `target`, for `BrowserUse`'s tools or `runJev`. */
+/** `BrowserActions` and `BrowserControl` over `target`, for `BrowserUse`'s own tools. */
 export const layer = (
   target: Target,
   options: Options = {},

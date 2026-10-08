@@ -5,15 +5,16 @@ Open a focused PR against `main` that explains the change and how it was checked
 
 ## Toolchain
 
-| Input                | Pin                          |
-| -------------------- | ---------------------------- |
-| Node                 | 24.14.1 (`.node-version`)    |
-| Bun                  | 1.4.2                        |
-| Effect               | 4.0.0                        |
-| Playwright           | playwright-core 1.63.0       |
-| TypeScript / Vite+   | 7.0.2 / 1.1.0                |
-| Vitest               | 5.0.3, as Vite+ 1.1.0 ships  |
-| Effect tsgo / Oxlint | 0.51.0 / 1.82.0              |
+| Input                | Pin                           |
+| -------------------- | ----------------------------- |
+| Node                 | 24.14.1 (`.node-version`)     |
+| Bun                  | 1.4.2                         |
+| Effect               | 4.0.0                         |
+| Playwright           | playwright-core 1.63.0        |
+| Yielded Agent        | @yielded/agent 0.1.0-beta.168 |
+| TypeScript / Vite+   | 7.0.2 / 1.1.0                 |
+| Vitest               | 5.0.3, as Vite+ 1.1.0 ships   |
+| Effect tsgo / Oxlint | 0.51.0 / 1.82.0               |
 
 Every manifest names exact versions and `bun.lock` is committed. On a host with a different Node or
 Bun, `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"` installs the
@@ -56,18 +57,22 @@ bun run ready                       # fmt check, lint, typecheck, test, build
 
 ## Layout
 
-- `packages/browser` (`effect-browser`): the browser, pages, snapshots, frames, events, tools, the
-  agent and moments. It depends on `effect` and `playwright-core` only. Its public modules are flat
+- `packages/browser` (`effect-browser`): the browser, pages, snapshots, frames, events and moments.
+  It depends on `effect` and `playwright-core` only. Its public modules are flat
   in `src/`; `src/internal/` is grouped by domain: page, pictures, input, reading, timeline and
-  agent. Code that runs inside the page sits in `*.inpage.ts` parts, each one self-contained
+  supervisor. Code that runs inside the page sits in `*.inpage.ts` parts, each one self-contained
   function that the bridge in `internal/page/bridge.ts` composes into the injected script.
 - `packages/browserbase` (`effect-browserbase`): the Browserbase client and sessions as a
   `Browser`. It depends on `effect-browser` through its public entry points.
+- `packages/agent` (`effect-browser-agent`): `effect-browser` pages as Yielded Agent's browser
+  ports, `BrowserActions` and `BrowserControl`, and the tools an agent drives them by. It depends on
+  `effect-browser` through its public entry points and on `@yielded/agent`, pinned exactly.
 - `packages/human-strokes` (`effect-browser-human-strokes`): an optional pointer planner over
   recorded human strokes. It depends on `effect-browser` through its public entry points only. Its
   code is MIT; its bundled stroke data is CC BY 4.0, with attribution in its README and
   `LICENSE-data`.
-- `bench`: private graded tasks, depending on `effect-browser` and `effect-browserbase`.
+- `bench`: private graded tasks, depending on `effect-browser`, `effect-browserbase` and
+  `effect-browser-agent`, whose agents run on Yielded.
 - `tools/`: the pinned-toolchain installer, and `check-packed.sh`, which checks the packed
   packages in a clean consumer. Releases are `.github/workflows/publish.yml`; see
   `docs/RELEASING.md`.

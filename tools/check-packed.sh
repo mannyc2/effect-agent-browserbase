@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The packed-archive check: install the three packed packages in a clean consumer, as one from npm
+# The packed-archive check: install the four packed packages in a clean consumer, as one from npm
 # would be, and check what that consumer gets. TypeScript, with `skipLibCheck: false`, checks the
 # declarations of every entry point, and Node imports each one. `bun run ready` cannot see either:
 # in the workspace every package resolves from its source.
@@ -25,7 +25,7 @@ if [ $# -gt 0 ]; then
   archives="$(cd "$1" && pwd)"
 else
   archives="$work/archives"
-  for dir in browser browserbase human-strokes; do
+  for dir in browser browserbase human-strokes agent; do
     (cd "$root/packages/$dir" && bun run build > /dev/null && bun pm pack --destination "$archives" --quiet > /dev/null)
   done
 fi
@@ -33,7 +33,7 @@ fi
 consumer="$work/consumer"
 mkdir "$consumer"
 echo '{ "private": true, "type": "module" }' > "$consumer/package.json"
-names=(effect-browser effect-browserbase effect-browser-human-strokes)
+names=(effect-browser effect-browserbase effect-browser-human-strokes effect-browser-agent)
 archived=()
 for name in "${names[@]}"; do archived+=("$archives/$name-$version.tgz"); done
 npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund \
@@ -63,7 +63,14 @@ cat > "$consumer/tsconfig.json" << 'EOF'
 }
 EOF
 
-"$consumer/node_modules/.bin/tsc" -p "$consumer/tsconfig.json"
+# Yielded Agent's own declarations do not pass `skipLibCheck: false`: its memory modules, as
+# published in 0.1.0-beta.167 too, name types they never declare. Only an error in another file
+# fails the check.
+if ! checked="$("$consumer/node_modules/.bin/tsc" -p "$consumer/tsconfig.json")"; then
+  ours="$(printf '%s\n' "$checked" | grep 'error TS' | grep -v 'node_modules/@yielded/' || true)"
+  if [ -n "$ours" ]; then printf '%s\n' "$checked" >&2; exit 1; fi
+  echo "Yielded Agent's own declarations have $(printf '%s\n' "$checked" | grep -c 'error TS') errors; none is in these packages."
+fi
 (cd "$consumer" && node --input-type=module -e "$(printf 'await import("%s");\n' "${entries[@]}")")
 echo "The ${#entries[@]} entry points of ${names[*]} $version typecheck and load in a clean consumer."
 rm -rf "$work"

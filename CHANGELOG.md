@@ -1,7 +1,8 @@
 # Changelog
 
 Each release lists what changed since the release before it. From 0.3 on, `effect-browser`,
-`effect-browserbase` and `effect-browser-human-strokes` are released together at one version.
+`effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
+`effect-browser-agent` joins them from its first release.
 
 ## Unreleased
 
@@ -18,33 +19,31 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   the action timeout whoever gives up, and one that ends after all its callers gave up serves the
   next caller to ask the same within an action timeout, until the page's next action or document.
   An action stops the reads nobody awaits rather than wait for them.
-- Receipts. Each browser tool answers with a `Tools.Receipt`: what it did and, for an action, what
-  followed on its page while it ran, from the page's events at no call and its changes in one: the
-  `Action` it recorded, the dialogs that opened and how each was answered, where the page went, the
-  tabs it opened and what visibly changed, with what could not be read in `missing`. A model is told
-  it as text, what the call did and then what followed, up to three of the changes its input
-  caused; a caller reads the value, in `Agent.Step.results` or `generateText`'s tool results, and it
-  crosses a process boundary as JSON. A failure is the call's `BrowserError`, told to a model with
-  what to do about it, `Busy` included.
-- One contract per page operation: its parameters, its receipt and `BrowserError` as schemas, and
-  one handler over a page. The tools (`Tools.PageToolkit`), the operations bound to a page
-  (`Tools.on(page)`) and an RPC group (`Tools.PageRpcs`) are its projections, so
-  `PageRpcs.toLayer(Tools.on(page))` serves a page's operations to another process, where they
-  answer with the same receipts and failures.
-- Tools take what they act on as a value. `Tools.make({ page })` pins them to one page, with no
-  `browser_tabs`. `Tools.make({ browser, follow })` acts on the tab the model last saw, offers
-  `browser_tabs`, and shows a tab that opened at the next look as `follow` says: `"select"`, the
-  default, makes it current without bringing it to front, so the page on air and an operator's view
-  stay where they are; `"front"` also brings it to front; `"never"` keeps the current tab.
-- `Agent.run(task, { page | browser, follow, observe, tools, system })`. `observe` is what the model
-  sees of the page, a function of it; `Agent.observe("outline" | "screenshot" | "both")` are the
-  default's three, which read what they can and name what they could not. `tools` makes the run's
-  tools from the default ones, its own definitions and handlers, to remove, rename, wrap or add
-  them; `done` and `give_up` stay the agent's. `system` makes the system prompt from the standard
-  one.
-- `AgentError` keeps the run's `usage` and its `history`: a failed run is the one worth reading.
+- `effect-browser-agent`, a new package: `effect-browser` pages as Yielded Agent's browser ports,
+  and the tools an agent drives them by. `PageControl` implements `BrowserActions` and
+  `BrowserControl` over a page, pinned to it, or over a browser's tabs, which it follows as `follow`
+  says: `"select"`, the default, makes a tab an action opened current without bringing it to front,
+  so the page on air and an operator's view stay where they are; `"front"` also brings it to front;
+  `"never"` keeps the current tab. An observation is the page's outline with its controls as values;
+  one after an action begins with what followed it, a dialog and how the browser answered it, where
+  the page went, a tab it opened and up to three changes its input caused. Every action result says
+  whether its input reached the browser, and nothing is retried. `BrowserTools.make()` gives an
+  agent Yielded's tools over those ports, but `screenshot` and `respond_dialog`, and pointer tools
+  of its own for what has no ref: `click_at`, `hover`, `drag`, `type_text`, `press_keys`, `zoom`,
+  `wait_still` and `back`. Before each turn the model sees a screenshot of the current tab and the
+  crops it asked for, as context the run never keeps, so only the current picture is ever in a
+  request. The input policy's judge reads the run's `task`.
+- `Snapshot.controls`, the controls an outline shows as values: each one's ref, kind, name and
+  what it holds, a select's options, and whether it is disabled, checked or takes typed text.
+  `SnapshotOptions.within` reads only inside the elements a CSS selector matches.
+- `Page.waitFor({ selector, state, text })`, in one call the page answers as it comes: until what a
+  selector matches shows, hides or is enabled, with some text if asked, or `Timeout`.
+- `PressOptions.on`, a ref that `press` focuses before its first key, such as a link only the
+  keyboard reaches.
+- `ScreenshotOptions.format: "png"`, a new picture as a PNG.
+- `Change.describe`, a change in the words a moment tells it.
 - `Page.correlate(id)` gives the actions an effect performs a caller's id, which each `Action`
-  records as `correlation`; the tools give each call's actions the model's call id.
+  records as `correlation`.
 - `PageOpened.opener`, the page that opened a tab, whose own events and windows now hold the tab's
   opening; and `DialogShown.answer`, how a dialog was answered.
 - `Browser.Options.maxPages`, with the new reason `Limit`: at that many open pages, those a site
@@ -129,9 +128,6 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   of the document's title, in one call that a page busy with a script cannot hold up, and empty for
   an untitled page; it used to wait for a busy page without bound, and a connection that dropped
   meanwhile made it empty rather than fail.
-- `Agent.run` does not observe the turn that ends the run, so an answer costs no picture after it.
-- The agent shows at most 8 crops after a batch, and says how many it left out; `browser_zoom` no
-  longer refuses a ninth.
 - The wait after input has no fixed sleep. After a click, a key, a submit or a scroll, the page gets
   a task and a frame, in one call, which also spans any navigation the input asked for, as a link,
   a form or a handler's timer does; a document that committed meanwhile is waited for until it is
@@ -170,20 +166,13 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - Reads wait for the action in flight on their page: a snapshot, `find`, `text`, `changes`, a
   picture or a zoom no longer runs while an action is changing the page, and an action waits for
   the reads before it.
-- `Page.observe`, `Page.Observation` and `Page.ObservationMode` are gone: what the agent shows a
-  model is a function of the page, `Agent.observe(mode)` by default.
-- `Tools.make` and `Agent.run` take a page or a browser, and no longer read the `Browser` service.
-  `Agent.Options`' `instructions`, `observation`, `additionalTools` and `tools` as `Tools.Options`
-  are gone, as is `Tools.Options`: `system`, `observe` and `tools` replace them.
-- The tools answer with a `Tools.Receipt`, and fail with a `BrowserError`, rather than text; the
-  definitions `Tools.Navigate` to `Tools.Tabs` are `Tools.PageToolkit.tools.browser_navigate` and
-  the rest, and `Tools.BrowserToolkit.tools.browser_tabs`. `Tools.Tools` has no `takeZooms` or
-  `refusals`: a crop is in its receipt and a refusal in its failure.
-- Tools that follow tabs act on the tab the model last saw until it looks again, so actions in a
-  batch no longer refuse after a tab opens; after `browser_tabs` switches, actions wait for a look.
-  Neither `browser_tabs` nor a new tab brings a tab to front unless `follow` is `"front"`.
-- `DialogShown` has `answer`, and `AgentError` `usage` and `history`, which a program that builds
-  them must give.
+- `Agent` and `Tools` leave `effect-browser`, and with them `effect/ai`'s `Chat` as the agent loop:
+  an agent runs on Yielded Agent, with `effect-browser-agent`'s tools. `effect-browser` itself has
+  no agent code and no Yielded dependency.
+- `Page.observe`, `Page.Observation` and `Page.ObservationMode` are gone: what an agent sees of a
+  page is `effect-browser-agent`'s.
+- `DialogShown` has `answer`, which a program that builds one must give, and `Snapshot` has
+  `controls`.
 - Under a guard, plain typing sends no key events: the text arrives in one insertion once its field
   is approved, so a page listening for key events sees none.
 - Each page has its own pointer, where its own last move left it; a glide on a page starts there,

@@ -1,13 +1,15 @@
 # effect-browser
 
 Browser automation for [Effect](https://effect.website) agents: page control, a compact page
-outline for models, screencast frames, browser tools for `effect/ai`, an agent loop, a record of
-what visibly changed on a page, and moments: what a page showed, and what changed on it, over a
-window of time, ready for a model.
+outline for models, screencast frames, a record of what visibly changed on a page, and moments:
+what a page showed, and what changed on it, over a window of time, ready for a model. Agents run on
+[Yielded Agent](https://github.com/yielded-dev/agent), whose browser ports `effect-browser-agent`
+implements over these pages.
 
 | Package                                                  | What it is                                                         |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`effect-browser`](packages/browser)                     | The browser, its pages, tools, agent and moments, over Playwright  |
+| [`effect-browser`](packages/browser)                     | The browser, its pages and moments, over Playwright                |
+| [`effect-browser-agent`](packages/agent)                 | Its pages as Yielded Agent's browser ports, with the agent's tools |
 | [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
 | [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, supplied as one layer            |
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
@@ -15,38 +17,54 @@ window of time, ready for a model.
 
 ## An agent in a local Chromium
 
-Any `effect/ai` `LanguageModel` drives the agent. This one goes through OpenRouter:
+A [Yielded](https://github.com/yielded-dev/agent) agent runs the loop; `BrowserTools` gives it
+Yielded's browser tools over an `effect-browser` page, and tools of its own for what has no ref.
+Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter:
 
 ```ts
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
+import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
-import { Agent, Browser, Chromium } from "effect-browser";
+import { Model } from "effect/ai";
+import { Browser, Chromium } from "effect-browser";
+import { BrowserTools } from "effect-browser-agent";
 import { FetchHttpClient } from "effect/http";
+
+const tools = BrowserTools.make();
+
+const reader = Agent.make("top-story", {
+  input: Schema.String,
+  output: Schema.Struct({ title: Schema.String, points: Schema.Finite }),
+  instructions: "Do the task with the browser tools, then answer.",
+  toolkit: tools.toolkit,
+  // One call at a time: a turn's calls act on one page, in the order the model made them.
+  policy: { maxTurns: 12, maxToolCalls: 40, maxDuration: "5 minutes", toolConcurrency: 1 },
+});
 
 const program = Effect.gen(function* () {
   const page = yield* (yield* Browser.Browser).firstPage;
+  const task = "Report the title and points of the top story.";
 
   yield* page.goto("https://news.ycombinator.com");
 
-  const result = yield* Agent.run("Report the title and points of the top story.", {
-    page,
-    answer: Schema.Struct({ title: Schema.String, points: Schema.Finite }),
-  });
+  // The tools act on this page, and the input policy's judge reads the task.
+  const result = yield* AgentRuntime.run(reader, task).pipe(
+    Effect.provide(Layer.merge(tools.layer({ page }, { task }), InMemory.layer)),
+  );
 
-  yield* Effect.log(result.answer, result.usage);
+  yield* Effect.log(result.output, result.usage);
 });
 
-// @effect/ai-openrouter 4.0.0 needs strictJsonSchema for structured output; without it,
-// OpenRouter drops the response format.
-const Model = OpenRouterLanguageModel.layer({
-  model: "<model id>",
-  config: { strictJsonSchema: true },
-}).pipe(
+const OpenRouter = Layer.mergeAll(
+  OpenRouterLanguageModel.layer({ model: "<model id>" }),
+  Layer.succeed(Model.ProviderName, "openrouter"),
+  Layer.succeed(Model.ModelName, "<model id>"),
+).pipe(
   Layer.provide(OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") })),
   Layer.provide(FetchHttpClient.layer),
 );
 
-program.pipe(Effect.provide([Chromium.layer(), Model]), Effect.runPromise);
+program.pipe(Effect.provide([Chromium.layer(), OpenRouter]), Effect.runPromise);
 ```
 
 ## The same agent on Browserbase
@@ -63,7 +81,7 @@ const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
   Layer.provide(FetchHttpClient.layer),
 );
 
-program.pipe(Effect.provide([Hosted, Model]), Effect.runPromise);
+program.pipe(Effect.provide([Hosted, OpenRouter]), Effect.runPromise);
 ```
 
 Its pages' screencasts run on a second connection to the session, so frames keep coming while a
@@ -142,52 +160,40 @@ prompt.
 
 ## How the tools work
 
-`Tools.make({ page })` builds an `effect/ai` toolkit pinned to a page: `browser_navigate`,
-`browser_back`, `browser_snapshot`, `browser_zoom`, `browser_click`, `browser_hover`,
-`browser_type`, `browser_press`, `browser_scroll`, `browser_drag`, `browser_select` and
-`browser_wait`. `Tools.make({ browser, follow })` adds `browser_tabs` and acts on the tab the model
-last saw. `Agent.run` takes the same page or browser, and adds `done` and `give_up`.
+`BrowserTools.make()` gives an agent Yielded's browser tools over `PageControl`'s ports, and this
+package's pointer tools: `observe`, `act`, `inspect`, `navigate`, `scroll`, `wait`, `press` and
+`select_tab`, then `click_at`, `hover`, `drag`, `type_text`, `press_keys`, `zoom`, `wait_still` and
+`back`. `BrowserTools.Control` and `BrowserTools.Pointer` are the two groups, for an agent that
+wants fewer. `tools.layer({ page })` serves them on one page; `tools.layer({ browser, follow })`
+on a browser's tabs. `PageControl.layer` serves the ports alone, for Yielded's own `BrowserUse`
+tools.
 
-- A snapshot is a compact outline of the viewport. Controls carry refs such as `e12`; a ref from an
-  old snapshot fails as stale rather than naming another element.
-- Anything a snapshot cannot show, such as a canvas game, a chart or a video, takes x and y in
-  viewport CSS pixels, as they appear in a full screenshot. Pixel click receipts name the element
-  under that exact point, with its role and accessible name when available.
-- Each call answers with a receipt, `Tools.Receipt`: what it did and, for an action, what followed
-  on its page while it ran: a dialog and how it was answered, where the page went, a tab it opened
-  and what visibly changed. The model reads it as a few lines of text; your code reads the value,
-  with the `Action` it recorded, whose `correlation` is the model's call id. A failure is the
-  call's `BrowserError`. `Agent.run` executes each turn's calls in order, stops at the first
-  failure or completion, and answers the remaining calls as not executed. A loop of your own gets
-  the same by spreading a fresh `yield* tools.batch` into each `generateText` call.
+- An observation is a compact outline of the viewport whose controls carry refs such as `e12`, and
+  the controls as values. A ref from an old observation fails as stale rather than naming another
+  element. `inspect` reads inside a CSS selector, and narrows a select's options.
+- `act` clicks, fills and selects refs, up to eight in one call with the default `"batched"` mode,
+  in order, stopping at the first failure, and answers with the next observation. That observation
+  begins with what followed the actions on the page: a dialog and how the browser answered it,
+  where the page went, a tab they opened and what their input visibly changed. Every result says
+  whether input reached the browser: `acknowledged`, `not-dispatched` for a refusal before any, or
+  `unknown` for a failure after it; nothing is ever retried.
+- Anything an outline cannot show, such as a canvas game, a chart or a video, takes x and y in
+  viewport CSS pixels with the pointer tools. Before each turn the model sees a screenshot of the
+  current tab, and the crops `zoom` took since its last turn, as context the run never keeps: only
+  the current picture is ever in a request, so the prompt cache keeps the history. `vision: false`
+  leaves the pictures out.
 - Tools that follow a browser's tabs act on the tab the model last saw, since it planned on what it
-  saw there. A tab that opens is shown at the next look as `follow` says: `"select"`, the default,
-  makes it current without bringing it to front, so the page on air and an operator's view stay;
-  `"front"` brings it to front; `"never"` stays. After `browser_tabs` switches, actions wait until
-  the model has seen the new tab.
-- The model receives an outline and a screenshot at the start and after each turn that does not
-  end the run, including failed batches. If the browser is gone, or a pinned page, the run fails
-  with its `BrowserError` rather than calling the model again. `observe` replaces what it sees, as
-  a function of the page: `Agent.observe("outline")` or `Agent.observe("screenshot")` when only one
-  is needed, or your own. `tools` replaces the tools from the default ones, to rename, wrap, remove
-  or add them, and `system` the system prompt. A malformed `done` answer goes back to the model to
-  correct, and so does a response that calls a tool that does not exist or passes arguments that
-  are not JSON: none of its calls run. A provider reply its client cannot decode ends the run
-  instead. A run that ends without an answer fails with `AgentError`, which keeps its usage and its
-  conversation.
-- Each page operation is one contract, so the tools, `Tools.on(page)`'s methods and the RPC group
-  `Tools.PageRpcs` agree: `PageRpcs.toLayer(Tools.on(page))` serves a page's operations to another
-  process, where the model runs, and they answer there with the same receipts.
-- `browser_navigate` and `browser_tabs` open only http and https addresses, `data:` URLs and
-  `about:blank`; a model cannot open a local file. An address without a scheme, such as
-  `example.com` or `localhost:3000`, opens over HTTPS, or HTTP on loopback; `Page.goto` reads
-  addresses the same way and also opens the `file:` URLs its caller passes.
-- `browser_zoom` takes a viewport region (`x`, `y`, `width`, `height`); its receipt holds the crop,
-  which `Agent.run` shows beside the next observation, whatever it observes. Captions give the
-  viewport origin, and the tab where tools follow tabs; clicks still use viewport coordinates. At
-  most eight crops follow a batch.
-- Pictures go to the model in a user message after the tool results. Only the latest few stay in
-  the conversation, and older ones are replaced several at a time, so the prompt cache keeps working.
+  saw there, and list the others. A tab that opens is shown at the next look as `follow` says:
+  `"select"`, the default, makes it current without bringing it to front, so the page on air and an
+  operator's view stay; `"front"` brings it to front; `"never"` stays.
+- `navigate` opens only http and https addresses, `data:` URLs and `about:blank`; a model cannot
+  open a local file. `Page.goto` also opens the `file:` URLs its caller passes.
+- The browser answers dialogs itself, so `respond_dialog` is left out and the port refuses it.
+  Yielded's `screenshot` tool is left out too: the pictures before each turn replace it, and the
+  port takes PNGs for a host that asks.
+- The run is Yielded's: its policy bounds turns, tool calls, time and spend, and it adds approval,
+  context management, durable runs and run events. See its
+  [documentation](https://github.com/yielded-dev/agent).
 - A page waits only for itself. An action has its page to itself, in the order actions were asked,
   and reads share it after the action in flight, so a read describes the page an action left. A
   wait behind other operations on the page fails `Busy`, and `Page.failFast` fails it at once.
@@ -206,7 +212,7 @@ last saw. `Agent.run` takes the same page or browser, and adds `done` and `give_
   `LanguageModel` or `Policy.decider` over a `DecisionModel` such as Jev, reads what an input
   means: a payment, an account, access, a deletion, a message or a secret. The guard denies a risk
   the user's task does not ask for, and fails closed on input with facts when the judge fails.
-  `Agent.run` gives the guard its task and stops after three refusals in a row.
+  `BrowserTools` and `PageControl` give the guard the run's `task`.
 - `Presentation` performs input for viewers: `presenter.view(page)` is a page whose actions wait as
   a person reacts, glide the presenter's one drawn pointer along a tuned two-stroke
   sigma-lognormal planner's paths, scroll off-screen targets into view with visible wheel input and
@@ -229,13 +235,8 @@ last saw. `Agent.run` takes the same page or browser, and adds `done` and `give_
   glide plans, submission receipts, button and key phases, wheel input and cursor shape. Each page
   has its own pointer position. Events have sequence cursors for bounded replay; a lagging reader
   gets an explicit history-expired error instead of missing events silently.
-- `tools` adds a caller's own tools beside the browser's, with their handlers. `done` and
-  `give_up` stay the agent's own. The same batch halting applies to those tools.
-- `onStep` sees each model call and its tool calls; failing stops the run with that error, which is
-  how a caller enforces a budget. Services it uses become requirements of the run. A run fails
-  with `AgentError | AiError | BrowserError`, plus `onStep`'s error.
-- Agent steps, tool calls, page actions with their phases, captures and opening the browser are
-  Effect spans, without typed text. Provide an exporter, such as `effect/observability`'s OTLP
+- Page actions with their phases, reads, captures and opening the browser are Effect spans, without
+  typed text, and Yielded traces the agent's turns and tool calls. Provide an exporter, such as `effect/observability`'s OTLP
   layer, to see them; the [package README](packages/browser/README.md#tracing) lists them.
 
 ## Development
@@ -255,5 +256,5 @@ real local Chromium and builds. No test calls a model or a hosted browser.
 
 The core packages and code are MIT. The optional `effect-browser-human-strokes` data is CC BY 4.0;
 its [README](packages/human-strokes/README.md) carries attribution. Parts of the build configuration are adapted from
-[effect-agent](https://github.com/danieljvdm/effect-agent) under the MIT License; see
-[LICENSE-effect-agent](LICENSE-effect-agent).
+[Yielded Agent](https://github.com/yielded-dev/agent), then named effect-agent, under the MIT
+License; see [LICENSE-effect-agent](LICENSE-effect-agent).

@@ -1,8 +1,8 @@
 # Releasing
 
-`effect-browser`, `effect-browserbase` and `effect-browser-human-strokes` are released together,
-at one version, by `.github/workflows/publish.yml`. The workflow runs on a `v<version>` tag on
-`main`, runs `bun run ready`, packs the three packages, checks the archives in a clean consumer and
+`effect-browser`, `effect-browserbase`, `effect-browser-human-strokes` and `effect-browser-agent`
+are released together, at one version, by `.github/workflows/publish.yml`. The workflow runs on a
+`v<version>` tag on `main`, runs `bun run ready`, packs the four packages, checks the archives in a clean consumer and
 publishes them through npm trusted publishing: no npm token, and npm signs provenance for each
 package. Ordinary CI never publishes,
 and preparing or testing a release does not authorize publishing, tagging or changing account
@@ -12,12 +12,13 @@ settings.
 
 The owner does this once, in npm and GitHub settings.
 
-1. **Reserve `effect-browser-human-strokes`.** Done: npm can only trust a publisher for a name
-   that exists, so the name was published by hand as a placeholder, `0.0.0-reserved.0`, like
-   `effect-browser`'s. npm points `latest` at a name's first version, so `latest` stays on the
-   placeholder until a stable release.
+1. **Reserve the names.** npm can only trust a publisher for a name that exists, so each name is
+   published by hand once as a placeholder, `0.0.0-reserved.0`. `effect-browser` and
+   `effect-browser-human-strokes` are done; `effect-browser-agent` is not yet, and the first
+   release that carries it needs it. npm points `latest` at a name's first version, so `latest`
+   stays on the placeholder until a stable release.
 
-2. **Trust the workflow on npm.** For each of the three packages, open the package's
+2. **Trust the workflow on npm.** For each of the four packages, open the package's
    **Settings → Trusted publishing** on npmjs.com, choose **GitHub Actions** and enter:
 
    | Field                | Value                      |
@@ -46,9 +47,9 @@ The owner does this once, in npm and GitHub settings.
 
 ## Cut a release
 
-1. In one PR, set the same `version` in all three `packages/*/package.json`, add the release's
-   section to `CHANGELOG.md`, move the `effect-browser` peer ranges in `effect-browserbase` and
-   `effect-browser-human-strokes` if the release needs the new version, and run
+1. In one PR, set the same `version` in all four `packages/*/package.json`, add the release's
+   section to `CHANGELOG.md`, move the `effect-browser` peer ranges in `effect-browserbase`,
+   `effect-browser-human-strokes` and `effect-browser-agent` if the release needs the new version, and run
    `bun install --ignore-scripts` so `bun.lock` agrees.
 2. Once it is merged, tag the merge commit and push the tag:
 
@@ -75,7 +76,7 @@ declarations with `skipLibCheck: false` and Node import each one: `bun run ready
 declaration or an import that only the workspace satisfies. Run it before tagging: without
 arguments it builds and packs the packages itself, under `$TMPDIR`.
 
-The tag must be on `main` and name the version all three packages carry. A prerelease
+The tag must be on `main` and name the version all four packages carry. A prerelease
 `x.y.z-alpha.N`, `-beta.N` or `-rc.N` goes to the dist-tag of that name; only a plain `x.y.z` goes
 to `latest`. Packages publish in dependency order, and a version already on npm is skipped, so
 dispatching the same tag again finishes an interrupted release. A published version cannot be
