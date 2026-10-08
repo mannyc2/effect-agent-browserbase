@@ -6,7 +6,9 @@
  * given, its navigations with both the address asked for and the one reached, and what was typed
  * as a named input slot, never the text itself. `replay` takes the steps in turn. Before a step
  * that acts on the page, it waits for `Page.ready`; then it finds the one element the step's
- * subject names, by role, name and context, and acts on it. An element step never falls back to
+ * subject names, by role and name among those that repeat all its recorded context, and acts on
+ * it. Text typed into focus was typed into the focused field, which replay finds the same way, and
+ * text typed into a secret field goes into nothing else. An element step never falls back to
  * coordinates, and a step recorded at a point acts there only while the element found for it still
  * covers that point. Replay stops at the first step it cannot take and says why: `Missing`,
  * `Ambiguous`, `Drifted`, or the step's own `BrowserError`. Nothing is replayed automatically, and
@@ -26,7 +28,14 @@ import {
   Subject,
 } from "./BrowserEvent.ts";
 import { Ambiguous, choose, Drifted, Missing } from "./internal/reading/choose.ts";
-import type { Found, Page, Point, ReadyOptions, Target } from "./Page.ts";
+import {
+  type Found,
+  type Page,
+  type Point,
+  type ReadyOptions,
+  redacted,
+  type Target,
+} from "./Page.ts";
 
 export { Ambiguous, Drifted, Missing } from "./internal/reading/choose.ts";
 
@@ -64,6 +73,8 @@ export class Step extends Schema.Class<Step>("effect-browser/Plan/Step")({
   box: Schema.optional(Box),
   /** The input slot whose text a `type` step types. */
   input: Schema.optional(Schema.String),
+  /** The slot's text went into a secret field, so replay types it into nothing else. */
+  secret: Schema.optional(Schema.Literal(true)),
   options: Schema.optional(ActionOptions),
 }) {}
 
@@ -148,6 +159,7 @@ export const fromEvents = (events: Iterable<BrowserEvent>): Plan => {
         toPoint: pointIn(drag?.[1]),
         box: point === undefined ? undefined : action.box,
         input: action.name === "type" ? slotFor(taken, action.subject?.name) : undefined,
+        secret: action.name === "type" && action.text === redacted ? true : undefined,
         options: action.options,
       });
     }),
@@ -264,9 +276,13 @@ const take = (
           );
     case "type":
       return step.subject === undefined
-        ? page.type(text, options)
+        ? page.type(text, { ...options, secret: step.secret })
         : Effect.flatMap(aim(page, step.subject), (into) =>
-            page.type(text, { ...options, into: typeof into === "string" ? into : undefined }),
+            page.type(text, {
+              ...options,
+              into: typeof into === "string" ? into : undefined,
+              secret: step.secret,
+            }),
           );
   }
 };

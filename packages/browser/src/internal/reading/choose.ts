@@ -1,10 +1,17 @@
 /**
  * Choosing the one element a recorded subject names, among those `find` gives for its role and
- * name. Context tells them apart, word for word as `near` reads it. An element in another row,
- * or under another column, is another subject: a row's words must appear somewhere in the
- * element's context, so a table laid out again as cards still matches. The rest are ranked by how
- * much of the recorded context they repeat, a field read the same counting over words found
- * elsewhere. There is no ordinal, so a tie stays a tie.
+ * name. Context tells them apart, and an element that does not repeat every part of the recorded
+ * context is another subject, so a sole element left once its own has gone, such as Alice's
+ * "Remove" after Bob has left, drifts rather than stands in:
+ *
+ * - a row is read whole: a row named "Wrapped BTC" is not the row "BTC". Laid out again without
+ *   rows, as cards, one of the element's fields must start with the row's words;
+ * - a column counts where the element is under one;
+ * - a label or heading must read the same, or its words appear, whole and in order, in one of the
+ *   element's fields, as `near` reads them.
+ *
+ * The rest are ranked by how much of the recorded context they read the same. There is no
+ * ordinal, so a tie stays a tie.
  */
 import { Effect, Schema } from "effect";
 
@@ -28,7 +35,7 @@ export class Ambiguous extends Schema.TaggedError<Ambiguous>()("Ambiguous", {
   }
 }
 
-/** The page is not where the recording was: another site, or the subject in another row. */
+/** The page is not where the recording was: another site, or no element with its context. */
 export class Drifted extends Schema.TaggedError<Drifted>()("Drifted", {
   detail: Schema.String,
 }) {
@@ -43,43 +50,51 @@ const fields = ["row", "column", "label", "heading"] as const;
 const said = (context: SubjectContext) =>
   Object.values(context).filter((value) => typeof value === "string");
 
+/** How an element repeats one recorded field: 2 read the same, 1 found as words, 0 not at all. */
+const repeats = (field: (typeof fields)[number], value: string, context: SubjectContext) => {
+  const own = context[field];
+
+  if (own !== undefined && normalize(own) === normalize(value)) return 2;
+  if (field === "column") return own === undefined ? 1 : 0;
+  if (field === "row")
+    return own === undefined &&
+      said(context).some((other) => `${normalize(other)} `.startsWith(`${normalize(value)} `))
+      ? 1
+      : 0;
+
+  return said(context).some((other) => holds(other, value)) ? 1 : 0;
+};
+
 export const choose = (
   subject: Subject,
   found: ReadonlyArray<Found>,
 ): Effect.Effect<Found, Missing | Ambiguous | Drifted> => {
-  const recorded = subject.context;
-  const { row, column } = recorded;
   // `find` matched the role; a subject without one only matches elements without one.
   const named = found.filter((one) => subject.role !== null || one.subject.role === null);
 
-  const kept = named.filter(
-    ({ subject: { context } }) =>
-      (row === undefined || said(context).some((value) => holds(value, row))) &&
-      (column === undefined ||
-        context.column === undefined ||
-        normalize(context.column) === normalize(column)),
-  );
+  const kept = named.flatMap((one) => {
+    let score = 0;
 
-  const score = (context: SubjectContext) =>
-    fields.reduce((total, field) => {
-      const value = recorded[field];
-      const own = context[field];
+    for (const field of fields) {
+      const value = subject.context[field];
+      const repeated = value === undefined ? 0 : repeats(field, value, one.subject.context);
 
-      if (value === undefined) return total;
-      if (own !== undefined && normalize(own) === normalize(value)) return total + 2;
+      if (value !== undefined && repeated === 0) return [];
+      score += repeated;
+    }
 
-      return said(context).some((other) => holds(other, value)) ? total + 1 : total;
-    }, 0);
+    return [{ one, score }];
+  });
 
-  const scores = kept.map((one) => score(one.subject.context));
-  const top = kept.filter((_, index) => scores[index] === Math.max(...scores));
+  const best = Math.max(...kept.map(({ score }) => score));
+  const top = kept.filter(({ score }) => score === best);
   const [only] = top;
 
   if (named.length === 0) return Effect.fail(new Missing());
   if (kept.length === 0)
-    return Effect.fail(new Drifted({ detail: "the subject is in another row or column" }));
+    return Effect.fail(new Drifted({ detail: "no element named so repeats the recorded context" }));
 
   return top.length === 1 && only !== undefined
-    ? Effect.succeed(only)
+    ? Effect.succeed(only.one)
     : Effect.fail(new Ambiguous({ count: top.length }));
 };

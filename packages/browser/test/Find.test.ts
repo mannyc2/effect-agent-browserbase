@@ -272,6 +272,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       ] as const)
         assert.lengthOf(yield* page.find({ role, name }), 1, `${role} ${name}`);
       assert.lengthOf(yield* page.find({ text: "Saved" }), 1);
+      // Pinned inside a part out of view, under a transparent layer over the whole page: by style
+      // attributes, one ignoring the pointer and one away from the probe points, and by a
+      // stylesheet, found at a probe point beneath the layer.
+      for (const text of [
+        "A toast that ignores the pointer",
+        "A badge between the points",
+        "A bar pinned by an adopted stylesheet",
+      ])
+        assert.lengthOf(yield* page.find({ text }), 1, text);
       assert.lengthOf(yield* page.find({ text: "The top of the story" }), 0);
       assert.lengthOf(yield* page.find({ role: "button", name: "At the bottom" }), 0);
       // What is pinned to the viewport sits under no heading of the story behind it.

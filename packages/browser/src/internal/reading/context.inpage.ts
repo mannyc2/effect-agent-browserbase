@@ -1,8 +1,9 @@
 /**
  * In the page: an element's context, the words around it that say which one it is:
  *
- * - in a table, its row, named by the row's header or first cell with text, and its column, named
- *   by the header over it, so a value is never read under the wrong header;
+ * - in a table, its row, named by the row's header or else its first cell with letters, so a rank
+ *   or a price never names it, and its column, named by the header over it, so a value is never
+ *   read under the wrong header;
  * - elsewhere, the words just before it in its row, item, group or block;
  * - the heading above it, unless it is pinned to the viewport, where the markup says nothing.
  *
@@ -10,6 +11,7 @@
  */
 import type { SubjectContext } from "../../BrowserEvent.ts";
 import type { Names } from "./names.inpage.ts";
+import type { Walk } from "./walk.inpage.ts";
 
 /** What one read has learnt of the page: each table's header row and each tree's headings. */
 export interface Known {
@@ -17,14 +19,12 @@ export interface Known {
   readonly headings: Map<Node, ReadonlyArray<Element>>;
 }
 
-export const context = (names: Names) => {
+export const context = (names: Names, walked: Walk) => {
   const { clean, isButton, isDocument, isHtml, isInput, isRoot } = names;
   const { isSelect, isTextArea, roleOf, textOf } = names;
+  const { visible } = walked;
 
   const known = (): Known => ({ headers: new Map(), headings: new Map() });
-
-  const shown = (element: Element): boolean =>
-    element.checkVisibility({ opacityProperty: true, visibilityProperty: true });
 
   // Text in these says what a control is called, not what the page says around it.
   const unspoken =
@@ -58,7 +58,7 @@ export const context = (names: Names) => {
         parent.closest(unspoken) !== null ||
         (isHtml(parent) && parent.isContentEditable) ||
         labels.some((label) => label.contains(parent)) ||
-        !shown(parent)
+        !visible(parent)
       )
         continue;
       text = backwards ? `${node.textContent ?? ""} ${text}` : `${text} ${node.textContent ?? ""}`;
@@ -90,7 +90,7 @@ export const context = (names: Names) => {
     for (const heading of headings.toReversed()) {
       if ((heading.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING) === 0)
         continue;
-      const text = shown(heading) ? clean(textOf(heading), 120) : "";
+      const text = visible(heading) ? clean(textOf(heading), 120) : "";
 
       if (text !== "") return text;
     }
@@ -134,10 +134,12 @@ export const context = (names: Names) => {
     if (row === header) return {};
     const cells = Array.from(row.children);
     const index = cells.indexOf(cell);
+    // A rank, a checkbox, a star or a price says where a row is, not which one it is.
+    const lettered = (other: Element) => /\p{L}/u.test(textOf(other));
 
     const named =
-      cells.find((other) => other.matches("th,[role=rowheader]")) ??
-      cells.find((other) => other !== cell && clean(textOf(other)) !== "");
+      cells.find((other) => other.matches("th,[role=rowheader]") && lettered(other)) ??
+      cells.find((other) => other !== cell && lettered(other));
 
     // Columns count spanned cells, so a cell after one spanning two is under the third header.
     let left = cells.slice(0, index).reduce((sum, other) => sum + span(other), 0);

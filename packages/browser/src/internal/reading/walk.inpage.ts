@@ -1,12 +1,13 @@
 /**
- * In the page: the walk every read shares, and what is painted at a point. The walk visits
- * visible elements in tree order, into shadow roots and same-origin frames. Reading the viewport,
- * it skips a subtree whose box lies outside the viewport before it styles anything in it, which
- * spares a long table all but its rows in view. A box says nothing of what is positioned out of
- * it, so a subtree is kept when its box is empty, such as a wrapper of a pinned dialog, or when it
- * holds what is painted at the viewport's edges, corners or middle, or in its top layer, such as
- * a bar pinned inside a header scrolled away. Something pinned elsewhere, inside a subtree out of
- * view, is missed. See `names.inpage.ts` for what a page-side part may use.
+ * In the page: the walk every read shares, what is in view and shows, and what is painted at a
+ * point. The walk visits visible elements in tree order, into shadow roots and same-origin frames.
+ * Reading the viewport, it skips a subtree whose box lies outside the viewport before it styles
+ * anything in it, which spares a long table all but its rows in view. A box says nothing of what
+ * is positioned out of it, so a subtree is kept when its box is empty, such as a wrapper of a
+ * pinned dialog, when it holds what is painted at the viewport's edges, corners or middle, under
+ * any transparent layer too, or in its top layer, or when it holds what its style attribute pins
+ * in view. Something a stylesheet pins inside a subtree out of view, away from those points or
+ * ignoring the pointer, is missed. See `names.inpage.ts` for what a page-side part may use.
  */
 import type { Names } from "./names.inpage.ts";
 
@@ -32,6 +33,15 @@ export const walk = (names: Names) => {
   const { interactiveRoles, isElement, isFrame, parentOf, roleOf } = names;
 
   const skipped = new Set("SCRIPT STYLE NOSCRIPT TEMPLATE HEAD META LINK SVG".split(" "));
+
+  /** Whether a box, in top-document pixels, meets the viewport. */
+  const inView = (rect: DOMRect, width = innerWidth, height = innerHeight): boolean =>
+    rect.right > 0 && rect.bottom > 0 && rect.left < width && rect.top < height;
+
+  /** Whether an element reached on its own shows, by the walk's rule and its ancestors'. */
+  const visible = (element: Element): boolean =>
+    element.checkVisibility({ opacityProperty: true, visibilityProperty: true }) &&
+    element.closest("[aria-hidden=true]") === null;
 
   const isVisible = (element: Element, style: CSSStyleDeclaration, rect: DOMRect): boolean =>
     style.display !== "none" &&
@@ -118,7 +128,7 @@ export const walk = (names: Names) => {
     return { x: x + outer.x + frame.clientLeft, y: y + outer.y + frame.clientTop, width, height };
   };
 
-  /** What is painted where pinned things sit, and every element holding it. */
+  /** What is painted where pinned things sit, what is pinned in view, and every element holding it. */
   const painted = (width: number, height: number): Set<Element> => {
     const keep = new Set<Element>();
 
@@ -133,9 +143,16 @@ export const walk = (names: Names) => {
 
     for (const y of [8, 48, height / 2, height - 48, height - 8])
       for (const x of [8, 48, width / 4, width / 2, (width * 3) / 4, width - 48, width - 8])
-        if (x >= 0 && y >= 0 && x < width && y < height) hold(hitAt(document, x, y));
+        if (x >= 0 && y >= 0 && x < width && y < height) {
+          hold(hitAt(document, x, y));
+          // What a transparent layer, such as one over a video player, covers.
+          for (const beneath of document.elementsFromPoint(x, y)) hold(beneath);
+        }
     for (const element of Array.from(document.querySelectorAll(":modal, :popover-open")))
       hold(element);
+    // What a style attribute pins, wherever it sits; a stylesheet's pins only at the points.
+    for (const element of Array.from(document.querySelectorAll('[style*="fixed" i]')))
+      if (inView(element.getBoundingClientRect(), width, height)) hold(element);
 
     return keep;
   };
@@ -169,7 +186,7 @@ export const walk = (names: Names) => {
         viewport &&
         local.width > 0 &&
         local.height > 0 &&
-        (rect.bottom <= 0 || rect.top >= height || rect.right <= 0 || rect.left >= width) &&
+        !inView(rect, width, height) &&
         !(keep ??= painted(width, height)).has(element)
       ) {
         visitor.outside?.(rect);
@@ -197,7 +214,7 @@ export const walk = (names: Names) => {
     else one(root, state, 0, 0);
   };
 
-  return { acts, boxOf, controlOf, hitAt, visit };
+  return { acts, boxOf, controlOf, hitAt, inView, visible, visit };
 };
 
 export type Walk = ReturnType<typeof walk>;

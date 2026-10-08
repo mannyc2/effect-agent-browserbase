@@ -124,14 +124,21 @@ session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `P
   subject, with no model call. `Plan.fromEvents` keeps a page's completed actions with their
   subjects and options, its navigations with the address asked for and the one reached, and typed
   text as named input slots, never the text. `Plan.replay(page, plan, { settle, inputs })` waits
-  for `Page.ready` before each step that acts, finds the one element the step's subject names by
-  role, name and context with `Plan.locate`, and acts on it. It stops at the first step it cannot
-  take with a `Plan.ReplayError`: `Missing`, `Ambiguous` (there is no ordinal), `Drifted`, or the
-  step's `BrowserError`. A plan is version 1, so a plan 0.2 stored does not decode.
-- `Page.ready({ quietMillis, timeout })`: in one call to the page, repeated, whether it is ready to
-  be shown: its document parsed and painted since, nothing that ends animating in view, its fonts
-  and the images in view loaded, and something shown. With `quietMillis`, the screen must also
-  stay still, counted from the first frame of a capture the wait starts.
+  for `Page.ready` before each step that acts, finds the one element the step's subject names with
+  `Plan.locate`, by role and name among the elements that repeat all of its recorded context, and
+  acts on it. Text typed into focus is typed again into the field it went into, and a slot first
+  typed into a secret field (`Step.secret`) only into a secret field. It stops at the first step it
+  cannot take with a `Plan.ReplayError`: `Missing`, `Ambiguous` (there is no ordinal), `Drifted`,
+  or the step's `BrowserError`. A plan is version 1, so a plan 0.2 stored does not decode.
+- `Page.ready({ quietMillis, timeout })`: in one call that checks in the page until it is ready or
+  the time is up, whether it is ready to be shown: its document parsed and painted since, nothing
+  that ends animating in view, its fonts and the images in view loaded, nothing in view marked
+  `aria-busy`, and something shown: text, a canvas drawn on, a picture or drawing larger than an
+  icon, a video or a frame. With `quietMillis`, the screen must also stay still, counted from the
+  first frame of a capture the wait starts and only while every frame's acknowledgement is
+  answered, and the spell ends with one more call to the page, so a connection that stalls is not
+  taken for a still screen.
+- `TypeOptions.secret`: `type` refuses, before any input, a field the page does not mark secret.
 - `FindQuery.at`: what a point action at a viewport point would reach.
 - `BrowserEvent.ActionOptions` and `Action.options`, the rest of what an action was asked, such as a
   click's count or `submit` on `type`; `BrowserEvent.Box`, with `Action.box` and
@@ -191,6 +198,12 @@ session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `P
 - A clock probe that runs past its two seconds fails with `Timeout`, as every other deadline does,
   not `Failed`.
 - Typing and pressing keys no longer send `Page.enable` again on a page the library has read.
+- A table row is named by its header, or else its first cell with letters, so a rank or a price
+  never names it.
+- Typing into focus records the focused field as the action's `subject`.
+- Reading the viewport keeps, inside a subtree out of view, what a style attribute pins in view,
+  and what is painted at the viewport's probe points beneath a transparent layer.
+- A field whose style shows dots for what it holds, as a PIN field's may, is secret.
 
 ### Breaking
 

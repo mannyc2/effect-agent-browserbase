@@ -52,11 +52,13 @@
   28,021-element table takes 7 ms instead of 95.
 - Plans and readiness. `Plan.fromEvents` records a page's walk from its events, and `Plan.replay`
   replays it on a fresh page by subject, with no model call: it waits for `Page.ready` before each
-  step that acts, finds the one element each step names by role, name and context, and stops at
-  the first step it cannot take with a typed reason. On plan 016's drift site, four walks under
-  nine drift operators, five seeds each, ended in the wrong place 0 times in 200 replays.
-  `Page.ready` says whether a page is ready to be shown, from the page's own evidence, and with
-  `quietMillis` also waits for the screen to be still.
+  step that acts, finds the one element each step names by role and name among those that repeat
+  all its recorded context, types a secret only into a secret field, and stops at the first step it
+  cannot take with a typed reason. On the drift site, plan 016's four walks and the phase 1
+  review's three, under eleven drift operators, five seeds each, ended in the wrong place 0 times
+  in 420 replays. `Page.ready` says, in one call to the page, whether a page is ready to be shown,
+  from the page's own evidence, so a blank canvas or a spinner alone is still loading; with
+  `quietMillis` it also waits for the screen to be still, and a stalled connection is not stillness.
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
   holds and validation before held actions resume: the press point is hit-tested after the
   pointer arrives, typing refuses to start on a control a key could activate, and a multi-key
@@ -94,10 +96,11 @@
   which a screenshot always must, and never shows a document the page has left.
 - Pictures and reads on each page's own protocol session, counted: a picture is one call, or two
   for a crop or another device pixel ratio; the page script is registered once per page session, so
-  a document's first read is two calls and a warm read one; the library's own clipped pictures stay
-  out of a running screencast, which keeps the page's own frames where the crop is on the page's
-  own session, as over CDP; and focus emulation keeps tabs behind painting. A native suite holds
-  these to their call budgets through a counting proxy.
+  a document's first read is two calls and a warm read one, `ready` included however long the page
+  takes, and a wait for a still screen two calls while a capture runs; the library's own clipped
+  pictures stay out of a running screencast, which keeps the page's own frames where the crop is on
+  the page's own session, as over CDP; and focus emulation keeps tabs behind painting. A native
+  suite holds these to their call budgets through a counting proxy.
 - Tracing: agent steps, tool calls, page operations with their phases and protocol cost, captures,
   page script round trips and opening a browser are Effect spans, with OpenTelemetry's GenAI attributes on the agent
   and its tool calls. No span carries typed text, and the application chooses the exporter. The
@@ -133,15 +136,17 @@ paid calls.
 0.3 is built in four phases, each ending with a pass that deletes what the phase made redundant,
 and each becoming the next beta.
 
-- **Phase 1, cost and replay, is built, and its review's fixes are under way.** Pictures and reads
+- **Phase 1, cost and replay, is built, with its review's fixes.** Pictures and reads
   go on each page's own counted protocol session, the clock is measured on first need, and
   `Page.find`, `Page.text`, `Plan` and `Page.ready` are in. The review found frames of the previous
   page served after a navigation, replays that act in the wrong place, and a busy page's first
   capture failing or widening the clock's estimate. The pictures and clock fixes are in: reads show
   the document a navigation reached, a busy page's first capture starts with what its clock probes
   could measure and narrows it while frames flow, a crop over CDP no longer pauses a running
-  capture, and a capture's start has a deadline. Its beta, `0.3.0-beta.1`, is prepared in the
-  changelog and the package versions; it waits for the replay fixes, and is not tagged.
+  capture, and a capture's start has a deadline. So are the replay and readiness fixes: replay
+  refuses the review's six drifts rather than act in the wrong place, `ready` waits out a loading
+  screen in one call to the page, and a stalled connection no longer reads as a still screen. Its
+  beta, `0.3.0-beta.1`, is prepared in the changelog and the package versions, and is not tagged.
 - **Phase 2, identity and lifetime, is under way.** `Supervisor`, the Browserbase release outcomes
   and `effect-browserbase/testing` have landed, with the review's follow-up: a context whose
   session may still be saving to it is cleared by the next writer rather than held with no way out,
@@ -154,13 +159,13 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 12,284                 | 11,064 → 14,399 | 129 → 167                 |
+| `effect-browser`               | 8,871 → 12,431                 | 11,064 → 14,736 | 129 → 167                 |
 | `effect-browserbase`           | 807 → 1,062, and 588 `testing` | 611 → 1,204     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
 `effect-browser`'s figures include phase 2 so far: the supervisor, 602 source lines, 506 test lines
 and 7 exports, and pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports.
-Without them, phase 1 leaves the package at 11,284 source lines, against a soft ceiling of about
+Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
 11,000 through phase 4.
 
 ## Not rebuilt yet

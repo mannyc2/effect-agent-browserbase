@@ -4,6 +4,8 @@
  */
 import { Schema } from "effect";
 
+import { Subject } from "../../BrowserEvent.ts";
+import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Guard } from "./guard.inpage.ts";
 
@@ -24,11 +26,15 @@ export type FocusResult =
     }
   | { readonly error: string; readonly stale?: boolean };
 
+/**
+ * Whether text may be typed, and whether its field is secret. Typing into focus also names the
+ * focused field, when it is one, so the action records what it typed into.
+ */
 export type TypeableResult =
-  | { readonly ok: true; readonly secret: boolean }
+  | { readonly ok: true; readonly secret: boolean; readonly subject?: typeof Subject.Encoded }
   | { readonly error: "stale" | "untypeable"; readonly detail: string };
 
-export const edit = (names: Names, guard: Guard) => {
+export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
   const {
     activeElement,
     clean,
@@ -41,6 +47,8 @@ export const edit = (names: Names, guard: Guard) => {
     isSelect,
     isTextArea,
     lookup,
+    nameOf,
+    roleOf,
   } = names;
 
   const { proseEligible, textEntry, typingRefusal } = guard;
@@ -64,7 +72,8 @@ export const edit = (names: Names, guard: Guard) => {
       : { error: "corrected prose did not match the requested text" };
   };
 
-  const typeable = (ref: string | null): TypeableResult => {
+  /** Whether text may be typed into a ref or focus, and, for a `secret`, only into a secret field. */
+  const typeable = (ref: string | null, secret: boolean): TypeableResult => {
     const element = ref === null ? activeElement() : lookup(ref);
 
     if (element === undefined)
@@ -72,11 +81,28 @@ export const edit = (names: Names, guard: Guard) => {
         error: "stale",
         detail: `${ref ?? "the focused element"} is not on the page any more`,
       };
-    const refusal = element === null ? undefined : typingRefusal(element, ref !== null);
 
-    return refusal === undefined
-      ? { ok: true, secret: element !== null && isSecret(element) }
-      : { error: "untypeable", detail: refusal };
+    const refusal =
+      element === null
+        ? secret
+          ? "nothing has focus to type a secret into"
+          : undefined
+        : (typingRefusal(element, ref !== null) ??
+          (secret && !isSecret(element)
+            ? `${describe(element)} is not a secret field`
+            : undefined));
+
+    if (refusal !== undefined) return { error: "untypeable", detail: refusal };
+    if (element === null || ref !== null || !textEntry(element))
+      return { ok: true, secret: element !== null && isSecret(element) };
+    const role = roleOf(element);
+    const tag = element.tagName.toLowerCase();
+
+    return {
+      ok: true,
+      secret: isSecret(element),
+      subject: { role, name: nameOf(element, role), tag, context: placing.contextOf(element) },
+    };
   };
 
   const focus = (ref: string, replace: boolean): FocusResult => {
@@ -134,7 +160,11 @@ export const edit = (names: Names, guard: Guard) => {
 export type Edit = ReturnType<typeof edit>;
 
 export const TypeableResultSchema = Schema.Union([
-  Schema.Struct({ ok: Schema.Literal(true), secret: Schema.Boolean }),
+  Schema.Struct({
+    ok: Schema.Literal(true),
+    secret: Schema.Boolean,
+    subject: Schema.optional(Subject),
+  }),
   Schema.Struct({ error: Schema.Literals(["stale", "untypeable"]), detail: Schema.String }),
 ]);
 
