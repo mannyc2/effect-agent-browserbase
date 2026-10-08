@@ -25,6 +25,8 @@ const Note = Schema.Struct({
   // 0 is the same batch of mutations as the note before.
   step: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3 })),
   seen: Schema.Boolean,
+  // Read as the page renders it, as what arrived is, rather than at once, as a price is.
+  rendered: Schema.Boolean,
 });
 
 const notes = Arbitrary.schema(Schema.Array(Note).check(Schema.isMaxLength(60)));
@@ -43,17 +45,28 @@ const recorded = (
   let at = 1000;
 
   for (const record of [capped, whole]) record.begin(at);
-  for (const { key, value, step, seen } of given) {
+  for (const { key, value, step, seen, rendered } of given) {
     at += step;
-    for (const record of [capped, whole]) {
-      const target = keys[key] ?? keys[0]!;
-      const sample = record.note(target, "content", at, values[value], () => "$0");
-
-      if (sample !== undefined) record.settle(target, sample, undefined, seenAlways || seen);
-    }
+    for (const record of [capped, whole])
+      noted(record, keys[key]!, at, values[value] ?? null, seenAlways || seen, rendered);
   }
 
   return { capped, whole, end: at };
+};
+
+/** A note as the recorder makes it: what it shows known at once, or judged as the page renders. */
+const noted = (
+  record: ReturnType<typeof history>,
+  key: object,
+  at: number,
+  shown: string | null,
+  seen: boolean,
+  rendered = false,
+) => {
+  const sample = record.note(key, "content", at, rendered ? undefined : shown, () => "$0");
+
+  if (sample !== undefined && rendered) record.settle(key, sample, shown, seen);
+  else if (sample !== undefined) sample.seen = seen;
 };
 
 /** A window inside the notes' span, by two fractions of it. */
@@ -68,12 +81,21 @@ const byKey = (folded: ReadonlyArray<Folded>) =>
 
 const total = (folded: ReadonlyArray<Folded>) => folded.reduce((sum, one) => sum + one.count, 0);
 
+// Elements fewer than the keys, so they give way; or changes per element fewer, so they do.
+const bounded = Arbitrary.schema(Schema.Literals([0, 1])).pipe(
+  Arbitrary.map((which) =>
+    which === 0
+      ? { tracks: 3, samples: 4, retention: Infinity }
+      : { tracks: 6, samples: 2, retention: Infinity },
+  ),
+);
+
 describe("the change record's history", () => {
   it.prop(
     "is whole after `from`: a window there reads as if nothing had been let go",
-    { given: notes, start: fraction, finish: fraction },
-    ({ given, start, finish }) => {
-      const { capped, whole, end } = recorded(given, { tracks: 3, samples: 4, retention: Infinity });
+    { given: notes, bounds: bounded, start: fraction, finish: fraction },
+    ({ given, bounds, start, finish }) => {
+      const { capped, whole, end } = recorded(given, bounds);
       const { since, until } = window(end, start, finish);
       const read = capped.read(since, until, end);
       const after = Math.max(since, read.from);
@@ -85,10 +107,23 @@ describe("the change record's history", () => {
   );
 
   it.prop(
+    "never states what an element showed at `since` that it does not know",
+    { given: notes, bounds: bounded, start: fraction, finish: fraction },
+    ({ given, bounds, start, finish }) => {
+      const { capped, whole, end } = recorded(given, bounds);
+      const { since, until } = window(end, start, finish);
+      const truth = byKey(whole.read(since, until, end).folded);
+
+      for (const { track, before } of capped.read(since, until, end).folded)
+        if (before !== undefined) assert.strictEqual(before, truth.get(track.key)?.before);
+    },
+  );
+
+  it.prop(
     "counts every change it let go, and moves `from` past it",
-    { given: notes, start: fraction, finish: fraction },
-    ({ given, start, finish }) => {
-      const { capped, whole, end } = recorded(given, { tracks: 3, samples: 4, retention: Infinity }, true);
+    { given: notes, bounds: bounded, start: fraction, finish: fraction },
+    ({ given, bounds, start, finish }) => {
+      const { capped, whole, end } = recorded(given, bounds, true);
       const { since, until } = window(end, start, finish);
       const read = capped.read(since, until, end);
       const missing = total(whole.read(since, until, end).folded) - total(read.folded);
@@ -106,24 +141,22 @@ describe("the change record's history", () => {
       const record = history(fold(), { tracks: 3, samples: 4, retention: Infinity });
       const cut = Math.floor((given.length * at) / 100);
       let time = 1000;
-      let noted: number | undefined;
+      let placedAt: number | undefined;
 
       record.begin(time);
-      for (const [index, { key, value, step, seen }] of given.entries()) {
+      for (const [index, { key, value, step, seen, rendered }] of given.entries()) {
         time += step + 1;
         if (index === cut) {
           const sample = record.note(news, "content", time, "Order placed", () => null);
 
-          if (sample !== undefined) record.settle(news, sample, undefined, true);
-          noted = sample === undefined ? undefined : time;
+          if (sample !== undefined) sample.seen = true;
+          placedAt = sample === undefined ? undefined : time;
         }
-        const sample = record.note(keys[key] ?? news, "content", time, values[value], () => "$0");
-
-        if (sample !== undefined) record.settle(keys[key] ?? news, sample, undefined, seen);
+        noted(record, keys[key]!, time, values[value] ?? null, seen, rendered);
       }
       const told = record.read(0, time + 1, time + 1).folded.some((one) => one.track.key === news);
 
-      assert.strictEqual(told, noted !== undefined);
+      assert.strictEqual(told, placedAt !== undefined);
     },
   );
 
@@ -136,11 +169,9 @@ describe("the change record's history", () => {
       const shown: Array<string | null> = ["$0"];
       let time = 1000;
 
-      for (const { value } of given) {
+      for (const { value, rendered } of given) {
         time += 1;
-        const sample = record.note(key, "content", time, values[value], () => "$0");
-
-        if (sample !== undefined) record.settle(key, sample, undefined, true);
+        noted(record, key, time, values[value] ?? null, true, rendered);
         if (values[value] !== shown.at(-1)) shown.push(values[value] ?? null);
       }
       const [one] = record.read(0, time, time).folded;
