@@ -546,8 +546,12 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ["text", "$61,250", "$61,260"],
         ["appeared", undefined, "gg wp"],
       ]);
-      assert.isTrue(
-        [...busy.changes, ...still.changes].every((change) => change.cause === undefined),
+      // None names the click: the line on a busy page, the slow tick, nor the feed's next line.
+      assert.deepStrictEqual(
+        [busy, still].flatMap(({ changes }) =>
+          changes.flatMap((change) => (change.cause === undefined ? [] : [change.after])),
+        ),
+        [],
       );
     }),
   );
