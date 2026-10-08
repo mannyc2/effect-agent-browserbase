@@ -4,7 +4,7 @@ import { Arbitrary, Duration, Effect, Layer, Schema, Stream } from "effect";
 import { type Prompt } from "effect/ai";
 
 import { Browser } from "../src/Browser.ts";
-import { Subject } from "../src/BrowserEvent.ts";
+import { Action, Subject } from "../src/BrowserEvent.ts";
 import { Change, Changes } from "../src/Change.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { fold, type Folded } from "../src/internal/timeline/fold.inpage.ts";
@@ -199,6 +199,55 @@ const textOf = (prompt: Prompt.Prompt) =>
   )[0] ?? "";
 
 describe("a moment's account", () => {
+  it("names as a cause only an action that ran as the input arrived", () => {
+    const button = new Subject({ role: "button", name: "Place order", tag: "button", context: {} });
+
+    const told = (startedAt: number) =>
+      textOf(
+        Moment.toPrompt(
+          new Moment.Moment({
+            page: "p1",
+            from: 5000,
+            at: 10_000,
+            frames: [],
+            events: [
+              new Action({
+                at: startedAt + 100,
+                startedAt,
+                page: "p1",
+                name: "click",
+                subject: button,
+                ok: true,
+                dispatched: true,
+              }),
+            ],
+            changes: new Changes({
+              document: 0,
+              from: 0,
+              until: 10_000,
+              cursor: 0,
+              dropped: 0,
+              changes: [
+                new Change({
+                  kind: "appeared",
+                  subject: new Subject({ role: null, name: "", tag: "p", context: {} }),
+                  startedAt: 8600,
+                  at: 8600,
+                  after: "Order placed",
+                  count: 1,
+                  cause: 8000,
+                }),
+              ],
+            }),
+          }),
+        ),
+      );
+
+    assert.include(told(7950), 'click button "Place order"');
+    // A click that had ended before the input came did not send it.
+    assert.notInclude(told(6000), 'click button "Place order"');
+  });
+
   it.prop(
     "tells news before what keeps changing",
     {

@@ -288,12 +288,15 @@ const maxLines = 24;
 const changed = (moment: Moment, record: Changes): ReadonlyArray<Line> => {
   const actions = moment.events.filter((event): event is Action => event._tag === "Action");
 
-  // The action whose input a change followed: the latest to start before the input arrived.
+  // The action whose input a change followed: one that ran while the input arrived, give or take
+  // the clock's mapping, so input the library did not send names no action.
   const cause = (change: Change) => {
     const input = change.cause;
 
     const action =
-      input === undefined ? undefined : actions.findLast((event) => event.startedAt <= input + 100);
+      input === undefined
+        ? undefined
+        : actions.findLast((event) => event.startedAt <= input + 100 && event.at >= input - 100);
 
     return action === undefined ? "" : `, after ${step(action)}`;
   };
