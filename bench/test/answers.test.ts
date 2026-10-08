@@ -31,8 +31,10 @@ const says = (answer: unknown) =>
 const browser = Chromium.layer({ frameHistory });
 
 // A sharp move and its control have one right answer each, on every seed: the answer is the
-// task's class. grading.test.ts holds a constant answer to passing at most one of the two.
-const classes: ReadonlySet<string> = new Set(["chart-spike", "chart-calm"]);
+// task's class. grading.test.ts holds a constant answer to passing at most one of the two. A still
+// board has one right answer too, "nothing changed", which board.test.ts holds to failing the
+// board's other tasks.
+const classes: ReadonlySet<string> = new Set(["chart-spike", "chart-calm", "board-steady"]);
 
 const understand = tasks.filter((task) => task.kind === "understand");
 

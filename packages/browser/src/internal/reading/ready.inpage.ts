@@ -5,21 +5,32 @@
  * shows something: text, a canvas drawn on, a picture or drawing larger than an icon, a video or a
  * frame. So a canvas mounted blank, or a spinner alone, is still loading. A screen that only says
  * "Loading…" in words reads as ready, and a WebGL canvas drawn once, without keeping its drawing,
- * reads as blank. See `names.inpage.ts` for what a page-side part may use.
+ * reads as blank. Asked for a quiet spell, where the page's changes are recorded, nothing in view
+ * may have changed for that long either. See `names.inpage.ts` for what a page-side part may use.
  */
 import { Schema } from "effect";
 
+import type { History } from "../timeline/history.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
 import type { Walk } from "./walk.inpage.ts";
 
 /** What the page is still waiting for; none when it is ready. */
 export const ReadinessSchema = Schema.Array(
-  Schema.Literals(["load", "paint", "animations", "images", "fonts", "busy", "content"]),
+  Schema.Literals([
+    "load",
+    "paint",
+    "animations",
+    "images",
+    "fonts",
+    "busy",
+    "content",
+    "changing",
+  ]),
 );
 
 export type Readiness = typeof ReadinessSchema.Type;
 
-export const ready = (walked: Walk, texts: Texts) => {
+export const ready = (walked: Walk, texts: Texts, kept: History) => {
   const { inView, visible } = walked;
   // A canvas is read through a small copy: reading it directly would give it a context of ours.
   let copy: OffscreenCanvasRenderingContext2D | null | undefined;
@@ -74,7 +85,7 @@ export const ready = (walked: Walk, texts: Texts) => {
   };
 
   // In a frame, before it is drawn: a canvas drawn every frame still holds its drawing then.
-  const check = (): Promise<Readiness> =>
+  const check = (quietMillis: number): Promise<Readiness> =>
     painted().then((paints) => {
       const waiting: Array<Readiness[number]> = [];
 
@@ -101,16 +112,21 @@ export const ready = (walked: Walk, texts: Texts) => {
       if (document.fonts.status !== "loaded") waiting.push("fonts");
       if (showing(document.querySelectorAll("[aria-busy=true]")).length > 0) waiting.push("busy");
       if (!content()) waiting.push("content");
+      if (kept.changing() > performance.timeOrigin + performance.now() - quietMillis)
+        waiting.push("changing");
 
       return waiting;
     });
 
-  /** Check until the page is ready, or for `millis`, and say what it is still waiting for. */
-  const wait = async (millis: number): Promise<Readiness> => {
+  /**
+   * Check until the page is ready, or for `millis`, and say what it is still waiting for; with
+   * `quietMillis`, until nothing the record saw in view has changed for that long, too.
+   */
+  const wait = async (millis: number, quietMillis = 0): Promise<Readiness> => {
     const until = performance.now() + millis;
 
     for (;;) {
-      const waiting = await check();
+      const waiting = await check(quietMillis);
 
       if (waiting.length === 0 || performance.now() >= until) return waiting;
       const { promise, resolve } = Promise.withResolvers<void>();
