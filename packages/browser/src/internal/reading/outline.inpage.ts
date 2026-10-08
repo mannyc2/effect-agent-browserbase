@@ -5,6 +5,7 @@
 import { Schema } from "effect";
 
 import type { Snapshot } from "../../Snapshot.ts";
+import type { addresses } from "../page/url.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
@@ -23,11 +24,14 @@ export interface SnapshotResult {
   readonly nextRef: number;
 }
 
-export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: Texts) => {
+/** The rule every address the library reports goes by, which a link's address goes by too. */
+type Url = ReturnType<typeof addresses>;
+
+export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: Texts, url: Url) => {
   const { clean, containers, isFrame, isInput, isSelect, isTextArea, nameOf, refFor, refs } = names;
   const { roleOf, textOf } = names;
   const { visit } = walked;
-  const { isControl, stateOf } = subjected;
+  const { isControl, stateOf } = subjects;
   const { cut, shown } = texts;
 
   const textBlocks =
@@ -79,12 +83,12 @@ export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: 
 
     if (raw === "" || raw.startsWith("javascript:")) return "";
     try {
-      const url = new URL(raw, element.ownerDocument.baseURI);
+      const { origin, href } = new URL(raw, element.ownerDocument.baseURI);
+      // Reported as every address is, before it is shortened, so no part of a credential shows.
+      const reported = url.redact(href);
+      const own = origin === location.origin && reported.startsWith(origin);
 
-      const short =
-        url.origin === location.origin ? url.pathname + url.search + url.hash : url.href;
-
-      return ` -> ${clean(short, 80)}`;
+      return ` -> ${clean(own ? reported.slice(origin.length) : reported, 80)}`;
     } catch {
       return "";
     }

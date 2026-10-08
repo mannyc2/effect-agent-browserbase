@@ -21,7 +21,7 @@ import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Chromium from "../src/Chromium.ts";
 import * as Url from "../src/internal/page/url.ts";
-import type { Page } from "../src/Page.ts";
+import { type Page, redacted } from "../src/Page.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import { behindProxy } from "./protocol.ts";
 
@@ -250,7 +250,7 @@ describe("a page's documents", () => {
         ),
         [
           [1, false, site.url("/form")],
-          [1, true, site.url("/form?ticker=ETH#top")],
+          [1, true, site.url(`/form?ticker=ETH&access_token=${redacted}#top`)],
           [2, false, site.url("/next")],
         ],
       );
@@ -314,9 +314,12 @@ describe("init scripts", () => {
   );
 });
 
-// Names that carry credentials, as sign-ins, signed links and APIs write them, and names that do
-// not, among them some that only contain one of those words.
-const secretNames = Schema.Literals([
+// The two sides of the address rule. Credentials go, however they are written: tokens, keys,
+// signatures, passwords, session ids, assertions and one-time codes, and codes and keys of a kind
+// that signs someone in. What an address is about stays, among it names that hold a credential's
+// word or end as one does, and the names that as often say what a page shows, such as a stock
+// code, unless their value looks generated.
+const credentialNames = Schema.Literals([
   "token",
   "access_token",
   "id_token",
@@ -327,25 +330,42 @@ const secretNames = Schema.Literals([
   "X-Goog-Signature",
   "sig",
   "signature",
-  "key",
   "api_key",
   "apiKey",
-  "code",
   "client_secret",
   "password",
+  "passcode",
   "pwd",
   "PHPSESSID",
   "session_id",
   "jwt",
   "auth",
-  "ticket",
+  "bearer",
   "code_verifier",
   "client_assertion",
   "SAMLResponse",
+  "SAMLart",
   "otp",
+  "totp",
 ]);
 
-const plainNames = Schema.Literals([
+const signsIn = Schema.Literals([
+  "verification",
+  "otp",
+  "mfa",
+  "reset",
+  "confirmation",
+  "activation",
+  "sms",
+  "auth",
+  "access",
+  "signing",
+  "license",
+  "client",
+  "encryption",
+]);
+
+const identityNames = Schema.Literals([
   "ticker",
   "q",
   "page",
@@ -357,38 +377,83 @@ const plainNames = Schema.Literals([
   "keyword",
   "zipcode",
   "promo_code",
+  "country-code",
+  "productCode",
+  "sort_key",
+  "publicKey",
   "state",
   "view",
   "author",
+  "sessions",
+  "ticket_id",
 ]);
 
-const parameter = Arbitrary.all({
-  secret: Arbitrary.schema(Schema.Boolean),
-  hidden: Arbitrary.schema(secretNames),
-  plain: Arbitrary.schema(plainNames),
-  // An address holds text, never a lone surrogate.
-  value: Arbitrary.schema(Schema.String).pipe(Arbitrary.filter((value) => !/\p{Cs}/u.test(value))),
-}).pipe(
-  Arbitrary.map(({ secret, hidden, plain, value }) => ({
-    secret,
-    name: secret ? hidden : plain,
-    value,
-  })),
+const ambiguousNames = Schema.Literals(["code", "key", "session", "sid", "ticket", "Code", "KEY"]);
+
+// What those names hold when they say what a page shows.
+const shown = Schema.Literals(["BTC", "AAPL", "600519", "SAVE10", "INC0012345", "ai-keynote"]);
+
+// A token, session id or authorization code, as a server generates one.
+const generated = Arbitrary.array(
+  Arbitrary.schema(
+    Schema.Literals([..."abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ0123456789-_"]),
+  ),
+  { minLength: 14, maxLength: 40 },
+).pipe(Arbitrary.map((characters) => `a1${characters.join("")}`));
+
+// An address holds text, never a lone surrogate.
+const text = Arbitrary.schema(Schema.String).pipe(
+  Arbitrary.filter((value) => value !== "" && !/\p{Cs}/u.test(value)),
 );
 
 type Parameter = { readonly secret: boolean; readonly name: string; readonly value: string };
+
+const parameter = Arbitrary.all({
+  side: Arbitrary.schema(
+    Schema.Literals(["credential", "signs in", "identity", "generated", "shown"]),
+  ),
+  credential: Arbitrary.schema(credentialNames),
+  kind: Arbitrary.schema(signsIn),
+  head: Arbitrary.schema(Schema.Literals(["code", "key", "Code", "Key"])),
+  separator: Arbitrary.schema(Schema.Literals(["_", "-", ""])),
+  identity: Arbitrary.schema(identityNames),
+  ambiguous: Arbitrary.schema(ambiguousNames),
+  generated,
+  shown: Arbitrary.schema(shown),
+  value: text,
+}).pipe(
+  Arbitrary.map((drawn): Parameter => {
+    switch (drawn.side) {
+      case "credential":
+        return { secret: true, name: drawn.credential, value: drawn.value };
+      case "signs in":
+        return {
+          secret: true,
+          name: `${drawn.kind}${drawn.separator}${drawn.head}`,
+          value: drawn.value,
+        };
+      case "identity":
+        return { secret: false, name: drawn.identity, value: drawn.value };
+      case "generated":
+        return { secret: true, name: drawn.ambiguous, value: drawn.generated };
+      case "shown":
+        return { secret: false, name: drawn.ambiguous, value: drawn.shown };
+    }
+  }),
+);
 
 const written = (parameters: ReadonlyArray<Parameter>) =>
   parameters
     .map(({ name, value }) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`)
     .join("&");
 
-const kept = (parameters: ReadonlyArray<Parameter>) =>
-  parameters.filter((each) => !each.secret).map(({ name, value }) => [name, value]);
+// Each parameter as the report reads it: its name, and its value or the withheld mark.
+const reported = (parameters: ReadonlyArray<Parameter>) =>
+  parameters.map(({ secret, name, value }) => [name, secret ? redacted : value]);
 
 describe("an address", () => {
   it.prop(
-    "keeps its origin, path and plain parameters in order, and loses its secrets",
+    "keeps its origin, path and what it is about, in order, and withholds each credential",
     {
       scheme: Arbitrary.schema(Schema.Literals(["http", "https"])),
       userinfo: Arbitrary.schema(Schema.Literals(["", "ada@", "ada:pass@"])),
@@ -398,33 +463,44 @@ describe("an address", () => {
       path: Arbitrary.array(Arbitrary.schema(Schema.Literals(["chart", "markets", "x y", "ü"])), {
         maxLength: 3,
       }),
+      // A Java session id, written into the path.
+      session: Arbitrary.schema(Schema.Union([Schema.Undefined, Schema.Literal("jsessionid")])),
+      sessionId: generated,
       query: Arbitrary.array(parameter, { maxLength: 6 }),
       route: Arbitrary.schema(Schema.Literals(["", "/inbox?"])),
       fragment: Arbitrary.array(parameter, { maxLength: 4 }),
     },
-    ({ scheme, userinfo, host, path, query, route, fragment }) => {
+    ({ scheme, userinfo, host, path, session, sessionId, query, route, fragment }) => {
+      const segments = path.map(encodeURIComponent).join("/");
+      const matrix = session === undefined ? "" : `;${session}=${sessionId}`;
+
       const address =
-        `${scheme}://${userinfo}${host}/${path.map(encodeURIComponent).join("/")}` +
+        `${scheme}://${userinfo}${host}/${segments}${matrix}` +
         (query.length === 0 ? "" : `?${written(query)}`) +
         (fragment.length === 0 ? "" : `#${route}${written(fragment)}`);
 
       const original = new URL(address);
-      const reported = Url.redact(address);
-      const redacted = new URL(reported);
+      const report = Url.redact(address);
+      const read = new URL(report);
 
-      assert.deepStrictEqual([redacted.username, redacted.password], ["", ""]);
+      assert.deepStrictEqual([read.username, read.password], ["", ""]);
       assert.deepStrictEqual(
-        [redacted.origin, redacted.pathname],
-        [original.origin, original.pathname],
+        [read.origin, decodeURI(read.pathname)],
+        [original.origin, decodeURI(`/${segments}${matrix.replace(sessionId, redacted)}`)],
       );
-      assert.deepStrictEqual([...redacted.searchParams], kept(query));
-      const tail = redacted.hash.slice(1 + route.length);
-
+      assert.deepStrictEqual([...read.searchParams], reported(query));
       if (fragment.length > 0)
-        assert.deepStrictEqual([...new URLSearchParams(tail)], kept(fragment));
-      assert.strictEqual(Url.redact(reported), reported);
-      if (userinfo === "" && [...query, ...fragment].every((each) => !each.secret))
-        assert.strictEqual(reported, original.href);
+        assert.deepStrictEqual(
+          [...new URLSearchParams(read.hash.slice(1 + route.length))],
+          reported(fragment),
+        );
+      assert.strictEqual(Url.redact(report), report);
+      if (
+        userinfo === "" &&
+        session === undefined &&
+        [...query, ...fragment].every((each) => !each.secret)
+      )
+        assert.strictEqual(report, original.href);
     },
   );
 
@@ -432,4 +508,25 @@ describe("an address", () => {
     for (const address of ["about:blank", "data:text/html,<a href='?token=1'>x</a>"])
       assert.strictEqual(Url.redact(address), address);
   });
+
+  // The page's own outline gives each link's address, a model reads it, and the page shortens a
+  // link on its own site to its path: the rule applies first.
+  it.live("of a link in the outline is reported by the same rule", () =>
+    Effect.gen(function* () {
+      const site = yield* Site;
+      const browser = yield* Chromium.open();
+      const page = yield* browser.newPage(site.url("/links"));
+      const links = (yield* page.snapshot()).text.split("\n").filter((line) => line.includes("->"));
+
+      assert.deepStrictEqual(
+        links.map((line) => line.slice(line.indexOf("-> ") + 3)),
+        [
+          `/download?verification_code=${redacted}&format=pdf`,
+          `https://partner.example/?token=${redacted}&ticker=ETH`,
+          "/chart?code=BTC",
+          `/cart;jsessionid=${redacted}`,
+        ],
+      );
+    }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+  );
 });

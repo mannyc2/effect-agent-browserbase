@@ -76,10 +76,11 @@ const install = (
   makeEvidence: typeof evidence,
   makeGuard: typeof guard,
   makeEdit: typeof edit,
+  makeAddresses: typeof Url.addresses,
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 12) return installed;
+  if (installed !== undefined && installed.version === 13) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
@@ -89,14 +90,14 @@ const install = (
   const seeing = makeSight(named, walked, texts, kept);
   const marking = makeMarks(named, kept, seeing);
   const recorder = makeRecord(named, texts, kept, seeing, marking);
-  const read = makeOutline(named, walked, subjected, texts);
+  const read = makeOutline(named, walked, subjected, texts, makeAddresses());
   const located = makeTargets(named, walked, placing);
   const guarded = makeGuard(named, located, makeEvidence(named, placing));
   const edited = makeEdit(named, guarded, placing);
   const readiness = makeReady(walked, texts, kept);
 
   const api: PageApi = {
-    version: 12,
+    version: 13,
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
@@ -120,7 +121,7 @@ const install = (
 };
 
 /** The expression that installs the script and evaluates to its API. */
-export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit].join(", ")})`;
+export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit, Url.addresses].join(", ")})`;
 
 const worldName = "effect-browser";
 

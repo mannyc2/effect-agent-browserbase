@@ -76,7 +76,8 @@ describe("hosted trials", () => {
 
       assert.strictEqual(create?.method, "POST");
       assert.isTrue(create?.url.endsWith("/v1/sessions"), create?.url);
-      assert.deepStrictEqual(create?.body, {
+      // Beside the create's own nonce, which finds its session should its answer be lost.
+      assert.deepInclude(create?.body, {
         timeout: hostedSessionSeconds,
         browserSettings: { viewport: { width: 1280, height: 720 } },
       });
