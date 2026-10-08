@@ -10,7 +10,7 @@ import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Image as BrowserImage } from "../src/Frame.ts";
-import type { Page } from "../src/Page.ts";
+import { type Page, redacted } from "../src/Page.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 
@@ -221,6 +221,45 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         "wasd",
       );
     }),
+  );
+
+  it.effect(
+    "types a secret only into a secret field, and records the field typed into by focus",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* open("/form");
+
+        const value = (selector: string) =>
+          Effect.promise(() => page.playwright.inputValue(selector));
+
+        const focus = (selector: string) =>
+          Effect.promise(() => page.playwright.locator(selector).focus());
+
+        yield* Effect.promise(() =>
+          page.playwright.setContent(
+            '<label>Company <input id="company"></label><label>Password <input id="password" type="password"></label>',
+          ),
+        );
+        yield* focus("#company");
+        assert.deepStrictEqual(yield* reason(page.type("hunter2", { secret: true })), {
+          tag: "NotActionable",
+          dispatched: false,
+        });
+        yield* focus("#password");
+        yield* page.type("hunter2", { secret: true });
+
+        const typed = (yield* page.recentEvents).flatMap((event) =>
+          event._tag === "Action" && event.name === "type" && event.ok
+            ? [[event.subject?.name, event.text]]
+            : [],
+        );
+
+        assert.deepStrictEqual(typed, [["Password", redacted]]);
+        assert.deepStrictEqual(
+          [yield* value("#company"), yield* value("#password")],
+          ["", "hunter2"],
+        );
+      }),
   );
 
   it.effect("stops repeated keys at a navigation instead of pressing on the next page", () =>

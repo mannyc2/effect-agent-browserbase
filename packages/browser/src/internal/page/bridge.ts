@@ -62,7 +62,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 8) return installed;
+  if (installed !== undefined && installed.version === 9) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named);
@@ -71,10 +71,10 @@ const install = (
   const read = makeOutline(named, walked, subjected, texts);
   const located = makeTargets(named, walked, placing);
   const guarded = makeGuard(named, located, makeEvidence(named, placing));
-  const edited = makeEdit(named, guarded);
+  const edited = makeEdit(named, guarded, placing);
 
   const api: PageApi = {
-    version: 8,
+    version: 9,
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,

@@ -1,8 +1,9 @@
 /**
  * In the page: an element's context, the words around it that say which one it is:
  *
- * - in a table, its row, named by the row's header or first cell with text, and its column, named
- *   by the header over it, so a value is never read under the wrong header;
+ * - in a table, its row, named by the row's header or else its first cell with letters, so a rank
+ *   or a price never names it, and its column, named by the header over it, so a value is never
+ *   read under the wrong header;
  * - elsewhere, the words just before it in its row, item, group or block;
  * - the heading above it, unless it is pinned to the viewport, where the markup says nothing.
  *
@@ -134,10 +135,12 @@ export const context = (names: Names) => {
     if (row === header) return {};
     const cells = Array.from(row.children);
     const index = cells.indexOf(cell);
+    // A rank, a checkbox, a star or a price says where a row is, not which one it is.
+    const lettered = (other: Element) => /\p{L}/u.test(textOf(other));
 
     const named =
-      cells.find((other) => other.matches("th,[role=rowheader]")) ??
-      cells.find((other) => other !== cell && clean(textOf(other)) !== "");
+      cells.find((other) => other.matches("th,[role=rowheader]") && lettered(other)) ??
+      cells.find((other) => other !== cell && lettered(other));
 
     // Columns count spanned cells, so a cell after one spanning two is under the third header.
     let left = cells.slice(0, index).reduce((sum, other) => sum + span(other), 0);

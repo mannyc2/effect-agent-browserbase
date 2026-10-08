@@ -76,6 +76,11 @@ export interface TypeOptions {
   readonly submit?: boolean | undefined;
   /** Allow corrected slips when replacing an explicit eligible prose ref while humanized. Sensitive fields stay exact. */
   readonly prose?: boolean | undefined;
+  /**
+   * The text is a secret: type it only into a field the page marks secret, such as a password,
+   * and otherwise refuse with `NotActionable` before any input. A replayed password asks this.
+   */
+  readonly secret?: boolean | undefined;
 }
 
 export interface PressOptions {
