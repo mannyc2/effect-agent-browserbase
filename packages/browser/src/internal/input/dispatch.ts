@@ -5,7 +5,6 @@
  */
 import { Effect, MutableRef, Option, Ref } from "effect";
 
-import { BrowserError } from "../../BrowserError.ts";
 import {
   KeyChanged,
   PointerPressed,
@@ -13,7 +12,7 @@ import {
   TextInserted,
   WheelScrolled,
 } from "../../BrowserEvent.ts";
-import { type PageContext, reasonOf } from "../page/context.ts";
+import { type PageContext, reasonOf, undispatched } from "../page/context.ts";
 import * as BrowserClock from "../pictures/clock.ts";
 import type * as Replies from "./replies.ts";
 
@@ -40,13 +39,8 @@ export const make = (page: PageContext) => {
 
   const inputCall = <A>(operation: string, effect: Effect.Effect<A, Replies.InputFailure>) =>
     effect.pipe(
-      Effect.mapError(
-        (error) =>
-          new BrowserError({
-            operation,
-            reason: reasonOf(error.cause, undefined, closedBy()),
-            dispatched: false,
-          }),
+      Effect.mapError((error) =>
+        undispatched(operation, reasonOf(error.cause, undefined, closedBy())),
       ),
     );
 

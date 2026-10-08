@@ -4,7 +4,6 @@
 // as the first capture starts.
 import { assert, it } from "@effect/vitest";
 import { Effect, Fiber, Option, Schedule, Stream } from "effect";
-import { consequence } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 
@@ -163,11 +162,11 @@ it.live(
           const error = yield* Fiber.join(reader).pipe(Effect.timeout("5 seconds"));
 
           assert.deepStrictEqual(
-            [error.operation, error.reason._tag, consequence(error)],
-            ["screencast", "Failed", { lost: "nothing", repeat: "safe" }],
+            [error.operation, error.reason._tag, error.dispatched],
+            ["screencast", "Failed", false],
           );
           // The page and its own session stand.
-          assert.include((yield* page.snapshot()).text, "");
+          yield* page.snapshot();
           yield* firstFrame(page);
           assert.strictEqual(proxy.connected, 3);
         }),
@@ -311,6 +310,48 @@ it.live("tags frames with the documents their own connection saw commit", () =>
         // The later documents' first frames came before the control connection heard them commit.
         assert.isAbove(early[1] ?? 0, 0);
         assert.isAbove(early[2] ?? 0, 0);
+      }),
+    );
+  }).pipe(Effect.scoped),
+);
+
+// The capture connection can attach after a new document has committed and before the page's own
+// session hears it, when it cannot number that document yet. Its frames take the number the page's
+// own session gives the document once it hears it, as `Navigated` does.
+it.live("numbers frames as the page's own session does, once it hears a commit late", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+
+    proxy.lag = (connection) => (connection === control ? 300 : 0);
+
+    yield* hosted(proxy, ({ browser }) =>
+      Effect.gen(function* () {
+        const page = yield* browser.newPage();
+        const from = proxy.commands.length;
+        const going = yield* Effect.forkChild(page.goto(animated));
+
+        // The browser commits soon after it is asked to navigate; the control connection hears it
+        // 300 ms later.
+        yield* Effect.sync(() =>
+          proxy.commands.slice(from).some((command) => command.method === "Page.navigate"),
+        ).pipe(
+          Effect.repeat({ schedule: Schedule.spaced("5 millis"), until: (sent) => sent }),
+          Effect.timeout("10 seconds"),
+        );
+        yield* Effect.sleep("100 millis");
+        const frames = yield* recorded(page);
+
+        yield* Fiber.join(going);
+        yield* Effect.sleep("300 millis");
+
+        const [latest] = (yield* page.recentEvents)
+          .flatMap((event) =>
+            event._tag === "Navigated" && !event.sameDocument ? [event.document] : [],
+          )
+          .slice(-1);
+
+        assert.isNotEmpty(frames);
+        assert.deepStrictEqual([...new Set(frames.map((frame) => frame.document))], [latest]);
       }),
     );
   }).pipe(Effect.scoped),

@@ -13,8 +13,8 @@ import { Effect, Layer } from "effect";
 import { chromium } from "playwright-core";
 
 import * as Browser from "./Browser.ts";
-import { BrowserError, Failed } from "./BrowserError.ts";
-import { reasonOf } from "./internal/page/context.ts";
+import { type BrowserError, Failed } from "./BrowserError.ts";
+import { reasonOf, undispatched } from "./internal/page/context.ts";
 
 export interface Options extends Browser.Options {
   /** Defaults to true. */
@@ -38,7 +38,7 @@ export interface Options extends Browser.Options {
 const launchTimeoutMillis = 180_000;
 
 const failed = (operation: string, timeoutMillis?: number) => (cause: unknown) =>
-  new BrowserError({ operation, reason: reasonOf(cause, timeoutMillis), dispatched: false });
+  undispatched(operation, reasonOf(cause, timeoutMillis));
 
 // Playwright puts this in place of Chromium's startup log when the sandbox could not start, in an
 // error that otherwise reads as a closed browser.
@@ -46,14 +46,13 @@ const sandboxFailed = /Chromium sandboxing failed|No usable sandbox/;
 
 const launchFailed = (cause: unknown) =>
   sandboxFailed.test(String(cause))
-    ? new BrowserError({
-        operation: "launch",
-        reason: new Failed({
+    ? undispatched(
+        "launch",
+        new Failed({
           detail:
             "Chromium's sandbox could not start on this host: it needs unprivileged user namespaces, and a user other than root",
         }),
-        dispatched: false,
-      })
+      )
     : failed("launch", launchTimeoutMillis)(cause);
 
 /** Launch Chromium and open a `Browser` over a fresh context. */

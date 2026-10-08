@@ -3,14 +3,12 @@
  * the library's first read of a page, its own protocol session registers the script, so every
  * later document runs it in an isolated world from its start; calls go to the current document's
  * world. The script is composed from the domains' page-side parts, the `*.inpage.ts` modules, in
- * the order they depend on one another: names, the walk, matching, context, subjects and text;
- * the change record (its history, sight, recorder and reads) and readiness, which asks it; then
- * the outline and the input parts. At the first read of a page's changes, its session registers
- * the recorder too, so every later document records from its start.
+ * the order they depend on one another. At the first read of a page's changes, its session
+ * registers the recorder too, so every later document records from its start.
  */
-import { Effect, Semaphore } from "effect";
+import { Effect, Schema, SynchronizedRef } from "effect";
 
-import { BrowserError, Failed } from "../../BrowserError.ts";
+import { type BrowserError, Failed } from "../../BrowserError.ts";
 import { Navigated } from "../../BrowserEvent.ts";
 import { edit, type Edit } from "../input/edit.inpage.ts";
 import { evidence } from "../input/evidence.inpage.ts";
@@ -30,7 +28,7 @@ import { history } from "../timeline/history.inpage.ts";
 import { marks } from "../timeline/marks.inpage.ts";
 import { record, type Recorder } from "../timeline/record.inpage.ts";
 import { sight } from "../timeline/sight.inpage.ts";
-import { contextGone, type PageContext } from "./context.ts";
+import { contextGone, failWith, type PageContext, undispatched } from "./context.ts";
 import * as Url from "./url.ts";
 
 /** What the script installs: a version, and a function of one of its parts for each call. */
@@ -135,6 +133,40 @@ const missing = "effect-browser: no __effectBrowser in this world";
 const isMissing = (error: BrowserError) =>
   error.reason._tag === "Failed" && error.reason.detail === missing;
 
+/** A frame as a page session reports its commit. */
+export const Commit = Schema.Struct({
+  parentId: Schema.optionalKey(Schema.String),
+  loaderId: Schema.String,
+  url: Schema.String,
+  urlFragment: Schema.optionalKey(Schema.String),
+});
+
+/** `Page.frameNavigated` or `Page.navigatedWithinDocument`, as far as `mainFrame` reads them. */
+export const MainFrameEvent = Schema.Union([
+  Schema.Struct({ frame: Commit }),
+  Schema.Struct({ frameId: Schema.String, url: Schema.String }),
+]);
+
+/** A commit's loader and its address, redacted. */
+export const commitOf = ({ loaderId, url, urlFragment = "" }: typeof Commit.Type) => ({
+  loader: loaderId,
+  url: Url.redact(url + urlFragment),
+});
+
+/**
+ * What a page session's commit or move says of `page`'s main frame: a new document's `loader` and
+ * its address, or a move's address; nothing for another frame. Only a commit is a new document:
+ * `frameStartedLoading` also fires on `pushState`, a move within the document.
+ */
+export const mainFrame = (page: string, event: typeof MainFrameEvent.Type) =>
+  "frame" in event
+    ? event.frame.parentId === undefined
+      ? commitOf(event.frame)
+      : undefined
+    : event.frameId === page
+      ? { loader: undefined, url: Url.redact(event.url) }
+      : undefined;
+
 /** A call to the page script, its arguments quoted as JavaScript literals. */
 export const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
@@ -142,9 +174,9 @@ export const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): strin
 export const make = Effect.fnUntraced(function* (page: PageContext) {
   const { id, cdp, native, span, publish, now } = page;
   const { send } = page.protocol;
-  const registering = yield* Semaphore.make(1);
-  // Whether this session has registered the script.
-  let registered = false;
+  // How far this session has registered: the script, then the recorder, which the first read of
+  // changes asks for. One caller takes each step, once, while the others wait.
+  const registration = yield* SynchronizedRef.make<"none" | "script" | "recorder">("none");
   // The current document's world, forgotten when the main frame commits another document; the
   // commits this session has seen, the latest marked on the page; and the page's address.
   let world: number | undefined;
@@ -154,28 +186,28 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   // sees the same commits, and numbers its frames by them.
   const loaders = new Map<string, number>();
 
-  const navigated = (next: string, sameDocument: boolean) => {
-    url = Url.redact(next);
+  const onMainFrame = (event: typeof MainFrameEvent.Type) => {
+    const seen = mainFrame(id, event);
+
+    if (seen === undefined) return;
+    if (seen.loader !== undefined) {
+      documents++;
+      loaders.delete(seen.loader);
+      loaders.set(seen.loader, documents);
+      const [oldest] = loaders.keys();
+
+      if (loaders.size > 8 && oldest !== undefined) loaders.delete(oldest);
+      page.activity.documentAt = now();
+      world = undefined;
+    }
+    url = seen.url;
+    const sameDocument = seen.loader === undefined;
+
     publish(new Navigated({ at: now(), page: id, url, document: documents, sameDocument }));
   };
 
-  // Only a commit is a new document: `frameStartedLoading` also fires on `pushState`, which the
-  // main frame reports as a navigation within its document.
-  cdp.on("Page.frameNavigated", ({ frame }) => {
-    if (frame.parentId !== undefined) return;
-    documents++;
-    loaders.delete(frame.loaderId);
-    loaders.set(frame.loaderId, documents);
-    const [oldest] = loaders.keys();
-
-    if (loaders.size > 8 && oldest !== undefined) loaders.delete(oldest);
-    page.activity.documentAt = now();
-    world = undefined;
-    navigated(frame.url + (frame.urlFragment ?? ""), false);
-  });
-  cdp.on("Page.navigatedWithinDocument", (moved) => {
-    if (moved.frameId === id) navigated(moved.url, true);
-  });
+  cdp.on("Page.frameNavigated", onMainFrame);
+  cdp.on("Page.navigatedWithinDocument", onMainFrame);
 
   /**
    * The main-frame commits seen so far, once the Page domain, which registration turned on, has
@@ -207,35 +239,28 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
         addScript(operation, `if (globalThis === globalThis.top) ${installSource};`),
       ],
       { concurrency: "unbounded" },
-    ).pipe(
-      Effect.map(() => {
-        registered = true;
-      }),
-      span("Page.register", {}, "Debug"),
+    ).pipe(span("Page.register", {}, "Debug"));
+
+  /** Take registration from `from` to `to` by `step`, unless it is past `from` already. */
+  const advance = (
+    from: "none" | "script",
+    to: "script" | "recorder",
+    step: Effect.Effect<unknown, BrowserError>,
+  ) =>
+    SynchronizedRef.updateEffect(registration, (state) =>
+      state === from ? Effect.as(step, to) : Effect.succeed(state),
     );
 
-  // Whether this session has registered the recorder, which the first read of changes asks for.
-  let recording = false;
-
-  /** Register the recorder after the script, once, so every later document records from its start. */
-  const registerRecorder = (operation: string) =>
-    registering.withPermits(1)(
-      Effect.suspend(() =>
-        recording
-          ? Effect.void
-          : Effect.andThen(registered ? Effect.void : register(operation), () =>
-              Effect.map(addScript(operation, recorderSource), () => {
-                recording = true;
-              }),
-            ),
-      ),
+  /** Register the script once, and the recorder after it once a read of changes asks for it. */
+  const ensure = (operation: string, recorder: boolean) =>
+    Effect.andThen(
+      advance("none", "script", register(operation)),
+      recorder ? advance("script", "recorder", addScript(operation, recorderSource)) : Effect.void,
     );
 
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
-      yield* registering.withPermits(1)(
-        Effect.suspend(() => (registered ? Effect.void : register(operation))),
-      );
+      yield* ensure(operation, false);
       const document = documents;
 
       // The main frame's id is the page's target id.
@@ -263,18 +288,12 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     native(operation, () =>
       send("Runtime.evaluate", { contextId, expression, returnByValue: true, awaitPromise: true }),
     ).pipe(
-      Effect.flatMap((result) =>
-        result.exceptionDetails === undefined
-          ? Effect.succeed<unknown>(result.result.value)
-          : Effect.fail(
-              new BrowserError({
-                operation,
-                reason: new Failed({
-                  detail:
-                    result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
-                }),
-                dispatched: false,
-              }),
+      Effect.flatMap(({ result, exceptionDetails: thrown }) =>
+        thrown === undefined
+          ? Effect.succeed<unknown>(result.value)
+          : failWith(
+              operation,
+              new Failed({ detail: thrown.exception?.description ?? thrown.text }),
             ),
       ),
     );
@@ -287,12 +306,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     ).pipe(
       Effect.filterOrFail(
         (value) => value !== missing,
-        () =>
-          new BrowserError({
-            operation,
-            reason: new Failed({ detail: missing }),
-            dispatched: false,
-          }),
+        () => undispatched(operation, new Failed({ detail: missing })),
       ),
       // One round trip to the page. Its arguments can hold typed text, so only the call is named.
       span("Page.evaluate", { function: call.split("(")[0] }, "Trace"),
@@ -334,7 +348,8 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     currentDocument,
     frameTag,
     documentOf,
-    registerRecorder,
+    /** Register the recorder, so every later document records from its start. */
+    registerRecorder: (operation: string) => ensure(operation, true),
   };
 });
 

@@ -7,6 +7,62 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ### Added
 
+- Per-page admission. Each page admits its operations in one lane of its own: an action, which
+  sends input or navigates, has the page to itself, in the order actions were asked, and reads
+  share it, after the action in flight and every action asked before them, so a read describes the
+  page an action left. A wait for a turn ends at the operation's deadline as the new reason `Busy`,
+  with `waitedMillis` and how many operations were `ahead`; `consequence` says to repeat it.
+  `Page.failFast` runs operations that fail `Busy` at once instead of waiting.
+- Reads keep their work. An identical read asked while one is in flight on the page, with no action
+  between them, joins it, so they cost one call between them. A read runs in the page's scope under
+  the action timeout whoever gives up, and one that ends after all its callers gave up serves the
+  next caller to ask the same within an action timeout, until the page's next action or document.
+  An action stops the reads nobody awaits rather than wait for them.
+- `Observation.missing`: `observe` gives what it could read, with why each part it could not read
+  is missing, and fails only when it could read nothing asked for. `Agent.run` tells the model
+  what an observation is missing.
+- `Browser.Options.maxPages`, with the new reason `Limit`: at that many open pages, those a site
+  opened included, `newPage` waits within the action timeout for one to close, then fails `Limit`,
+  or fails at once under `Page.failFast`.
+
+### Changed
+
+- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
+  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
+  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
+- A page waits only for itself: the browser-wide input lock is gone. A click on one page no longer
+  waits for humanized typing on another, which held an on-air click for about 9.5 s in the release
+  review, and failed it undispatched at 10 s with 100 characters.
+- Guarded typing approves a field once. Plain text goes into the approved field in one insertion,
+  so a guarded 2,000-character paste takes 15 ms locally and half a second at a 70 ms round trip,
+  where each key used to wait for the keys before it and a focus check: 6.3 s locally and
+  4.8 minutes at 70 ms. Humanized typing checks that the field still has focus before each space,
+  which could press a button, and after its last key, rather than before every key.
+- `title` and `viewport` read in the page's turn, within the action timeout; `title` used to wait
+  for a busy page without bound.
+
+### Breaking
+
+- A wait behind other operations on the page fails `Busy`, not `Timeout`, and `Reason` has `Busy`
+  and `Limit` beside the rest, so a caller that handles reasons by tag has two more to handle.
+- Reads wait for the action in flight on their page: a snapshot, `find`, `text`, `changes`, a
+  picture or a zoom no longer runs while an action is changing the page, and an action waits for
+  the reads before it.
+- `Observation` carries `missing`, and `observe` succeeds with what it could read.
+- Under a guard, plain typing sends no key events: the text arrives in one insertion once its field
+  is approved, so a page listening for key events sees none.
+- Each page has its own pointer, where its own last move left it; a glide on a page starts there,
+  or mid-viewport, not where input on another tab left the pointer.
+
+## 0.3.0-beta.2 (unreleased)
+
+Identity and lifetime: pages named by their target ids, with a typed life story, the browser's
+loss and its cause, `consequence` and redacted addresses; `Supervisor`, with Browserbase releases
+that confirm the end and `reconcile`; the capture connection; and the change record, which moments
+lead with.
+
+### Added
+
 - `Supervisor`, a new module: a browser kept open across losses and session ends, as generations
   from a provider's `open`. `browser` waits, bounded by `waitTimeout`, for the current generation,
   and every caller shares one open, which runs in the supervisor's scope. A loss is published at
@@ -82,58 +138,27 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Moment.changes`, and `Moment.CaptureOptions.unmask`: a moment reads what changed up to its last
   frame's paint, from where the previous moment's changes ended; a page that cannot say, as while
   it navigates, still has its moment.
-- Per-page admission. Each page admits its operations in one lane of its own: an action, which
-  sends input or navigates, has the page to itself, in the order actions were asked, and reads
-  share it, after the action in flight and every action asked before them, so a read describes the
-  page an action left. A wait for a turn ends at the operation's deadline as the new reason `Busy`,
-  with `waitedMillis` and how many operations were `ahead`; `consequence` says to repeat it.
-  `Page.failFast` runs operations that fail `Busy` at once instead of waiting.
-- Reads keep their work. An identical read asked while one is in flight on the page, with no action
-  between them, joins it, so they cost one call between them. A read runs in the page's scope under
-  the action timeout whoever gives up, and one that ends after all its callers gave up serves the
-  next caller to ask the same within an action timeout, until the page's next action or document.
-  An action stops the reads nobody awaits rather than wait for them.
-- `Observation.missing`: `observe` gives what it could read, with why each part it could not read
-  is missing, and fails only when it could read nothing asked for. `Agent.run` tells the model
-  what an observation is missing.
-- `Browser.Options.maxPages`, with the new reason `Limit`: at that many open pages, those a site
-  opened included, `newPage` waits within the action timeout for one to close, then fails `Limit`,
-  or fails at once under `Page.failFast`.
 
 ### Changed
 
 - `Page.ready({ quietMillis })` also waits, where the page's changes are recorded, until nothing in
   view has changed for the spell, so frames a browser holds back cannot pass for a still page.
-
 - Every address the library reports, in events, frames, reads, errors and a guard's request, loses
   its userinfo and the query and fragment parameters named for credentials, such as tokens, keys,
   signatures and authorization codes, and keeps the rest, such as a chart's `?ticker=ETH`.
 - A crashed page is closed, so its calls fail at once, `Closed` as crashed, instead of at their
-  deadline; and a lost browser fails the calls in flight on its pages at once.
+  deadline; and a lost browser fails the calls in flight on its pages, and its screencasts'
+  readers, at once, `Closed` by its loss's cause.
 - A page's registration sends its target id, focus emulation and the Page domain in one round trip,
   and the first read and the first capture no longer send the target id or the Page domain. Opening
   over CDP costs 33 calls: these two, and focus emulation, which the old count of 30 missed as it
-  went out after `open` returned. A first read costs 3 calls, from 5, and a first capture 8, from
-  10.
+  went out after `open` returned. A first read costs 3 calls, from 5, and a first capture 8, from 10.
 - `BrowserError.message` is a sentence for operators; the browser tools add what a model should do,
   such as taking a new snapshot after a stale ref. A crop's caption names its tab by number.
 - The tools say when a tab's title could not be read, rather than calling the tab untitled.
 - A Browserbase answer of 400 is the reason `InvalidRequest`, not `Status`, so a request Browserbase
   refuses as malformed, such as a session id that is not a UUID, reads the same as one this client
   refuses before sending.
-- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
-  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
-  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
-- A page waits only for itself: the browser-wide input lock is gone. A click on one page no longer
-  waits for humanized typing on another, which held an on-air click for about 9.5 s in the release
-  review, and failed it undispatched at 10 s with 100 characters.
-- Guarded typing approves a field once. Plain text goes into the approved field in one insertion,
-  so a guarded 2,000-character paste takes 15 ms locally and half a second at a 70 ms round trip,
-  where each key used to wait for the keys before it and a focus check: 6.3 s locally and
-  4.8 minutes at 70 ms. Humanized typing checks that the field still has focus before each space,
-  which could press a button, and after its last key, rather than before every key.
-- `title` and `viewport` read in the page's turn, within the action timeout; `title` used to wait
-  for a busy page without bound.
 
 ### Breaking
 
@@ -168,16 +193,6 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   Hovers, scrolls and attempts that changed nothing are left out. Only a moment without a record
   of changes lists every step, as before. The prompt's wording changed with it.
 - `Page` has a `changes` member, so a hand-made `Page` needs one.
-- A wait behind other operations on the page fails `Busy`, not `Timeout`, and `Reason` has `Busy`
-  and `Limit` beside the rest, so a caller that handles reasons by tag has two more to handle.
-- Reads wait for the action in flight on their page: a snapshot, `find`, `text`, `changes`, a
-  picture or a zoom no longer runs while an action is changing the page, and an action waits for
-  the reads before it.
-- `Observation` carries `missing`, and `observe` succeeds with what it could read.
-- Under a guard, plain typing sends no key events: the text arrives in one insertion once its field
-  is approved, so a page listening for key events sees none.
-- Each page has its own pointer, where its own last move left it; a glide on a page starts there,
-  or mid-viewport, not where input on another tab left the pointer.
 
 ## 0.3.0-beta.1 (unreleased)
 
