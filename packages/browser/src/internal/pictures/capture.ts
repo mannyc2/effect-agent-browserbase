@@ -76,11 +76,7 @@ export interface Controller {
   /** Lifetime counts, or those of the latest `windowMillis`, at most `countsKept`. */
   readonly stats: (windowMillis?: number) => Effect.Effect<CaptureStats>;
   readonly active: Effect.Effect<boolean>;
-  /**
-   * Run a clipped or scaled picture of the page, keeping what it draws out of the capture: every
-   * frame meanwhile, or only those of another size than the page's where the picture is `resized`,
-   * drawn at its own size.
-   */
+  /** Run a clipped or scaled picture of the page, keeping what it draws out of the capture. */
   readonly excluding: <A, E, R>(
     picture: Effect.Effect<A, E, R>,
     resized?: boolean,

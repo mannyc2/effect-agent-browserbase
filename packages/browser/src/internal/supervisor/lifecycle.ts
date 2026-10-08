@@ -114,10 +114,7 @@ export const start = <A>(): Step<A> => ({
 
 const servingOf = <A>(state: State<A>) => (state._tag === "Retired" ? undefined : state.serving);
 
-/**
- * The state after `input`, with the events to publish and the commands to run. When generations
- * are `exclusive`, the next opens only once the current one's release has finished.
- */
+/** The state after `input`, with the events to publish and the commands to run. */
 export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boolean): Step<A> => {
   const release = (live: Live<A>): Command<A> => ({ _tag: "Release", live });
   const stay: Step<A> = { state, events: [], commands: [] };

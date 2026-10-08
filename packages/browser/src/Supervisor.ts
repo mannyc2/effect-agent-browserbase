@@ -75,10 +75,7 @@ export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable"
   }
 }
 
-/**
- * One generation, as a provider opened it in the scope the supervisor gave it. Its browser's
- * `expiresAt` is when the provider ends it on its own.
- */
+/** One generation, as a provider opened it in the scope the supervisor gave it. */
 export interface Opened {
   readonly browser: Browser.Service;
   /**

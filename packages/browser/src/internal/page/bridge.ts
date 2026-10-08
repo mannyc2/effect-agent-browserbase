@@ -3,10 +3,8 @@
  * the library's first read of a page, its own protocol session registers the script, so every
  * later document runs it in an isolated world from its start; calls go to the current document's
  * world. The script is composed from the domains' page-side parts, the `*.inpage.ts` modules, in
- * the order they depend on one another: names, the walk, matching, context, subjects and text;
- * the change record (its history, sight, recorder and reads) and readiness, which asks it; then
- * the outline and the input parts. At the first read of a page's changes, its session registers
- * the recorder too, so every later document records from its start.
+ * the order they depend on one another. At the first read of a page's changes, its session
+ * registers the recorder too, so every later document records from its start.
  */
 import { Effect, Semaphore } from "effect";
 
