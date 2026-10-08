@@ -158,7 +158,9 @@
   provenance; a frame read states how old it may be, and whether it must follow the latest input,
   which a screenshot always must, and never shows a document the page has left.
 - Pictures and reads on each page's own protocol session, counted: a picture is one call, or two
-  for a crop or another device pixel ratio; the page script is registered once per page session, so
+  for a crop or another device pixel ratio, and a page's pictures go one at a time; a page's first
+  clipped picture also holds a copy of the screen the page reads, in two more calls, so a crop leaves
+  a screen another session emulates as it was; the page script is registered once per page session, so
   a document's first read is two calls and a warm read one, `ready` included however long the page
   takes, and a wait for a still screen two calls while a capture runs; the library's own clipped
   pictures stay out of a running screencast, which keeps the page's own frames where the crop is on
@@ -257,7 +259,11 @@ and each becoming the next beta.
   reported the session's end. A context's `updatedAt` did not move when a session saved to it, so
   nothing in the API tells when a save has landed, and `contextSettle` stays a fixed wait. And a
   raw crop changed what the page reads as its screen from 1280×720 to 800×600 for the rest of the
-  session, `device-width` media queries with it, while the window stayed 1280×720.
+  session, `device-width` media queries with it, while the window stayed 1280×720. A crop now
+  leaves the screen as it was, in a local repro of that finding: from a page's first clipped
+  picture on, the page's own session holds a copy of the screen the page reads, which every later
+  picture restores. A page's pictures also go one at a time, since two crops at once left the
+  page's view at the first one's size.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
