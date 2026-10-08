@@ -1,5 +1,8 @@
-import { Clock, Data, Duration, Effect, Option } from "effect";
-import type { CDPSession } from "playwright-core";
+/**
+ * The browser's clock read on the owner's: estimates of their offset from timed probes, how an
+ * estimate ages, and the one mapping a browser's pages share. `pictures.ts` takes the probes.
+ */
+import { Duration, Effect, Option } from "effect";
 
 export interface Probe {
   readonly hostStart: number;
@@ -15,10 +18,6 @@ export interface Estimate {
   readonly roundTripMillis: number;
   readonly sampledAt: number;
 }
-
-export class ClockCalibrationFailure extends Data.TaggedError("ClockCalibrationFailure")<{
-  readonly cause: unknown;
-}> {}
 
 /** The fastest complete probe limits uncertainty without mistaking transit delay for clock offset. */
 export const estimate = (probes: ReadonlyArray<Probe>): Option.Option<Estimate> => {
@@ -140,71 +139,3 @@ export const toHostTime = (calibration: Estimate, browserEpochMillis: number): n
 /** CDP input timestamps use seconds, unlike browser frame timestamps and the owner's clock. */
 export const toBrowserSeconds = (calibration: Estimate, hostMillis: number): number =>
   (hostMillis + calibration.offsetMillis) / 1000;
-
-const command = <A>(run: () => Promise<A>): Effect.Effect<A, ClockCalibrationFailure> =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) => new ClockCalibrationFailure({ cause }),
-  });
-
-/**
- * Reads only in the given world, one without the page script: no DOM markers, input, navigation or
- * extra tabs. The owning clock supplies both stamps and the deadline even if a caller overrides
- * Clock later.
- */
-export const calibrate = (
-  send: CDPSession["send"],
-  clock: Clock.Clock,
-  contextId: number,
-): Effect.Effect<Estimate, ClockCalibrationFailure> =>
-  Effect.gen(function* () {
-    const probes: Array<Probe> = [];
-
-    for (let index = 0; index < 3; index++) {
-      const hostStart = Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
-
-      // A round trip to the page's script like any other, so traced as one.
-      const response = yield* command(() =>
-        send("Runtime.evaluate", {
-          contextId,
-          expression: "performance.timeOrigin + performance.now()",
-          returnByValue: true,
-        }),
-      ).pipe(
-        Effect.withSpan(
-          "Page.evaluate",
-          { attributes: { function: "clock" }, level: "Trace" },
-          { captureStackTrace: false },
-        ),
-      );
-
-      const hostEnd = Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
-      const browserTime: unknown = response.result.value;
-
-      if (response.exceptionDetails !== undefined || typeof browserTime !== "number")
-        return yield* new ClockCalibrationFailure({
-          cause: new Error("the browser clock probe did not return a timestamp"),
-        });
-      probes.push({ hostStart, hostEnd, browserTime });
-    }
-
-    const result = estimate(probes);
-
-    if (Option.isNone(result))
-      return yield* new ClockCalibrationFailure({
-        cause: new Error("the browser clock probes did not define a finite interval"),
-      });
-
-    return result.value;
-  }).pipe(
-    Effect.timeoutOrElse({
-      duration: Duration.seconds(2),
-      orElse: () =>
-        Effect.fail(
-          new ClockCalibrationFailure({
-            cause: new Error("browser clock calibration exceeded its deadline"),
-          }),
-        ),
-    }),
-    Effect.provideService(Clock.Clock, clock),
-  );

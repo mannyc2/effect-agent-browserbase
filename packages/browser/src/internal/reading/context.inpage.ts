@@ -11,8 +11,6 @@
 import type { SubjectContext } from "../../BrowserEvent.ts";
 import type { Names } from "./names.inpage.ts";
 
-export type Context = SubjectContext;
-
 /** What one read has learnt of the page: each table's header row and each tree's headings. */
 export interface Known {
   readonly headers: Map<Element, Element | null>;
@@ -118,7 +116,7 @@ export const context = (names: Names) => {
   const tables = "table,[role=table],[role=grid],[role=treegrid]";
 
   /** A cell's row and column names, or nothing when it is not in a table with either. */
-  const tableContext = (cell: Element, read: Known): Context => {
+  const tableContext = (cell: Element, read: Known): SubjectContext => {
     const row = cell.closest("tr,[role=row]");
     const table = row?.closest(tables);
 
@@ -167,7 +165,7 @@ export const context = (names: Names) => {
   };
 
   /** The words around an element that say which one it is. */
-  const contextOf = (element: Element, read = known()): Context => {
+  const contextOf = (element: Element, read = known()): SubjectContext => {
     const cell = element.closest(
       "td,th,[role=cell],[role=gridcell],[role=rowheader],[role=columnheader]",
     );
@@ -195,7 +193,7 @@ export const context = (names: Names) => {
     };
   };
 
-  return { contextOf, headingBefore, known, textBeside, treeOf };
+  return { contextOf, groups, headingBefore, known, textBeside, treeOf };
 };
 
 export type ContextReader = ReturnType<typeof context>;

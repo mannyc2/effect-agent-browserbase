@@ -90,18 +90,17 @@ export const walk = (names: Names) => {
     return hit;
   };
 
+  /** Whether its role or a click handler makes an element a control. */
+  const acts = (element: Element, role: string | null): boolean =>
+    (role !== null && (interactiveRoles.has(role) || role === "canvas" || role === "iframe")) ||
+    element.hasAttribute("onclick");
+
   // A painted child of a control still activates the control; keep its name without moving the point.
   const controlOf = (hit: Element): Element => {
     let element: Element | null = hit;
 
     while (element !== null) {
-      const role = roleOf(element);
-
-      if (
-        (role !== null && (interactiveRoles.has(role) || role === "canvas" || role === "iframe")) ||
-        element.hasAttribute("onclick")
-      )
-        return element;
+      if (acts(element, roleOf(element))) return element;
       element = parentOf(element);
     }
 
@@ -198,7 +197,7 @@ export const walk = (names: Names) => {
     else one(root, state, 0, 0);
   };
 
-  return { boxOf, controlOf, hitAt, visit };
+  return { acts, boxOf, controlOf, hitAt, visit };
 };
 
 export type Walk = ReturnType<typeof walk>;

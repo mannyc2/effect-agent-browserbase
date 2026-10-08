@@ -405,9 +405,9 @@ narrative timeline. Compositing remains the consumer’s job.
 
 The pointer starts at the first active viewport’s center and belongs to the browser across tabs.
 Input actions share ownership of it, one at a time across tabs; navigation and a policy hold leave
-that ownership free. An action first waits for its own page (another operation there, its unresolved
-input replies, its first clock probe) and only then queues for the browser-wide turn, so one slow tab
-never holds the others up. The action's timeout bounds those waits before a full timeout bounds the
+that ownership free. An action first waits for its own page (another operation there, or its
+unresolved input replies) and only then queues for the browser-wide turn, so one slow tab never
+holds the others up. The action's timeout bounds those waits before a full timeout bounds the
 action itself. Every sent
 move updates the position, including a partially cancelled glide. A later viewport clamps the
 starting point to its bounds if necessary.

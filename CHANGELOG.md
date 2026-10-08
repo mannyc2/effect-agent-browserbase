@@ -7,6 +7,53 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ### Added
 
+- `Supervisor`, a new module: a browser kept open across losses and session ends, as generations
+  from a provider's `open`. `browser` waits, bounded by `waitTimeout`, for the current generation,
+  and every caller shares one open, which runs in the supervisor's scope. A loss is published at
+  once and the next generation opens on the `reopen` schedule; `rotate`, or the time `rotateBefore`
+  ahead of a generation's `expiresAt`, makes the next generation before it breaks the current one,
+  or breaks first when generations are `exclusive`; `retire` stops at once and releases what is
+  open. `states` streams each generation's `Opening`, `Reopening`, `Open`, `Lost`, `Down` and
+  `Closed`, the last with the release outcome, `Settled` or `Unconfirmed`, as `Generation` values.
+  Pages don't carry over between generations.
+- `Browserbase.supervise`: Browserbase sessions as `Supervisor` generations. Sessions that persist
+  to a stored context are exclusive.
+- `Browserbase.reconcile(contextId)` ends a stored context's running sessions, found by the
+  `persistsContext` label `open` puts in their user metadata, confirms they ended, and lets the
+  context go after `contextSettle`: the way out of an `Unconfirmed` release, and of a persisting
+  create whose answer was lost.
+- `effect-browserbase/testing`: `TestBrowserbase`, the Browserbase API in memory as an `HttpClient`,
+  whose sessions run until released or until their timeout on the Effect `Clock`, with a `Script`
+  of lost creates, pending or refused releases and failed status reads; and
+  `BrowserbaseContract.checks`, what the package relies on Browserbase to do, which the fake
+  passes.
+
+### Changed
+
+- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
+  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
+  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
+
+### Breaking
+
+- `Browserbase.open` and `attach` give a `Hosted`, `{ browser, session, release }`, instead of the
+  `Browser`. `release` ends the session, confirms it ended, and gives the outcome; for `open`, the
+  scope's close runs it too, once.
+- A Browserbase release confirms the session ended: it reads the session, trying again a second
+  apart for up to a minute, including after a failed read. A session still running then is
+  `Unconfirmed`, and a persisting session's context stays held until `reconcile`. Before, a failed
+  release was a logged warning, and the context was let go after a minute whatever the session
+  did.
+- A persisting session carries `persistsContext: <context id>` in its user metadata, beside the
+  caller's own.
+
+## 0.3.0-beta.1 (unreleased)
+
+Cheaper pictures and reads, and replay: pictures and reads on each page's own counted protocol
+session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `Page.ready`.
+
+### Added
+
 - `Page.find(query)`: in one call to the page, the elements that a query of `role`, `name` (a
   string or a `RegExp`), `text` and `near` (words of an element's context) matches, in the viewport
   or the whole document. Each is a `Found` with a ref the actions take, its `Subject`, its box,
@@ -42,26 +89,6 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   acknowledgements of frames not yet answered, which slow a screencast over a slow connection.
 - Every page span reports its protocol cost on the page's own session: `calls`, `bytesOut`,
   `bytesIn` and `waitedMillis`. A picture's `source` is `frame` or `screenshot`.
-- `Supervisor`, a new module: a browser kept open across losses and session ends, as generations
-  from a provider's `open`. `browser` waits, bounded by `waitTimeout`, for the current generation,
-  and every caller shares one open, which runs in the supervisor's scope. A loss is published at
-  once and the next generation opens on the `reopen` schedule; `rotate`, or the time `rotateBefore`
-  ahead of a generation's `expiresAt`, makes the next generation before it breaks the current one,
-  or breaks first when generations are `exclusive`; `retire` stops at once and releases what is
-  open. `states` streams each generation's `Opening`, `Reopening`, `Open`, `Lost`, `Down` and
-  `Closed`, the last with the release outcome, `Settled` or `Unconfirmed`, as `Generation` values.
-  Pages don't carry over between generations.
-- `Browserbase.supervise`: Browserbase sessions as `Supervisor` generations. Sessions that persist
-  to a stored context are exclusive.
-- `Browserbase.reconcile(contextId)` ends a stored context's running sessions, found by the
-  `persistsContext` label `open` puts in their user metadata, confirms they ended, and lets the
-  context go after `contextSettle`: the way out of an `Unconfirmed` release, and of a persisting
-  create whose answer was lost.
-- `effect-browserbase/testing`: `TestBrowserbase`, the Browserbase API in memory as an `HttpClient`,
-  whose sessions run until released or until their timeout on the Effect `Clock`, with a `Script`
-  of lost creates, pending or refused releases and failed status reads; and
-  `BrowserbaseContract.checks`, what the package relies on Browserbase to do, which the fake
-  passes.
 
 ### Changed
 
@@ -89,22 +116,12 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - An estimate of the clock says less as it ages, by up to 100 parts per million of its age. A frame
   carries its estimate's uncertainty at its paint, and a newer measurement replaces an estimate
   that its age has made less certain.
-- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
-  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
-  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
+- A clock probe that runs past its two seconds fails with `Timeout`, as every other deadline does,
+  not `Failed`.
+- Typing and pressing keys no longer send `Page.enable` again on a page the library has read.
 
 ### Breaking
 
-- `Browserbase.open` and `attach` give a `Hosted`, `{ browser, session, release }`, instead of the
-  `Browser`. `release` ends the session, confirms it ended, and gives the outcome; for `open`, the
-  scope's close runs it too, once.
-- A Browserbase release confirms the session ended: it reads the session, trying again a second
-  apart for up to a minute, including after a failed read. A session still running then is
-  `Unconfirmed`, and a persisting session's context stays held until `reconcile`. Before, a failed
-  release was a logged warning, and the context was let go after a minute whatever the session
-  did.
-- A persisting session carries `persistsContext: <context id>` in its user metadata, beside the
-  caller's own.
 - `Subject` has a `context`: a table cell's `row` and `column`, the `label` just before an element,
   and the `heading` above it. Every `Action` records it, and `ResolvedTarget` carries it.
 - `Snapshot.above` and `below` count the parts of the page skipped because they lie out of view,

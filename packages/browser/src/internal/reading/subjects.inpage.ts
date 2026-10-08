@@ -3,14 +3,15 @@
  * an element's role, name and tag, plus its context (see `context.inpage.ts`). Its state is read
  * beside it. See `names.inpage.ts` for what a page-side part may use.
  */
-import type { Context, ContextReader } from "./context.inpage.ts";
+import type { SubjectContext } from "../../BrowserEvent.ts";
+import type { ContextReader } from "./context.inpage.ts";
 import type { FindRequest, Match } from "./match.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Walk } from "./walk.inpage.ts";
 
 export const subjects = (names: Names, walked: Walk, matching: Match, placing: ContextReader) => {
-  const { interactiveRoles, isDisabled, isInput, nameOf, refFor, refs, roleOf, textOf } = names;
-  const { boxOf, controlOf, hitAt } = walked;
+  const { isDisabled, isInput, nameOf, refFor, refs, roleOf, textOf } = names;
+  const { acts, boxOf, controlOf, hitAt } = walked;
   const { contextOf, known } = placing;
 
   /** What the outline lists as a control, with a ref: something a person would act on. */
@@ -21,8 +22,7 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     rect: DOMRect,
     insidePointer: boolean,
   ): boolean =>
-    (role !== null && (interactiveRoles.has(role) || role === "canvas" || role === "iframe")) ||
-    element.hasAttribute("onclick") ||
+    acts(element, role) ||
     (style.cursor === "pointer" && !insidePointer && rect.width > 0 && rect.height > 0);
 
   const stateOf = (element: Element, role: string | null) => {
@@ -77,7 +77,7 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
       readonly rect: DOMRect;
       readonly role: string | null;
       name?: string;
-      context?: Context;
+      context?: SubjectContext;
       matched: boolean;
     }
 

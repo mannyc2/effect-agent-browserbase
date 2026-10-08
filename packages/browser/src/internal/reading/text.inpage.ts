@@ -1,8 +1,8 @@
 /**
  * In the page: the text a page shows, and the one rule for what a field shows. A field's value
  * reads `••••` unless a caller unmasks it, and a secret field's always does, including a field
- * that was secret when the library saw it, such as a password its page now reveals. See
- * `names.inpage.ts` for what a page-side part may use.
+ * that was secret when the library saw it, such as a password its page now reveals. Text, and the
+ * outline, are cut at a line. See `names.inpage.ts` for what a page-side part may use.
  */
 import { Schema } from "effect";
 
@@ -59,6 +59,14 @@ export const text = (names: Names, walked: Walk) => {
     return unmask && !isSecret(element) ? value : "••••";
   };
 
+  /** Lines cut after the last whole line within `max` characters, or at `max` when none is. */
+  const cut = (lines: string, max: number) => {
+    if (lines.length <= max) return { text: lines, truncated: false };
+    const end = lines.lastIndexOf("\n", max);
+
+    return { text: lines.slice(0, end > 0 ? end : max), truncated: true };
+  };
+
   /**
    * What the viewport, or one element, shows as text: a line per block, table cells apart by a
    * tab, and each field as `shown` gives it.
@@ -108,18 +116,15 @@ export const text = (names: Names, walked: Walk) => {
       },
     });
     end();
-    const all = lines.join("\n");
-    const cut = all.length > request.maxChars ? all.lastIndexOf("\n", request.maxChars) : -1;
 
     return {
-      text: all.length > request.maxChars ? all.slice(0, cut > 0 ? cut : request.maxChars) : all,
-      truncated: all.length > request.maxChars,
+      ...cut(lines.join("\n"), request.maxChars),
       url: location.href,
       title: document.title,
     };
   };
 
-  return { read, shown };
+  return { cut, read, shown };
 };
 
 export type Texts = ReturnType<typeof text>;

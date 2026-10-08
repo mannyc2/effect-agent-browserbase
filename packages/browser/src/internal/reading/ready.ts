@@ -7,19 +7,16 @@
  */
 import { Duration, Effect, Schedule, Sink, Stream } from "effect";
 
-import { Timeout } from "../../BrowserError.ts";
 import type { Frame } from "../../Frame.ts";
 import type { ReadyOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { decodeWith, failWith, type PageContext } from "../page/context.ts";
+import { decodeWith, type PageContext } from "../page/context.ts";
 import type * as Capture from "../pictures/capture.ts";
 import { ReadinessSchema } from "./ready.inpage.ts";
 
 export const make =
   (page: PageContext, bridge: Bridge, capture: Capture.Controller) =>
   (options: ReadyOptions = {}) => {
-    const timeout = options.timeout ?? Duration.seconds(15);
-
     const evidence = bridge.evaluate("ready", scriptCall("ready")).pipe(
       Effect.flatMap(decodeWith("ready", ReadinessSchema)),
       Effect.tap((waiting) => Effect.annotateCurrentSpan({ waiting: waiting.join(",") })),
@@ -49,10 +46,7 @@ export const make =
         until: (waiting) => waiting.length === 0,
       }),
       Effect.andThen(options.quietMillis === undefined ? Effect.void : quiet(options.quietMillis)),
-      Effect.timeoutOrElse({
-        duration: timeout,
-        orElse: () => failWith("ready", new Timeout({ millis: Duration.toMillis(timeout) })),
-      }),
+      page.within("ready", options.timeout ?? Duration.seconds(15)),
       page.span("Page.ready"),
       page.owned,
     );

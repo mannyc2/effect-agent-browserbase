@@ -4,9 +4,8 @@
  * construction stays internal. A page is assembled here from its domains: the script bridge,
  * pictures, reading, input and navigation.
  */
-import { Duration, Effect, Semaphore } from "effect";
+import { Effect, Semaphore } from "effect";
 
-import { Timeout } from "../../BrowserError.ts";
 import type { Page } from "../../Page.ts";
 import * as Actions from "../input/actions.ts";
 import * as Pictures from "../pictures/pictures.ts";
@@ -19,7 +18,7 @@ import * as Viewport from "./viewport.ts";
 
 export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const page = Context.make(options, yield* Semaphore.make(1));
-  const { id, playwright, settings, native, owned } = page;
+  const { id, playwright, native, owned, within } = page;
   const bridge = yield* Bridge.make(page);
   const viewport = Viewport.make(page, bridge);
   const input = Actions.make(page, bridge, viewport);
@@ -42,17 +41,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     screenshot: pictures.screenshot,
     frame: pictures.frame,
     zoom: pictures.zoom,
-    viewport: viewport.viewportFor("viewport").pipe(
-      Effect.timeoutOrElse({
-        duration: settings.actionTimeout,
-        orElse: () =>
-          Context.failWith(
-            "viewport",
-            new Timeout({ millis: Duration.toMillis(settings.actionTimeout) }),
-          ),
-      }),
-      owned,
-    ),
+    viewport: viewport.viewportFor("viewport").pipe(within("viewport"), owned),
     observe: reading.observe,
     find: reading.find,
     text: reading.text,

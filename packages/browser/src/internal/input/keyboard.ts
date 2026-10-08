@@ -4,53 +4,34 @@
  */
 import { Duration, Effect } from "effect";
 
-import { BrowserError, NotActionable } from "../../BrowserError.ts";
-import type { PageContext } from "../page/context.ts";
+import { NotActionable } from "../../BrowserError.ts";
+import type { Bridge } from "../page/bridge.ts";
+import { failWith, type PageContext } from "../page/context.ts";
 import type { Dispatch } from "./dispatch.ts";
 import * as Keys from "./keys.ts";
 import type * as Replies from "./replies.ts";
 
-export const make = (page: PageContext, dispatch: Dispatch) => {
-  const { cdp, playwright, native } = page;
+export const make = (page: PageContext, bridge: Bridge, dispatch: Dispatch) => {
+  const { playwright } = page;
   const { send } = page.protocol;
+  const { currentDocument } = bridge;
   const { stamp, inputCall, dispatchKey, dispatchText } = dispatch;
 
-  // A multi-key action stops before its next key once the page has moved to another document.
-  // This session counts main-frame commits as the browser reports them, so a key sent within
+  // A multi-key action stops before its next key once the page has moved to another document. The
+  // page's own session counts main-frame commits as the browser reports them, so a key sent within
   // about one protocol round trip of a commit can still reach the new document.
-  let documents = 0;
-  let watchingDocuments = false;
-
-  cdp.on("Page.frameNavigated", ({ frame }) => {
-    if (frame.parentId === undefined) documents++;
-  });
-
-  const currentDocument = (operation: string) =>
-    Effect.suspend(() =>
-      watchingDocuments
-        ? Effect.void
-        : native(operation, () => send("Page.enable")).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                watchingDocuments = true;
-              }),
-            ),
-          ),
-    ).pipe(Effect.map(() => documents));
-
   const sameDocument = (operation: string, since: number) =>
-    Effect.suspend(() =>
-      documents === since
-        ? Effect.void
-        : Effect.fail(
-            new BrowserError({
+    currentDocument(operation).pipe(
+      Effect.flatMap((now) =>
+        now === since
+          ? Effect.void
+          : failWith(
               operation,
-              reason: new NotActionable({
+              new NotActionable({
                 detail: "the page moved to another document, so the remaining keys were not sent",
               }),
-              dispatched: false,
-            }),
-          ),
+            ),
+      ),
     );
 
   const keyStroke = (

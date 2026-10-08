@@ -4,7 +4,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { Context, Effect, Layer, Tracer } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 const form = `<!doctype html><title>Order</title>
 <body style="margin:0;font-family:sans-serif">
@@ -95,7 +95,8 @@ const ticker = `<!doctype html><title>Ticker</title>
 <div>Ordered <b>25</b> eth</div>`;
 
 // Pinned parts whose containers lie outside the viewport once it scrolls to the middle: a bar in
-// a header, a banner in a footer, and a dialog in an empty wrapper at the end.
+// a header, a banner in a footer, a dialog in an empty wrapper at the end, and a popover in the
+// top layer, away from every point the walk tests.
 const pinned = `<!doctype html><title>Pinned</title>
 <body style="margin:0;font-family:sans-serif">
 <header style="height:64px"><nav style="position:fixed;top:0;left:0;right:0;height:48px;background:#fff"><a href="/next">Sign in</a></nav></header>
@@ -105,6 +106,8 @@ const pinned = `<!doctype html><title>Pinned</title>
   <div style="height:3000px"></div>
   <p id="middle">The middle of the story</p>
   <div style="height:3000px"></div>
+  <p>Notes <span popover id="saved" style="inset:auto;top:300px;left:100px;margin:0">Saved</span></p>
+  <script>saved.showPopover()</script>
   <button>At the bottom</button>
 </main>
 <footer><div style="position:fixed;bottom:0;left:0;right:0;height:40px;background:#eee">Cookies help <button>Accept</button></div></footer>
@@ -166,25 +169,3 @@ export const SiteLayer = Layer.effect(
     return Site.of({ url: (path) => `http://127.0.0.1:${port}${path}` });
   }),
 );
-
-/** What an effect sends to the page script, counted by the bridge's spans. */
-export const roundTrips = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    const names: Array<string> = [];
-
-    const tracer = Tracer.make({
-      span: (options) => {
-        names.push(options.name);
-
-        return new Tracer.NativeSpan(options);
-      },
-    });
-
-    const value = yield* effect.pipe(Effect.provideService(Tracer.Tracer, tracer));
-
-    return {
-      value,
-      calls: names.filter((name) => name === "Page.evaluate").length,
-      worlds: names.filter((name) => name === "Page.createWorld").length,
-    };
-  });
