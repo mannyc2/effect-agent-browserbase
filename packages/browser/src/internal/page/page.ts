@@ -28,6 +28,8 @@ export interface Internals {
   readonly inputEnded: Eff.Effect<void, BrowserError>;
   /** The page's documents so far, counted as `Navigated` counts them. */
   readonly document: () => number;
+  /** Wait, in one call, until what a query finds is there, is not, or shows something else. */
+  readonly until: Reading.Reading["until"];
 }
 
 /** A page this library built: it keeps its internals where only this module reaches them. */
@@ -45,6 +47,13 @@ class Built {
 
 /** What a page this library built keeps out of sight; nothing for any other `Page`. */
 export const internalsOf = (page: Page) => Built.internalsOf(page);
+
+/** `view`, made from `page` with some of its operations replaced, keeping what `page` keeps out of sight. */
+export const viewOf = <A extends Page>(page: Page, view: A): A => {
+  const internals = internalsOf(page);
+
+  return internals === undefined ? view : Object.assign(new Built(internals), view);
+};
 
 export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const page = Context.make(options, yield* Effect.scope);
@@ -125,6 +134,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     input,
     inputEnded: lane.read("inputEnded")(Effect.void).pipe(owned),
     document: () => bridge.frameTag().document,
+    until: reading.until,
   };
 
   return Object.assign(new Built(internals), assembled);

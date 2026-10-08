@@ -12,6 +12,7 @@ import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import * as Url from "../page/url.ts";
 import type { ConditionRequest } from "./controls.inpage.ts";
+import type { Want } from "./expect.inpage.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
 import type { SnapshotRequest } from "./outline.inpage.ts";
 import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
@@ -25,6 +26,8 @@ const SnapshotResult = Schema.Union([
 
 const FindResults = Schema.Struct({ found: Schema.Array(Found), nextRef: Schema.Finite });
 
+const UntilResult = Schema.Struct({ met: Schema.Boolean, mark: Schema.String });
+
 const ConditionResult = Schema.Union([
   Schema.Struct({ met: Schema.Boolean }),
   Schema.Struct({ invalid: Schema.String }),
@@ -37,6 +40,16 @@ const wanted = (value: string | RegExp | undefined): Wanted | null =>
     : typeof value === "string"
       ? value
       : { source: value.source, flags: value.flags };
+
+/** A query as the page takes it, but for the first ref it may give. */
+const askedOf = (query: FindQuery, scope: "viewport" | "document") => ({
+  role: query.role ?? null,
+  name: wanted(query.name),
+  text: wanted(query.text),
+  near: query.near ?? null,
+  at: query.at ?? null,
+  scope: query.scope ?? scope,
+});
 
 export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Bridge) {
   const { now, span, owned, within, lane } = page;
@@ -79,14 +92,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
   };
 
   const find = (query: FindQuery = {}) => {
-    const asked = {
-      role: query.role ?? null,
-      name: wanted(query.name),
-      text: wanted(query.text),
-      near: query.near ?? null,
-      at: query.at ?? null,
-      scope: query.scope ?? "viewport",
-    };
+    const asked = askedOf(query, "viewport");
 
     return finds(
       JSON.stringify(asked),
@@ -181,11 +187,37 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
       );
   };
 
+  // One call, which the page answers once `want` holds of what `query` matches, the whole document
+  // unless it says otherwise, or at the deadline, with the mark of what matched then. It follows
+  // the action in flight, as `waitFor` does, and the page has the action timeout past the deadline
+  // to answer.
+  const until = (query: FindQuery, want: Want, millis: number) => {
+    const look = Effect.gen(function* () {
+      const request: FindRequest = {
+        ...askedOf(query, "document"),
+        firstRef: yield* Ref.get(nextRef),
+      };
+
+      return yield* evaluate("expect", scriptCall("until", request, want, millis)).pipe(
+        Effect.flatMap(decodeWith("expect", UntilResult)),
+      );
+    });
+
+    return lane
+      .read("expect")(Effect.void)
+      .pipe(
+        Effect.andThen(Effect.retry(look, { while: contextGone })),
+        within("expect", Duration.sum(Duration.millis(millis), page.settings.actionTimeout)),
+        span("Page.expect", { want: typeof want === "string" ? want : "other" }),
+        owned,
+      );
+  };
+
   /** The viewport's text as it was last read, if after `since`, as a document began. */
   const viewedSince = (since: number) =>
     viewed !== undefined && viewed.at > since ? viewed : undefined;
 
-  return { snapshot, find, text, waitFor, viewedSince };
+  return { snapshot, find, text, waitFor, until, viewedSince };
 });
 
 export type Reading = Effect.Success<ReturnType<typeof make>>;

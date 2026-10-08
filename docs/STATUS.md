@@ -83,6 +83,10 @@ Agent, the renamed Effect Agent:
   in 420 replays. `Page.ready` says, in one call to the page, whether a page is ready to be shown,
   from the page's own evidence, so a blank canvas or a spinner alone is still loading; with
   `quietMillis` it also waits for the screen to be still, and a stalled connection is not stillness.
+- Expectations: `Expect.attempt` names what an action is for, something that appears, goes or
+  changes as `Page.find` finds it, or a navigation, and each `run` checks before it acts, so an
+  action whose input went before it failed is sent again only where its effect did not come:
+  `Done`, `AlreadyDone` or `NotDone`. A check is one call, and so is the wait for an effect.
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
   holds and validation before held actions resume: the press point is hit-tested after the
   pointer arrives, typing refuses to start on a control a key could activate, and a multi-key
@@ -280,7 +284,10 @@ and each becoming the next beta.
   leaves the screen as it was, in a local repro of that finding: from a page's first clipped
   picture on, the page's own session holds a copy of the screen the page reads, which every later
   picture restores. A page's pictures also go one at a time, since two crops at once left the
-  page's view at the first one's size. The release hygiene left from earlier is done too:
+  page's view at the first one's size. Expectations have landed: an attempt checks what an action
+  is for before it acts, and after an action that failed once its input went, so a repeat after a
+  `Timeout` or a reconnect sends nothing where the effect came. The release hygiene left from
+  earlier is done too:
   - `effect` is now a `~4.0.0` peer, while the packages rely on modules that Effect marks unstable;
     [RELEASING.md](RELEASING.md) has the policy.
   - The docs now say that `attach` resumes only a session created with `keepAlive`, and that closing

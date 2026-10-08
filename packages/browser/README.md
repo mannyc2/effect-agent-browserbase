@@ -572,6 +572,26 @@ reached the browser; `check` its effect first, as it may have taken place; `poin
 such as with a stale ref; or `resume` reading events from a newer cursor. `message` is a sentence
 for operators, and the browser tools tell a model what to do about the failure.
 
+`Expect` is that check, for an action whose effect the page shows. An attempt names what the action
+is for, `appeared(query)`, `gone(query)`, `changed(query)` or `navigated(url?)`, with `Page.find`'s
+queries over the whole document, and takes its baseline as it begins. Each `run` checks first and
+sends nothing where the expectation holds already, `AlreadyDone`; otherwise it acts and waits for
+it, `Done`, or `NotDone` after `wait`, 5 seconds by default. An action that fails after its input
+went is checked too: `Done` if its effect came, else its own failure, so the next `run` of the same
+attempt, on the same page or the one a reconnect finds by its id, acts only if nothing came.
+
+```ts
+const placing = yield * Expect.attempt(page, Expect.appeared({ text: "Order placed" }));
+const outcome = yield * placing.run(page, (page) => page.click(ref));
+```
+
+A check is one call to the page, and so is a wait, which the page answers as the effect comes;
+`navigated` reads what the page already knows, at no call. `changed` compares what the query found
+at the start, its elements' text, field values and states but focus, by a mark the page keeps, so
+none of it leaves the page. On a page a reconnect found, `navigated` without an address tells only
+a move to another address, as the new connection counts documents afresh. A presenter's view is
+checked as its page is; a page a `Browser` did not make is refused.
+
 Every address the library reports, in events, frames, reads, errors, a guard's request and the
 outline's links, keeps its identity and loses its userinfo and its credentials' values, which read
 `Page.redacted`. A credential is a query, fragment or path parameter named for a token, secret,

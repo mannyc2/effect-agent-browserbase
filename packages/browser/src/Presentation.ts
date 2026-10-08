@@ -19,7 +19,7 @@ import { Clock, Duration, Effect, Fiber, MutableRef, Option, Semaphore } from "e
 
 import type { BrowserError } from "./BrowserError.ts";
 import * as Style from "./internal/input/style.ts";
-import { type Internals, internalsOf } from "./internal/page/page.ts";
+import { type Internals, internalsOf, viewOf } from "./internal/page/page.ts";
 import * as Motion from "./Motion.ts";
 import type { Page, Point, Target } from "./Page.ts";
 
@@ -167,7 +167,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
           ),
         );
 
-    const performed: View = {
+    const performed: View = viewOf(page, {
       ...page,
       click: (target, clickOptions) => perform(target)(input.click(target, clickOptions, style)),
       hover: (target) => perform(target)(input.hover(target, style)),
@@ -184,7 +184,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
             fiber: yield* hand.withPermits(1)(input.aim(target, style)).pipe(Effect.forkIn(scope)),
           };
         }),
-    };
+    });
 
     views.set(page, performed);
 
