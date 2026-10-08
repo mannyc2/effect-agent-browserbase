@@ -30,7 +30,9 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Snapshot`     | The model-readable outline of a page, with refs for its controls                     |
 | `Frame`        | A screencast frame                                                                   |
 | `BrowserEvent` | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end       |
-| `Motion`       | The replaceable, bounded pointer planner, with a tuned sigma-lognormal default       |
+| `Motion`       | A bounded pointer planner, as a value, and the tuned sigma-lognormal one             |
+| `Presentation` | Input performed for viewers: a presenter, and its views of pages                     |
+| `Stage`        | The source of a live output, switched between pages and stamped                      |
 | `BrowserError` | Typed failures, whether input reached the page first, and what each leaves           |
 | `Tools`        | The `effect/ai` browser toolkit                                                      |
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
@@ -295,44 +297,41 @@ the approval inspected the target, not that control. Each
 further press of a double or triple click is checked the same way after the earlier clicks' handlers
 have run. Typing approves its field once. Plain text then goes into it in one insertion, which no
 key handler can split, so the page sees one `input` event and no keys, and a paste's time does not
-grow with its length: 2,000 characters took half a second at a 70 ms round trip. Humanized typing checks that the approved
-control still has focus once the keys before are answered, before each space, which could press a
-focused button, and after its last key, so a key handler that moves focus stops the typing before
-its next space; each check is about two protocol round trips, and the typing deadline allows
-250 ms for it. A policy timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
+grow with its length: 2,000 characters took half a second at a 70 ms round trip. Typing key by key,
+as a presenter's view does, checks that the approved control still has focus once the keys before
+are answered, before each space, which could press a focused button, and after its last key, so a
+key handler that moves focus stops the typing before its next space; each check is about two
+protocol round trips, and the typing deadline allows 250 ms for it. A policy timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
 receipts. Without a guard, actions are allowed and nothing is revalidated. Canvas and opaque frames
 expose their outer element's metadata.
 
-With `humanize`, off-screen ref targets are reached with visible wheel input before the pointer
-moves to them. Scroll attempts are bounded and may use one instant fallback. A denied or held action
+A presenter's view reaches an off-screen ref target with visible wheel input before the pointer
+moves to it. Scroll attempts are bounded and may use one instant fallback. A denied or held action
 does not scroll. After scrolling, a guarded action checks the original target again; a page handler
 that changes its meaning can therefore stop it after its wheel input but before a click, and the
 failure is undispatched: travel toward a press is not the action's input. Drag endpoints are
 resolved together in the final viewport, and checked under the pointer, before the button is
 pressed.
 
-Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. It evaluates the model
-every 16.7 ms but sends a move only when the pointer reaches a new pixel; the exact destination
-lands at the model's end time, so only that final move can repeat the position before it.
-`Motion.Motion` is a service reference with that default; the browser captures it once when
-constructed. A custom `plan(from, to)` returns a complete schedule with finite coordinates and
-nondecreasing absolute `afterMillis` offsets, at most 2,048 samples and 5,000 milliseconds, ending
-at the exact destination. The browser decodes it with `Motion.Plan` into its own copy, then checks
-the endpoint; invalid plans fail with `InvalidRequest` before their track or input is sent.
-Equal-time samples are retained. Plain pointer movement does not use the service.
+A view's pointer follows the planner its presenter was given, `Motion.lognormal` unless another.
+That tuned two-stroke sigma-lognormal model is evaluated every 16.7 ms, but a move goes only when
+the pointer reaches a new pixel; the exact destination lands at the model's end time, so only that
+final move can repeat the position before it. A custom `plan(from, to)` returns a complete
+schedule with finite coordinates and nondecreasing absolute `afterMillis` offsets, at most 2,048
+samples and 5,000 milliseconds, ending at the exact destination. The browser decodes it with
+`Motion.Plan` into its own copy, then checks the endpoint; invalid plans fail with
+`InvalidRequest` before their track or input is sent. Equal-time samples are retained. Plain input
+never plans a glide: its pointer jumps, or moves in eight short steps while dragging.
 
-For recorded human strokes, install the optional `effect-browser-human-strokes` package and
-provide it to the layer that builds the browser:
+For recorded human strokes, install the optional `effect-browser-human-strokes` package and give
+its planner to the presenter:
 
 ```ts
 import * as HumanStrokes from "effect-browser-human-strokes";
-import * as Chromium from "effect-browser/Chromium";
+import * as Presentation from "effect-browser/Presentation";
 
-const browser = HumanStrokes.provideTo(Chromium.layer({ humanize: true }));
+const presenter = yield * Presentation.make({ motion: yield * HumanStrokes.motion });
 ```
-
-Because the planner is read once, at construction, merging `HumanStrokes.layer` beside a browser
-layer instead of providing it to that layer leaves the default planner in place.
 
 That package bundles 32,130 attributed CC BY 4.0 strokes, preserving their original sample times.
 The core package includes no stroke data. Every glide reserves its full bounded schedule before
@@ -341,13 +340,13 @@ At most 2,112 input commands and reservations are owned at once; ordinary input 
 64-command admission limit. Actions still await their replies before succeeding, and interruption
 stops the unsent suffix and releases held input.
 
-Typing sends key pairs for printable US characters in both plain and humanized modes; other text
-uses Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
+Typing sends key pairs for printable US characters, plainly and in a view; other text uses
+Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
 link or change a select, so `type` refuses before any input when its `into` ref is not a text field
 or, without `into`, when focus is on such a control; `press` sends keys to those. With `secret`,
 `type` also refuses a field the page does not mark secret, so a password goes only where the page
-hides it, as a replayed password does. Humanized typing aims for about 75 WPM including slower word
-starts, with key holds around 110 ms that can overlap. The ordered schedule releases a repeated
+hides it, as a replayed password does. A view types at its pacing's words a minute, 70 by
+default, including slower word starts, with key holds around 110 ms that can overlap. The ordered schedule releases a repeated
 physical key before pressing it again. Keys follow that schedule without waiting for each network
 reply. Pending replies are bounded and drained before an action succeeds; interruption stops new
 input and releases every submitted held key. Shortcut chords retain Playwright’s platform-specific
@@ -357,14 +356,59 @@ browser reports a new document as it commits, so a key sent within about one pro
 that commit can still reach it. Under a guard, typing's submit Enter and each repeated Enter or
 Space are first checked against the approved element.
 
-`Page.type(text, { prose: true })` opts eligible textarea or contenteditable prose into occasional
-corrected slips when humanized, with an explicit `into` ref and whole-field replacement. The
-`browser_type` tool exposes the same `prose` flag. It is off by default; explicit opt-in cannot enable
-it for numbers, URLs, credentials, payment/order fields or other excluded targets. Eligibility is
-decided once the field has focus, after its focus handlers ran, and its final text must match
-before Enter can submit. Append and implicit-focus typing stay exact. Presentation pauses come
-from bounded distributions and supplement the functional navigation delay and document wait; they
-never shorten that wait.
+After a click, a key, a submit or a scroll, the page settles before the action returns: one call
+waits a task and a frame in the page, and Chromium answers it only once a navigation the input
+asked for, by a link, a form or a handler's timer, has committed. A document that committed is then
+waited for until it is parsed, within 5 seconds. `pushState` and a 204 answer wait for nothing. A
+navigation a handler starts once a fetch answers comes too late for any wait; the next look sees
+it, and a picture never shows a document the page has left.
+
+## Presenting pages
+
+`Presentation` performs input for viewers of a page, and `Stage` decides which page they see.
+
+```ts
+import { Effect, Stream } from "effect";
+import { Browser } from "effect-browser/Browser";
+import type { Frame } from "effect-browser/Frame";
+import * as Presentation from "effect-browser/Presentation";
+import * as Stage from "effect-browser/Stage";
+
+declare const encode: (frame: Frame) => Effect.Effect<void>; // the application's own output
+
+const program = Effect.gen(function* () {
+  const stage = yield* Stage.make({ quality: 80 });
+  const presenter = yield* Presentation.make();
+  const page = yield* (yield* Browser).newPage("https://example.com");
+  const shown = yield* stage.present(page); // Presented { page, at, latency }
+
+  yield* stage.frames.pipe(Stream.runForEach(encode), Effect.forkScoped);
+  yield* presenter.view(page).click("e12"); // glides, then clicks, as a person would
+});
+```
+
+A presenter owns one drawn pointer. `presenter.view(page)` is the page with its actions performed:
+each waits first as a person reacts, by `Presentation.human`'s medians, 280 ms after an expected
+change, 600 ms after a new document and 1 second on another page; the pointer glides from where
+viewers last saw it, on whichever page; a field is clicked before typing; and the wheel turns in
+100 px notches, in bursts of up to nine. One view acts at a time. The time a view spends showing an
+action, its glides, holds and typing, has a budget of its own outside `actionTimeout`. `page`
+itself stays plain, and plain input on any page never waits for a view. `view.aim(target)` starts
+the glide as soon as a target is known, as when it appears in a model's streamed tool call; the
+view's next action completes it if it acts on that target, and stops it where it is otherwise. An
+aim records no action, and does nothing under an input guard.
+
+A stage is one per live output. `present(page, { at })` switches it at `at`, host monotonic
+milliseconds on the frame clock, or at once: it starts the new page's capture ahead, waits for its
+first frame, then for input already under way on the old page, and turns, stopping the old capture
+after. The captures overlap, within a session as across two: on Browserbase, two captures in one
+session ran together at the frame rate of one, where stopping first left 250 to 295 ms dark.
+`Presented.at` is when the switch took effect, no earlier than the frames it followed or the new
+page's first, and `latency` how long after `at`. A first frame that does not come in time fails
+`present` with `Timeout`, and the old page stays. A capture that fails restarts on its page while the
+page and its browser stand. A still page sends no frames until it changes, so a switch's first frame
+can be older than the frames before it. A delay line, a liveness rule, redaction and repeating a
+held frame stay the application's.
 
 `Browser.now`, event stamps, frame `receivedAt` and `Moment.at` share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.

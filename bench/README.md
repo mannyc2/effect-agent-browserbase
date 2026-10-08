@@ -8,7 +8,7 @@ The pages (`Sites.ts`) are served at `https://bench.test` by request interceptio
 Chromium and a hosted browser load them the same way, with no tunnel. Each page keeps its truth in
 `window.__bench` for grading; models never see it. Each trial derives its fixture seed from the base seed, task and trial number,
 so changing concurrency does not change its page data. The same seed seeds the trial's Effect
-`Random`, which humanized pointer paths and typing draw from.
+`Random`, which a performed run's pointer paths and typing draw from.
 
 Operate pages vary with the seed too, so a task's trials sample a family of pages rather than
 repeat one, and every graded answer is the page's own:
@@ -69,9 +69,9 @@ turn halt on the first failure. `browser_zoom` adds requested viewport crops to 
 pixel clicks return the element under the requested point. Runs without a model still use the free
 scripted solutions. Runs allow input by default; a caller's `Browser.Options.guard` can deny or
 hold input and navigation without a user-facing confirmation prompt. Typing keeps its
-pacing over delayed connections. Humanized runs use visible wheel input to reach off-screen
-targets and type near 75 WPM with overlapping holds; the optional prose flag permits corrected
-slips only in eligible fields. Presentation pauses preserve the navigation wait. Events, frame
+pacing over delayed connections. `--humanize` runs a trial through a presenter's views of its
+pages, so the scripted solutions and the agent's tools perform their input: they use visible wheel
+input to reach off-screen targets and type near 70 WPM with overlapping holds. Events, frame
 arrivals and moment windows use the browser’s host monotonic clock; these stamps are relative timings, not calendar dates. `Browser.events()` also
 exposes the presentation track with sequence cursors for bounded replay. The bench’s descriptions
 continue to use narrative action events, without the cursor-rendering track. Frame windows and

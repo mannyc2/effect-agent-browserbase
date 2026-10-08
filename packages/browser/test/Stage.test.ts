@@ -255,11 +255,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Effect.sleep("300 millis");
 
         const sizes = new Set(frames.map((frame) => `${frame.width}x${frame.height}`));
+        const carried = frames.length;
         const stats = Option.getOrThrow(yield* stage.stats({ window: "30 seconds" }));
 
         assert.strictEqual(sizes.size, 1, [...sizes].join(", "));
         assert.isAbove(stats.foreignSize + stats.duringPictures, 0);
-        assert.isAtLeast(stats.accepted, frames.length);
+        assert.isAtLeast(stats.accepted, carried);
+        // No frame goes out twice.
+        assert.strictEqual(new Set(frames.map((frame) => frame.timestamp)).size, frames.length);
       }).pipe(Effect.scoped),
     );
   },

@@ -264,6 +264,8 @@ export const make = (page: PageContext, sender: Dispatch) => {
               );
             });
 
+      const record = info.recorded === false ? () => 0 : publish;
+
       // Record the outcome even when the caller interrupts: its input may already be in the page.
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
@@ -286,34 +288,29 @@ export const make = (page: PageContext, sender: Dispatch) => {
             }),
           });
 
-          if (info.recorded !== false)
-            publish(
-              new Action({
-                at: now(),
-                startedAt,
-                page: id,
-                name,
-                target: info.target,
-                options: Exit.isSuccess(exit) ? info.options : undefined,
-                subject,
-                to,
-                box,
-                text:
-                  info.text === undefined
-                    ? undefined
-                    : revealed
-                      ? info.text.slice(0, 200)
-                      : redacted,
-                x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
-                y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
-                ok: Exit.isSuccess(exit),
-                dispatched,
-                error: Option.match(failure, {
-                  onNone: () => (Exit.hasInterrupts(exit) ? "interrupted" : undefined),
-                  onSome: (error) => error.message,
-                }),
+          record(
+            new Action({
+              at: now(),
+              startedAt,
+              page: id,
+              name,
+              target: info.target,
+              options: Exit.isSuccess(exit) ? info.options : undefined,
+              subject,
+              to,
+              box,
+              text:
+                info.text === undefined ? undefined : revealed ? info.text.slice(0, 200) : redacted,
+              x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
+              y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
+              ok: Exit.isSuccess(exit),
+              dispatched,
+              error: Option.match(failure, {
+                onNone: () => (Exit.hasInterrupts(exit) ? "interrupted" : undefined),
+                onSome: (error) => error.message,
               }),
-            );
+            }),
+          );
           if (Exit.isSuccess(exit)) return exit.value;
           if (dispatched)
             return yield* Exit.mapError(exit, (error) =>

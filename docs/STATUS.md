@@ -36,10 +36,11 @@
   credential parameters, and init scripts run where their `match` allows, a popup's first document
   included. Chromium announces a title change only with the next address change, so titles are
   read on demand.
-- `effect-browser-human-strokes`: an optional layer with 32,130 recorded, attributed CC BY 4.0
-  pointer strokes, retaining their original sample coordinates and times. The core pointer planner
-  uses the tuned two-stroke sigma-lognormal model; browsers capture the motion service once.
-  Complete bounded plans are validated and admitted before publication and input.
+- `effect-browser-human-strokes`: an optional pointer planner, `HumanStrokes.motion`, over 32,130
+  recorded, attributed CC BY 4.0 pointer strokes, retaining their original sample coordinates and
+  times. The core planner, `Motion.lognormal`, uses the tuned two-stroke sigma-lognormal model; a
+  presenter takes either as a value. Complete bounded plans are validated and admitted before
+  publication and input.
 - `Agent.run` and `Tools.batch` run a turn's tool calls in order and halt on the first failure,
   with one outline and screenshot per turn, configurable observations and caller toolkits. A
   response that calls an unknown tool gets a correction rather than ending the run, a browser
@@ -67,8 +68,8 @@
   pointer arrives, typing refuses to start on a control a key could activate, and a multi-key
   action stops at a new document. Typing approves its field once: plain text goes into it in one
   insertion, so a guarded 2,000-character paste takes half a second at a 70 ms round trip, where
-  each key used to wait for the keys before it and a focus check, and humanized keys check focus
-  before each space and after the last key. Guards receive structural facts, never keyword categories, and
+  each key used to wait for the keys before it and a focus check, and keys a presenter's view
+  types check focus before each space and after the last key. Guards receive structural facts, never keyword categories, and
   page evidence around the target without field values; text typed into secret fields is redacted
   from requests and recorded events. A 77-control labelled corpus grades the facts in `ready`.
   `Policy` adds judges over `effect/ai` (`reviewer` on a `LanguageModel`, `decider` on a
@@ -104,16 +105,31 @@
   action has the page to itself, in the order actions were asked, and reads share it after the
   action in flight and every action asked before them, so a read describes the page an action
   left. A wait for a turn fails `Busy`, never `Timeout`, and `Page.failFast` fails it at once. A
-  click on one page no longer waits for humanized typing on another, which held an on-air click
-  for about 9.5 s in the release review. Identical reads in flight share one call, a read whose
+  click on one page no longer waits for typing at a person's pace on another, which held an on-air
+  click for about 9.5 s in the release review. Identical reads in flight share one call, a read whose
   callers gave up serves the next caller to ask the same until the page's next action, and
   `observe` returns what it could read, with why the rest is missing. `Browser.Options.maxPages`
   bounds the open pages, failing `Limit`.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
-  events; a pointer per page, and bounded event replay with explicit expiration.
-- Humanized scrolling to off-screen targets, bounded fallback and approval revalidation; typing
-  near 75 WPM with overlapping holds, slower word starts and opt-in corrected prose slips.
-  Sampled presentation pauses retain the functional navigation wait.
+  events; a pointer per page, a presenter's one drawn pointer across its views, and bounded event
+  replay with explicit expiration.
+- Input performed for viewers as an explicit view: `Presentation.make({ pacing, motion })` owns one
+  drawn pointer, and `presenter.view(page)` performs a page's actions while the page stays plain.
+  A view waits before each action as a person reacts (280 ms after an expected change, 600 ms
+  after a new document, 1 s on another page), glides from where viewers last saw the pointer,
+  clicks a field before typing near 70 WPM with overlapping holds, and scrolls in notches and
+  bursts, also to off-screen targets, with a bounded fallback and approval revalidation. One view
+  acts at a time, its presentation time is outside `actionTimeout`, and `view.aim` starts a glide
+  as soon as a target is known. The motion planner is a value: `Motion.lognormal`, or recorded
+  strokes from `HumanStrokes.motion`.
+- A stage for live output: `Stage.make` and `stage.present(page, { at })` switch an output's frames
+  between pages, in one session or across two, with the captures overlapping, and stamp when each
+  switch took effect on the frame clock. On Browserbase two captures in one session ran at the
+  frame rate of one, where stopping first left 250 to 295 ms dark. A late first frame fails typed
+  and leaves the old page on the stage, and a capture that fails restarts on its page.
+- After input, one call waits a task and a frame in the page, spanning any navigation the input
+  asked for, and a committed document is waited for until parsed: no fixed sleep. Ten clicks that
+  navigate nowhere took 1.65 s locally and 3.75 s at a 70 ms round trip, and take 0.5 s and 3.25 s.
 - Browser paint mapped onto the host clock with explicit uncertainty, wider as its estimate ages,
   through one browser-wide clock mapping that the first capture measures, never the opening of a
   browser, and that a capture measures again while its frames flow, so a busy page's wide first
@@ -194,16 +210,17 @@ and each becoming the next beta.
   changelog and the package versions, and is not tagged.
 - **Phase 3, concurrency and presentation, has begun.** Per-page admission is in: the browser-wide
   input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
-  pages have a budget, and guarded typing approves its field once.
+  pages have a budget, and guarded typing approves its field once. So are the stage, the presenter
+  and the wait after input: `humanize` and its fixed sleeps are gone.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 14,568                 | 11,064 → 15,902 | 129 → 177                 |
+| `effect-browser`               | 8,871 → 15,091                 | 11,064 → 16,258 | 129 → 186                 |
 | `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,643     | 32 → 36, and 14 `testing` |
-| `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
+| `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
 `effect-browser`'s figures include phase 2, as each part landed: the supervisor, 602 source lines,
 506 test lines and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9
@@ -211,8 +228,10 @@ exports; the capture connection's port and transport, 324 source lines, 43 test 
 and the change record, 1,423 source lines, 728 test lines and 6 exports. The phase's simplify pass
 took 118 source lines back out. The figures include phase 3's per-page admission too, 508 source
 lines, 411 test lines and 3 exports, most of it the lane, which deleting the browser-wide input lock
-paid for only in part. Without them, phase 1 leaves the package at 11,431 source lines, against a
-soft ceiling of about 11,000 through phase 4.
+paid for only in part; and the stage, the presenter and the wait after input, 523 source lines, 356
+test lines and 9 exports, which deleting `humanize`, its prose slips and the fixed sleeps paid for
+in part. Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of
+about 11,000 through phase 4.
 
 ## Not rebuilt yet
 

@@ -125,10 +125,12 @@ export const make = Effect.fn("Stage.make")(function* (options: Options = {}) {
         Stream.runForEach((frame) =>
           Effect.sync(() => {
             fed.latest = frame;
+            if (fed.live) {
+              painted = frame.hostTime;
+              PubSub.publishUnsafe(output, frame);
+            }
+            // Last: a switch waiting for this frame may turn, and send it, at once.
             Deferred.doneUnsafe(fed.first, Exit.void);
-            if (!fed.live) return;
-            painted = frame.hostTime;
-            PubSub.publishUnsafe(output, frame);
           }),
         ),
         Effect.retry({ while: restartable, schedule: Schedule.spaced(Duration.millis(500)) }),

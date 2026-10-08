@@ -189,17 +189,18 @@ prompt.
   means: a payment, an account, access, a deletion, a message or a secret. The guard denies a risk
   the user's task does not ask for, and fails closed on input with facts when the judge fails.
   `Agent.run` gives the guard its task and stops after three refusals in a row.
-- `humanize` uses a tuned two-stroke sigma-lognormal pointer planner and scrolls off-screen targets into view with visible
-  wheel input, using bounded attempts and an instant fallback. It rechecks the approved target
-  before activation. Typing aims for about 75 WPM, with overlapping key holds and slower word
-  starts; bounded pending replies keep connection latency out of the intended schedule.
-  The optional `effect-browser-human-strokes` layer supplies 32,130 recorded strokes, preserving
-  their original samples and timing; the core package contains no data. `Motion.Motion` is captured
-  when the browser is built, and each full glide is validated and admitted before its clock starts.
-- `Page.type(text, { prose: true })` and the `browser_type` tool's `prose` flag allow occasional
-  corrected slips when replacing an explicitly targeted prose field while humanized. Final text
-  is checked before submit; numbers, URLs, credentials and payment/order fields stay exact.
-  Presentation pauses supplement the functional navigation wait.
+- `Presentation` performs input for viewers: `presenter.view(page)` is a page whose actions wait as
+  a person reacts, glide the presenter's one drawn pointer along a tuned two-stroke
+  sigma-lognormal planner's paths, scroll off-screen targets into view with visible wheel input and
+  type at about 70 WPM, with overlapping key holds and slower word starts, while the page itself
+  stays plain. Presentation time has a budget of its own, outside `actionTimeout`, and
+  `view.aim(target)` starts a glide early. The optional `effect-browser-human-strokes` package
+  supplies 32,130 recorded strokes as a planner, `HumanStrokes.motion`; the core package contains
+  no data. Each full glide is validated and admitted before its clock starts.
+- `Stage` is the source of a live output: `present(page, { at })` switches it between pages, in one
+  session or across two, overlapping their captures, and stamps when each switch took effect.
+- After input, a page settles in one call, a task and a frame, which spans any navigation the input
+  asked for, and then waits for a committed document to be parsed; there is no fixed sleep.
   Printable US text uses key events; other text uses Unicode insertion.
 - Events, frame arrivals and moments share the owning browser’s host monotonic clock in milliseconds.
   `Browser.now` reads that clock. These stamps measure elapsed time, not calendar dates.
