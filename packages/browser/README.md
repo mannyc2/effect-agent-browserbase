@@ -28,9 +28,9 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Page`         | One tab: navigation, reads, screenshots, input, waits and the screencast             |
 | `Snapshot`     | The model-readable outline of a page, with refs for its controls                     |
 | `Frame`        | A screencast frame                                                                   |
-| `BrowserEvent` | Actions, navigations, tabs, dialogs and pointer motion, as they happen               |
+| `BrowserEvent` | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end       |
 | `Motion`       | The replaceable, bounded pointer planner, with a tuned sigma-lognormal default       |
-| `BrowserError` | Typed failures, saying whether input reached the page before the failure             |
+| `BrowserError` | Typed failures, whether input reached the page first, and what each leaves           |
 | `Tools`        | The `effect/ai` browser toolkit                                                      |
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
@@ -63,7 +63,7 @@ halting execution and the `concurrency: 1` that `effect/ai` needs to keep calls 
 the current `tools.page` and drains `tools.takeZooms` into that same observation message.
 
 `browser_zoom` captures a region in viewport CSS pixels when the tool runs. Requested crops arrive
-with the next observation even in outline mode, labeled with their source page and viewport origin.
+with the next observation even in outline mode, labeled with their tab's number and viewport origin.
 At most eight crops may await an observation. `Page.zoom` exposes the same capture as a `Zoom`
 schema value with `region` and `image`; crop pixel coordinates need the region's origin added before
 using them as click coordinates.
@@ -419,6 +419,44 @@ with a typed error. `recentFrames` keeps the frames painted within `frameHistory
 reader leaves; a stop whose reply is late is never resent, and the next capture waits for it (up
 to 2 s per attempt) rather than disabling capture for the page.
 
+A page's `id` is its CDP target id. A new connection to the same browser, as after a dropped one,
+finds each page under the id it had, with `browser.page(id)`; a stored id the browser no longer
+finds is a page that closed. `browser.pages` lists the open pages in the order the browser began
+tracking them, and `browser.firstPage` gives the first, opening one when there is none.
+
+A page's life is told on the browser's timeline. `PageOpened`; `Navigated` for every move of its
+main frame, `sameDocument` for one within the document, such as `pushState`, with `document`
+counting the page's documents from 0, the one it had when the browser began tracking it;
+`PageLoaded` as a document finishes parsing and loading; `DialogShown`; and `PageClosed`, by the
+page or because it crashed. A document count belongs to the page within one `Browser`, and starts
+again on a new connection. Each frame carries the document it followed and the page's address. A
+tab the site opened that the library could not track is `PageUntracked`. Chromium announces a
+title change only with the next change of address, so there is no title event: read `page.title`
+when `Navigated` or `PageLoaded` says the page moved.
+
+The browser's own end is one `Disconnected`, and `browser.disconnected` completes with its cause:
+`connection`, `session`, at or after the provider's `expiresAt`, which `SessionEnding` announces,
+or `released`, by the owner's scope. A browser lost so publishes no `PageClosed` for its pages,
+and calls in flight on them fail at once rather than at their deadline. A crashed page is closed:
+Playwright drives it no more, and its calls would never return.
+
+A failure on a page that is gone is `Closed` with its cause: `page`, `crashed`, or the browser's.
+`BrowserError.consequence(error)` says what any failure leaves: what was `lost` (`nothing`, the
+`page`, or the `session` with its pages), and whether to `repeat` the call: `safe`, as nothing
+reached the browser; `check` its effect first, as it may have taken place; `pointless` as it is,
+such as with a stale ref; or `resume` reading events from a newer cursor. `message` is a sentence
+for operators, and the browser tools tell a model what to do about the failure.
+
+Every address the library reports, in events, frames, reads, errors and a guard's request, keeps
+its identity and loses its userinfo and the query and fragment parameters named for credentials:
+tokens, keys, signatures, passwords, sessions, assertions and authorization codes. A chart's
+`?ticker=ETH` stays.
+
+`initScripts` take `{ match, source }`. The source runs before each new document's own scripts, in
+every frame, or only where `match`, a `RegExp`, finds the document's address, as a block. Playwright
+registers them as it sets each page up, so a popup's first document runs them too, at no call per
+document.
+
 `Browser.events()` streams `RecordedEvent` values: `{ sequence, event }`. The sequence orders
 all browser events and is the replay cursor. Call `browser.events({ after: lastSequence })` to
 resume, or use `after: 0` for everything since the browser opened if it is still retained. With
@@ -453,13 +491,14 @@ starting point to its bounds if necessary.
 `Supervisor.make` keeps a browser open across losses and session ends, as generations, each a new
 browser from the provider's `open`. Opens run in the supervisor's own scope, so a caller that stops
 waiting never interrupts a half-open browser. `browser` gives the current generation, waiting up to
-`waitTimeout` while one opens. A lost browser is published at once, and the next one opens on the
-`reopen` schedule, which also retries a failed open until it gives up, unless the provider deems
-the failure `definite`, such as a refused key: then the generation is `Down` at once, with its
-cause, which `Unavailable` also gives anyone waiting, because a schedule would only hide a
-configuration error. `rotate`, or the time
-`rotateBefore` ahead of a generation's `expiresAt`, opens the next generation before it releases
-the current one, unless generations are `exclusive`: then the current one is released first.
+`waitTimeout` while one opens. A lost browser is published at once, `Lost` with its browser's
+`disconnected` cause, and the next one opens on the `reopen` schedule, which also retries a failed
+open until it gives up, unless the provider deems the failure `definite`, such as a refused key:
+then the generation is `Down` at once, with its cause, which `Unavailable` also gives anyone
+waiting, because a schedule would only hide a configuration error. `rotate`, or the time
+`rotateBefore` ahead of a generation's browser's `expiresAt`, opens the next generation before it
+releases the current one, unless generations are `exclusive`: then the current one is released
+first.
 `retire` stops reopening at once and releases what is open; closing the scope retires too. `states`
 streams each generation's `Opening`, `Reopening`, `Open`, `Lost`, `Down` and `Closed`, the last with
 the provider's release outcome, `Settled` or `Unconfirmed`, so time open is a subtraction of their

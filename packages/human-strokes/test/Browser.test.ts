@@ -14,7 +14,7 @@ layer(browserLayer, { excludeTestServices: true, timeout: Duration.seconds(60) }
     it.effect("captures the supplied planner once and performs its exact published samples", () =>
       Effect.gen(function* () {
         const browser = yield* Browser;
-        const page = yield* browser.page;
+        const page = yield* browser.firstPage;
 
         yield* Effect.promise(() =>
           page.playwright.setContent(

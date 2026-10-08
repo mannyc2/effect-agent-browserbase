@@ -7,6 +7,7 @@
 // outline.
 import { Context, Effect, Exit, Option, Ref, Schema } from "effect";
 import * as Agent from "effect-browser/Agent";
+import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
 import * as Tools from "effect-browser/Tools";
@@ -439,6 +440,7 @@ const VisionToolkit = Toolkit.make(
  */
 const visionFirst = <A, I, E>(task: string, options: OperateOptions<A, I, E>) =>
   Effect.gen(function* () {
+    const browser = yield* Browser;
     const tools = yield* Tools.make();
     const { handlers } = tools;
 
@@ -451,6 +453,10 @@ const visionFirst = <A, I, E>(task: string, options: OperateOptions<A, I, E>) =>
         Effect.catch((error) => Effect.succeed(error.message)),
       );
 
+      // A crop names its tab as the tab list numbers it, from one, as the agent's do.
+      const open = yield* browser.pages;
+      const tabOf = (id: string) => open.findIndex((tab) => tab.id === id) + 1;
+
       return message([
         text(
           typeof image === "string"
@@ -460,7 +466,7 @@ const visionFirst = <A, I, E>(task: string, options: OperateOptions<A, I, E>) =>
         ...(image === undefined || typeof image === "string" ? [] : picture(image)),
         ...zooms.flatMap((zoom) => [
           text(
-            `Zoom from page ${zoom.page}: viewport origin (${zoom.region.x}, ${zoom.region.y}), ${zoom.region.width}x${zoom.region.height} CSS pixels. Captured when browser_zoom ran. Add this origin to image coordinates for viewport clicks.`,
+            `Zoom from ${tabOf(zoom.page) === 0 ? "a tab since closed" : `tab ${tabOf(zoom.page)}`}: viewport origin (${zoom.region.x}, ${zoom.region.y}), ${zoom.region.width}x${zoom.region.height} CSS pixels. Captured when browser_zoom ran. Add this origin to image coordinates for viewport clicks.`,
           ),
           Prompt.makePart("file", { mediaType: zoom.image.mediaType, data: zoom.image.data }),
         ]),

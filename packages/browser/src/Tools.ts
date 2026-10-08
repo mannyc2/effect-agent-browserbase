@@ -28,7 +28,7 @@ import {
 import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
-import type { BrowserError } from "./BrowserError.ts";
+import { type BrowserError, consequence } from "./BrowserError.ts";
 import * as Url from "./internal/page/url.ts";
 import * as Page from "./Page.ts";
 
@@ -417,6 +417,20 @@ const named = (op: {
   readonly y?: number | undefined;
 }) => op.ref ?? `(${op.x}, ${op.y})`;
 
+/** A failure as the model is told it: what happened, then what to do about it. */
+const told = (error: BrowserError | string) => {
+  if (typeof error === "string") return error;
+  const { lost, repeat } = consequence(error);
+
+  const advice = [
+    lost === "session" ? "The browser is gone." : lost === "page" ? "The tab is gone." : "",
+    error.reason._tag === "StaleRef" ? "Take a new snapshot." : "",
+    repeat === "check" ? "It may have taken effect: look at the page before you repeat it." : "",
+  ].filter((sentence) => sentence !== "");
+
+  return [`${error.message}.`, ...advice].join(" ");
+};
+
 /** Build the tools over the `Browser` in context, acting on its first tab to begin with. */
 export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   const browser = yield* Browser;
@@ -471,7 +485,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     const open = yield* browser.pages;
     const kept = Option.filter(current, (tab) => open.includes(tab));
     const lost = Option.isSome(current) && Option.isNone(kept);
-    const tab = Option.isSome(kept) ? kept.value : yield* browser.page;
+    const tab = Option.isSome(kept) ? kept.value : yield* browser.firstPage;
 
     seen.add(tab.id);
     if (lost) become(tab, closed);
@@ -490,10 +504,9 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
 
   const describeTab = (tab: Page.Page) =>
     tab.title.pipe(
-      Effect.orElseSucceed(() => ""),
-      Effect.flatMap((title) =>
-        Effect.map(tab.url, (url) => `${title === "" ? "(untitled)" : title} — ${url}`),
-      ),
+      Effect.map((title) => (title === "" ? "(untitled)" : title)),
+      Effect.catch((error) => Effect.succeed(`(its title could not be read: ${error.message})`)),
+      Effect.flatMap((title) => Effect.map(tab.url, (url) => `${title} — ${url}`)),
     );
 
   /** Note a refusal, and forget them all once the policy allows an action it decides on. */
@@ -539,7 +552,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       // A tab that registers later is followed when the tools next look; either way, later
       // actions wait until it is observed.
       return (yield* follow) ? `${receipt}\n${opened}` : receipt;
-    }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message)));
+    }).pipe(Effect.mapError(told));
 
   const tabList = Effect.gen(function* () {
     const open = yield* browser.pages;
@@ -567,7 +580,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
         const snapshot = yield* tab.snapshot({ full, query, maxChars: snapshotChars });
 
         return note === undefined ? snapshot.rendered : `${note}\n${snapshot.rendered}`;
-      }).pipe(Effect.mapError((error) => error.message)),
+      }).pipe(Effect.mapError(told)),
     browser_zoom: (region) =>
       zoomLock.withPermits(1)(
         Effect.gen(function* () {
@@ -577,11 +590,12 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
             );
           const { tab, note } = yield* resolve;
           const zoom = yield* tab.zoom(region);
+          const number = (yield* browser.pages).indexOf(tab) + 1;
 
           zooms.push(zoom);
 
-          return `${note === undefined ? "" : note + "\n"}Captured a zoom from page ${zoom.page} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
-        }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message))),
+          return `${note === undefined ? "" : note + "\n"}Captured a zoom from tab ${number} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
+        }).pipe(Effect.mapError(told)),
       ),
     browser_click: (op) =>
       act(
@@ -683,7 +697,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
         }
 
         return yield* tabList;
-      }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message))),
+      }).pipe(Effect.mapError(told)),
   });
 
   const toolkit = yield* BrowserToolkit.pipe(Effect.provide(BrowserToolkit.toLayer(handlers)));

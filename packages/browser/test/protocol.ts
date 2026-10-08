@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,8 @@ export interface Proxy {
    * toward the client, frames and answers alike; toward the browser, acknowledgements and commands.
    */
   stall: (toward: "client" | "browser", millis: number) => void;
+  /** Cut every connection open now, as a network fault would; the browser runs on. */
+  readonly drop: () => void;
 }
 
 // One direction of a connection: messages pass at once, except while it stalls, when they wait and
@@ -270,6 +272,7 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
   );
 
   const stalled = { client: 0, browser: 0 };
+  const connections = new Set<Socket>();
 
   const proxy: Proxy = {
     endpoint: "",
@@ -280,13 +283,19 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
     stall: (toward, millis) => {
       stalled[toward] = Math.max(stalled[toward], performance.now() + millis);
     },
+    drop: () => {
+      for (const connection of connections) connection.destroy();
+    },
   };
 
   const server = yield* Effect.acquireRelease(
     Effect.callback<Server>((resume) => {
-      const listening = relay(endpoint, proxy, stalled).listen(0, "127.0.0.1", () =>
-        resume(Effect.succeed(listening)),
-      );
+      const listening = relay(endpoint, proxy, stalled)
+        .on("connection", (connection: Socket) => {
+          connections.add(connection);
+          connection.on("close", () => connections.delete(connection));
+        })
+        .listen(0, "127.0.0.1", () => resume(Effect.succeed(listening)));
     }),
     (server) => Effect.sync(() => server.close()),
   );

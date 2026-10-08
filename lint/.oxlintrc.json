@@ -171,16 +171,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 242, "skipBlankLines": true, "skipComments": true }
-        ]
-      }
-    },
-    {
-      "files": ["**/packages/browser/src/Browser.ts"],
-      "rules": {
-        "eslint/max-lines-per-function": [
-          "error",
-          { "max": 201, "skipBlankLines": true, "skipComments": true }
+          { "max": 237, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },

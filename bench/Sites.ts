@@ -518,7 +518,11 @@ export const truth = <A, I>(
     try: () => page.playwright.evaluate(() => (window as unknown as { __bench: unknown }).__bench),
     catch: (cause) =>
       page.playwright.isClosed()
-        ? new BrowserError({ operation: "truth", reason: new Closed({}), dispatched: false })
+        ? new BrowserError({
+            operation: "truth",
+            reason: new Closed({ cause: "page" }),
+            dispatched: false,
+          })
         : new FixtureUnreadable({
             detail: `${page.playwright.url()} could not be evaluated: ${cause instanceof Error ? cause.message.split("\n")[0] : "unknown"}`,
           }),

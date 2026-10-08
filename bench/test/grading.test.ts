@@ -122,7 +122,7 @@ const describeWith = (
       );
     }
 
-    const page = yield* browser.page;
+    const page = yield* browser.firstPage;
 
     const prompts: Array<Prompt.Prompt> = [];
     const histories: Array<ReadonlyArray<Frame>> = [];
@@ -163,7 +163,10 @@ const describeWith = (
     const outcome = yield* taskNamed(name)
       .withModel({ seed: options.seed ?? 23, onUsage: () => Effect.void })
       .pipe(
-        Effect.provideService(Browser, Browser.of({ ...browser, page: Effect.succeed(observed) })),
+        Effect.provideService(
+          Browser,
+          Browser.of({ ...browser, firstPage: Effect.succeed(observed) }),
+        ),
         Effect.provideService(LanguageModel.LanguageModel, model),
       );
 

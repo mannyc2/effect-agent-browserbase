@@ -194,13 +194,21 @@ const timeline = (moment: Moment): ReadonlyArray<string> =>
         return [`${when} ${event.name} ${what}${outcome}`.replace(/\s+/g, " ").trim()];
       }
       case "Navigated":
-        return [`${when} navigated to ${event.url}`];
+        return [
+          `${when} ${event.sameDocument ? "moved within the page" : "navigated"} to ${event.url}`,
+        ];
       case "PageOpened":
         return [`${when} a tab opened at ${event.url}`];
       case "PageClosed":
-        return [`${when} the tab closed`];
+        return [`${when} the tab ${event.cause === "crashed" ? "crashed" : "closed"}`];
       case "DialogShown":
         return [`${when} a dialog (${event.kind}) said ${JSON.stringify(event.message)}`];
+      // What the page's own pictures and timeline show already, or the browser's, not the page's.
+      case "PageLoaded":
+      case "PageUntracked":
+      case "Disconnected":
+      case "SessionEnding":
+        return [];
     }
   });
 

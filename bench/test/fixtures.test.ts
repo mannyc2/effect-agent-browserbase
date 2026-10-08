@@ -14,7 +14,7 @@ const quotePage = (path: string, seed: number) =>
     const browser = yield* Browser;
 
     yield* serve(browser, seed);
-    const page = yield* browser.page;
+    const page = yield* browser.firstPage;
 
     yield* page.goto(origin + path);
     const expected = yield* truth(page, QuoteTruth);

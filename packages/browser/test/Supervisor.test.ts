@@ -2,7 +2,6 @@
 // releases and retiring, each checked against the rules a supervisor must keep. Then the
 // supervisor itself: over local Chromium for losses and rotations, and over stand-in browsers on
 // the test clock for its timing.
-import { EventEmitter } from "node:events";
 
 import { assert, describe, it } from "@effect/vitest";
 import { Arbitrary, DateTime, Effect, Fiber, Option, Schedule, Schema, Stream } from "effect";
@@ -107,7 +106,11 @@ const apply = (world: World, input: Lifecycle.Input<string>) => {
     );
   for (const [number, state] of step.events)
     if (state._tag === "Lost") {
-      assert.deepStrictEqual(input, { _tag: "Lost", number }, "only the lost generation is lost");
+      assert.deepStrictEqual(
+        input,
+        { _tag: "Lost", number, cause: state.cause },
+        "only the lost generation is lost, with its cause",
+      );
       assert.strictEqual(step.state._tag, "Opening", "a loss reopens at once");
     }
 
@@ -171,7 +174,12 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
         `lose ${number}`,
         () => {
           world.fired.add(`lost ${number}`);
-          apply(world, { _tag: "Lost", number });
+          // A generation being released is lost to its own release.
+          apply(world, {
+            _tag: "Lost",
+            number,
+            cause: world.releasing.has(number) ? "released" : "connection",
+          });
         },
       ]);
     if (!world.fired.has(`due ${number}`))
@@ -292,7 +300,9 @@ describe("Supervisor's lifecycle", () => {
 const line = ({ number, state }: Supervisor.Generation) =>
   state._tag === "Closed"
     ? `${number} Closed ${state.released?._tag ?? "none"}`
-    : `${number} ${state._tag}`;
+    : state._tag === "Lost"
+      ? `${number} Lost ${state.cause}`
+      : `${number} ${state._tag}`;
 
 /** Everything `states` publishes until the supervisor retires, as lines. */
 const record = (supervisor: Supervisor.Supervisor) =>
@@ -311,11 +321,9 @@ const published = (supervisor: Supervisor.Supervisor, expected: string) =>
 
 const local = Chromium.open().pipe(Effect.map((browser) => ({ browser })));
 
-/** A browser never driven, whose context closing is how its loss shows. */
-const standIn = () =>
-  ({
-    context: Object.assign(new EventEmitter(), { browser: () => null }),
-  }) as unknown as Browser.Service;
+/** A browser never driven and never lost, which its provider ends at `expiresAt`, if given. */
+const standIn = (expiresAt?: DateTime.Utc) =>
+  ({ disconnected: Effect.never, expiresAt }) as unknown as Browser.Service;
 
 describe("Supervisor", () => {
   it.live("publishes a loss at once, reopens, and reports the lost generation's release", () =>
@@ -339,9 +347,14 @@ describe("Supervisor", () => {
       assert.isFalse(second.context.browser()?.isConnected());
       const lines = yield* Fiber.join(states);
 
-      assert.deepStrictEqual(of(lines, 1), ["1 Opening", "1 Open", "1 Lost", "1 Closed Settled"]);
+      assert.deepStrictEqual(of(lines, 1), [
+        "1 Opening",
+        "1 Open",
+        "1 Lost connection",
+        "1 Closed Settled",
+      ]);
       assert.deepStrictEqual(of(lines, 2), ["2 Reopening", "2 Open", "2 Closed Settled"]);
-      assert.isBelow(lines.indexOf("1 Lost"), lines.indexOf("2 Reopening"));
+      assert.isBelow(lines.indexOf("1 Lost connection"), lines.indexOf("2 Reopening"));
     }),
   );
 
@@ -392,10 +405,7 @@ describe("Supervisor", () => {
         Effect.map((now) => {
           opened += 1;
 
-          return {
-            browser: standIn(),
-            expiresAt: DateTime.add(now, { minutes: opened === 1 ? 60 : 10 }),
-          };
+          return { browser: standIn(DateTime.add(now, { minutes: opened === 1 ? 60 : 10 })) };
         }),
       );
 

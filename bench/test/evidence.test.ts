@@ -17,6 +17,8 @@ const painted = (millis: number) =>
     receivedAt: millis + 5,
     width: 1280,
     height: 720,
+    document: 1,
+    url: "http://bench.test/",
   });
 
 const jump = 1_700_000_000_000 + 2500;

@@ -29,7 +29,9 @@ const open = (path: string) =>
     const browser = yield* Browser;
     const site = yield* Site;
 
-    return yield* Effect.acquireRelease(browser.newPage(site.url(path)), (page) => page.close);
+    return yield* Effect.acquireRelease(browser.newPage(site.url(path)), (page) =>
+      Effect.ignore(page.close),
+    );
   });
 
 const text = (page: Page, selector: string) =>
@@ -361,7 +363,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     Effect.gen(function* () {
       const browser = yield* Browser;
       const site = yield* Site;
-      const fresh = yield* Effect.acquireRelease(browser.newPage(), (page) => page.close);
+
+      const fresh = yield* Effect.acquireRelease(browser.newPage(), (page) =>
+        Effect.ignore(page.close),
+      );
 
       assert.deepStrictEqual(yield* reason(fresh.back), { tag: "NotFound", dispatched: false });
 
@@ -405,9 +410,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const pages = yield* browser.pages;
 
       assert.strictEqual(pages.length, before + 1);
-      yield* Effect.forEach(
-        pages.filter((other) => other.id !== page.id).slice(-1),
-        (other) => other.close,
+      yield* Effect.forEach(pages.filter((other) => other.id !== page.id).slice(-1), (other) =>
+        Effect.ignore(other.close),
       );
 
       const events = (yield* browser.recentEvents).filter(
@@ -887,7 +891,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         });
 
         for (let index = 0; index < 3; index++) yield* visit;
-        yield* (yield* browser.page).close;
+        yield* (yield* browser.firstPage).close;
         yield* browser.pages.pipe(
           Effect.repeat({
             schedule: Schedule.spaced(Duration.millis(50)),

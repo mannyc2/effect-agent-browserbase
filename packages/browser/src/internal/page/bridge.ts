@@ -1,13 +1,15 @@
 /**
- * The bridge to the page script. At the library's first read of a page, its own protocol session
- * registers the script, so every later document runs it in an isolated world from its start; calls
- * go to the current document's world. The script is composed from the domains' page-side parts,
- * the `*.inpage.ts` modules, in the order they depend on one another: names, the walk, matching,
- * context, subjects, text and readiness, then the outline and the input parts.
+ * The bridge to the page script, and the page's documents as its own session sees them commit. At
+ * the library's first read of a page, its own protocol session registers the script, so every
+ * later document runs it in an isolated world from its start; calls go to the current document's
+ * world. The script is composed from the domains' page-side parts, the `*.inpage.ts` modules, in
+ * the order they depend on one another: names, the walk, matching, context, subjects, text and
+ * readiness, then the outline and the input parts.
  */
 import { Effect, Semaphore } from "effect";
 
 import { BrowserError, Failed } from "../../BrowserError.ts";
+import { Navigated } from "../../BrowserEvent.ts";
 import { edit, type Edit } from "../input/edit.inpage.ts";
 import { evidence } from "../input/evidence.inpage.ts";
 import { guard, type Guard } from "../input/guard.inpage.ts";
@@ -21,6 +23,7 @@ import { subjects, type Subjects } from "../reading/subjects.inpage.ts";
 import { text, type Texts } from "../reading/text.inpage.ts";
 import { walk } from "../reading/walk.inpage.ts";
 import { contextGone, type PageContext } from "./context.ts";
+import * as Url from "./url.ts";
 
 /** What the script installs: a version, and a function of one of its parts for each call. */
 export interface PageApi {
@@ -112,60 +115,45 @@ export const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): strin
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
 export const make = Effect.fnUntraced(function* (page: PageContext) {
-  const { cdp, native, span } = page;
+  const { id, cdp, native, span, publish, now } = page;
   const { send } = page.protocol;
   const registering = yield* Semaphore.make(1);
-  // The main frame's id, which is the page's target id, and whether this session has registered
-  // the script and has the Page domain on.
-  let frameId: string | undefined;
+  // Whether this session has registered the script.
   let registered = false;
-  let paging = false;
-  // The current document's world, forgotten when the main frame commits another document, and the
-  // commits this session has seen, the latest marked on the page. Only a commit is a new document:
-  // `frameStartedLoading` also fires on `pushState`.
+  // The current document's world, forgotten when the main frame commits another document; the
+  // commits this session has seen, the latest marked on the page; and the page's address.
   let world: number | undefined;
   let documents = 0;
+  let url = Url.redact(page.url);
 
+  const navigated = (next: string, sameDocument: boolean) => {
+    url = Url.redact(next);
+    publish(new Navigated({ at: now(), page: id, url, document: documents, sameDocument }));
+  };
+
+  // Only a commit is a new document: `frameStartedLoading` also fires on `pushState`, which the
+  // main frame reports as a navigation within its document.
   cdp.on("Page.frameNavigated", ({ frame }) => {
     if (frame.parentId !== undefined) return;
     documents++;
-    page.activity.documentAt = page.now();
+    page.activity.documentAt = now();
     world = undefined;
+    navigated(frame.url + (frame.urlFragment ?? ""), false);
+  });
+  cdp.on("Page.navigatedWithinDocument", (moved) => {
+    if (moved.frameId === id) navigated(moved.url, true);
   });
 
-  // The Page domain's events, commits among them, reach a session only once it enables the domain.
-  const enablePage = (operation: string) =>
-    Effect.suspend(() =>
-      paging
-        ? Effect.void
-        : native(operation, () => send("Page.enable")).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                paging = true;
-              }),
-            ),
-          ),
-    );
-
   /**
-   * The main-frame commits seen so far, with the Page domain on so that every later one counts. A
-   * commit within about one round trip of the count can still be missed.
+   * The main-frame commits seen so far, once the Page domain, which registration turned on, has
+   * answered, so that every later one counts. A commit within about one round trip of the count
+   * can still be missed.
    */
   const currentDocument = (operation: string) =>
-    enablePage(operation).pipe(Effect.map(() => documents));
+    page.paging(operation).pipe(Effect.map(() => documents));
 
-  const mainFrame = (operation: string) =>
-    Effect.suspend(() =>
-      frameId === undefined
-        ? native(operation, () => send("Target.getTargetInfo")).pipe(
-            Effect.map(({ targetInfo }) => {
-              frameId = targetInfo.targetId;
-
-              return targetInfo.targetId;
-            }),
-          )
-        : Effect.succeed(frameId),
-    );
+  /** What a frame that arrives now shows: the page's current document and its address. */
+  const frameTag = () => ({ document: documents, url });
 
   // The registration belongs to this session and the world to the page, so a session that attaches
   // later, as after a reconnect, registers again and finds the script already installed. With the
@@ -173,8 +161,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   const register = (operation: string) =>
     Effect.all(
       [
-        mainFrame(operation),
-        enablePage(operation),
+        page.paging(operation),
         native(operation, () =>
           send("Page.addScriptToEvaluateOnNewDocument", {
             source: `if (globalThis === globalThis.top) ${installSource};`,
@@ -193,18 +180,16 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       span("Page.register", {}, "Debug"),
     );
 
-  const registeredFrame = (operation: string) =>
-    registering
-      .withPermits(1)(Effect.suspend(() => (registered ? Effect.void : register(operation))))
-      .pipe(Effect.andThen(mainFrame(operation)));
-
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
-      const frame = yield* registeredFrame(operation);
+      yield* registering.withPermits(1)(
+        Effect.suspend(() => (registered ? Effect.void : register(operation))),
+      );
       const document = documents;
 
+      // The main frame's id is the page's target id.
       const created = yield* native(operation, () =>
-        send("Page.createIsolatedWorld", { frameId: frame, worldName }),
+        send("Page.createIsolatedWorld", { frameId: id, worldName }),
       );
 
       // A world the page replaced while it was being looked up serves this call, not later ones.
@@ -219,14 +204,9 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
 
   /** A world of the current document without the page script, as the clock probe needs. */
   const bareWorld = (operation: string) =>
-    mainFrame(operation).pipe(
-      Effect.flatMap((frame) =>
-        native(operation, () =>
-          send("Page.createIsolatedWorld", { frameId: frame, worldName: `${worldName}-clock` }),
-        ),
-      ),
-      Effect.map((created) => created.executionContextId),
-    );
+    native(operation, () =>
+      send("Page.createIsolatedWorld", { frameId: id, worldName: `${worldName}-clock` }),
+    ).pipe(Effect.map((created) => created.executionContextId));
 
   const run = (operation: string, expression: string, contextId: number) =>
     native(operation, () =>
@@ -294,7 +274,15 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   const evaluate = (operation: string, call: string) =>
     evaluateWithContext(operation, call).pipe(Effect.map(({ value }) => value));
 
-  return { current, bareWorld, evaluate, evaluateIn, evaluateWithContext, currentDocument };
+  return {
+    current,
+    bareWorld,
+    evaluate,
+    evaluateIn,
+    evaluateWithContext,
+    currentDocument,
+    frameTag,
+  };
 });
 
 export type Bridge = Effect.Success<ReturnType<typeof make>>;

@@ -106,7 +106,7 @@ describe("hosted trials", () => {
             ),
           );
 
-          const page = yield* Context.get(context, Browser).page;
+          const page = yield* Context.get(context, Browser).firstPage;
 
           yield* page.goto("data:text/html,<button>Go</button>");
           assert.include((yield* page.snapshot()).text, 'button "Go"');
@@ -140,16 +140,14 @@ describe("hosted trials", () => {
       new Status({ status: 502, detail: "bad gateway" }),
       new Status({ status: 408, detail: "request timeout" }),
       new Decode({ detail: "missing region" }),
-      new Decode({
-        detail: "missing region; session s9 could not be released and ends at its timeout",
-      }),
+      new Decode({ detail: "missing region", released: false }),
     ])
       assert.isTrue(uncertainAllocation(failed("createSession", reason)), reason.message);
 
     for (const reason of [
       new RateLimited({ detail: "busy" }),
       new Status({ status: 400, detail: "bad request" }),
-      new Decode({ detail: "missing region; session s9 was released" }),
+      new Decode({ detail: "missing region", released: true }),
     ])
       assert.isFalse(uncertainAllocation(failed("createSession", reason)), reason.message);
     assert.isFalse(

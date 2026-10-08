@@ -192,7 +192,13 @@ const typed = (text: string) =>
 
 const walk = (text: string): ReadonlyArray<BrowserEvent> => [
   opened,
-  new Navigated({ ...at, at: 2, url: "https://example.com/markets-moved" }),
+  new Navigated({
+    ...at,
+    at: 2,
+    url: "https://example.com/markets-moved",
+    document: 1,
+    sameDocument: false,
+  }),
   new Action({
     ...at,
     at: 3,
@@ -395,7 +401,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
   const fresh = Effect.gen(function* () {
     const browser = yield* Browser;
 
-    return yield* Effect.acquireRelease(browser.newPage(), (page) => page.close);
+    return yield* Effect.acquireRelease(browser.newPage(), (page) => Effect.ignore(page.close));
   });
 
   it.effect("says a walk that ends on another site drifted", () =>
@@ -438,7 +444,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
         const browser = yield* Browser;
         const site = yield* DriftSite;
         const seeds = Number(process.env["DRIFT_SEEDS"] ?? 1);
-        const fresh = Effect.acquireRelease(browser.newPage(), (page) => page.close);
+        const fresh = Effect.acquireRelease(browser.newPage(), (page) => Effect.ignore(page.close));
         const outcomes: Record<string, string> = {};
         const wanted: Record<string, string> = {};
         const timings: Record<string, number> = {};

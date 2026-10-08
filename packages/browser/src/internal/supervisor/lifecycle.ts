@@ -5,6 +5,8 @@
  */
 import { Schema } from "effect";
 
+import { DisconnectCause } from "../../BrowserEvent.ts";
+
 /** The provider confirmed that the generation's browser ended. */
 export class Settled extends Schema.TaggedClass<Settled>()("Settled", {}) {}
 
@@ -26,8 +28,10 @@ export class Reopening extends Schema.TaggedClass<Reopening>()("Reopening", {}) 
 /** Open: `browser` gives this generation until the next one opens. */
 export class Open extends Schema.TaggedClass<Open>()("Open", {}) {}
 
-/** Lost: its connection dropped, or its browser was closed from the other side. */
-export class Lost extends Schema.TaggedClass<Lost>()("Lost", {}) {}
+/** Lost: its connection dropped, or its provider ended its session, as `cause` says. */
+export class Lost extends Schema.TaggedClass<Lost>()("Lost", {
+  cause: DisconnectCause,
+}) {}
 
 /**
  * It never opened: its last try failed with `cause`, which the provider deems definite, or after
@@ -80,7 +84,7 @@ export type Input<A> =
     }
   /** The open of `number` was stopped, as on retiring, before it opened. */
   | { readonly _tag: "Abandoned"; readonly number: number }
-  | { readonly _tag: "Lost"; readonly number: number }
+  | { readonly _tag: "Lost"; readonly number: number; readonly cause: DisconnectCause }
   /** A caller asks for the next generation, or the rotation time of `due` came. */
   | { readonly _tag: "Rotate"; readonly due?: number | undefined }
   | { readonly _tag: "Retire" }
@@ -168,7 +172,7 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
       const lost = servingOf(state);
 
       if (state._tag === "Retired" || lost?.number !== input.number) return stay;
-      const events = [[lost.number, new Lost()] as const];
+      const events = [[lost.number, new Lost({ cause: input.cause })] as const];
 
       // A rotation already opening the next generation carries on without the lost one.
       if (state._tag === "Opening")

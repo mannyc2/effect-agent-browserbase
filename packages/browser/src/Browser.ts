@@ -4,12 +4,15 @@
  * `Browser` is a service with one implementation, built by a provider over a Playwright browser
  * context: `Chromium` launches one locally, `Cdp` connects to any DevTools endpoint and
  * `effect-browserbase` allocates a hosted one. Code written against `Browser` runs on all three.
+ * A page is named by its CDP target id, so a new connection to the same browser finds it again.
  *
  * @since 0.3.0
  */
 import {
   Clock,
   Context,
+  DateTime,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -20,29 +23,39 @@ import {
   Semaphore,
   type Stream,
 } from "effect";
-import type {
-  BrowserContext,
-  CDPSession,
-  Dialog,
-  Frame as PlaywrightFrame,
-  Page as PlaywrightPage,
-} from "playwright-core";
+import type { BrowserContext, Dialog, Page as PlaywrightPage } from "playwright-core";
 
 import { BrowserError, Failed, InvalidRequest } from "./BrowserError.ts";
 import {
   type BrowserEvent,
   DialogShown,
-  Navigated,
+  Disconnected,
+  type DisconnectCause,
   PageClosed,
+  PageLoaded,
   PageOpened,
+  PageUntracked,
   type RecordedEvent,
+  SessionEnding,
 } from "./BrowserEvent.ts";
-import { reasonOf } from "./internal/page/context.ts";
+import { call } from "./internal/page/context.ts";
 import * as PageImpl from "./internal/page/page.ts";
+import * as Url from "./internal/page/url.ts";
 import * as BrowserClock from "./internal/pictures/clock.ts";
 import * as Timeline from "./internal/timeline/events.ts";
 import * as Motion from "./Motion.ts";
 import type * as Page from "./Page.ts";
+
+/** A script that documents run before their own, such as a consent-banner remover. */
+export interface InitScript {
+  /**
+   * The documents that run it, by a pattern their address (`location.href`) matches; every
+   * document and frame when left out. Under a `match`, the source runs as a block, so its own
+   * top-level `let`, `const` and classes stay its own.
+   */
+  readonly match?: RegExp | undefined;
+  readonly source: string;
+}
 
 export interface Options {
   /** Move the pointer along curved paths and type with human pacing. Defaults to false. */
@@ -65,8 +78,8 @@ export interface Options {
   readonly guard?: Page.InputGuard | undefined;
   /** A separate bound for policy holds, outside action timeouts. Defaults to 5 minutes. */
   readonly policyTimeout?: Duration.Input | undefined;
-  /** Scripts every new document runs before its own, such as a consent-banner remover. */
-  readonly initScripts?: ReadonlyArray<string> | undefined;
+  /** Scripts that new documents run before their own, each where its `match` allows. */
+  readonly initScripts?: ReadonlyArray<InitScript> | undefined;
 }
 
 export interface EventOptions {
@@ -78,15 +91,24 @@ export interface Service {
   /** The provider's session id, or a local id. */
   readonly id: string;
   readonly provider: string;
+  /** When the provider ends the session on its own, as a hosted session's timeout does. */
+  readonly expiresAt: DateTime.Utc | undefined;
   /** Host monotonic milliseconds on the clock shared by this browser’s events and frames. */
   readonly now: Effect.Effect<number>;
   /** The Playwright context, for anything this API does not cover. Never give it to a model. */
   readonly context: BrowserContext;
-  /** Open pages in the order they opened. */
+  /** Open pages in the order this browser began tracking them. */
   readonly pages: Effect.Effect<ReadonlyArray<Page.Page>>;
+  /** The open page with this id, its CDP target id, as stored before a reconnect. */
+  readonly page: (id: string) => Effect.Effect<Option.Option<Page.Page>>;
   /** The first open page, opening one when there is none. */
-  readonly page: Effect.Effect<Page.Page, BrowserError>;
+  readonly firstPage: Effect.Effect<Page.Page, BrowserError>;
   readonly newPage: (url?: string) => Effect.Effect<Page.Page, BrowserError>;
+  /**
+   * Completes once the browser is lost to its owner, with why: its connection dropped, its
+   * provider ended its session, or its owner's scope released it.
+   */
+  readonly disconnected: Effect.Effect<DisconnectCause>;
   /** Live events, or replay after a cursor. A reader that falls behind fails with EventHistoryExpired. */
   readonly events: (options?: EventOptions) => Stream.Stream<RecordedEvent, BrowserError>;
   /** The latest `eventHistory` events, oldest first. */
@@ -95,39 +117,14 @@ export interface Service {
 
 export class Browser extends Context.Service<Browser, Service>()("effect-browser/Browser") {}
 
-/**
- * A tab behind another stops painting unless a session holds focus emulation on it, so the
- * library's own session on each page does, for as long as it is attached, whatever else is. A
- * renderer busy with its first script answers late, so a capture of the page waits for the answer
- * and registering the page does not.
- */
-const holdFocus = (cdp: CDPSession) => {
-  const focusing = cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
-
-  void focusing.catch(() => undefined);
-
-  return Effect.tryPromise({
-    try: () => focusing,
-    catch: (cause) =>
-      new BrowserError({ operation: "focus", reason: reasonOf(cause), dispatched: false }),
-  }).pipe(Effect.asVoid);
-};
-
-/**
- * Build the service over a context the provider owns. The provider closes the context; this only
- * tracks its pages and events, for as long as the surrounding scope is open. Each page's protocol
- * session, capture and listeners end when that page closes or when the scope does, so a closed
- * tab retains nothing and the context keeps none of them afterwards.
- */
-export const make = Effect.fn("Browser.make")(function* (
-  context: BrowserContext,
-  info: { readonly id: string; readonly provider: string },
-  options: Options = {},
-) {
-  const clock = yield* Clock.Clock;
-  const motion = yield* Motion.Motion;
-  const ownerScope = yield* Scope.Scope;
-  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+/** The settings every page shares, and how many events the browser keeps, from its options. */
+const settingsOf = Effect.fnUntraced(function* (options: Options) {
+  const invalid = (detail: string) =>
+    new BrowserError({
+      operation: "make",
+      reason: new InvalidRequest({ detail }),
+      dispatched: false,
+    });
 
   // Every bound guards a lock or a held key, so each must be a real, finite deadline.
   const bound = (name: string, input: Duration.Input | undefined, fallback: Duration.Duration) => {
@@ -137,13 +134,7 @@ export const make = Effect.fn("Browser.make")(function* (
       Number.isFinite(Duration.toMillis(decoded.value)) &&
       Duration.isPositive(decoded.value)
       ? Effect.succeed(decoded.value)
-      : Effect.fail(
-          new BrowserError({
-            operation: "make",
-            reason: new InvalidRequest({ detail: `${name} must be finite and greater than zero` }),
-            dispatched: false,
-          }),
-        );
+      : Effect.fail(invalid(`${name} must be finite and greater than zero`));
   };
 
   const settings: Page.Settings = {
@@ -162,12 +153,190 @@ export const make = Effect.fn("Browser.make")(function* (
   const eventHistory = options.eventHistory ?? 4096;
 
   if (!Number.isSafeInteger(eventHistory) || eventHistory < 1)
-    return yield* new BrowserError({
-      operation: "make",
-      reason: new InvalidRequest({ detail: "eventHistory must be a positive safe integer" }),
-      dispatched: false,
+    return yield* invalid("eventHistory must be a positive safe integer");
+
+  return { settings, eventHistory };
+});
+
+/**
+ * A provider that ends a session at `expiresAt` by its own clock can cut the connection a little
+ * before this host's clock gets there.
+ */
+const endMargin = Duration.seconds(5);
+
+/**
+ * The browser's loss, once: its context closing from the other side, at or after the session's
+ * end or before it, or `lose`, as the owner's scope releases it. Playwright leaves the calls in
+ * flight on the library's own sessions unanswered when the connection drops, so `untilLost` fails
+ * each with the browser, as a closed page's call fails.
+ */
+const watchLoss = Effect.fnUntraced(function* (
+  context: BrowserContext,
+  expiresAt: DateTime.Utc | undefined,
+  clock: Clock.Clock,
+  disconnected: (cause: DisconnectCause) => void,
+) {
+  let lostBy: DisconnectCause | undefined;
+  const lost = yield* Deferred.make<DisconnectCause>();
+  const inFlight = new Set<(cause: Error) => void>();
+  const gone = () => new Error("Target page, context or browser has been closed");
+
+  const lose = (cause: DisconnectCause) => {
+    if (lostBy !== undefined) return;
+    lostBy = cause;
+    for (const reject of inFlight) reject(gone());
+    disconnected(cause);
+    Deferred.doneUnsafe(lost, Exit.succeed(cause));
+  };
+
+  const untilLost = <A>(reply: Promise<A>): Promise<A> => {
+    if (lostBy !== undefined) {
+      void reply.catch(() => undefined);
+
+      return Promise.reject(gone());
+    }
+
+    return new Promise<A>((resolve, reject) => {
+      inFlight.add(reject);
+      void reply.then(resolve, reject).finally(() => inFlight.delete(reject));
+    });
+  };
+
+  const ended = () =>
+    expiresAt !== undefined &&
+    clock.currentTimeMillisUnsafe() >=
+      DateTime.toEpochMillis(expiresAt) - Duration.toMillis(endMargin);
+
+  const onClose = () => lose(ended() ? "session" : "connection");
+
+  context.on("close", onClose);
+  yield* Effect.addFinalizer(() => Effect.sync(() => context.off("close", onClose)));
+  if (context.browser()?.isConnected() === false) onClose();
+
+  return { lostBy: () => lostBy, lost: Deferred.await(lost), lose, untilLost };
+});
+
+/**
+ * What a page's own Playwright events publish, its close and crash aside, while its scope is
+ * open. Dialogs are answered: alerts accepted, others dismissed.
+ */
+const listen = (
+  playwright: PlaywrightPage,
+  page: string,
+  publish: (event: BrowserEvent) => number,
+  now: () => number,
+  on: { readonly close: () => void; readonly crash: () => void },
+) => {
+  const parsed = () => publish(new PageLoaded({ at: now(), page, state: "domcontentloaded" }));
+  const load = () => publish(new PageLoaded({ at: now(), page, state: "load" }));
+
+  const dialog = (shown: Dialog) => {
+    const kind = shown.type();
+
+    publish(new DialogShown({ at: now(), page, kind, message: shown.message().slice(0, 500) }));
+
+    const answer = kind === "alert" || kind === "beforeunload" ? shown.accept() : shown.dismiss();
+
+    answer.catch(() => undefined);
+  };
+
+  return Effect.acquireRelease(
+    Effect.sync(() => {
+      playwright.on("close", on.close);
+      playwright.on("crash", on.crash);
+      playwright.on("domcontentloaded", parsed);
+      playwright.on("load", load);
+      playwright.on("dialog", dialog);
+    }),
+    () =>
+      Effect.sync(() => {
+        playwright.off("close", on.close);
+        playwright.off("crash", on.crash);
+        playwright.off("domcontentloaded", parsed);
+        playwright.off("load", load);
+        playwright.off("dialog", dialog);
+      }),
+  );
+};
+
+/**
+ * Register each page the site opens, such as a popup, as Playwright reports it, for as long as the
+ * scope is open. One that could not be tracked is published, unless it closed as it opened.
+ */
+const followOpened = Effect.fnUntraced(function* (
+  context: BrowserContext,
+  register: (playwright: PlaywrightPage) => Effect.Effect<Page.Page, BrowserError>,
+  publish: (event: BrowserEvent) => number,
+  now: () => number,
+) {
+  const opened = yield* Queue.unbounded<PlaywrightPage>();
+
+  const onPage = (playwright: PlaywrightPage) => {
+    Queue.offerUnsafe(opened, playwright);
+  };
+
+  const untracked = (playwright: PlaywrightPage) => (error: BrowserError) =>
+    Effect.sync(() => {
+      const url = Url.redact(playwright.url());
+
+      if (!playwright.isClosed())
+        publish(new PageUntracked({ at: now(), url, detail: error.message }));
     });
 
+  context.on("page", onPage);
+  yield* Effect.addFinalizer(() => Effect.sync(() => context.off("page", onPage)));
+  yield* Queue.take(opened).pipe(
+    Effect.flatMap((playwright) => register(playwright).pipe(Effect.catch(untracked(playwright)))),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+});
+
+/** Release something native, on the owner's clock, giving up after a second: cleanup only. */
+const releaseNative = (clock: Clock.Clock) => (run: () => Promise<unknown>) =>
+  Effect.tryPromise(run).pipe(
+    Effect.interruptible,
+    Effect.timeoutOrElse({ duration: Duration.seconds(1), orElse: () => Effect.void }),
+    Effect.provideService(Clock.Clock, clock),
+    Effect.ignore,
+  );
+
+/** A page's own events among the browser's retained ones, oldest first. */
+const eventsOf = (recent: Effect.Effect<ReadonlyArray<RecordedEvent>>, page: string) =>
+  Effect.map(recent, (records) =>
+    records.flatMap(({ event }) => ("page" in event && event.page === page ? [event] : [])),
+  );
+
+/** A script as its documents run it: everywhere, or as a block where its `match` allows. */
+const scoped = ({ match, source }: InitScript) =>
+  match === undefined ? source : `if (${String(match)}.test(location.href)) {\n${source}\n}`;
+
+/** A call sent now and awaited later, by whatever needs its answer. */
+const sentNow = <A>(sent: Promise<A>) => {
+  void sent.catch(() => undefined);
+
+  return sent;
+};
+
+/**
+ * Build the service over a context the provider owns. The provider closes the context; this only
+ * tracks its pages and events, for as long as the surrounding scope is open. Each page's protocol
+ * session, capture and listeners end when that page closes or when the scope does, so a closed
+ * tab retains nothing and the context keeps none of them afterwards.
+ */
+export const make = Effect.fn("Browser.make")(function* (
+  context: BrowserContext,
+  info: {
+    readonly id: string;
+    readonly provider: string;
+    readonly expiresAt?: DateTime.Utc | undefined;
+  },
+  options: Options = {},
+) {
+  const clock = yield* Clock.Clock;
+  const motion = yield* Motion.Motion;
+  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  const { settings, eventHistory } = yield* settingsOf(options);
   // Measured on first need: the first capture of any page measures it, and input never waits.
   const mapping = BrowserClock.mapping(now);
 
@@ -176,42 +345,49 @@ export const make = Effect.fn("Browser.make")(function* (
   yield* Effect.addFinalizer(() => timeline.close);
   const publish = timeline.publish;
 
-  const recentEvents = (page: string) =>
-    timeline.recent.pipe(
-      Effect.map((records) =>
-        records.flatMap((record) => (record.event.page === page ? [record.event] : [])),
-      ),
-    );
+  if (info.expiresAt !== undefined)
+    publish(new SessionEnding({ at: now(), expiresAt: info.expiresAt }));
 
   // One visible pointer belongs to the browser, including when input changes tabs.
   const pointer = yield* Ref.make(Option.none<Page.Point>());
   const inputLock = yield* Semaphore.make(1);
 
+  const { lostBy, lost, lose, untilLost } = yield* watchLoss(
+    context,
+    info.expiresAt,
+    clock,
+    (cause) => publish(new Disconnected({ at: now(), cause })),
+  );
+
   const registry = new Map<PlaywrightPage, Page.Page>();
   const registering = yield* Semaphore.make(1);
-  let counter = 0;
+  // The pages' scopes close after the browser is marked released, so what fails as they close
+  // says why.
+  const pagesScope = yield* Scope.fork(yield* Scope.Scope);
 
   const native = <A>(operation: string, run: () => Promise<A>) =>
-    Effect.tryPromise({
-      try: run,
-      catch: (cause) => new BrowserError({ operation, reason: reasonOf(cause), dispatched: false }),
-    });
+    call(operation, run, () => lostBy() ?? "page");
 
-  const releaseNative = (run: () => Promise<unknown>) =>
-    Effect.tryPromise(run).pipe(
-      Effect.interruptible,
-      Effect.timeoutOrElse({ duration: Duration.seconds(1), orElse: () => Effect.void }),
-      Effect.provideService(Clock.Clock, clock),
-      Effect.ignore,
-    );
+  const release = releaseNative(clock);
 
   // Each tab owns its protocol session, capture and listeners in a scope of its own. It closes
   // with the tab, so a closed tab retains nothing, and with the browser, so a caller's context
-  // keeps none of our listeners, such as the dialog handler, after this browser is gone.
-  const closing = yield* Queue.unbounded<Scope.Closeable>();
+  // keeps none of our listeners, such as the dialog handler, after this browser is gone. A dropped
+  // connection closes every page, then the context, and `Disconnected` stands for all of them: the
+  // queue hands a close to its fiber in a later turn, once Playwright has reported the context's.
+  const closing = yield* Queue.unbounded<{
+    readonly scope: Scope.Closeable;
+    readonly page: string;
+    readonly cause: PageClosed["cause"];
+  }>();
 
   yield* Queue.take(closing).pipe(
-    Effect.flatMap((scope) => Scope.close(scope, Exit.void)),
+    Effect.tap(({ page, cause }) =>
+      Effect.sync(() => {
+        if (lostBy() === undefined) publish(new PageClosed({ at: now(), page, cause }));
+      }),
+    ),
+    Effect.flatMap(({ scope }) => Scope.close(scope, Exit.void)),
     Effect.forever,
     Effect.forkScoped,
   );
@@ -228,75 +404,59 @@ export const make = Effect.fn("Browser.make")(function* (
             reason: new Failed({ detail: "the page closed as it opened" }),
             dispatched: false,
           });
-        const scope = yield* Scope.fork(ownerScope);
+        const scope = yield* Scope.fork(pagesScope);
 
         return yield* Effect.gen(function* () {
+          let crashed = false;
+          const closedBy = () => lostBy() ?? (crashed ? "crashed" : "page");
           const cdp = yield* native("newPage", () => context.newCDPSession(playwright));
 
-          yield* Effect.addFinalizer(() => releaseNative(() => cdp.detach()));
-          const id = `p${++counter}`;
+          yield* Effect.addFinalizer(() => release(() => cdp.detach()));
+          // The page's name, its target id, costs one round trip, which the calls that keep it
+          // painting behind other tabs and report its documents share. A renderer busy with its
+          // first script answers those two late, so what needs them waits, and registering does not.
+          const send: typeof cdp.send = (method, params) => untilLost(cdp.send(method, params));
+          const focusing = sentNow(send("Emulation.setFocusEmulationEnabled", { enabled: true }));
+          const paging = sentNow(send("Page.enable"));
+          const { targetInfo } = yield* native("newPage", () => send("Target.getTargetInfo"));
+          const id = targetInfo.targetId;
 
           const page = yield* PageImpl.make({
             id,
+            url: targetInfo.url,
             playwright,
             cdp,
+            untilLost,
             settings,
             motion,
             clock,
             mapping,
             publish,
-            recentEvents: recentEvents(id),
+            recentEvents: eventsOf(timeline.recent, id),
             pointer,
             inputLock,
-            focused: holdFocus(cdp),
+            focused: call("focus", () => focusing, closedBy).pipe(Effect.asVoid),
+            paging: (operation) => call(operation, () => paging, closedBy).pipe(Effect.asVoid),
+            closedBy,
           });
 
-          const onNavigated = (frame: PlaywrightFrame) => {
-            if (frame === playwright.mainFrame())
-              publish(new Navigated({ at: now(), page: id, url: frame.url() }));
-          };
-
-          const onClose = () => {
+          const close = () => {
             if (registry.get(playwright) !== page) return;
             registry.delete(playwright);
-            publish(new PageClosed({ at: now(), page: id }));
-            Queue.offerUnsafe(closing, scope);
+            Queue.offerUnsafe(closing, { scope, page: id, cause: crashed ? "crashed" : "page" });
           };
 
-          const onDialog = (dialog: Dialog) => {
-            const kind = dialog.type();
-
-            publish(
-              new DialogShown({
-                at: now(),
-                page: id,
-                kind,
-                message: dialog.message().slice(0, 500),
-              }),
-            );
-
-            const answer =
-              kind === "alert" || kind === "beforeunload" ? dialog.accept() : dialog.dismiss();
-
-            answer.catch(() => undefined);
+          // Playwright drives a crashed page no more and its calls never return, so it is closed:
+          // they fail at once, `Closed` because it crashed.
+          const crash = () => {
+            crashed = true;
+            void playwright.close().catch(() => undefined);
           };
 
           registry.set(playwright, page);
-          publish(new PageOpened({ at: now(), page: id, url: playwright.url() }));
-          yield* Effect.acquireRelease(
-            Effect.sync(() => {
-              playwright.on("framenavigated", onNavigated);
-              playwright.on("close", onClose);
-              playwright.on("dialog", onDialog);
-            }),
-            () =>
-              Effect.sync(() => {
-                playwright.off("framenavigated", onNavigated);
-                playwright.off("close", onClose);
-                playwright.off("dialog", onDialog);
-              }),
-          );
-          if (playwright.isClosed()) onClose();
+          publish(new PageOpened({ at: now(), page: id, url: Url.redact(targetInfo.url) }));
+          yield* listen(playwright, id, publish, now, { close, crash });
+          if (playwright.isClosed()) close();
 
           return page;
         }).pipe(
@@ -306,59 +466,47 @@ export const make = Effect.fn("Browser.make")(function* (
       }),
     );
 
+  // Playwright registers its init scripts as it sets up each page, before a popup's first document
+  // runs, and they cost no call per document.
   for (const script of options.initScripts ?? [])
-    yield* native("initScripts", () => context.addInitScript({ content: script }));
-
-  // Pages opened by the site, such as popups, are registered by a fiber as Playwright reports them.
-  const opened = yield* Queue.unbounded<PlaywrightPage>();
-
-  const onPage = (playwright: PlaywrightPage) => {
-    Queue.offerUnsafe(opened, playwright);
-  };
-
-  context.on("page", onPage);
-  yield* Effect.addFinalizer(() => Effect.sync(() => context.off("page", onPage)));
-  yield* Queue.take(opened).pipe(
-    Effect.flatMap((playwright) =>
-      register(playwright).pipe(
-        Effect.ignore({ log: "Debug", message: "a page the site opened could not be tracked" }),
-      ),
-    ),
-    Effect.forever,
-    Effect.forkScoped,
-  );
+    yield* native("initScripts", () => context.addInitScript({ content: scoped(script) }));
+  yield* followOpened(context, register, publish, now);
   for (const existing of context.pages()) yield* register(existing);
 
-  const pages = Effect.sync(() =>
-    [...registry.values()].toSorted(
-      (left, right) => Number(left.id.slice(1)) - Number(right.id.slice(1)),
-    ),
-  );
+  const pages = Effect.sync(() => [...registry.values()]);
 
   const newPage = Effect.fn("Browser.newPage")(function* (url?: string) {
     const playwright = yield* native("newPage", () => context.newPage());
 
     const page = yield* register(playwright).pipe(
-      Effect.onError(() => releaseNative(() => playwright.close())),
+      Effect.onError(() => release(() => playwright.close())),
     );
 
     // A rejected or interrupted navigation must not leave the newly allocated blank tab behind.
-    if (url !== undefined) yield* page.goto(url).pipe(Effect.onError(() => page.close));
+    if (url !== undefined)
+      yield* page.goto(url).pipe(Effect.onError(() => page.close.pipe(Effect.ignore)));
 
     return page;
   });
 
+  // Added last, so it runs first as the owner's scope closes.
+  yield* Effect.addFinalizer(() => Effect.sync(() => lose("released")));
+
   const service: Service = {
     id: info.id,
     provider: info.provider,
+    expiresAt: info.expiresAt,
     now: Effect.sync(now),
     context,
     pages,
-    page: pages.pipe(
+    page: (id) =>
+      Effect.map(pages, (open) => Option.fromNullishOr(open.find((page) => page.id === id))),
+    firstPage: pages.pipe(
       Effect.map((open) => Option.fromNullishOr(open[0])),
       Effect.flatMap(Option.match({ onNone: () => newPage(), onSome: Effect.succeed })),
     ),
     newPage,
+    disconnected: lost,
     events: (eventOptions = {}) => timeline.stream(eventOptions.after),
     recentEvents: timeline.recent.pipe(
       Effect.map((records) => records.map((record) => record.event)),

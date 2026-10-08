@@ -3,9 +3,10 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer, type Server } from "node:net";
 
 import { assert, it } from "@effect/vitest";
-import { Effect, Redacted } from "effect";
+import { Arbitrary, Effect, Redacted } from "effect";
 
-import type { BrowserError } from "../src/BrowserError.ts";
+import { BrowserError, consequence } from "../src/BrowserError.ts";
+import { DisconnectCause } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Chromium from "../src/Chromium.ts";
 
@@ -114,4 +115,48 @@ it.live("a failed connect never repeats the endpoint's credential", () =>
       assert.include(error.message, where);
     }
   }).pipe(Effect.scoped),
+);
+
+const pointless = [
+  "StaleRef",
+  "NotFound",
+  "NotActionable",
+  "InvalidRequest",
+  "PolicyDenied",
+  "PolicyTimeout",
+];
+
+// What a failure leaves follows from its reason, and whether it was dispatched, alone: whatever
+// else differs, such as the operation or the reason's details, two failures alike there have the
+// same consequence.
+it.prop(
+  "a failure's consequence follows from its reason and whether it was dispatched alone",
+  { errors: Arbitrary.array(Arbitrary.schema(BrowserError), { minLength: 2, maxLength: 40 }) },
+  ({ errors }) => {
+    const seen = new Map<string, ReturnType<typeof consequence>>();
+
+    for (const error of errors) {
+      const { reason, dispatched } = error;
+      const { lost, repeat } = consequence(error);
+      const closedBy = reason._tag === "Closed" ? reason.cause : undefined;
+      const key = JSON.stringify([reason._tag, closedBy, dispatched]);
+
+      assert.deepStrictEqual(seen.get(key) ?? { lost, repeat }, { lost, repeat }, key);
+      seen.set(key, { lost, repeat });
+
+      // Only a closed page loses anything, and only its browser's loss loses the session.
+      assert.strictEqual(lost !== "nothing", reason._tag === "Closed", key);
+      assert.strictEqual(
+        lost === "session",
+        closedBy !== undefined && DisconnectCause.literals.some((cause) => cause === closedBy),
+        key,
+      );
+      // A request that cannot succeed as it is, or a cursor that expired, says so either way.
+      assert.strictEqual(repeat === "resume", reason._tag === "EventHistoryExpired", key);
+      assert.strictEqual(repeat === "pointless", pointless.includes(reason._tag), key);
+      // Otherwise repeating is safe unless the call reached the browser, then it waits for a look.
+      if (repeat === "safe" || repeat === "check")
+        assert.strictEqual(repeat, dispatched ? "check" : "safe", key);
+    }
+  },
 );

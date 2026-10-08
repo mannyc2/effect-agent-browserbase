@@ -56,7 +56,7 @@ const elapsed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 it.live("measures the viewport of a page Playwright did not size", () =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const page = yield* browser.page;
+    const page = yield* browser.firstPage;
 
     yield* page.goto("data:text/html,<body style='margin:0;height:5000px'>tall</body>");
 
@@ -82,7 +82,7 @@ it.live("measures the viewport of a page Playwright did not size", () =>
 it.live("bounds a viewport read on a busy page by the action's deadline and records it", () =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const page = yield* browser.page;
+    const page = yield* browser.firstPage;
 
     // The page becomes unresponsive for five seconds, longer than every bound here.
     yield* page.goto(
@@ -117,7 +117,7 @@ it.live("bounds a viewport read on a busy page by the action's deadline and reco
 it.live("captures an unsized page at its CSS viewport and reuses current frames", () =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const page = yield* browser.page;
+    const page = yield* browser.firstPage;
 
     yield* page.goto(
       "data:text/html,<title>Spin</title><body style='margin:0'><canvas id=c width=300 height=300></canvas><script>const g=c.getContext('2d');(function f(t){g.fillStyle='hsl('+(t/5%360)+',80%,50%)';g.fillRect(0,0,300,300);requestAnimationFrame(f)})(0)</script></body>",
@@ -256,10 +256,8 @@ it.live("reads every later document after another connection takes over a page",
     assert.include((yield* opened.snapshot()).text, "one");
 
     const later = yield* Cdp.open({ endpoint: proxy.endpoint });
-    const page = (yield* later.pages).find((each) => each.playwright.url() === still("one"));
+    const page = Option.getOrThrow(yield* later.page(opened.id));
 
-    assert.isDefined(page);
-    if (page === undefined) return;
     assert.include((yield* page.snapshot()).text, "one");
     yield* Scope.close(earlier, Exit.void);
     yield* page.goto(still("two"));

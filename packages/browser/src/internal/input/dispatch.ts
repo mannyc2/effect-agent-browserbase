@@ -29,7 +29,7 @@ export type MouseEvent = {
 };
 
 export const make = (page: PageContext) => {
-  const { id, pointer, publish, now, noteInput } = page;
+  const { id, pointer, publish, now, noteInput, closedBy } = page;
   const { send } = page.protocol;
   // Each run's clock mapping, recorded when it begins.
   const inputClocks = new WeakMap<Replies.Run, BrowserClock.Estimate>();
@@ -42,7 +42,11 @@ export const make = (page: PageContext) => {
     effect.pipe(
       Effect.mapError(
         (error) =>
-          new BrowserError({ operation, reason: reasonOf(error.cause), dispatched: false }),
+          new BrowserError({
+            operation,
+            reason: reasonOf(error.cause, undefined, closedBy()),
+            dispatched: false,
+          }),
       ),
     );
 

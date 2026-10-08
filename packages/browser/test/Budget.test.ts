@@ -79,12 +79,14 @@ const framesArrive = (page: Page) =>
     Effect.timeout("10 seconds"),
   );
 
-// Playwright's own connection to the browser and its tab, and the library's session on that tab.
-// Nothing is measured: no page of the library's own opens. How many round trips Playwright's
-// commands share depends on how soon Chromium answers each, so only the calls are held. Playwright
-// detaches from the three targets it does not track whenever it gets to them, before `open`
-// returns or, on a loaded machine, after, so those detaches are not counted.
-it.live("opening a browser over CDP costs 30 calls", () =>
+// Playwright's own connection to the browser and its tab, and the library's session on that tab:
+// attached, then in one round trip the tab's target id, which names it, focus emulation and the
+// Page domain, which report its documents. Nothing is measured: no page of the library's own
+// opens. How many round trips Playwright's commands share depends on how soon Chromium answers
+// each, so only its calls are held. Playwright detaches from the three targets it does not track
+// whenever it gets to them, before `open` returns or, on a loaded machine, after, so those
+// detaches are not counted.
+it.live("opening a browser over CDP costs 33 calls, the tab's registration one round trip", () =>
   Effect.gen(function* () {
     const proxy = yield* behindProxy();
 
@@ -92,7 +94,12 @@ it.live("opening a browser over CDP costs 30 calls", () =>
       (command) => command.method !== "Target.detachFromTarget",
     );
 
-    assert.strictEqual(sent.length, 30, sent.map((command) => command.method).join(", "));
+    assert.strictEqual(sent.length, 33, sent.map((command) => command.method).join(", "));
+    holds(
+      sent.filter((command) => proxy.attached.has(command.sessionId ?? "")),
+      3,
+      1,
+    );
   }).pipe(Effect.scoped),
 );
 
@@ -101,9 +108,9 @@ it.live("a capture starts in two calls once the browser's clock is mapped", () =
     const { proxy, browser } = yield* opened();
     const page = yield* browser.newPage(still("first"));
 
-    // The browser's first capture maps its clock first, in a world of its own: the main frame,
-    // that world and three probes. The page script is registered to read the viewport.
-    holds(yield* toFirstFrame(proxy, page), 10, 9, 1);
+    // The browser's first capture maps its clock first, in a world of its own: that world and
+    // three probes. The page script is registered to read the viewport.
+    holds(yield* toFirstFrame(proxy, page), 8, 8, 1);
     // Then a capture reads the viewport and starts.
     holds(yield* toFirstFrame(proxy, page), 2, 2);
     const other = yield* browser.newPage(still("second"));
@@ -170,9 +177,9 @@ it.live("a read costs two calls on a new document, and one warm", () =>
     const { proxy, browser } = yield* opened();
     const page = yield* browser.newPage(still("one"));
 
-    // The first read registers the page script with the page's own session, once: three calls
-    // sent together, then the world and the read.
-    holds(yield* sentBy(proxy, page.snapshot()), 5, 3, 1);
+    // The first read registers the page script with the page's own session, once, then finds the
+    // world and reads.
+    holds(yield* sentBy(proxy, page.snapshot()), 3, 3, 1);
 
     yield* page.goto(still("two"));
     holds(yield* sentBy(proxy, page.snapshot()), 2, 2);

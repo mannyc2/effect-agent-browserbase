@@ -187,7 +187,9 @@ const open = (path: string) =>
     const browser = yield* Browser;
     const site = yield* Site;
 
-    return yield* Effect.acquireRelease(browser.newPage(site.url(path)), (page) => page.close);
+    return yield* Effect.acquireRelease(browser.newPage(site.url(path)), (page) =>
+      Effect.ignore(page.close),
+    );
   });
 
 const rows = (found: ReadonlyArray<Found>) =>

@@ -21,7 +21,18 @@
   break first for sessions saving to one stored context), and stopping at once on `retire`. A
   failure the provider deems definite, such as a refused key, is `Down` at once with its cause,
   rather than hidden behind the schedule. Each generation's changes stream as `states`, with its
-  release outcome last. `Browserbase.supervise` supervises hosted sessions.
+  release outcome last, a loss with its cause. `Browserbase.supervise` supervises hosted sessions.
+- Pages with durable names and a life story. A page's id is its CDP target id, so a new connection
+  to the same browser finds it again with `browser.page(id)`. The timeline tells each page's
+  documents and moves within them (`Navigated` with `document` and `sameDocument`), its loads
+  (`PageLoaded`) and its close or crash, and the browser's end as one `Disconnected` with its
+  cause, `connection`, `session` or `released`, also `browser.disconnected`; frames carry their
+  document and address. A failure on a page that is gone is `Closed` with its cause, calls in
+  flight fail at once with a lost browser or a crashed page, and `BrowserError.consequence` says
+  what any failure leaves and whether to repeat it. Every reported address loses its userinfo and
+  credential parameters, and init scripts run where their `match` allows, a popup's first document
+  included. Chromium announces a title change only with the next address change, so titles are
+  read on demand.
 - `effect-browser-human-strokes`: an optional layer with 32,130 recorded, attributed CC BY 4.0
   pointer strokes, retaining their original sample coordinates and times. The core pointer planner
   uses the tuned two-stroke sigma-lognormal model; browsers capture the motion service once.
@@ -140,19 +151,22 @@ and each becoming the next beta.
   and `effect-browserbase/testing` have landed, with the review's follow-up: a context whose
   session may still be saving to it is cleared by the next writer rather than held with no way out,
   a definite failure goes `Down` at once, and the fake answers each id shape as Browserbase does.
+  Pages keep their target ids across connections, and their lifecycle, the browser's loss with its
+  cause, `consequence`, redacted addresses and per-origin init scripts are in.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 12,033                 | 11,064 → 14,197 | 129 → 158                 |
-| `effect-browserbase`           | 807 → 1,007, and 560 `testing` | 611 → 1,053     | 32 → 36, and 14 `testing` |
+| `effect-browser`               | 8,871 → 12,431                 | 11,064 → 14,736 | 129 → 167                 |
+| `effect-browserbase`           | 807 → 1,062, and 588 `testing` | 611 → 1,204     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
-`effect-browser`'s figures include phase 2's supervisor: 602 source lines, 506 test lines and 7
-exports. Without it, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of
-about 11,000 through phase 4.
+`effect-browser`'s figures include phase 2 so far: the supervisor, 602 source lines, 506 test lines
+and 7 exports, and pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports.
+Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
+11,000 through phase 4.
 
 ## Not rebuilt yet
 
