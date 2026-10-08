@@ -1,15 +1,15 @@
 // The market board's tasks: seeded changes the page never gives away, and grading that judges what
 // an answer says rather than how it says it. No model is called.
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Schedule, Stream } from "effect";
+import { Effect, Layer, Schedule } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import * as Moment from "effect-browser/Moment";
-import { LanguageModel } from "effect/ai";
 
 import { tasks } from "../Catalog.ts";
 import { BoardTruth, origin, routes, serve, truth } from "../Sites.ts";
 import { assetsIn, type BoardAnswer, feed, frameHistory, gradeBoard } from "../Tasks.ts";
+import { modelOf } from "./scripted.ts";
 
 const tick: BoardAnswer = {
   priceChanged: true,
@@ -164,20 +164,15 @@ describe("board fixture", () => {
 
 describe("board tasks", () => {
   // A describer that always says nothing changed, as a narrator that only compares outlines does.
-  const unchanged = Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: () =>
-        Effect.succeed([
-          { type: "text", text: JSON.stringify(nothing) },
-          {
-            type: "finish",
-            reason: "stop",
-            usage: { inputTokens: { total: 1200 }, outputTokens: { total: 40 } },
-          },
-        ]),
-      streamText: () => Stream.empty,
-    }),
+  const unchanged = modelOf(() =>
+    Effect.succeed([
+      { type: "text", text: JSON.stringify(nothing) },
+      {
+        type: "finish",
+        reason: "stop",
+        usage: { inputTokens: { total: 1200 }, outputTokens: { total: 40 } },
+      },
+    ]),
   );
 
   for (const [name, passes] of [

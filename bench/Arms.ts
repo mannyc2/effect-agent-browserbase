@@ -1,34 +1,69 @@
-// The arms of the paired experiment: how a model sees a page and acts on it, each a configuration of
-// `Agent.run` on the task's page. Arm 5 is the library's default. Arm 1 answers every action with an
-// outline and shows pictures only on request; arm 2 sees a picture after each batch and acts by
-// pixels. Understand tasks differ only in arm 1, whose moments add the outline.
-import { Effect, Schema } from "effect";
-import * as Agent from "effect-browser/Agent";
-import type { BrowserError } from "effect-browser/BrowserError";
+// The arms of the paired experiment: which tools a Yielded agent drives a task's page with, and
+// what it sees. Arm 5 is the library's default: `act` in batches, Yielded's control tools, the
+// pointer tools and a screenshot before each turn. Arm 1 is Yielded's own tools alone: one action
+// per `act`, an outline after each, and no pictures. Arm 2 sees a screenshot before each turn and
+// acts by pixels. Understand tasks differ only in arm 1, whose moments add the outline.
+import { Agent, AgentRuntime, BrowserUse, InMemory, type RunEvent } from "@yielded/agent";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
+import * as BrowserTools from "effect-browser-agent/BrowserTools";
 import type { Page } from "effect-browser/Page";
-import * as Tools from "effect-browser/Tools";
-import { Prompt, Tool, Toolkit } from "effect/ai";
+import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
 export const arms = [1, 2, 5] as const;
 
 export type Arm = (typeof arms)[number];
 
 export const armNames: { readonly [A in Arm]: string } = {
-  1: "per-action outline",
+  1: "Yielded's tools alone",
   2: "vision first",
-  5: "batched, Agent.run",
+  5: "default",
 };
 
-export interface OperateOptions<A, I, E> {
+/** Token counts, as the run or the model's response reported them. */
+export interface Usage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  /** Input read from the provider's cache, where the response says. */
+  readonly cachedInputTokens?: number | undefined;
+}
+
+/** One model turn and the tool calls it made, for a recording. */
+export interface Step {
+  readonly step: number;
+  /** What the model said alongside its tool calls. */
+  readonly text: string;
+  readonly calls: ReadonlyArray<{ readonly name: string; readonly params: unknown }>;
+  readonly results: ReadonlyArray<{
+    readonly name: string;
+    readonly result: unknown;
+    readonly isFailure: boolean;
+  }>;
+}
+
+/** The model said the task cannot be done. */
+export class GaveUp extends Schema.TaggedError<GaveUp>()("GaveUp", { reason: Schema.String }) {}
+
+/** The run used every turn or tool call its policy allows without an answer. */
+export class StepLimit extends Schema.TaggedError<StepLimit>()("StepLimit", {
+  detail: Schema.String,
+}) {}
+
+/** The model's output could not stand as a turn or an answer, as the runtime refused it. */
+export class Unanswered extends Schema.TaggedError<Unanswered>()("Unanswered", {
+  detail: Schema.String,
+}) {}
+
+/** How an operate task ended without an answer, as the bench grades it. */
+export const isUnanswered = Schema.is(Schema.Union([GaveUp, StepLimit, Unanswered]));
+
+export interface OperateOptions<A, I> {
   readonly answer: Schema.Codec<A, I>;
   readonly maxSteps: number;
-  readonly onStep: (step: Agent.Step) => Effect.Effect<void, E>;
+  readonly onStep: (step: Step) => Effect.Effect<void>;
 }
 
 /** Whether an arm's moments carry the page's outline: only arm 1's, as the library's default leaves it out. */
 export const outline = (arm: Arm): boolean => arm === 1;
-
-const text = (value: string) => Prompt.makePart("text", { text: value });
 
 const closing = [
   "- If an action fails and says it may have taken effect, look at the page before you repeat it.",
@@ -36,234 +71,178 @@ const closing = [
   "- When the task is done, call done with the answer. If it cannot be done, call give_up with the reason.",
 ];
 
-const { tools } = Tools.PageToolkit;
+const instructions: { readonly [A in Arm]: string } = {
+  1: [
+    "You operate a web browser through tools to complete the user's task.",
+    "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects one of them and answers with the next outline.",
+    "- inspect narrows the outline to a CSS selector; scroll, wait, navigate and press do what they say.",
+    ...closing,
+  ].join("\n"),
+  2: [
+    "You operate a web browser through tools to complete the user's task.",
+    "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates: act with x and y.",
+    "- zoom crops a small region, shown before your next turn at the viewport's own scale; keep using viewport coordinates for clicks.",
+    "- Click a field before typing into it. To choose from a drop-down, click it, then type the option's label or use the arrow keys, and press Enter.",
+    "- Batch two or more predictable steps in one turn. Calls run in order and stop at the first failure.",
+    ...closing,
+  ].join("\n"),
+  5: [
+    "You operate a web browser through tools to complete the user's task.",
+    "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+    "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+    "- Prefer refs where the outline has them.",
+    ...closing,
+  ].join("\n"),
+};
 
-// Without parameters: an empty struct's JSON Schema has no object root, which OpenAI rejects.
-const Screenshot = Tool.make("browser_screenshot", {
-  description: "Show the viewport as a picture in the next message.",
-  success: Schema.String,
-  failure: Schema.String,
-  failureMode: "return",
-});
+const finishing = <A, I>(answer: Schema.Codec<A, I>) =>
+  Toolkit.make(
+    Tool.make("done", {
+      description: "Finish the task and report the answer.",
+      parameters: Schema.Struct({ answer }),
+      success: Schema.Void,
+    }),
+    Tool.make("give_up", {
+      description: "Stop because the task cannot be done, and say why.",
+      parameters: Schema.Struct({ reason: Schema.String }),
+      success: Schema.Void,
+    }),
+  );
 
-const PerActionToolkit = Toolkit.make(
-  tools.browser_navigate,
-  tools.browser_back,
-  tools.browser_snapshot,
-  Screenshot,
-  tools.browser_click,
-  tools.browser_hover,
-  tools.browser_type,
-  tools.browser_press,
-  tools.browser_scroll,
-  tools.browser_drag,
-  tools.browser_select,
-  tools.browser_wait,
+const { tools: control } = BrowserTools.Control;
+const { tools: pointer } = BrowserTools.Pointer;
+const single = BrowserTools.make({ mode: "single" });
+const batched = BrowserTools.make();
+
+const VisionToolkit = Toolkit.make(
+  control.navigate,
+  pointer.back,
+  pointer.zoom,
+  pointer.click_at,
+  pointer.hover,
+  pointer.type_text,
+  pointer.press_keys,
+  pointer.drag,
+  pointer.wait_still,
 );
 
-/**
- * Arm 1, the tools as they were before batching (`d100c9f`): every action answers with a fresh
- * outline, pictures come only from `browser_screenshot`, and the prompt has no batching hint.
- * The halt on the first failure stays, as the library's safety contract.
- */
-const perActionOutline = (page: Page) => {
-  let pending: Array<Prompt.UserMessagePart> = [];
-  let opened = false;
-  const outlined = page.snapshot({ maxChars: 8000 });
+/** Each arm's tools, the run's layer, and whether it shows pictures. */
+const tooling = {
+  1: {
+    toolkit: Toolkit.merge(BrowserUse.make().toolkit, BrowserTools.Control),
+    tools: single,
+    vision: false,
+  },
+  2: { toolkit: VisionToolkit, tools: batched, vision: true },
+  5: { toolkit: batched.toolkit, tools: batched, vision: true },
+} as const;
 
-  const withOutline =
-    <P>(handler: (params: P) => Effect.Effect<Tools.Receipt, BrowserError>) =>
-    (params: P) =>
-      Effect.flatMap(handler(params), (receipt) =>
-        outlined.pipe(
-          Effect.map((snapshot) => snapshot.rendered),
-          Effect.orElseSucceed(() => "(could not read the page)"),
-          Effect.map((read) => new Tools.Receipt({ ...receipt, did: `${receipt.did}\n${read}` })),
-        ),
-      );
+/** What the run hands back: the answer, or why there is none. */
+const Outcome = <A, I>(answer: Schema.Codec<A, I>) =>
+  Schema.Union([Schema.Struct({ answer }), Schema.Struct({ gaveUp: Schema.String })]);
 
-  return {
-    system: () =>
-      [
-        "You operate a web browser through tools to complete the user's task.",
-        "",
-        "Seeing the page:",
-        "- browser_snapshot gives a text outline of the viewport. Controls carry refs such as e12 for the other tools. Refs from an old snapshot can be stale.",
-        "- browser_screenshot shows the viewport as a picture in the next message. Its pixel coordinates are viewport coordinates: use them as x and y for anything without a ref, such as a canvas game, a chart or a video.",
-        "- Every action answers with what it did and a fresh snapshot of the viewport.",
-        "",
-        "Acting:",
-        "- Prefer refs. Use x and y for what the snapshot cannot show.",
-        "- Calls run in order and stop at the first failure; remaining calls are not executed.",
-        ...closing,
-      ].join("\n"),
-    // The opening is the outline alone; after that, only the pictures the model asked for.
-    observe: () =>
-      opened
-        ? Effect.sync(() => {
-            const pictures = pending;
+/** A turn's steps from the run's events: its text, its calls and their results. */
+const steps = (onStep: (step: Step) => Effect.Effect<void>) => {
+  let turn = 0;
+  let text = "";
+  let calls: Array<{ name: string; params: unknown }> = [];
+  let results: Array<{ name: string; result: unknown; isFailure: boolean }> = [];
 
-            pending = [];
+  return (event: RunEvent.RunEvent) => {
+    if (event._tag === "TurnStarted") {
+      turn = event.turn;
+      text = "";
+      calls = [];
+      results = [];
+    } else if (event._tag === "TextDelta") text += event.text;
+    else if (event._tag === "ToolCallDeclared")
+      calls.push({ name: event.toolName, params: event.parameters });
+    else if (event._tag === "ToolCallSucceeded")
+      results.push({ name: event.toolName, result: event.result, isFailure: false });
+    else if (event._tag === "ToolCallFailed")
+      results.push({ name: event.toolName, result: event.message, isFailure: true });
+    else if (event._tag === "TurnCompleted") return onStep({ step: turn, text, calls, results });
 
-            return pictures;
-          })
-        : Effect.map(outlined, (snapshot) => {
-            opened = true;
-
-            return [text(snapshot.rendered)];
-          }),
-    tools: (defaults: Tools.Tools<Tools.PageTools>) => {
-      const { handlers } = defaults;
-
-      return {
-        toolkit: PerActionToolkit,
-        handlers: PerActionToolkit.of({
-          browser_navigate: withOutline(handlers.browser_navigate),
-          browser_back: withOutline(handlers.browser_back),
-          browser_snapshot: handlers.browser_snapshot,
-          browser_screenshot: () =>
-            page.screenshot().pipe(
-              Effect.map((image) => {
-                pending.push(
-                  text(
-                    `Screenshot: ${image.width}x${image.height}. Its pixel coordinates are viewport coordinates.`,
-                  ),
-                  Prompt.makePart("file", { mediaType: image.mediaType, data: image.data }),
-                );
-
-                return "The screenshot follows in the next message.";
-              }),
-              Effect.mapError((error) => error.message),
-            ),
-          browser_click: withOutline(handlers.browser_click),
-          browser_hover: withOutline(handlers.browser_hover),
-          browser_type: withOutline(handlers.browser_type),
-          browser_press: withOutline(handlers.browser_press),
-          browser_scroll: withOutline(handlers.browser_scroll),
-          browser_drag: withOutline(handlers.browser_drag),
-          browser_select: withOutline(handlers.browser_select),
-          browser_wait: withOutline(handlers.browser_wait),
-        }),
-      };
-    },
+    return Effect.void;
   };
 };
 
-const pixel = (description: string) =>
-  Schema.Finite.annotate({ description: `Viewport ${description} in screenshot pixels` });
+/** Run an operate task on its page in one arm, to its answer, `GaveUp` or `Unanswered`. */
+export const operate = <A, I>(arm: Arm, page: Page, task: string, options: OperateOptions<A, I>) =>
+  Effect.gen(function* () {
+    const { toolkit, tools, vision } = tooling[arm];
+    const finish = finishing(options.answer);
+    const output = Outcome(options.answer);
 
-// A default tool's receipt and failure, under parameters for pixels alone.
-const byPixels = <const Name extends string, Parameters extends Schema.Struct.Fields>(
-  name: Name,
-  description: string,
-  parameters: Parameters,
-) =>
-  Tool.make(name, {
-    description,
-    parameters: Schema.Struct(parameters),
-    success: tools.browser_click.successSchema,
-    failure: tools.browser_click.failureSchema,
-    failureMode: "return",
+    const agent = Agent.make(`bench-arm-${arm}`, {
+      input: Schema.String,
+      output,
+      instructions: instructions[arm],
+      toolkit: Toolkit.merge(finish, toolkit),
+      policy: {
+        maxTurns: options.maxSteps,
+        maxToolCalls: options.maxSteps * 8,
+        maxDuration: "15 minutes",
+        toolConcurrency: 1,
+      },
+      completion: {
+        tool: "done",
+        required: true,
+        project: ({ parameters }) => ({ answer: parameters.answer }),
+      },
+      completionFromTools: [
+        {
+          tool: "give_up",
+          project: ({ parameters }) => Option.some({ gaveUp: parameters.reason }),
+        },
+      ],
+    });
+
+    const record = steps(options.onStep);
+    let completed: RunEvent.RunCompleted | undefined;
+
+    yield* AgentRuntime.stream(agent, task).pipe(
+      Stream.runForEach((event) =>
+        event._tag === "RunCompleted"
+          ? Effect.sync(() => {
+              completed = event;
+            })
+          : record(event),
+      ),
+      // A spent turn or tool-call allowance and a refused output are the model's; everything else
+      // that stops a run stays what it is.
+      Effect.catchTags({
+        AgentPolicyError: (error) => Effect.fail(new StepLimit({ detail: error.message })),
+        ModelProtocolError: (error) => Effect.fail(new Unanswered({ detail: error.message })),
+      }),
+      Effect.provide(
+        Layer.mergeAll(
+          tools.layer({ page }, { task, vision }),
+          finish.toLayer({ done: () => Effect.void, give_up: () => Effect.void }),
+          InMemory.layer,
+        ),
+      ),
+    );
+
+    if (completed === undefined)
+      return yield* new Unanswered({ detail: "the run ended without completing" });
+
+    const outcome = yield* Schema.decodeUnknownEffect(output)(completed.output).pipe(
+      Effect.mapError((error) => new Unanswered({ detail: error.message })),
+    );
+
+    if ("gaveUp" in outcome) return yield* new GaveUp({ reason: outcome.gaveUp });
+    const usage = completed.usage;
+
+    return {
+      answer: outcome.answer,
+      steps: completed.turns,
+      usage: { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 },
+    };
   });
 
-const VisionToolkit = Toolkit.make(
-  tools.browser_navigate,
-  tools.browser_back,
-  tools.browser_zoom,
-  byPixels("browser_click", "Click a point of the screenshot.", {
-    x: pixel("x"),
-    y: pixel("y"),
-    double: Schema.optional(Schema.Boolean),
-    button: Schema.optional(Schema.Literals(["left", "right", "middle"])),
-  }),
-  byPixels("browser_hover", "Move the pointer to a point of the screenshot.", {
-    x: pixel("x"),
-    y: pixel("y"),
-  }),
-  byPixels(
-    "browser_type",
-    "Type text into the focused element. Click a field first to focus it; press Control+A first to replace its content.",
-    {
-      text: Schema.String,
-      submit: Schema.optional(Schema.Boolean).annotate({ description: "Press Enter afterwards" }),
-    },
-  ),
-  tools.browser_press,
-  byPixels(
-    "browser_scroll",
-    "Scroll the page, or whatever is under a point, such as a list or a chart.",
-    {
-      direction: Schema.Literals(["down", "up", "right", "left"]),
-      pages: Schema.optional(Schema.Finite).annotate({
-        description: "How far, in viewports; defaults to 0.8",
-      }),
-      x: Schema.optional(pixel("x")),
-      y: Schema.optional(pixel("y")),
-    },
-  ),
-  byPixels("browser_drag", "Drag from one point of the screenshot to another, such as a slider.", {
-    fromX: pixel("x"),
-    fromY: pixel("y"),
-    toX: pixel("x"),
-    toY: pixel("y"),
-  }),
-  byPixels(
-    "browser_wait",
-    "Wait for the screen to stop moving (reels, animations, loading), or for some seconds.",
-    {
-      still: Schema.optional(Schema.Boolean),
-      seconds: Schema.optional(Schema.Finite).annotate({ description: "At most 30" }),
-    },
-  ),
-);
+/** What a run needs besides its page: the model, as the bench's runner provides it. */
+export type Requirements = LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName;
 
-/**
- * Arm 2, vision first: a screenshot after each batch and no outline, pixel targets only, and
- * `browser_zoom`. The tools that need the outline (`browser_snapshot`, `browser_select` and
- * waiting for text) are left out.
- */
-const visionFirst = {
-  system: () =>
-    [
-      "You operate a web browser through tools to complete the user's task.",
-      "",
-      "Seeing the page:",
-      "- After each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates: act with x and y.",
-      "- browser_zoom crops a small viewport region and shows it on its own after the batch, at the viewport's own CSS pixel scale: a closer look, not a magnification. Its caption gives the viewport origin; keep using viewport coordinates for clicks.",
-      "- Tool calls return receipts. One fresh screenshot follows the whole batch.",
-      "",
-      "Acting:",
-      "- Click a field before typing into it. To choose from a drop-down, click it, then type the option's label or use the arrow keys, and press Enter.",
-      "- Batch two or more predictable steps in one turn. Calls run in order and stop at the first failure; remaining calls are not executed. Coordinates in a batch refer to the screenshot before it.",
-      ...closing,
-    ].join("\n"),
-  observe: Agent.observe("screenshot"),
-  tools: ({ handlers }: Tools.Tools<Tools.PageTools>) => ({
-    toolkit: VisionToolkit,
-    handlers: VisionToolkit.of({
-      browser_navigate: handlers.browser_navigate,
-      browser_back: handlers.browser_back,
-      browser_zoom: handlers.browser_zoom,
-      browser_click: handlers.browser_click,
-      browser_hover: handlers.browser_hover,
-      browser_type: handlers.browser_type,
-      browser_press: handlers.browser_press,
-      browser_scroll: handlers.browser_scroll,
-      browser_drag: handlers.browser_drag,
-      browser_wait: handlers.browser_wait,
-    }),
-  }),
-};
-
-/** Run an operate task on its page in one arm, to its answer or an `AgentError`. */
-export const operate = <A, I, E>(
-  arm: Arm,
-  page: Page,
-  task: string,
-  options: OperateOptions<A, I, E>,
-) =>
-  arm === 5
-    ? Agent.run(task, { page, ...options })
-    : arm === 1
-      ? Agent.run(task, { page, ...options, ...perActionOutline(page) })
-      : Agent.run(task, { page, ...options, ...visionFirst });
+/** How a run can fail without a page or a provider to blame: see `isUnanswered`. */
+export type OperateError = Effect.Error<ReturnType<typeof operate<unknown, unknown>>>;

@@ -27,8 +27,10 @@
         "@effect/platform-node": "4.0.0",
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
+        "@yielded/agent": "0.1.0-beta.168",
         "effect": "4.0.0",
         "effect-browser": "workspace:*",
+        "effect-browser-agent": "workspace:*",
         "effect-browserbase": "workspace:*",
         "playwright-core": "1.63.0",
         "typescript": "7.0.2",
@@ -65,7 +67,7 @@
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
-        "@yielded/agent": "file:../../.work/yielded-local/yielded-agent-0.1.0-beta.168.tgz",
+        "@yielded/agent": "0.1.0-beta.168",
         "effect": "4.0.0",
         "effect-browser": "workspace:*",
         "playwright-core": "1.63.0",
@@ -140,6 +142,7 @@
   },
   "overrides": {
     "@effect/platform-node-shared": "4.0.0",
+    "@yielded/agent": "file:.work/yielded-local/yielded-agent-0.1.0-beta.168.tgz",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
     "vitest": "5.0.3",
   },
@@ -426,7 +429,7 @@
 
     "@voidzero-dev/vite-plus-win32-x64-msvc": ["@voidzero-dev/vite-plus-win32-x64-msvc@1.1.0", "", { "os": "win32", "cpu": "x64" }, "sha512-K9k77Mj/TszFHKsZePKsyfsIPo8HbjKeJUxaSJ6YZKAmSh9QvDsMFe4i4/HALwyii/PR1EQ8N0iN1nf9cNimGQ=="],
 
-    "@yielded/agent": ["@yielded/agent@../../.work/yielded-local/yielded-agent-0.1.0-beta.168.tgz", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-fWepQ0dCM4Zo6aPfsx88lOTz6slXQJbJzqPeetbJTAh2a48v92kGXAGxdEZ8GjsK7vCjTTfnoNhqKtPDpS+PkQ=="],
+    "@yielded/agent": ["@yielded/agent@.work/yielded-local/yielded-agent-0.1.0-beta.168.tgz", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-fWepQ0dCM4Zo6aPfsx88lOTz6slXQJbJzqPeetbJTAh2a48v92kGXAGxdEZ8GjsK7vCjTTfnoNhqKtPDpS+PkQ=="],
 
     "@yuku-codegen/binding-android-arm64": ["@yuku-codegen/binding-android-arm64@0.9.5", "", { "os": "android", "cpu": "arm64" }, "sha512-jrOY5WM+AaAqkv51fHP1x28ifto4WgcZVzodLUyMU1jMWn5Sq+VciRdk/n8E0Ey5w4p4cWWE+m5GfXWOYh7Kzw=="],
 

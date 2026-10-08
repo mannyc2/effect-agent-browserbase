@@ -135,6 +135,41 @@ const Params = Schema.Struct({
   answer: Schema.optional(Schema.Unknown),
 });
 
+/** One action of an `act` call: a click, a fill or a choice, on a ref. */
+const Act = Schema.Struct({
+  kind: Schema.String,
+  value: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+/** An `act` call's actions, one or a batch. */
+const Acts = Schema.Union([
+  Schema.Struct({ actions: Schema.Array(Act) }),
+  Schema.Struct({ action: Act }),
+]);
+
+/** What an `act` call did, in words: "typed “Ada” and clicked". */
+const acted = (params: unknown, failed: boolean) =>
+  Option.match(Schema.decodeUnknownOption(Acts)(params), {
+    onNone: () => (failed ? "Act on the page" : "Acted on the page"),
+    onSome: (acts) => {
+      const steps = ("actions" in acts ? acts.actions : [acts.action]).map(({ kind, value }) =>
+        kind === "fill"
+          ? `${failed ? "type" : "typed"} ${quoted(value ?? "")}`
+          : kind === "select"
+            ? `${failed ? "choose" : "chose"} ${quoted(value ?? "")}`
+            : failed
+              ? "click"
+              : "clicked",
+      );
+
+      return capitalized(
+        steps.length > 1
+          ? `${steps.slice(0, -1).join(", ")} and ${steps.at(-1)}`
+          : (steps[0] ?? ""),
+      );
+    },
+  });
+
 const noParams: typeof Params.Type = {};
 
 const readParams = (params: unknown) =>
@@ -208,9 +243,14 @@ export const describeCall = (
   const text = ((): string => {
     switch (name) {
       case "click":
+      case "click_at":
         return failed || outcome === undefined ? "Click" : `Clicked ${clicked(outcome.result)}`;
+      case "act":
+        return acted(call.params, failed);
       case "type":
+      case "type_text":
         return `${failed ? "Type" : "Typed"} ${quoted(params.text ?? "")}`;
+      case "press_keys":
       case "press": {
         const times = params.times ?? 1;
 
@@ -220,6 +260,14 @@ export const describeCall = (
         return params.text !== undefined && params.text !== null && params.text !== ""
           ? `Waited for ${quoted(params.text)} to appear`
           : `Waited ${params.seconds ?? 1} s for the screen to settle`;
+      case "wait_still":
+        return "Waited for the screen to settle";
+      case "zoom":
+        return "Looked closer";
+      case "back":
+        return failed ? "Go back" : "Went back";
+      case "give_up":
+        return "Gave up";
       case "scroll":
       case "wheel":
         return failed ? "Scroll" : "Scrolled";
@@ -229,6 +277,7 @@ export const describeCall = (
         return failed ? "Open a page" : "Opened a page";
       case "snapshot":
       case "observe":
+      case "inspect":
       case "screenshot":
         return "Looked at the page";
       case "done":

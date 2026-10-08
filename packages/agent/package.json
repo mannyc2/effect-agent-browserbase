@@ -42,7 +42,7 @@
   "devDependencies": {
     "@effect/vitest": "4.0.0",
     "@types/node": "26.1.2",
-    "@yielded/agent": "file:../../.work/yielded-local/yielded-agent-0.1.0-beta.168.tgz",
+    "@yielded/agent": "0.1.0-beta.168",
     "effect": "4.0.0",
     "effect-browser": "workspace:*",
     "playwright-core": "1.63.0",

@@ -1,11 +1,11 @@
 // Yielded agent runs with the browser tools on a real Chromium page, driven by scripted models: no
 // model is called.
-import { assert, layer } from "@effect/vitest";
+import { assert, it, layer } from "@effect/vitest";
 import { Agent, AgentRuntime, InMemory, Output } from "@yielded/agent";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
-import type { Prompt } from "effect/ai";
+import { AnthropicStructuredOutput, OpenAiStructuredOutput, type Prompt } from "effect/ai";
 
 import * as BrowserTools from "../src/BrowserTools.ts";
 import {
@@ -131,4 +131,33 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.include(textOf(prompts[1]!), "a crop cannot be shown");
     }),
   );
+});
+
+it("gives every tool parameters both pinned providers' structured outputs accept", () => {
+  const all = {
+    ...BrowserTools.make().toolkit.tools,
+    ...BrowserTools.make({ mode: "single" }).toolkit.tools,
+  };
+
+  // Each provider's codec takes any schema; a tool's own parameters are one.
+  const schemas: ReadonlyArray<[string, Schema.Top]> = Object.entries(all).map(([name, tool]) => [
+    name,
+    tool.parametersSchema,
+  ]);
+
+  const refused = schemas.flatMap(([name, schema]) =>
+    [OpenAiStructuredOutput.toCodecOpenAI, AnthropicStructuredOutput.toCodecAnthropic].flatMap(
+      (codec) => {
+        try {
+          codec(schema);
+
+          return [];
+        } catch (error) {
+          return [`${name}: ${String(error)}`];
+        }
+      },
+    ),
+  );
+
+  assert.deepStrictEqual(refused, []);
 });

@@ -1,7 +1,7 @@
 // Deterministic free checks of shared admission, raw receipts and real browser ownership.
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, describe, it } from "@effect/vitest";
-import { Cause, ConfigProvider, Deferred, Effect, Exit, Fiber, Ref, Schema } from "effect";
+import { Cause, ConfigProvider, Deferred, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
@@ -315,7 +315,7 @@ describe("BYOK receipts", () => {
 });
 
 describe("unbudgeted routes", () => {
-  it.effect("refuse streaming, decisions and raw generated requests before sending them", () =>
+  it.effect("refuse decisions and raw generated requests before sending them", () =>
     Effect.gen(function* () {
       const budget = yield* ledger(0.1, 0.04);
       const account = yield* budget.account;
@@ -340,7 +340,6 @@ describe("unbudgeted routes", () => {
       });
 
       const request = { model: "openai/test", messages: [{ role: "user" as const, content: "x" }] };
-      const stream = yield* wrapped.createChatCompletionStream(request).pipe(Effect.flip);
 
       const decisions = yield* wrapped
         .createDecisions({ model: "openai/test", state: {}, questions: {} })
@@ -350,11 +349,58 @@ describe("unbudgeted routes", () => {
         .sendChatCompletionRequest({ payload: request })
         .pipe(Effect.flip);
 
-      assert.strictEqual(stream.reason._tag, "InvalidRequestError");
       assert.strictEqual(decisions.reason._tag, "InvalidRequestError");
       assert.strictEqual(raw._tag, "HttpClientError");
       assert.strictEqual(requests, 0);
       assert.strictEqual((yield* account.snapshot).calls, 0);
+    }),
+  );
+});
+
+describe("streamed requests", () => {
+  it.effect("are sent as one charged completion and read back as a stream that sent it whole", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+      const account = yield* budget.account;
+      const bodies: Array<string> = [];
+
+      const http = byokResponse({ cost: 0.002 });
+
+      const native = yield* OpenRouterClient.make({}).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            if (request.body._tag === "Uint8Array")
+              bodies.push(new TextDecoder().decode(request.body.body));
+
+            return http.execute(request);
+          }),
+        ),
+      );
+
+      const model = yield* OpenRouterLanguageModel.make({ model: "openai/test" }).pipe(
+        Effect.provideService(
+          OpenRouterClient.OpenRouterClient,
+          budgetedClient(native, account, {
+            rates: { input: 1e-6, output: 2e-6 },
+            maxOutputTokens: 64,
+          }),
+        ),
+      );
+
+      const parts = yield* LanguageModel.streamText({ prompt: "x" }).pipe(
+        Stream.runCollect,
+        Effect.provideService(LanguageModel.LanguageModel, model),
+      );
+
+      const text = parts.flatMap((part) => (part.type === "text-delta" ? [part.delta] : []));
+
+      assert.deepStrictEqual(text, ['{"result":1}']);
+      assert.strictEqual(parts.at(-1)?.type, "finish");
+      assert.strictEqual(bodies.length, 1);
+      assert.notInclude(bodies[0] ?? "", '"stream":true');
+      assert.strictEqual((yield* account.snapshot).calls, 1);
+      assert.closeTo((yield* budget.snapshot).knownUsd, 0.002, 1e-9);
     }),
   );
 });

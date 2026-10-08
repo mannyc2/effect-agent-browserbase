@@ -127,7 +127,15 @@ export const Pointer = Toolkit.make(
     "Wait for the screen to stop moving, as reels coming to rest or a chart that loads.",
     { seconds: absent(Schema.Finite, { description: "At most this long; defaults to 15" }) },
   ),
-  pointerTool("back", "Go back to the previous page in this tab.", {}),
+  // Without parameters, not with an empty struct: an empty struct's JSON Schema has no object root,
+  // which OpenAI's structured outputs reject for the whole request.
+  Tool.make("back", {
+    description: "Go back to the previous page in this tab.",
+    parameters: Tool.EmptyParams,
+    success: Receipt,
+    failure: BrowserUse.BrowserUseError,
+    failureMode: "return",
+  }),
 );
 
 const { tools } = BrowserUse.browserTools;

@@ -2,9 +2,9 @@
 // local Chromium. Every HTTP answer is in memory: no credentials and no paid calls.
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import * as Chromium from "effect-browser/Chromium";
-import { LanguageModel } from "effect/ai";
+import { LanguageModel, Model } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { budgetedClient, ledger } from "../Budget.ts";
@@ -78,7 +78,16 @@ const trade = Effect.fnUntraced(function* (
   const exit = yield* isolatedTrial(
     task.withModel({ seed: 23, onUsage: () => Effect.void, ...narration }),
     Chromium.layer({ frameHistory }),
-  ).pipe(Effect.provideService(LanguageModel.LanguageModel, language), Effect.exit);
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(LanguageModel.LanguageModel, language),
+        Layer.succeed(Model.ProviderName, "openrouter"),
+        Layer.succeed(Model.ModelName, model),
+      ),
+    ),
+    Effect.exit,
+  );
 
   const calls = yield* account.calls;
 
@@ -106,7 +115,7 @@ describe("operate trials on the real adapter", () => {
 
   it.live("grade malformed tool arguments from a decoded, charged response", () =>
     Effect.gen(function* () {
-      const result = yield* trade("google/test", () => toolCall("browser_snapshot", "{not json"));
+      const result = yield* trade("google/test", () => toolCall("observe", "{not json"));
 
       assert.isAtLeast(result.requests, 1);
       assert.strictEqual(result.outcome.status, "graded");
@@ -120,7 +129,7 @@ describe("operate trials on the real adapter", () => {
     Effect.gen(function* () {
       const result = yield* trade("google/test", (request) =>
         request === 0
-          ? toolCall("browser_navigate", JSON.stringify({ url: "https://bench.test/nowhere" }))
+          ? toolCall("navigate", JSON.stringify({ url: "https://bench.test/nowhere" }))
           : toolCall("done", JSON.stringify({ answer: { orderId: "ORD-1001" } })),
       );
 
@@ -171,7 +180,11 @@ describe("narration", () => {
           agentCalls += 1;
 
           return agentCalls === 1
-            ? toolCall("browser_wait", JSON.stringify({ seconds: 3 }))
+            ? // A condition that never holds keeps the agent working for its three seconds.
+              toolCall(
+                "wait",
+                JSON.stringify({ selector: "#never", state: "visible", timeoutMillis: 3000 }),
+              )
             : toolCall("done", JSON.stringify({ answer: { orderId: "ORD-0000" } }));
         },
         {

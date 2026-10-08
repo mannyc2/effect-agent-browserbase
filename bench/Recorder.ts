@@ -124,9 +124,6 @@ export const make = Effect.fnUntraced(function* (
             result: plain(result.result),
             isFailure: result.isFailure,
           })),
-          inputTokens: step.usage.inputTokens,
-          outputTokens: step.usage.outputTokens,
-          ...(step.rejected === undefined ? {} : { rejected: step.rejected }),
         }),
       );
     });

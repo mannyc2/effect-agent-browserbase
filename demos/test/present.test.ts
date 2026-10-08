@@ -51,6 +51,31 @@ describe("describeCall", () => {
     assert.include(words.technical, "ToolParameterValidationError");
   });
 
+  it("tells an act call's actions in order, without their refs", () => {
+    const words = describeCall(
+      {
+        name: "act",
+        params: {
+          actions: [
+            { kind: "fill", ref: "e3", value: "Ada" },
+            { kind: "select", ref: "e5", value: "Ethereum" },
+            { kind: "click", ref: "e7" },
+          ],
+        },
+      },
+      { result: { completed: 3 }, isFailure: false },
+    );
+
+    assert.strictEqual(words.text, "Typed “Ada”, chose “Ethereum” and clicked");
+    assert.strictEqual(
+      describeCall(
+        { name: "act", params: { action: { kind: "click", ref: "e7" } } },
+        { result: "the ref was gone", isFailure: true },
+      ).text,
+      "Click",
+    );
+  });
+
   it("carries a finishing call's answer", () => {
     assert.deepStrictEqual(
       describeCall(

@@ -3,7 +3,6 @@
 // grades against the page's own truth, and has a scripted solution that uses the library alone, to
 // show the task can be done and graded without a model.
 import { Deferred, Duration, Effect, Fiber, Option, Schedule, Schema, Stream } from "effect";
-import type * as Agent from "effect-browser/Agent";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
@@ -14,7 +13,7 @@ import type { Snapshot } from "effect-browser/Snapshot";
 import { type AiError, LanguageModel, Prompt, type Response } from "effect/ai";
 
 import * as Arms from "./Arms.ts";
-import type { Arm } from "./Arms.ts";
+import type { Arm, Usage } from "./Arms.ts";
 import type { Trace } from "./Recording.ts";
 import {
   BoardTruth,
@@ -53,7 +52,7 @@ export interface Outcome extends Grade {
   readonly steps: number;
   /** Tool calls the model made, `done` and `give_up` included; 0 for an understand task. */
   readonly actions: number;
-  readonly usage: Agent.Usage;
+  readonly usage: Usage;
 }
 
 export interface TrialOptions {
@@ -68,8 +67,11 @@ export interface TrialOptions {
 export interface ModelOptions<E> extends TrialOptions {
   /** How the model sees the page and acts on it. Defaults to arm 5, the library's default. */
   readonly arm?: Arm | undefined;
-  /** Runs after every model call with that call's usage. Failing stops the task, as a spent budget does. */
-  readonly onUsage: (usage: Agent.Usage) => Effect.Effect<void, E>;
+  /**
+   * Runs with an understand task's model call's usage, and with an operate task's total once its
+   * run ends. Failing fails the task.
+   */
+  readonly onUsage: (usage: Usage) => Effect.Effect<void, E>;
   /**
    * Caption an operate task's page this often while its agent works, from moments, through
    * `trace`. A caption reads what the screen showed; it neither steers nor grades the agent.
@@ -157,8 +159,8 @@ export interface Task {
     options: ModelOptions<E>,
   ) => Effect.Effect<
     Outcome,
-    AiError.AiError | BrowserError | Agent.AgentError | EvidenceIncomplete | FixtureUnreadable | E,
-    Browser | LanguageModel.LanguageModel
+    AiError.AiError | BrowserError | Arms.OperateError | EvidenceIncomplete | FixtureUnreadable | E,
+    Browser | Arms.Requirements
   >;
   readonly scripted: (
     options?: TrialOptions,
@@ -171,9 +173,9 @@ export interface Task {
  */
 export const frameHistory = Duration.seconds(30);
 
-const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
+const noUsage: Usage = { inputTokens: 0, outputTokens: 0 };
 
-const usageOf = (usage: Response.Usage): Agent.Usage => ({
+const usageOf = (usage: Response.Usage): Usage => ({
   inputTokens: usage.inputTokens.total ?? 0,
   outputTokens: usage.outputTokens.total ?? 0,
   cachedInputTokens: usage.inputTokens.cacheRead ?? 0,
@@ -289,11 +291,11 @@ export const operate = <A, I>(spec: {
         onStep: (step) => {
           actions += step.calls.length;
 
-          return (options.trace?.({ _tag: "Step", step }) ?? Effect.void).pipe(
-            Effect.andThen(options.onUsage(step.usage)),
-          );
+          return options.trace?.({ _tag: "Step", step }) ?? Effect.void;
         },
       });
+
+      yield* options.onUsage(result.usage);
 
       // The answer is in: the narrator finishes the caption it is writing, and starts no other.
       yield* Deferred.succeed(stopNarrating, undefined);

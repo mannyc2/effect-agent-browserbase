@@ -2,13 +2,14 @@
 // and the moments shown to a model, on the browser's one host clock, with the trial's outcome.
 // This module has no Node imports, so a player in a web page can decode the same schema.
 import { Schema } from "effect";
-import type * as Agent from "effect-browser/Agent";
 import { RecordedEvent } from "effect-browser/BrowserEvent";
 import type * as Moment from "effect-browser/Moment";
 
+import type { Step } from "./Arms.ts";
+
 /** What a task reports to a recorder as it runs; the recorder stamps each entry on arrival. */
 export type Trace =
-  | { readonly _tag: "Step"; readonly step: Agent.Step }
+  | { readonly _tag: "Step"; readonly step: Step }
   | {
       readonly _tag: "Moment";
       readonly moment: Moment.Moment;
@@ -44,8 +45,9 @@ export class RecordedStep extends Schema.Class<RecordedStep>("bench/RecordedStep
   results: Schema.Array(
     Schema.Struct({ name: Schema.String, result: Schema.Unknown, isFailure: Schema.Boolean }),
   ),
-  inputTokens: Schema.Finite,
-  outputTokens: Schema.Finite,
+  /** Recordings made before the agent ran on Yielded counted each call's tokens. */
+  inputTokens: Schema.optional(Schema.Finite),
+  outputTokens: Schema.optional(Schema.Finite),
   rejected: Schema.optional(Schema.String),
 }) {}
 
