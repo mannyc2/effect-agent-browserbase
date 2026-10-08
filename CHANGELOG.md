@@ -129,7 +129,8 @@ lead with.
   they cannot be confirmed ended, so each try is a way out and two writers are never let in.
 - `effect-browserbase/testing`: `TestBrowserbase`, the Browserbase API in memory as an `HttpClient`,
   whose sessions run until released or until their timeout on the Effect `Clock`, with a `Script`
-  of lost creates, pending or refused releases and failed status reads; and
+  of lost creates, listed at once or `listedAfter` a while, pending or refused releases and failed
+  status reads; and
   `BrowserbaseContract.checks`, what the package relies on Browserbase to do, which the fake
   passes. Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase
   does: a malformed session id is refused, where an unknown well-formed one is not found.
@@ -157,9 +158,10 @@ lead with.
   frames was 352 ms, against 1,802 ms on the old path. `Browserbase.Options.captureConnection:
   false` turns it off. It is read-only: a page's session on it sends only the screencast's
   commands, the Page domain and the frame tree, and frames carry the document their own
-  connection saw commit, numbered as `Navigated` numbers them. A failure of the connection ends
-  the capture with `Failed`, leaving the page and its own session as they were, and the next
-  capture opens another.
+  connection saw commit, numbered as `Navigated` numbers them. A failure of the connection alone
+  ends the capture with `Failed`, two seconds on, leaving the page and its own session as they
+  were, and the next capture opens another. When the browser is lost too, the capture's readers
+  are told the browser's loss, whichever connection hears the end first.
 - `Browser.CaptureSource` and `Cdp.Options.capture`: the port a provider supplies its capture
   connection through. Without one, a capture runs on the page's own session, as before.
 - `Change`, a new module, and `Page.changes({ since, until, unmask })`: what visibly changed on a
@@ -183,12 +185,27 @@ lead with.
 
 - `Page.ready({ quietMillis })` also waits, where the page's changes are recorded, until nothing in
   view has changed for the spell, so frames a browser holds back cannot pass for a still page.
-- Every address the library reports, in events, frames, reads, errors and a guard's request, loses
-  its userinfo and the query and fragment parameters named for credentials, such as tokens, keys,
-  signatures and authorization codes, and keeps the rest, such as a chart's `?ticker=ETH`.
+  Where the capture runs on a capture connection, the spell also ends with one round trip there,
+  `Page.getFrameTree`, whose answer comes behind any frame still on its way, so a stall on that
+  connection is not stillness either. The control connection's cost is unchanged.
+- Every address the library reports, in events, frames, reads, errors, a guard's request and the
+  outline's links, loses its userinfo, and each credential's value reads `Page.redacted`. A
+  credential is a query, fragment or path parameter named for a token, secret, password,
+  signature, assertion, session id or one-time code, or for a code or key that signs someone in,
+  such as `verification_code` or `api_key`. `code`, `key`, `session`, `sid` and `ticket` as often
+  name what a page shows, so under them only a value that looks generated, of at least 16
+  characters with letters and digits, is one. The rest keeps its identity, such as a chart's
+  `?ticker=ETH` or `?code=BTC`.
+- `Plan.fromEvents` makes a navigation to an address with a credential withheld an input slot,
+  `address`, so replay goes where the caller says, and never to the address without its credential.
 - A crashed page is closed, so its calls fail at once, `Closed` as crashed, instead of at their
   deadline; and a lost browser fails the calls in flight on its pages, and its screencasts'
-  readers, at once, `Closed` by its loss's cause.
+  readers, `Closed` by its loss's cause.
+- A Browserbase create whose answer was lost, or answered 5xx or 408, ends the session it may have
+  made, persisting or not, found by the nonce its create carried. Browserbase can list a session
+  late, so it is looked for, more and more seldom, for up to 30 seconds, before a persisting
+  context's `contextSettle`; a failed open takes that much longer. Before, only a persisting
+  session was looked for, once, and any other ran and billed until its timeout.
 - A page's registration sends its target id, focus emulation and the Page domain in one round trip,
   and the first read and the first capture no longer send the target id or the Page domain. Opening
   over CDP costs 33 calls: these two, and focus emulation, which the old count of 30 missed as it
@@ -203,16 +220,17 @@ lead with.
 ### Breaking
 
 - `Browserbase.open` and `attach` give a `Hosted`, `{ browser, session, release }`, instead of the
-  `Browser`. `release` ends the session, confirms it ended, and gives the outcome; for `open`, the
-  scope's close runs it too, once.
+  `Browser`. `release` disconnects the browser, which is lost as `released`, then ends the
+  session, confirms it ended, and gives the outcome; for `open`, the scope's close runs it too,
+  once.
 - A Browserbase release confirms the session ended: it reads the session, trying again a second
   apart for up to a minute, including after a failed read. A session still running then is
   `Unconfirmed`, and its context is left for the next writer to clear. Before, a failed release was
   a logged warning, and the context was let go after a minute whatever the session did.
 - `Browserbase.open`, `layer` and `supervise` can fail with `ContextHeld`, so a caller that handles
   their errors by tag has one more to handle.
-- A persisting session carries `persistsContext: <context id>` in its user metadata, beside the
-  caller's own.
+- A session `open` creates carries `createNonce`, its create's own, in its user metadata, and a
+  persisting one `persistsContext: <context id>` too, beside the caller's own.
 - `page.id` is the page's CDP target id, not `p<n>`, and `browser.pages` lists pages in the order
   the browser began tracking them.
 - `browser.page` finds a page by id; the first open page, opening one when there is none, is

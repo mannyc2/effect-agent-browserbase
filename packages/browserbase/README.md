@@ -32,13 +32,22 @@ and its caller can stop. Only `GET` requests are retried, twice, after a transie
 create that fails in transit is not resent, because it may have created the session. Connect URLs and the Live View debugger URL are `Redacted`: keep them away from
 models and logs. A failed connect names only the connect URL's scheme, host and port.
 
+Each create `open` sends carries a nonce of its own in the session's user metadata, `createNonce`.
+A create whose answer was lost, or that Browserbase answered 5xx or 408, may still have made a
+session that nobody can see, and that bills until its timeout: `open` looks for it by its nonce,
+again and again for up to 30 seconds, since Browserbase can list a new session late, ends it, and
+then fails with the create's error. A `supervise` that tries again after such failures leaves no
+session behind each try.
+
 `open` and `attach` record the session's id and region on their spans, so a trace finds its
 session in Browserbase's dashboard (`https://browserbase.com/sessions/<id>`).
 
 ## Releases
 
 `open` and `attach` give a `Hosted`: the `browser`, Browserbase's `session`, and `release`. A
-release asks Browserbase to end the session and then reads it until Browserbase reports it ended,
+release first disconnects the browser, which is lost as `released`, so a call in flight or a
+capture's reader says the session was released, not that the connection Browserbase then cuts was
+lost. It asks Browserbase to end the session and then reads it until Browserbase reports it ended,
 trying both again a second apart for up to a minute, and says how it went: `Settled`, or
 `Unconfirmed` when the session still ran, or Browserbase could not be asked, at the deadline. An
 unconfirmed session may still bill until its timeout. `open`'s scope releases its session as it
@@ -100,10 +109,15 @@ connection's own: the attach, then the Page domain and the frame tree together, 
 The browser's first capture also opens the connection. A later capture of the page costs the start
 alone, and on the control connection a capture costs one call fewer. The page's own session keeps the focus
 emulation that keeps a tab behind painting: a session that held it too would blur the page as it
-went. The connection opens with the first capture and closes with the browser. If it fails, the
-capture ends with `Failed`, the page and its own session stay as they were, and the next capture
-opens another. `captureConnection: false` keeps captures on each page's own session; so does a
-DevTools server's `http:` address, such as a local Chromium's in tests.
+went. The connection opens with the first capture and closes with the browser. If it fails alone,
+the capture ends with `Failed` two seconds on, the page and its own session stay as they were, and
+the next capture opens another. If the browser is lost too, the capture's readers are told the
+browser's loss, `Closed` by its cause, whichever connection hears the end first. A wait for a
+still screen, `ready({ quietMillis })`, ends with one round trip on this connection,
+`Page.getFrameTree`, whose answer comes behind any frame still on its way, so a stall here is not
+read as stillness; it costs the control connection nothing. `captureConnection: false` keeps
+captures on each page's own session; so does a DevTools server's `http:` address, such as a local
+Chromium's in tests.
 
 ## Stored contexts
 
@@ -140,8 +154,8 @@ context, and the next `open` on it clears the mark before it writes: it ends the
 which `open` labels with `persistsContext: <context id>` in Browserbase's user metadata, confirms
 they ended, waits `contextSettle` and goes on. While they cannot be confirmed ended it fails with
 `ContextHeld`, which leaves the mark, so the open after it tries again. A lost create's own open
-ends that session the same way and then fails with the create's error. No context is ever held with
-no way out, and no two sessions write to one context.
+ends that session, found by its create's nonce, waits `contextSettle`, and then fails with the
+create's error. No context is ever held with no way out, and no two sessions write to one context.
 
 `reconcile(contextId)` does that clearing without opening a session: the way to end sessions another
 process left running. It waits for a writer this process has open, and a session still running at
@@ -171,8 +185,8 @@ const program = Effect.gen(function* () {
 `effect-browserbase/testing` holds `TestBrowserbase`, the Browserbase API in memory: an `HttpClient`
 under the real `BrowserbaseClient`, so the client and `Browserbase` run as they would against
 Browserbase, for free. Sessions run until released or until their timeout on the Effect `Clock`, so
-`TestClock` ends them. A `Script` loses a create, leaves a release pending, refuses it, or fails
-status reads, in turn. `connectUrl` gives each session a DevTools address, such as a local
+`TestClock` ends them. A `Script` loses a create, whose session it can list only `listedAfter` a
+while, leaves a release pending, refuses it, or fails status reads, in turn. `connectUrl` gives each session a DevTools address, such as a local
 Chromium's. It keeps sessions and stored contexts only, and fails a test that calls anything else.
 Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase does: it
 refuses a session id of any other shape, where it answers an unknown well-formed one as not found.
