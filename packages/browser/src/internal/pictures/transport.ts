@@ -18,10 +18,7 @@ import type { Bridge } from "../page/bridge.ts";
 import { type PageContext, undispatched } from "../page/context.ts";
 import * as Url from "../page/url.ts";
 
-/**
- * Where a capture's screencast runs: the page's own session, or one on a capture connection. Its
- * calls never throw: a failure rejects.
- */
+/** Where a capture's screencast runs. Its calls never throw: a failure rejects. */
 export interface Transport {
   readonly start: (settings: {
     readonly format: "jpeg";
