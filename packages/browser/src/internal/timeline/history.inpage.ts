@@ -54,35 +54,31 @@ export const history = (
     gone.push(track.key);
   };
 
-  /** Room for one more: one that holds no change goes first, then one that keeps changing. */
-  const room = (): boolean => {
-    if (tracks.size < maxTracks) return true;
-    let victim: Track | undefined;
+  // How often the tracks' samples have changed, and when a search found none to give way, which
+  // holds until they change again, so a burst of newcomers pays for one search.
+  let version = 0;
+  let barren = -1;
+
+  /** What gives way for a newcomer: one that holds no change, then one that keeps changing. */
+  const victim = (): Track | undefined => {
+    let chosen: Track | undefined;
     let rank = 0;
 
-    for (const track of tracks.values()) {
-      const [only, ...more] = track.samples;
+    for (const track of barren === version ? [] : tracks.values()) {
+      const next = folding.rank(track);
 
-      const next =
-        only === undefined
-          ? 4
-          : more.length > 0
-            ? 3
-            : only.seen === false
-              ? 2
-              : only.shown === null
-                ? 1
-                : 0;
-
-      if (next > rank) [victim, rank] = [track, next];
+      if (next > rank) [chosen, rank] = [track, next];
       if (rank === 4) break;
     }
-    if (victim === undefined) return false;
-    drop(victim);
-    if (victim.samples.length > 0) refused.add(victim.key);
-    for (const sample of victim.samples) lose(sample.at, 1);
+    if (chosen === undefined) barren = version;
 
-    return true;
+    return chosen;
+  };
+
+  const evict = (track: Track) => {
+    drop(track);
+    if (track.samples.length > 0) refused.add(track.key);
+    for (const sample of track.samples) lose(sample.at, 1);
   };
 
   /** A key the record cannot keep: its change is counted. */
@@ -107,15 +103,20 @@ export const history = (
     let track = tracks.get(key);
 
     if (track === undefined) {
-      if (refused.has(key)) return refuse(key, at);
+      const full = !refused.has(key) && tracks.size >= maxTracks;
+      const out = full ? victim() : undefined;
+
+      if (refused.has(key) || (full && out === undefined)) return refuse(key, at);
       const before = initial();
 
       if (shown !== undefined && shown === before) return undefined;
-      if (!room()) return refuse(key, at);
+      if (out !== undefined) evict(out);
       track = { key, kind, initial: before, known: Number.NEGATIVE_INFINITY, samples: [] };
       tracks.set(key, track);
     }
     const { samples } = track;
+
+    version++;
 
     if (samples.at(-1)?.at === at) samples.pop();
     const previous = samples.length === 0 ? track.initial : samples.at(-1)?.shown;
@@ -140,6 +141,7 @@ export const history = (
     const track = tracks.get(key);
 
     // `null` is a state, what shows nothing, so only `undefined` is unjudged.
+    version++;
     if (sample.shown === undefined) sample.shown = shown;
     if (sample.seen === undefined) sample.seen = seen;
     if (track === undefined) return;
@@ -202,6 +204,8 @@ export const history = (
     /** Keys whose tracks went since this was last asked, for the recorder to stop watching. */
     forgotten: (): ReadonlyArray<object> => gone.splice(0),
     has: (key: object) => tracks.has(key),
+    /** Whether the record has let `key` go: its later changes are counted, never kept. */
+    refuses: (key: object) => refused.has(key),
     lose,
     note,
     read,

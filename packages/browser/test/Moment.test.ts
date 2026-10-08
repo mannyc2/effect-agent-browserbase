@@ -13,8 +13,8 @@ import {
   Subject,
   TrackEvent,
 } from "../src/BrowserEvent.ts";
-import * as Chromium from "../src/Chromium.ts";
 import { Changes } from "../src/Change.ts";
+import * as Chromium from "../src/Chromium.ts";
 import { Frame, Screenshot } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
 import { Snapshot } from "../src/Snapshot.ts";

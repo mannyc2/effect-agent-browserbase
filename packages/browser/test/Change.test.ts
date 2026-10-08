@@ -35,11 +35,7 @@ const fraction = Arbitrary.schema(Schema.Int.check(Schema.isBetween({ minimum: 0
 const keys = Array.from({ length: 6 }, (_, index) => ({ index }));
 
 /** The same notes given to a record of `bounds` and to one that keeps everything. */
-const recorded = (
-  given: ReadonlyArray<typeof Note.Type>,
-  bounds: Bounds,
-  seenAlways = false,
-) => {
+const recorded = (given: ReadonlyArray<typeof Note.Type>, bounds: Bounds, seenAlways = false) => {
   const capped = history(fold(), bounds);
   const whole = history(fold(), { tracks: Infinity, samples: Infinity, retention: Infinity });
   let at = 1000;
@@ -205,7 +201,11 @@ const textOf = (prompt: Prompt.Prompt) =>
 describe("a moment's account", () => {
   it.prop(
     "tells news before what keeps changing",
-    { told: Arbitrary.schema(Schema.Array(Told).check(Schema.isMinLength(1), Schema.isMaxLength(12))) },
+    {
+      told: Arbitrary.schema(
+        Schema.Array(Told).check(Schema.isMinLength(1), Schema.isMaxLength(12)),
+      ),
+    },
     ({ told }) => {
       const changes = told.map(
         ({ count, earlier, startedAt }, index) =>
@@ -242,8 +242,12 @@ describe("a moment's account", () => {
       );
 
       const line = (index: number) => text.indexOf(`"after-${index}"`);
-      const news = told.flatMap((one, index) => (one.count === 1 && !one.earlier ? [line(index)] : []));
-      const flux = told.flatMap((one, index) => (one.count > 1 || one.earlier ? [line(index)] : []));
+      const news = told.flatMap((one, index) =>
+        one.count === 1 && !one.earlier ? [line(index)] : [],
+      );
+      const flux = told.flatMap((one, index) =>
+        one.count > 1 || one.earlier ? [line(index)] : [],
+      );
 
       assert.isTrue(
         news.every((at) => at !== -1 && flux.every((later) => at < later)),
@@ -276,11 +280,13 @@ const run = (page: Page, script: () => void) =>
 
 /** The ref of the one button `name` names. */
 const button = (page: Page, name: string) =>
-  page.find({ role: "button", name }).pipe(
-    Effect.flatMap(([found]) =>
-      found === undefined ? Effect.die(`no button ${name}`) : Effect.succeed(found.ref),
-    ),
-  );
+  page
+    .find({ role: "button", name })
+    .pipe(
+      Effect.flatMap(([found]) =>
+        found === undefined ? Effect.die(`no button ${name}`) : Effect.succeed(found.ref),
+      ),
+    );
 
 const told = (changes: Changes) =>
   changes.changes.map((change) => [change.kind, change.before, change.after]);
@@ -352,44 +358,56 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ["appeared", undefined, "Tip: limit orders"],
         ["appeared", undefined, "Fee"],
       ]);
-      assert.deepStrictEqual(told(hidden), [["disappeared", "Market closes early today", undefined]]);
+      assert.deepStrictEqual(told(hidden), [
+        ["disappeared", "Market closes early today", undefined],
+      ]);
     }),
   );
 
-  it.effect("puts a one-off \"Order placed\" before a ticker beside it, with the ticker's range", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
+  it.effect(
+    'puts a one-off "Order placed" before a ticker beside it, with the ticker\'s range',
+    () =>
+      Effect.gen(function* () {
+        const page = yield* start("/desk");
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* page.changes();
-      yield* run(page, () => {
-        const prices = [61_240, 61_310, 61_190, 61_450, 61_380];
-        let tick = 0;
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* page.changes();
+        yield* run(page, () => {
+          const prices = [61_240, 61_310, 61_190, 61_450, 61_380];
+          let tick = 0;
 
-        setInterval(() => {
-          const btc = document.querySelector("#btc");
+          setInterval(() => {
+            const btc = document.querySelector("#btc");
 
-          if (btc !== null) btc.textContent = `$${(prices[++tick % prices.length] ?? 0).toLocaleString("en-US")}`;
-        }, 100);
-      });
-      yield* Effect.sleep(Duration.millis(700));
-      yield* page.click(yield* button(page, "Place order"));
-      yield* page.waitForText("Order placed");
-      yield* Effect.sleep(Duration.millis(200));
-      const moment = yield* Moment.capture(page, { since: Duration.seconds(2) });
-      const changes = moment.changes?.changes ?? [];
-      const placed = changes.find((change) => change.after === "Order placed");
-      const ticker = changes.find((change) => change.subject.context.row === "BTC");
+            if (btc !== null)
+              btc.textContent = `$${(prices[++tick % prices.length] ?? 0).toLocaleString("en-US")}`;
+          }, 100);
+        });
+        yield* Effect.sleep(Duration.millis(700));
+        yield* page.click(yield* button(page, "Place order"));
+        yield* page.waitForText("Order placed");
+        yield* Effect.sleep(Duration.millis(200));
+        const moment = yield* Moment.capture(page, { since: Duration.seconds(2) });
+        const changes = moment.changes?.changes ?? [];
+        const placed = changes.find((change) => change.after === "Order placed");
+        const ticker = changes.find((change) => change.subject.context.row === "BTC");
 
-      assert.deepStrictEqual([placed?.kind, placed?.count, placed?.earlier], ["appeared", 1, undefined]);
-      assert.isAbove(ticker?.count ?? 0, 3);
-      assert.deepStrictEqual([ticker?.lowest, ticker?.highest], ["$61,190", "$61,450"]);
-      assert.deepStrictEqual(ticker?.subject.context, { row: "BTC", column: "Price", heading: "Desk" });
+        assert.deepStrictEqual(
+          [placed?.kind, placed?.count, placed?.earlier],
+          ["appeared", 1, undefined],
+        );
+        assert.isAbove(ticker?.count ?? 0, 3);
+        assert.deepStrictEqual([ticker?.lowest, ticker?.highest], ["$61,190", "$61,450"]);
+        assert.deepStrictEqual(ticker?.subject.context, {
+          row: "BTC",
+          column: "Price",
+          heading: "Desk",
+        });
 
-      const text = textOf(Moment.toPrompt(moment));
+        const text = textOf(Moment.toPrompt(moment));
 
-      assert.isBelow(text.indexOf('"Order placed"'), text.indexOf('"$61,'), text);
-    }),
+        assert.isBelow(text.indexOf('"Order placed"'), text.indexOf('"$61,'), text);
+      }),
   );
 
   it.effect("counts what a capped burst let go, and moves `from` past it", () =>
@@ -456,7 +474,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* Effect.sleep(Duration.millis(100));
       const moment = yield* Moment.capture(page, { since: Duration.seconds(3) });
       const placed = moment.changes?.changes.find((change) => change.after === "Order placed");
-      const click = moment.events.find((event) => event._tag === "Action" && event.name === "click");
+      const click = moment.events.find(
+        (event) => event._tag === "Action" && event.name === "click",
+      );
 
       // 600 ms on, too late to be direct, but inside the form whose button was clicked.
       assert.isDefined(placed?.cause);
@@ -497,41 +517,40 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("continues each read where the last ended, and records a new document from its start", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
-      const reads = [yield* page.changes()];
+  it.effect(
+    "continues each read where the last ended, and records a new document from its start",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* start("/desk");
+        const reads = [yield* page.changes()];
 
-      for (const price of ["$1", "$2", "$3", "$4"]) {
-        yield* Effect.promise(() =>
-          page.playwright.evaluate((text) => {
-            document.querySelector("#btc")!.textContent = text;
-          }, price),
-        );
-        yield* Effect.sleep(Duration.millis(50));
-        reads.push(yield* page.changes({ since: reads.at(-1) }));
-      }
-      // Four windows, each holding its one change, each starting where the last ended.
-      assert.deepStrictEqual(
-        reads.slice(1).map(told),
-        [
+        for (const price of ["$1", "$2", "$3", "$4"]) {
+          yield* Effect.promise(() =>
+            page.playwright.evaluate((text) => {
+              document.querySelector("#btc")!.textContent = text;
+            }, price),
+          );
+          yield* Effect.sleep(Duration.millis(50));
+          reads.push(yield* page.changes({ since: reads.at(-1) }));
+        }
+        // Four windows, each holding its one change, each starting where the last ended.
+        assert.deepStrictEqual(reads.slice(1).map(told), [
           [["text", "$61,240", "$1"]],
           [["text", "$1", "$2"]],
           [["text", "$2", "$3"]],
           [["text", "$3", "$4"]],
-        ],
-      );
+        ]);
 
-      // The page's next document records from its start, with no read of its own.
-      yield* page.goto((yield* Site).url("/desk"));
-      yield* run(page, () => {
-        document.querySelector("#answer")!.textContent = "Order placed";
-      });
-      yield* Effect.sleep(Duration.millis(300));
-      const next = yield* page.changes();
+        // The page's next document records from its start, with no read of its own.
+        yield* page.goto((yield* Site).url("/desk"));
+        yield* run(page, () => {
+          document.querySelector("#answer")!.textContent = "Order placed";
+        });
+        yield* Effect.sleep(Duration.millis(300));
+        const next = yield* page.changes();
 
-      assert.strictEqual(next.document, reads[0]!.document + 1);
-      assert.deepStrictEqual(told(next), [["appeared", undefined, "Order placed"]]);
-    }),
+        assert.strictEqual(next.document, reads[0]!.document + 1);
+        assert.deepStrictEqual(told(next), [["appeared", undefined, "Order placed"]]);
+      }),
   );
 });

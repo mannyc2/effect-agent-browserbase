@@ -102,7 +102,22 @@ export const fold = () => {
     };
   };
 
-  return { number, over };
+  /**
+   * How readily a track gives way when the record is full: one that holds no change first, then
+   * one that keeps changing, one never seen in view and one that has gone; news never does.
+   */
+  const rank = ({ samples: [only, ...more] }: Track): number =>
+    only === undefined
+      ? 4
+      : more.length > 0
+        ? 3
+        : only.seen === false
+          ? 2
+          : only.shown === null
+            ? 1
+            : 0;
+
+  return { number, over, rank };
 };
 
 export type Fold = ReturnType<typeof fold>;

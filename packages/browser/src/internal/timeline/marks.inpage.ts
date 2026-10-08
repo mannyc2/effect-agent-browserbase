@@ -147,10 +147,12 @@ export const marks = (names: Names, kept: History, seeing: Sight) => {
       const target = ownerOf(change);
 
       if (target === null || !isElement(target) || inside(target, batch.arrived)) continue;
-      // A text-only element the record follows changes only its text, as a ticking price does,
-      // so its nodes need no look: each would cost this world a wrapper of its own.
+      // A text-only element the record follows, or has let go, changes only its text, as a
+      // ticking price does, so its nodes need no look: each would cost this world a wrapper.
+      const known = kept.has(target) || kept.refuses(target);
+
       if (change.type !== "attributes")
-        if (change.type === "characterData" || (target.childElementCount === 0 && kept.has(target)))
+        if (change.type === "characterData" || (target.childElementCount === 0 && known))
           batch.owners.add(target);
         else nodes(change, target, batch);
       else if (isHtml(target) && target !== document.body && target !== document.documentElement)
@@ -159,7 +161,10 @@ export const marks = (names: Names, kept: History, seeing: Sight) => {
     for (const owner of batch.owners) {
       const leaf = owner.childElementCount === 0;
 
-      if (!isHtml(owner) || unwritten.has(owner.tagName) || owner === document.body) continue;
+      // What the record let go is counted, with no word of it read.
+      if (kept.refuses(owner)) kept.lose(at, 1);
+      if (kept.refuses(owner) || !isHtml(owner) || unwritten.has(owner.tagName)) continue;
+      if (owner === document.body) continue;
       if (batch.arrived.has(owner) || inside(owner, batch.arrived)) continue;
       content(owner, at, leaf ? words(owner.textContent) : undefined, () => {
         byOwner ??= Map.groupBy(records, ownerOf);
