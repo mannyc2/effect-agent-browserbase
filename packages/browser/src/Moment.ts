@@ -18,7 +18,7 @@
 import { Duration, Effect, Option, Schema } from "effect";
 import { Prompt } from "effect/ai";
 
-import { BrowserError, InvalidRequest } from "./BrowserError.ts";
+import { InvalidRequest } from "./BrowserError.ts";
 import {
   type Action,
   BrowserEvent,
@@ -28,6 +28,7 @@ import {
 } from "./BrowserEvent.ts";
 import { type Change, Changes } from "./Change.ts";
 import { Frame } from "./Frame.ts";
+import { undispatched } from "./internal/page/context.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
@@ -97,12 +98,7 @@ const startOf = (since: Moment | Duration.Input): ((at: number) => number) | und
   return Number.isFinite(millis) && millis >= 0 ? (at) => at - millis : undefined;
 };
 
-const invalid = (detail: string) =>
-  new BrowserError({
-    operation: "moment",
-    reason: new InvalidRequest({ detail }),
-    dispatched: false,
-  });
+const invalid = (detail: string) => undispatched("moment", new InvalidRequest({ detail }));
 
 export const capture = Effect.fn("Moment.capture")(function* (
   page: Page.Page,

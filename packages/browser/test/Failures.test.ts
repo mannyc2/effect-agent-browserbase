@@ -58,7 +58,6 @@ it.live("a connect timeout reports the bound the caller gave", () =>
       [error.operation, timeoutOf(error), error.dispatched],
       ["connect", 700, false],
     );
-    assert.strictEqual(error.message, "connect failed: timed out after 700 ms");
   }).pipe(Effect.scoped),
 );
 

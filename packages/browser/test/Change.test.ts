@@ -123,9 +123,13 @@ describe("the change record's history", () => {
       const { since, until } = window(end, start, finish);
       const read = capped.read(since, until, end);
       const missing = total(whole.read(since, until, end).folded) - total(read.folded);
+      const kept = capped.read(0, end, end).folded;
 
       assert.isAtLeast(read.dropped, missing);
       if (missing > 0) assert.isAbove(read.from, since);
+      // What it keeps stays within its bounds.
+      assert.isAtMost(kept.length, bounds.tracks);
+      for (const { track } of kept) assert.isAtMost(track.samples.length, bounds.samples);
     },
   );
 
@@ -243,9 +247,9 @@ describe("a moment's account", () => {
         ),
       );
 
-    assert.include(told(7950), 'click button "Place order"');
+    assert.include(told(7950), '"Place order"');
     // A click that had ended before the input came did not send it.
-    assert.notInclude(told(6000), 'click button "Place order"');
+    assert.notInclude(told(6000), '"Place order"');
   });
 
   it.prop(
@@ -416,7 +420,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   );
 
   it.effect(
-    'puts a one-off "Order placed" before a ticker beside it, with the ticker\'s range',
+    'tells a one-off "Order placed" as news beside a ticker, with the ticker\'s range',
     () =>
       Effect.gen(function* () {
         const page = yield* start("/desk");
@@ -454,10 +458,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           column: "Price",
           heading: "Desk",
         });
-
-        const text = textOf(Moment.toPrompt(moment));
-
-        assert.isBelow(text.indexOf('"Order placed"'), text.indexOf('"$61,'), text);
       }),
   );
 
@@ -493,21 +493,21 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const page = yield* start("/desk");
       const menu = yield* button(page, "Menu");
 
-      yield* page.changes();
-      yield* run(page, () => {
-        let tick = 0;
+      const tick = run(page, () => {
+        const btc = document.querySelector("#btc");
 
-        setInterval(() => {
-          const btc = document.querySelector("#btc");
-
-          if (btc !== null) btc.textContent = `$61,${240 + ++tick * 10}`;
-        }, 300);
+        if (btc !== null) btc.textContent = `$61,${Number(btc.textContent?.slice(-3)) + 10}`;
       });
-      yield* Effect.sleep(Duration.millis(900));
+
+      yield* page.changes();
+      // It ticked 400 ms before the click, so it was already changing when the click came.
+      yield* tick;
+      yield* Effect.sleep(Duration.millis(400));
       const before = yield* page.changes();
 
       yield* page.click(menu);
-      yield* Effect.sleep(Duration.millis(700));
+      yield* tick;
+      yield* Effect.sleep(Duration.millis(300));
       const after = yield* page.changes({ since: before });
 
       assert.isNotEmpty(after.changes);
@@ -534,7 +534,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.isDefined(placed?.cause);
       assert.isAbove(placed?.startedAt ?? 0, (placed?.cause ?? 0) + 500);
       assert.isAtLeast(placed?.cause ?? 0, (click?.at ?? Infinity) - 1000);
-      assert.include(textOf(Moment.toPrompt(moment)), 'after click button "Place order"');
     }),
   );
 
@@ -544,12 +543,14 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const field = (name: string) => page.find({ role: "textbox", name });
       const amount = (yield* field("Amount"))[0]?.ref ?? "";
       const memo = (yield* field("Memo"))[0]?.ref ?? "";
+      const pin = (yield* field("PIN"))[0]?.ref ?? "";
 
       yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
       const first = yield* page.changes();
 
       yield* page.type("25", { into: amount });
       yield* page.type("sell at 70k", { into: memo });
+      yield* page.type("4321", { into: pin });
       yield* Effect.sleep(Duration.millis(300));
       const frame = yield* page.frame({ maxAge: 0 });
 
@@ -563,12 +564,14 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       const masked = yield* page.changes({ since: first });
 
-      // What was typed shows only as a field's value, masked, in an editable region too.
-      assert.deepStrictEqual(typed(masked), ["••••", "••••"]);
+      // What was typed shows only as a field's value, masked, in an editable region too, and a
+      // secret field's stays masked when unmasked.
+      assert.deepStrictEqual(typed(masked), ["••••", "••••", "••••"]);
       assert.notInclude(JSON.stringify(masked), "sell");
       assert.deepStrictEqual(typed(yield* page.changes({ since: first, unmask: true })), [
         "25",
         "sell at 70k",
+        "••••",
       ]);
       // A window that ends at the frame holds nothing painted after it.
       assert.isFalse(

@@ -4,16 +4,9 @@
  * it stands; then each element's history is folded over the window (`history.inpage.ts`), and only
  * now named: its role, its name when something else names it, its tag, and its context, where it
  * is or, for what was removed, where it was. A field's value reads `••••` unless the read unmasks
- * it, and a secret field's always does.
- *
- * A change names its cause, the input it followed, only where it was the input's own doing:
- *
- * - the element had not changed in the second before the input, so it was not already changing;
- * - it changed within 500 ms of the input, or within 3 s where it lies inside what the input
- *   acted on, or in its row, form or dialog, or in what it controls (`aria-controls`), so a reply
- *   from a server keeps its cause.
- *
- * See `names.inpage.ts` for what a page-side part may use.
+ * it, and a secret field's always does. A change names the input it followed only where it was
+ * the input's own doing, by `Change.cause`'s rule. See `names.inpage.ts` for what a page-side part
+ * may use.
  */
 import { Schema } from "effect";
 

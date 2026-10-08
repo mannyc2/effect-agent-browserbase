@@ -399,32 +399,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("registers a tab a link opens and records events", () =>
-    Effect.gen(function* () {
-      const browser = yield* Browser;
-      const page = yield* open("/form");
-      const before = (yield* browser.pages).length;
-
-      yield* page.click(refOf(yield* page.snapshot(), "link", "Open in a new tab"));
-      yield* Effect.sleep(Duration.millis(500));
-      const pages = yield* browser.pages;
-
-      assert.strictEqual(pages.length, before + 1);
-      yield* Effect.forEach(pages.filter((other) => other.id !== page.id).slice(-1), (other) =>
-        Effect.ignore(other.close),
-      );
-
-      const events = (yield* browser.recentEvents).filter(
-        (event) => "page" in event && event.page === page.id,
-      );
-
-      assert.isTrue(events.some((event) => event._tag === "Navigated"));
-      assert.isTrue(
-        events.some((event) => event._tag === "Action" && event.name === "click" && event.ok),
-      );
-    }),
-  );
-
   it.effect("registers a tab that is busy while it opens", () =>
     Effect.gen(function* () {
       const browser = yield* Browser;

@@ -13,26 +13,11 @@
 import { Effect, Exit, Option, Schema, Scope } from "effect";
 
 import type { CaptureSource } from "../../Browser.ts";
-import { BrowserError, Failed } from "../../BrowserError.ts";
-import type { Bridge } from "../page/bridge.ts";
-import type { PageContext } from "../page/context.ts";
-import * as Url from "../page/url.ts";
+import { type BrowserError, Failed } from "../../BrowserError.ts";
+import { type Bridge, Commit, commitOf, mainFrame, MainFrameEvent } from "../page/bridge.ts";
+import { type PageContext, undispatched } from "../page/context.ts";
 
-/** A native screencast frame, as Chromium sends it. */
-export interface NativeFrame {
-  readonly data: string;
-  readonly metadata: {
-    readonly timestamp?: number | undefined;
-    readonly deviceWidth: number;
-    readonly deviceHeight: number;
-  };
-  readonly sessionId: number;
-}
-
-/**
- * Where a capture's screencast runs: the page's own session, or one on a capture connection. Its
- * calls never throw: a failure rejects.
- */
+/** Where a capture's screencast runs. Its calls never throw: a failure rejects. */
 export interface Transport {
   readonly start: (settings: {
     readonly format: "jpeg";
@@ -77,17 +62,9 @@ export const own = (page: PageContext, bridge: Bridge): Transport => {
   };
 };
 
-const Commit = Schema.Struct({
-  parentId: Schema.optionalKey(Schema.String),
-  loaderId: Schema.String,
-  url: Schema.String,
-  urlFragment: Schema.optionalKey(Schema.String),
-});
-
 const FrameTree = Schema.Struct({ frameTree: Schema.Struct({ frame: Commit }) });
-const Navigated = Schema.Struct({ frame: Commit });
-const Moved = Schema.Struct({ frameId: Schema.String, url: Schema.String });
 
+/** A native screencast frame, as Chromium sends it. */
 const ScreencastFrame = Schema.Struct({
   data: Schema.String,
   sessionId: Schema.Int,
@@ -98,13 +75,13 @@ const ScreencastFrame = Schema.Struct({
   }),
 });
 
-const address = (commit: typeof Commit.Type) => Url.redact(commit.url + (commit.urlFragment ?? ""));
+export type NativeFrame = typeof ScreencastFrame.Type;
 
 /**
  * The document and address a capture connection's frames show, from the commits its session
  * reports after `first`, the main frame's document as the session began.
  */
-const documents = (bridge: Bridge, first: typeof Commit.Type) => {
+const documents = (bridge: Bridge, first: ReturnType<typeof commitOf>) => {
   // The number the page's own session gave the latest commit of `loader`, if it has counted one.
   const counted = (loader: string) => bridge.documentOf(loader) ?? -1;
   const latest = bridge.frameTag().document;
@@ -112,20 +89,18 @@ const documents = (bridge: Bridge, first: typeof Commit.Type) => {
   // A loader the page's own session hasn't counted began the document it had from the start, or
   // a commit still on its way to it.
   const shown = {
-    loader: first.loaderId,
-    url: address(first),
-    document:
-      counted(first.loaderId) >= 0 ? counted(first.loaderId) : latest === 0 ? 0 : latest + 1,
+    ...first,
+    document: counted(first.loader) >= 0 ? counted(first.loader) : latest === 0 ? 0 : latest + 1,
   };
 
   return {
-    commit: (commit: typeof Commit.Type) => {
-      shown.document = Math.max(shown.document + 1, counted(commit.loaderId));
-      shown.loader = commit.loaderId;
-      shown.url = address(commit);
-    },
-    moved: (url: string) => {
-      shown.url = Url.redact(url);
+    /** A commit or a move the session reported, in the order the browser sent them. */
+    see: (seen: ReturnType<typeof mainFrame>) => {
+      if (seen?.loader !== undefined) {
+        shown.document = Math.max(shown.document + 1, counted(seen.loader));
+        shown.loader = seen.loader;
+      }
+      if (seen !== undefined) shown.url = seen.url;
     },
     tag: () => {
       shown.document = Math.max(shown.document, counted(shown.loader));
@@ -165,11 +140,10 @@ export const apart = (
     if (attached) listening?.lost(ended);
   };
 
-  const unreadable = new BrowserError({
-    operation: "screencast",
-    reason: new Failed({ detail: "the capture connection sent an event it could not read" }),
-    dispatched: false,
-  });
+  const unreadable = undispatched(
+    "screencast",
+    new Failed({ detail: "the capture connection sent an event it could not read" }),
+  );
 
   const attach = (scope: Scope.Closeable) =>
     Effect.gen(function* () {
@@ -185,14 +159,8 @@ export const apart = (
 
         if (method === "Page.screencastFrame")
           decoded(ScreencastFrame, (frame: NativeFrame) => listening?.frame(frame));
-        else if (method === "Page.frameNavigated")
-          decoded(Navigated, ({ frame }) => {
-            if (frame.parentId === undefined) shown?.commit(frame);
-          });
-        else if (method === "Page.navigatedWithinDocument")
-          decoded(Moved, (moved) => {
-            if (moved.frameId === page.id) shown?.moved(moved.url);
-          });
+        else if (method === "Page.frameNavigated" || method === "Page.navigatedWithinDocument")
+          decoded(MainFrameEvent, (event) => shown?.see(mainFrame(page.id, event)));
         else if (method === "Target.detachedFromTarget")
           end(scope, error(new Error("Target page has been closed")));
       };
@@ -206,7 +174,7 @@ export const apart = (
           Promise.all([send("Page.enable"), send("Page.getFrameTree")]).then(([, tree]) =>
             Option.match(Schema.decodeUnknownOption(FrameTree)(tree), {
               onNone: () => Promise.reject(unreadable),
-              onSome: ({ frameTree }) => (shown = documents(bridge, frameTree.frame)),
+              onSome: ({ frameTree }) => (shown = documents(bridge, commitOf(frameTree.frame))),
             }),
           ),
         catch: error,

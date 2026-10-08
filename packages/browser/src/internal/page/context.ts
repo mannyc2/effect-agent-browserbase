@@ -94,12 +94,7 @@ export const call = <A>(
 ) =>
   Effect.tryPromise({
     try: run,
-    catch: (cause) =>
-      new BrowserError({
-        operation,
-        reason: reasonOf(cause, timeoutMillis, closedBy()),
-        dispatched: false,
-      }),
+    catch: (cause) => undispatched(operation, reasonOf(cause, timeoutMillis, closedBy())),
   });
 
 export const contextGone = (error: BrowserError) =>
@@ -135,21 +130,18 @@ const CurrentCost = Context.Reference<Cost | undefined>(
 const sizeOf = (value: unknown) =>
   value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
 
+/** A failure of `operation` before any of its input reached the browser. */
+export const undispatched = (operation: string, reason: Reason) =>
+  new BrowserError({ operation, reason, dispatched: false });
+
 export const failWith = (operation: string, reason: Reason) =>
-  Effect.fail(new BrowserError({ operation, reason, dispatched: false }));
+  Effect.fail(undispatched(operation, reason));
 
 export const decodeWith =
   <A>(operation: string, schema: Schema.Codec<A, unknown>) =>
   (value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(
-      Effect.mapError(
-        (error) =>
-          new BrowserError({
-            operation,
-            reason: new Failed({ detail: error.message }),
-            dispatched: false,
-          }),
-      ),
+      Effect.mapError((error) => undispatched(operation, new Failed({ detail: error.message }))),
     );
 
 export const make = (options: MakeOptions, scope: Scope.Scope) => {
@@ -267,12 +259,7 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     now,
     actionTimeout: options.settings.actionTimeout,
     documentAt: () => activity.documentAt,
-    gone: (operation) =>
-      new BrowserError({
-        operation,
-        reason: new Closed({ cause: options.closedBy() }),
-        dispatched: false,
-      }),
+    gone: (operation) => undispatched(operation, new Closed({ cause: options.closedBy() })),
     scope,
   });
 

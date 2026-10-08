@@ -27,6 +27,7 @@ import {
   type Navigated,
   Subject,
 } from "./BrowserEvent.ts";
+import { undispatched } from "./internal/page/context.ts";
 import { Ambiguous, choose, Drifted, Missing } from "./internal/reading/choose.ts";
 import {
   type Found,
@@ -187,12 +188,7 @@ export const locate = (page: Page, subject: Subject) =>
       Effect.withSpan("Plan.locate", { attributes: { role: subject.role ?? "" } }),
     );
 
-const invalid = (detail: string) =>
-  new BrowserError({
-    operation: "replay",
-    reason: new InvalidRequest({ detail }),
-    dispatched: false,
-  });
+const invalid = (detail: string) => undispatched("replay", new InvalidRequest({ detail }));
 
 /**
  * Where the step acts: the element its subject names, or, for a step recorded at a point, the same

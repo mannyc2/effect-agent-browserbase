@@ -177,17 +177,21 @@ and each becoming the next beta.
   refuses the review's six drifts rather than act in the wrong place, `ready` waits out a loading
   screen in one call to the page, and a stalled connection no longer reads as a still screen. Its
   beta, `0.3.0-beta.1`, is prepared in the changelog and the package versions, and is not tagged.
-- **Phase 2, identity and lifetime, is under way.** `Supervisor`, the Browserbase release outcomes
-  and `effect-browserbase/testing` have landed, with the review's follow-up: a context whose
-  session may still be saving to it is cleared by the next writer rather than held with no way out,
-  a definite failure goes `Down` at once, and the fake answers each id shape as Browserbase does.
-  Pages keep their target ids across connections, and their lifecycle, the browser's loss with its
-  cause, `consequence`, redacted addresses and per-origin init scripts are in. So is the capture
-  connection: on Browserbase, pages' screencasts run on a second, read-only connection to the
-  session, and on a hosted session the on-air page's longest wait between frames, while another
-  tab read and uploaded, fell from 1,802 ms to 352 ms. And the change record is: the page records
-  what visibly changes on it from the first read of its changes, at the start of each later
-  document, and moments lead with it.
+- **Phase 2, identity and lifetime, is built, and its adversarial review is under way.**
+  `Supervisor`, the Browserbase release outcomes and `effect-browserbase/testing` have landed, with
+  the review's follow-up: a context whose session may still be saving to it is cleared by the next
+  writer rather than held with no way out, a definite failure goes `Down` at once, and the fake
+  answers each id shape as Browserbase does. Pages keep their target ids across connections, and
+  their lifecycle, the browser's loss with its cause, `consequence`, redacted addresses and
+  per-origin init scripts are in. So is the capture connection: on Browserbase, pages' screencasts
+  run on a second, read-only connection to the session, and on a hosted session the on-air page's
+  longest wait between frames, while another tab read and uploaded, fell from 1,802 ms to 352 ms.
+  And the change record is: the page records what visibly changes on it from the first read of its
+  changes, at the start of each later document, and moments lead with it. The phase's simplify pass
+  shared what its parts wrote twice, made a screencast's readers on a dropped connection fail as
+  every other call does, by the connection rather than as the page's close, and killed the five of
+  its eleven planted bugs that the suite let through. Its beta, `0.3.0-beta.2`, is prepared in the
+  changelog and the package versions, and is not tagged.
 - **Phase 3, concurrency and presentation, has begun.** Per-page admission is in: the browser-wide
   input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
   pages have a budget, and guarded typing approves its field once.
@@ -197,17 +201,18 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 14,686                 | 11,064 → 15,918 | 129 → 177                 |
-| `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,593     | 32 → 36, and 14 `testing` |
+| `effect-browser`               | 8,871 → 14,568                 | 11,064 → 15,902 | 129 → 177                 |
+| `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,643     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
-`effect-browser`'s figures include phase 2 so far: the supervisor, 602 source lines, 506 test lines
-and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports; the
-capture connection's port and transport, 324 source lines, 43 test lines and 1 export; and the
-change record, 1,423 source lines, 728 test lines and 6 exports. They include phase 3's per-page
-admission too, 508 source lines, 411 test lines and 3 exports, most of it the lane, which deleting
-the browser-wide input lock paid for only in part. Without them, phase 1 leaves the package at
-11,431 source lines, against a soft ceiling of about 11,000 through phase 4.
+`effect-browser`'s figures include phase 2, as each part landed: the supervisor, 602 source lines,
+506 test lines and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9
+exports; the capture connection's port and transport, 324 source lines, 43 test lines and 1 export;
+and the change record, 1,423 source lines, 728 test lines and 6 exports. The phase's simplify pass
+took 118 source lines back out. The figures include phase 3's per-page admission too, 508 source
+lines, 411 test lines and 3 exports, most of it the lane, which deleting the browser-wide input lock
+paid for only in part. Without them, phase 1 leaves the package at 11,431 source lines, against a
+soft ceiling of about 11,000 through phase 4.
 
 ## Not rebuilt yet
 
