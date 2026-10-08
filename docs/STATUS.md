@@ -75,15 +75,17 @@
   Sampled presentation pauses retain the functional navigation wait.
 - Browser paint mapped onto the host clock with explicit uncertainty, wider as its estimate ages,
   through one browser-wide clock mapping that the first capture measures, never the opening of a
-  browser; timestamped mouse and raw text-key input once it exists; and per-page capture counters,
-  over a page's life or a window of the latest minute, for filtering, paint gaps, late frames apart
-  from lost ones and the acknowledgement backlog. Screenshot timing has its own provenance; a frame
-  read states how old it may be, and whether it must follow the latest input, which a screenshot
-  always must.
+  browser, and that a capture measures again while its frames flow, so a busy page's wide first
+  estimate narrows; timestamped mouse and raw text-key input once it exists; and per-page capture
+  counters, over a page's life or a window of the latest minute, for filtering, paint gaps, late
+  frames apart from lost ones and the acknowledgement backlog. Screenshot timing has its own
+  provenance; a frame read states how old it may be, and whether it must follow the latest input,
+  which a screenshot always must, and never shows a document the page has left.
 - Pictures and reads on each page's own protocol session, counted: a picture is one call, or two
   for a crop or another device pixel ratio; the page script is registered once per page session, so
   a document's first read is two calls and a warm read one; the library's own clipped pictures stay
-  out of a running screencast; and focus emulation keeps tabs behind painting. A native suite holds
+  out of a running screencast, which keeps the page's own frames where the crop is on the page's
+  own session, as over CDP; and focus emulation keeps tabs behind painting. A native suite holds
   these to their call budgets through a counting proxy.
 - Tracing: agent steps, tool calls, page operations with their phases and protocol cost, captures,
   page script round trips and opening a browser are Effect spans, with OpenTelemetry's GenAI attributes on the agent
@@ -124,8 +126,11 @@ and each becoming the next beta.
   go on each page's own counted protocol session, the clock is measured on first need, and
   `Page.find`, `Page.text`, `Plan` and `Page.ready` are in. The review found frames of the previous
   page served after a navigation, replays that act in the wrong place, and a busy page's first
-  capture failing or widening the clock's estimate. Its beta, `0.3.0-beta.1`, is prepared in the
-  changelog and the package versions; it waits for those fixes, and is not tagged.
+  capture failing or widening the clock's estimate. The pictures and clock fixes are in: reads show
+  the document a navigation reached, a busy page's first capture starts with what its clock probes
+  could measure and narrows it while frames flow, a crop over CDP no longer pauses a running
+  capture, and a capture's start has a deadline. Its beta, `0.3.0-beta.1`, is prepared in the
+  changelog and the package versions; it waits for the replay fixes, and is not tagged.
 - **Phase 2, identity and lifetime, is under way.** `Supervisor`, the Browserbase release outcomes
   and `effect-browserbase/testing` have landed, with the review's follow-up: a context whose
   session may still be saving to it is cleared by the next writer rather than held with no way out,
@@ -136,12 +141,12 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 11,771                 | 11,064 → 13,624 | 129 → 158                 |
+| `effect-browser`               | 8,871 → 11,882                 | 11,064 → 13,854 | 129 → 158                 |
 | `effect-browserbase`           | 807 → 1,007, and 560 `testing` | 611 → 1,053     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
-`effect-browser`'s figures include phase 2's supervisor: 566 source lines, 473 test lines and 7
-exports. Without it, phase 1 leaves the package at 11,205 source lines, against a soft ceiling of
+`effect-browser`'s figures include phase 2's supervisor: 602 source lines, 506 test lines and 7
+exports. Without it, phase 1 leaves the package at 11,280 source lines, against a soft ceiling of
 about 11,000 through phase 4.
 
 ## Not rebuilt yet

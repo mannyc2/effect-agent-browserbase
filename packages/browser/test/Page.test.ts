@@ -458,7 +458,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         screenshot: page.screenshot(),
         frame: Effect.map(page.frame(), (frame) => frame.image),
         "frame after input": Effect.map(page.frame({ after: "input" }), (frame) => frame.image),
-        moment: Effect.map(Moment.capture(page, { frames: 1 }), (moment) => moment.frames[0]?.image),
+        moment: Effect.map(
+          Moment.capture(page, { frames: 1 }),
+          (moment) => moment.frames[0]?.image,
+        ),
       };
 
       for (const [read, image] of Object.entries(reads)) {

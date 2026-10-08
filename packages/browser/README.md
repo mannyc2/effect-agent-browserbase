@@ -324,7 +324,9 @@ nothing is cropped, it is one `Page.captureScreenshot`; a crop, or another devic
 the page's layout metrics for Playwright's clip formula. Where Playwright knows no viewport, as in
 the default context over CDP, the page's first picture also learns it. Where Playwright emulates the viewport, as `Chromium.layer` does, a crop or a
 scaled picture is Playwright's own screenshot, on its own session: a clipped capture on another
-session would clear that emulation when it restores its own.
+session would clear that emulation when it restores its own. Such a picture sends Playwright's
+335 KB injected script with a document's first one, as it would over CDP once a caller gives
+Playwright a viewport.
 
 Reads go to the page script in an isolated world. The page's own session registers the script at the
 library's first read of the page, so every later document runs it from its start: a document's

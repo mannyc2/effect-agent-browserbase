@@ -106,9 +106,13 @@ const calibrator = (page: PageContext, bridge: Bridge) => {
     Effect.gen(function* () {
       const probes: Array<BrowserClock.Probe> = [];
 
-      yield* Effect.forEach([1, 2, 3], () => Effect.map(probe(contextId), (one) => probes.push(one)), {
-        discard: true,
-      }).pipe(
+      yield* Effect.forEach(
+        [1, 2, 3],
+        () => Effect.map(probe(contextId), (one) => probes.push(one)),
+        {
+          discard: true,
+        },
+      ).pipe(
         within("calibrate", Duration.seconds(2)),
         Effect.catch((error) => (probes.length === 0 ? Effect.fail(error) : Effect.void)),
       );
