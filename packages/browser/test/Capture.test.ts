@@ -121,7 +121,7 @@ const setup = Effect.fnUntraced(function* (controlled = false) {
     { frameHistory: Duration.millis(300) },
   );
 
-  const page = yield* browser.page;
+  const page = yield* browser.firstPage;
 
   const inject = (
     timestamp: number | undefined,

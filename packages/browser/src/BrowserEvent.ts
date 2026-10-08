@@ -1,9 +1,12 @@
 /**
- * What happened in a browser, in order: pages, navigations, actions and pointer motion.
+ * What happened in a browser, in order: pages and their documents, actions, pointer motion, and
+ * the browser's own end.
  *
  * Every event carries `at`, host monotonic milliseconds from the owning browser’s Effect `Clock`.
  * This clock also stamps screencast frames’ `receivedAt` and moments, so wall-clock corrections
  * cannot disturb their order. Compare stamps only within the same browser clock, not across hosts.
+ * A page is named by its CDP target id, which stays the same across reconnects, and every URL is
+ * reported without its userinfo or known secret parameters.
  *
  * @since 0.3.0
  */
@@ -17,16 +20,68 @@ export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
   url: Schema.String,
 }) {}
 
+/**
+ * The page closed (`page`), or crashed and was closed (`crashed`). A page lost with its browser
+ * has no event of its own: `Disconnected` stands for all of them.
+ */
 export class PageClosed extends Schema.TaggedClass<PageClosed>()("PageClosed", {
   at: Schema.Finite,
   page: Schema.String,
+  cause: Schema.Literals(["page", "crashed"]),
 }) {}
 
-/** The page's main frame committed a new URL, including same-document navigations. */
+/**
+ * A tab the site opened that the library could not track, as its registration failed with
+ * `detail`. A tab that closed as it opened has no event.
+ */
+export class PageUntracked extends Schema.TaggedClass<PageUntracked>()("PageUntracked", {
+  at: Schema.Finite,
+  url: Schema.String,
+  detail: Schema.String,
+}) {}
+
+/**
+ * The page's main frame moved to `url`: into a new document, or within the current one
+ * (`sameDocument`), as `pushState` and fragment links do. Frames carry the document they followed.
+ */
 export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
   at: Schema.Finite,
   page: Schema.String,
   url: Schema.String,
+  /**
+   * The page's documents counted from 0, the one it had when this browser began tracking it, one
+   * more for each new document. The count belongs to the page within one `Browser` and starts at
+   * 0 again on a new connection, so compare it only with the same page's in the same browser.
+   */
+  document: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  sameDocument: Schema.Boolean,
+}) {}
+
+/** The page's document finished parsing (`domcontentloaded`) or loading (`load`). */
+export class PageLoaded extends Schema.TaggedClass<PageLoaded>()("PageLoaded", {
+  at: Schema.Finite,
+  page: Schema.String,
+  state: Schema.Literals(["domcontentloaded", "load"]),
+}) {}
+
+/**
+ * Why a browser was lost to its owner: its connection dropped (`connection`), its provider ended
+ * its session, at or after the session's `expiresAt` (`session`), or its owner released it.
+ */
+export const DisconnectCause = Schema.Literals(["connection", "session", "released"]);
+
+export type DisconnectCause = typeof DisconnectCause.Type;
+
+/** The browser was lost to its owner, with every page in it. It happens once. */
+export class Disconnected extends Schema.TaggedClass<Disconnected>()("Disconnected", {
+  at: Schema.Finite,
+  cause: DisconnectCause,
+}) {}
+
+/** The provider ends this browser's session at `expiresAt`, a wall-clock instant. */
+export class SessionEnding extends Schema.TaggedClass<SessionEnding>()("SessionEnding", {
+  at: Schema.Finite,
+  expiresAt: Schema.DateTimeUtc,
 }) {}
 
 /**
@@ -213,10 +268,14 @@ export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown"
 export const BrowserEvent = Schema.Union([
   PageOpened,
   PageClosed,
+  PageUntracked,
   Navigated,
+  PageLoaded,
   Action,
   ...TrackEvent.members,
   DialogShown,
+  Disconnected,
+  SessionEnding,
 ]);
 
 export type BrowserEvent = typeof BrowserEvent.Type;

@@ -75,11 +75,12 @@ export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable"
   }
 }
 
-/** One generation, as a provider opened it in the scope the supervisor gave it. */
+/**
+ * One generation, as a provider opened it in the scope the supervisor gave it. Its browser's
+ * `expiresAt` is when the provider ends it on its own.
+ */
 export interface Opened {
   readonly browser: Browser.Service;
-  /** When the provider ends it on its own, such as a hosted session's timeout. */
-  readonly expiresAt?: DateTime.Utc | undefined;
   /**
    * Whether the provider confirmed its end. The supervisor asks once it has closed the
    * generation's scope; without it, a closed scope counts as `Settled`.
@@ -123,20 +124,6 @@ interface Held {
   readonly opened: Opened;
   readonly scope: Scope.Closeable;
 }
-
-/**
- * Completes when a browser is lost to its owner: its connection dropped, or the other side closed
- * it. Playwright reports both as the context closing, including when our own scope closes it.
- */
-const lost = (browser: Browser.Service) =>
-  Effect.callback<void>((resume) => {
-    const done = () => resume(Effect.void);
-
-    if (browser.context.browser()?.isConnected() === false) return done();
-    browser.context.once("close", done);
-
-    return Effect.sync(() => browser.context.off("close", done));
-  });
 
 const retired = () => new Unavailable({ reason: "retired", detail: "the supervisor was retired" });
 
@@ -297,14 +284,18 @@ export const make = Effect.fn("Supervisor.make")(function* <E, R>(
       );
     });
 
+  // A generation's own release loses its browser too, which the transition ignores.
   const watch = (live: Lifecycle.Live<Held>) => {
-    const { browser, expiresAt } = live.value.opened;
-    const loss = lost(browser).pipe(Effect.andThen(apply({ _tag: "Lost", number: live.number })));
+    const { browser } = live.value.opened;
+
+    const loss = browser.disconnected.pipe(
+      Effect.flatMap((cause) => apply({ _tag: "Lost", number: live.number, cause })),
+    );
 
     const rotation =
-      expiresAt === undefined || rotateBefore === undefined
+      browser.expiresAt === undefined || rotateBefore === undefined
         ? Effect.void
-        : untilRotation(expiresAt, rotateBefore).pipe(
+        : untilRotation(browser.expiresAt, rotateBefore).pipe(
             Effect.andThen(apply({ _tag: "Rotate", due: live.number })),
           );
 

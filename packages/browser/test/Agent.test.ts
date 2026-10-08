@@ -153,7 +153,7 @@ const trackObservations = Effect.fnUntraced(function* (page: Page) {
     observations,
     browser: Browser.of({
       ...browser,
-      page: Effect.succeed(observed),
+      firstPage: Effect.succeed(observed),
       pages: browser.pages.pipe(
         Effect.map((pages) => pages.map((open) => (open === page ? observed : open))),
       ),
@@ -176,7 +176,7 @@ const refIn = (prompt: Prompt.Prompt, role: string, name: string): string => {
 
 const start = (path: string) =>
   Effect.gen(function* () {
-    const page = yield* (yield* Browser).page;
+    const page = yield* (yield* Browser).firstPage;
 
     yield* page.goto((yield* Site).url(path));
 
@@ -669,7 +669,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           Browser,
           Browser.of({
             ...browser,
-            page: Effect.succeed(observed),
+            firstPage: Effect.succeed(observed),
             pages: browser.pages.pipe(
               Effect.map((pages) => pages.map((open) => (open === page ? observed : open))),
             ),
@@ -697,7 +697,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const context = yield* Effect.promise(() => native.newContext());
       const browser = yield* makeBrowser(context, { id: "closing", provider: "test" });
 
-      yield* (yield* browser.page).goto((yield* Site).url("/next"));
+      yield* (yield* browser.firstPage).goto((yield* Site).url("/next"));
 
       const Closing = Toolkit.make(
         Tool.make("close_browser", { parameters: Schema.Struct({}), success: Schema.String }),
@@ -746,7 +746,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const context = yield* Effect.promise(() => native.newContext());
       const browser = yield* makeBrowser(context, { id: "expiring", provider: "test" });
 
-      yield* (yield* browser.page).goto("data:text/html,<title>Task</title>The answer is 42");
+      yield* (yield* browser.firstPage).goto("data:text/html,<title>Task</title>The answer is 42");
       const reported: Array<number> = [];
 
       // The model answers while the hosted session expires.
@@ -1148,7 +1148,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
                 observation?.content.filter((part) => part.type === "file").length,
                 observationMode === "both" ? 1 : 0,
               );
-              assert.notInclude(text, "Zoom from page");
+              assert.notInclude(text, "Zoom from tab");
               assert.strictEqual(pictures(prompt), 1);
 
               return [call("done", { answer: "seen" }), finish];
@@ -1162,7 +1162,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
           assert.strictEqual(result.answer, "seen");
           assert.strictEqual(tracked.observations.length, 4);
-          assert.strictEqual(textOf(result.history).split("Zoom from page").length - 1, 8);
+          assert.strictEqual(textOf(result.history).split("Zoom from tab").length - 1, 8);
         }),
     );
   }
@@ -1209,7 +1209,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           Browser,
           Browser.of({
             ...browser,
-            page: Effect.succeed(observed),
+            firstPage: Effect.succeed(observed),
             pages: browser.pages.pipe(
               Effect.map((pages) => pages.map((open) => (open === page ? observed : open))),
             ),
@@ -1219,7 +1219,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.strictEqual(pictures(model.prompts[0]!), 0);
       assert.strictEqual(pictures(result.history), 1);
-      assert.strictEqual(textOf(result.history).split("Zoom from page").length - 1, 1);
+      assert.strictEqual(textOf(result.history).split("Zoom from tab").length - 1, 1);
       assert.strictEqual(observations, 3);
     }),
   );
@@ -1376,7 +1376,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       });
 
       yield* Effect.gen(function* () {
-        const page = yield* browser.page;
+        const page = yield* browser.firstPage;
 
         yield* page.goto((yield* Site).url("/form"));
         const tools = yield* Tools.make();
@@ -1624,9 +1624,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.include(yield* tools.handlers.browser_tabs({ action: "list" }), "2. [current] Next");
       yield* tools.handlers.browser_tabs({ action: "close", index: 2 });
       assert.strictEqual((yield* tools.page).id, page.id);
-      assert.include(
+      assert.match(
         yield* tools.handlers.browser_click({ ref: "e99999" }).pipe(Effect.flip),
-        "take a new snapshot",
+        /take a new snapshot/i,
       );
     }),
   );

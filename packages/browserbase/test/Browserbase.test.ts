@@ -493,7 +493,12 @@ describe("Browserbase", () => {
       const [session] = yield* kept;
 
       assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Decode"]);
-      assert.include(error.message, `session ${session?.id} was released`);
+      assert.isTrue(
+        error._tag === "BrowserbaseError" &&
+          error.reason._tag === "Decode" &&
+          error.reason.released === true,
+      );
+      assert.isDefined(session);
       assert.deepStrictEqual(
         (yield* kept).map(({ status, releases }) => [status, releases]),
         [["COMPLETED", 1]],
@@ -534,7 +539,7 @@ describe("Browserbase", () => {
       yield* Effect.gen(function* () {
         yield* Effect.gen(function* () {
           const browser = yield* Browser;
-          const page = yield* browser.page;
+          const page = yield* browser.firstPage;
 
           yield* page.goto("data:text/html,<title>Hosted</title><button>Go</button>");
           assert.deepStrictEqual([browser.id, browser.provider], [...(yield* ids), "browserbase"]);

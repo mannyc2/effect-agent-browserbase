@@ -245,7 +245,10 @@ export type Fact = typeof Fact.Type;
  */
 export class InputRequest extends Schema.Class<InputRequest>("effect-browser/InputRequest")({
   page: Schema.String,
-  /** The page's URL, without a fragment that only names a place on the page. */
+  /**
+   * The page's URL, without a fragment that only names a place on the page. This and the other
+   * addresses keep no userinfo or known secret parameters.
+   */
   url: Schema.String,
   /** The page's title, at most 120 characters. */
   title: Schema.String,
@@ -300,9 +303,11 @@ export interface Settings {
 }
 
 export interface Page {
+  /** The page's CDP target id: the same page has it again after a reconnect to its browser. */
   readonly id: string;
   /** The Playwright page, for anything this API does not cover. Never give it to a model. */
   readonly playwright: PlaywrightPage;
+  /** The page's address, without its userinfo or known secret parameters. */
   readonly url: Effect.Effect<string>;
   readonly title: Effect.Effect<string, BrowserError>;
 
@@ -312,7 +317,8 @@ export interface Page {
   readonly reload: Effect.Effect<void, BrowserError>;
   /** Make this the visible tab. Background tabs paint rarely and send few screencast frames. */
   readonly bringToFront: Effect.Effect<void, BrowserError>;
-  readonly close: Effect.Effect<void>;
+  /** Close the tab, succeeding once it has closed, or at once when it already had. */
+  readonly close: Effect.Effect<void, BrowserError>;
 
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
   /**

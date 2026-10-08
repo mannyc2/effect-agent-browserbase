@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +37,8 @@ export interface Proxy {
   readonly attached: Set<string>;
   /** Answer a command with an empty result instead of sending it on. */
   swallow: (command: Command) => boolean;
+  /** Cut every connection open now, as a network fault would; the browser runs on. */
+  readonly drop: () => void;
 }
 
 // The messages a client sends over a WebSocket: each frame is masked, and a message can span
@@ -237,19 +239,27 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
     Effect.sync(stop),
   );
 
+  const connections = new Set<Socket>();
+
   const proxy: Proxy = {
     endpoint: "",
     commands: [],
     answers: new Map(),
     attached: new Set(),
     swallow: () => false,
+    drop: () => {
+      for (const connection of connections) connection.destroy();
+    },
   };
 
   const server = yield* Effect.acquireRelease(
     Effect.callback<Server>((resume) => {
-      const listening = relay(endpoint, proxy).listen(0, "127.0.0.1", () =>
-        resume(Effect.succeed(listening)),
-      );
+      const listening = relay(endpoint, proxy)
+        .on("connection", (connection: Socket) => {
+          connections.add(connection);
+          connection.on("close", () => connections.delete(connection));
+        })
+        .listen(0, "127.0.0.1", () => resume(Effect.succeed(listening)));
     }),
     (server) => Effect.sync(() => server.close()),
   );

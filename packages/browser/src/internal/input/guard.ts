@@ -9,6 +9,7 @@ import { type BrowserError, InvalidRequest, NotActionable, StaleRef } from "../.
 import { InputRequest, redacted } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
+import * as Url from "../page/url.ts";
 import * as Script from "./guard.inpage.ts";
 
 export interface Approval {
@@ -101,9 +102,10 @@ export const make = (page: PageContext, bridge: Bridge) => {
       const target = targets[0];
       const { title, description, dialog, heading, nearby, form } = prepared.evidence;
 
+      // A guard may hand the request to a judge's model, so its addresses keep no secrets.
       const request = new InputRequest({
         page: id,
-        url: prepared.url,
+        url: Url.redact(prepared.url),
         title,
         action,
         target: info.target,
@@ -115,9 +117,10 @@ export const make = (page: PageContext, bridge: Bridge) => {
         role: first?.role,
         name: first?.name,
         description,
-        href: first?.href,
+        href: first?.href === undefined ? undefined : Url.redact(first.href),
         point: target !== null && typeof target === "object" ? target : undefined,
-        destination: prepared.destination,
+        destination:
+          prepared.destination === undefined ? undefined : Url.redact(prepared.destination),
         facts: prepared.facts,
         context: { dialog, heading, nearby },
         form,

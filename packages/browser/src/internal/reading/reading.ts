@@ -17,6 +17,7 @@ import {
 import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext } from "../page/context.ts";
+import * as Url from "../page/url.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
 import type { SnapshotRequest } from "./outline.inpage.ts";
 import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
@@ -57,12 +58,12 @@ export const make = Effect.fnUntraced(function* (
         Effect.flatMap(decodeWith("snapshot", SnapshotResult)),
       );
 
-      const { text, truncated } = result.snapshot;
+      const { text, truncated, url } = result.snapshot;
 
       yield* counted(result.nextRef);
       yield* Effect.annotateCurrentSpan({ chars: text.length, truncated });
 
-      return result.snapshot;
+      return new Snapshot({ ...result.snapshot, url: Url.redact(url) });
     }).pipe(
       within("snapshot"),
       span("Page.snapshot", { full: snapshotOptions.full ?? false }),
@@ -119,7 +120,7 @@ export const make = Effect.fnUntraced(function* (
       if (result === null) return yield* failWith("text", new StaleRef({ ref: scope }));
       yield* Effect.annotateCurrentSpan({ chars: result.text.length, truncated: result.truncated });
 
-      return new Text({ ...result, at: now() });
+      return new Text({ ...result, url: Url.redact(result.url), at: now() });
     }).pipe(
       within("text"),
       span("Page.text", { scope: scope === "viewport" ? "viewport" : "ref" }),

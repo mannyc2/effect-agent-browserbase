@@ -41,6 +41,14 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   receivedAt: Schema.Finite,
   width: Schema.Finite,
   height: Schema.Finite,
+  /**
+   * The page's document committed before the frame arrived, as `Navigated` counts them. Just
+   * after a commit a browser can still show the old document's paint, so a frame may show the
+   * document before its own, never one after it.
+   */
+  document: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** The page's address when the frame arrived. */
+  url: Schema.String,
 }) {
   get timestamp(): number | undefined {
     return this.timing._tag === "BrowserPaint" ? this.timing.timestamp : undefined;

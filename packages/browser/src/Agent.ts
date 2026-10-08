@@ -13,7 +13,7 @@
 import { Context, Effect, Exit, Option, Ref, Schema } from "effect";
 import { AiError, Chat, type LanguageModel, Prompt, Tool, Toolkit } from "effect/ai";
 
-import type { Browser } from "./Browser.ts";
+import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
 import * as Usage from "./internal/agent/usage.ts";
 import type { Observation, ObservationMode, Zoom } from "./Page.ts";
@@ -200,8 +200,15 @@ const unreadable = (
 const note = (text: string) =>
   Prompt.makeMessage("user", { content: [Prompt.makePart("text", { text })] });
 
-/** The observation, or why the page could not be observed. */
-const observationMessage = (observed: Observation | string, zooms: ReadonlyArray<Zoom>) => {
+/**
+ * The observation, or why the page could not be observed, and each crop with its tab's number,
+ * from one, as the tab list numbers them.
+ */
+const observationMessage = Effect.fnUntraced(function* (
+  observed: Observation | string,
+  zooms: ReadonlyArray<Zoom>,
+) {
+  const open = yield* (yield* Browser).pages;
   const image = typeof observed === "string" ? undefined : observed.image;
 
   const content: Array<Prompt.UserMessagePart> = [
@@ -223,16 +230,18 @@ const observationMessage = (observed: Observation | string, zooms: ReadonlyArray
   }
 
   for (const zoom of zooms) {
+    const tab = open.findIndex((page) => page.id === zoom.page) + 1;
+
     content.push(
       Prompt.makePart("text", {
-        text: `Zoom from page ${zoom.page}: viewport origin (${zoom.region.x}, ${zoom.region.y}), ${zoom.region.width}x${zoom.region.height} CSS pixels. Captured when browser_zoom ran. Add this origin to image coordinates for viewport clicks.`,
+        text: `Zoom from ${tab === 0 ? "a tab since closed" : `tab ${tab}`}: viewport origin (${zoom.region.x}, ${zoom.region.y}), ${zoom.region.width}x${zoom.region.height} CSS pixels. Captured when browser_zoom ran. Add this origin to image coordinates for viewport clicks.`,
       }),
       Prompt.makePart("file", { mediaType: zoom.image.mediaType, data: zoom.image.data }),
     );
   }
 
   return Prompt.makeMessage("user", { content });
-};
+});
 
 const loop = <E, Extra extends ExtraTools, R>(
   answerSchema: Schema.Codec<unknown, unknown>,
@@ -304,7 +313,7 @@ const loop = <E, Extra extends ExtraTools, R>(
         })
         .pipe(Effect.catch((error) => Effect.succeed(error.message)));
 
-      return observationMessage(observed, zooms);
+      return yield* observationMessage(observed, zooms);
     });
 
     const opening = yield* observe;

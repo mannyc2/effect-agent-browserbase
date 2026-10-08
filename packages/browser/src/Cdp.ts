@@ -6,12 +6,13 @@
  *
  * @since 0.3.0
  */
-import { Effect, Layer, Redacted } from "effect";
+import { type DateTime, Effect, Layer, Redacted } from "effect";
 import { chromium } from "playwright-core";
 
 import * as Browser from "./Browser.ts";
 import { BrowserError, Failed, type Reason } from "./BrowserError.ts";
 import { reasonOf } from "./internal/page/context.ts";
+import * as Url from "./internal/page/url.ts";
 
 export interface Options extends Browser.Options {
   /**
@@ -25,9 +26,9 @@ export interface Options extends Browser.Options {
   readonly provider?: string | undefined;
   /** Bound on connecting. Defaults to 30 seconds. */
   readonly connectTimeoutMillis?: number | undefined;
+  /** When the provider ends the session on its own, as a hosted session's timeout does. */
+  readonly expiresAt?: DateTime.Utc | undefined;
 }
-
-const urls = /[a-z][a-z\d+.-]*:\/\/[^\s"'<>]+/gi;
 
 /**
  * Playwright can echo the endpoint, or a URL derived from it with its query, userinfo or path, in
@@ -37,7 +38,7 @@ const urls = /[a-z][a-z\d+.-]*:\/\/[^\s"'<>]+/gi;
 const withoutEndpoint = (endpoint: string, reason: Reason): Reason => {
   if (reason._tag !== "Failed") return reason;
 
-  const origins = reason.detail.replace(urls, (url) => {
+  const origins = reason.detail.replace(Url.quoted, (url) => {
     const parsed = URL.parse(url);
 
     return parsed === null || parsed.host === "" ? "<url>" : `${parsed.protocol}//${parsed.host}`;
@@ -85,7 +86,7 @@ export const open = Effect.fn("Cdp.open")(function* (options: Options) {
 
   return yield* Browser.make(
     context,
-    { id: options.id ?? "cdp", provider: options.provider ?? "cdp" },
+    { id: options.id ?? "cdp", provider: options.provider ?? "cdp", expiresAt: options.expiresAt },
     options,
   );
 });

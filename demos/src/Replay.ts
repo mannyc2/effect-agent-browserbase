@@ -24,8 +24,9 @@ export class Replay extends Schema.Class<Replay>("demos/Replay")({
 
 /**
  * The frames to show, oldest first: each from the page the latest event concerned, so a page
- * painting in the background never flashes into view. Before any event, and after the shown
- * page closes, every page's frames qualify.
+ * painting in the background never flashes into view. A page that only finished loading, or an
+ * event of the whole browser, concerns no page shown. Before any event, and after the shown page
+ * closes, every page's frames qualify.
  */
 export const shownFrames = <F extends { readonly page: string; readonly hostTime: number }>(
   frames: ReadonlyArray<F>,
@@ -38,7 +39,10 @@ export const shownFrames = <F extends { readonly page: string; readonly hostTime
 
   for (const frame of frames.toSorted((left, right) => left.hostTime - right.hostTime)) {
     for (let record = ordered[next]; record !== undefined && record.event.at <= frame.hostTime;) {
-      active = record.event._tag === "PageClosed" ? undefined : record.event.page;
+      const { event } = record;
+
+      if (event._tag === "PageClosed") active = undefined;
+      else if ("page" in event && event._tag !== "PageLoaded") active = event.page;
       record = ordered[++next];
     }
     if (active === undefined || frame.page === active) shown.push(frame);
@@ -116,6 +120,10 @@ export const track = (events: ReadonlyArray<RecordedEvent>): Track => {
       case "Navigated":
       case "PageClosed":
       case "PageOpened":
+      case "PageLoaded":
+      case "PageUntracked":
+      case "Disconnected":
+      case "SessionEnding":
     }
   }
 
