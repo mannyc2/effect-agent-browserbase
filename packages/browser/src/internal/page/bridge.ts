@@ -30,7 +30,7 @@ import { history } from "../timeline/history.inpage.ts";
 import { marks } from "../timeline/marks.inpage.ts";
 import { record, type Recorder } from "../timeline/record.inpage.ts";
 import { sight } from "../timeline/sight.inpage.ts";
-import { contextGone, type PageContext } from "./context.ts";
+import { contextGone, failWith, type PageContext } from "./context.ts";
 import * as Url from "./url.ts";
 
 /** What the script installs: a version, and a function of one of its parts for each call. */
@@ -143,8 +143,10 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   const { id, cdp, native, span, publish, now } = page;
   const { send } = page.protocol;
   const registering = yield* Semaphore.make(1);
-  // Whether this session has registered the script.
+  // Whether this session has registered the script, and the recorder, which the first read of
+  // changes asks for.
   let registered = false;
+  let recording = false;
   // The current document's world, forgotten when the main frame commits another document; the
   // commits this session has seen, the latest marked on the page; and the page's address.
   let world: number | undefined;
@@ -214,28 +216,23 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       span("Page.register", {}, "Debug"),
     );
 
-  // Whether this session has registered the recorder, which the first read of changes asks for.
-  let recording = false;
-
-  /** Register the recorder after the script, once, so every later document records from its start. */
-  const registerRecorder = (operation: string) =>
+  /** Register the script once, and the recorder after it once a read of changes asks for it. */
+  const ensure = (operation: string, recorder: boolean) =>
     registering.withPermits(1)(
       Effect.suspend(() =>
-        recording
-          ? Effect.void
-          : Effect.andThen(registered ? Effect.void : register(operation), () =>
-              Effect.map(addScript(operation, recorderSource), () => {
+        Effect.andThen(registered ? Effect.void : register(operation), () =>
+          !recorder || recording
+            ? Effect.void
+            : Effect.map(addScript(operation, recorderSource), () => {
                 recording = true;
               }),
-            ),
+        ),
       ),
     );
 
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
-      yield* registering.withPermits(1)(
-        Effect.suspend(() => (registered ? Effect.void : register(operation))),
-      );
+      yield* ensure(operation, false);
       const document = documents;
 
       // The main frame's id is the page's target id.
@@ -263,19 +260,10 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     native(operation, () =>
       send("Runtime.evaluate", { contextId, expression, returnByValue: true, awaitPromise: true }),
     ).pipe(
-      Effect.flatMap((result) =>
-        result.exceptionDetails === undefined
-          ? Effect.succeed<unknown>(result.result.value)
-          : Effect.fail(
-              new BrowserError({
-                operation,
-                reason: new Failed({
-                  detail:
-                    result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
-                }),
-                dispatched: false,
-              }),
-            ),
+      Effect.flatMap(({ result, exceptionDetails: thrown }) =>
+        thrown === undefined
+          ? Effect.succeed<unknown>(result.value)
+          : failWith(operation, new Failed({ detail: thrown.exception?.description ?? thrown.text })),
       ),
     );
 
@@ -334,7 +322,8 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     currentDocument,
     frameTag,
     documentOf,
-    registerRecorder,
+    /** Register the recorder, so every later document records from its start. */
+    registerRecorder: (operation: string) => ensure(operation, true),
   };
 });
 

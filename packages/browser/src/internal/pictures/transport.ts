@@ -18,17 +18,6 @@ import type { Bridge } from "../page/bridge.ts";
 import type { PageContext } from "../page/context.ts";
 import * as Url from "../page/url.ts";
 
-/** A native screencast frame, as Chromium sends it. */
-export interface NativeFrame {
-  readonly data: string;
-  readonly metadata: {
-    readonly timestamp?: number | undefined;
-    readonly deviceWidth: number;
-    readonly deviceHeight: number;
-  };
-  readonly sessionId: number;
-}
-
 /**
  * Where a capture's screencast runs: the page's own session, or one on a capture connection. Its
  * calls never throw: a failure rejects.
@@ -84,6 +73,7 @@ const FrameTree = Schema.Struct({ frameTree: Schema.Struct({ frame: Commit }) })
 const Navigated = Schema.Struct({ frame: Commit });
 const Moved = Schema.Struct({ frameId: Schema.String, url: Schema.String });
 
+/** A native screencast frame, as Chromium sends it. */
 const ScreencastFrame = Schema.Struct({
   data: Schema.String,
   sessionId: Schema.Int,
@@ -93,6 +83,8 @@ const ScreencastFrame = Schema.Struct({
     deviceHeight: Schema.Finite,
   }),
 });
+
+export type NativeFrame = typeof ScreencastFrame.Type;
 
 const address = (commit: typeof Commit.Type) => Url.redact(commit.url + (commit.urlFragment ?? ""));
 
