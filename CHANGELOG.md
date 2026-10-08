@@ -37,9 +37,39 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   `BrowserbaseContract.checks`, what the package relies on Browserbase to do, which the fake
   passes. Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase
   does: a malformed session id is refused, where an unknown well-formed one is not found.
+- `browser.page(id)` finds an open page by its id, which is now its CDP target id: a new connection
+  to the same browser, as after a dropped one, finds each page under the id it had.
+- A page's life on the browser's timeline: `PageLoaded` as a document finishes parsing and loading;
+  `Navigated` with `sameDocument` for a move within the document, such as `pushState`, and
+  `document`, counting the page's documents from 0 within one `Browser`; and `PageUntracked`, a tab
+  the site opened that the library could not track, which used to go unreported.
+- The browser's end: one `Disconnected` event, and `browser.disconnected`, which completes with its
+  `DisconnectCause`: `connection`, `session` (at or after the provider's `expiresAt`) or
+  `released`. `browser.expiresAt` and the `SessionEnding` event carry the session's end, which
+  `Browserbase` passes on through the new `Cdp.Options.expiresAt`.
+- `Frame.document` and `Frame.url`: the document each frame followed and the page's address then.
+- `BrowserError.consequence(error)`: what a failure leaves, `lost` (`nothing`, the `page` or the
+  `session`) and whether to `repeat` it (`safe`, `check` first, `pointless` as it is, or `resume`
+  from a newer cursor), from its reason and `dispatched` alone.
+- `Browser.InitScript`: an init script runs only in documents whose address its `match` finds.
+- A Browserbase create whose answer named its session but did not decode is `Decode` with
+  `released`, whether the client then released the session.
 
 ### Changed
 
+- Every address the library reports, in events, frames, reads, errors and a guard's request, loses
+  its userinfo and the query and fragment parameters named for credentials, such as tokens, keys,
+  signatures and authorization codes, and keeps the rest, such as a chart's `?ticker=ETH`.
+- A crashed page is closed, so its calls fail at once, `Closed` as crashed, instead of at their
+  deadline; and a lost browser fails the calls in flight on its pages at once.
+- A page's registration sends its target id, focus emulation and the Page domain in one round trip,
+  and the first read and the first capture no longer send the target id or the Page domain. Opening
+  over CDP costs 33 calls: these two, and focus emulation, which the old count of 30 missed as it
+  went out after `open` returned. A first read costs 3 calls, from 5, and a first capture 8, from
+  10.
+- `BrowserError.message` is a sentence for operators; the browser tools add what a model should do,
+  such as taking a new snapshot after a stale ref. A crop's caption names its tab by number.
+- The tools say when a tab's title could not be read, rather than calling the tab untitled.
 - A Browserbase answer of 400 is the reason `InvalidRequest`, not `Status`, so a request Browserbase
   refuses as malformed, such as a session id that is not a UUID, reads the same as one this client
   refuses before sending.
@@ -60,6 +90,20 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   their errors by tag has one more to handle.
 - A persisting session carries `persistsContext: <context id>` in its user metadata, beside the
   caller's own.
+- `page.id` is the page's CDP target id, not `p<n>`, and `browser.pages` lists pages in the order
+  the browser began tracking them.
+- `browser.page` finds a page by id; the first open page, opening one when there is none, is
+  `browser.firstPage`.
+- `Closed` carries its `cause`: `page`, `crashed`, `connection`, `session` or `released`.
+- `PageClosed` carries its `cause`, `page` or `crashed`, and a page lost with its browser has none:
+  `Disconnected` stands for them all.
+- `Navigated` comes from the page's own protocol session and carries `document` and `sameDocument`;
+  `Frame` carries `document` and `url`.
+- `Page.close` fails with a `BrowserError` when the page could not be closed, and succeeds once it
+  has.
+- `Browser.Options.initScripts` takes `{ match, source }` objects, not strings.
+- `Supervisor`'s `Lost` carries its `cause`, and `Opened` no longer takes `expiresAt`: the
+  supervisor reads the browser's.
 
 ## 0.3.0-beta.1 (unreleased)
 
