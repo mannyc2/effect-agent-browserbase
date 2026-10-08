@@ -249,12 +249,7 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     now,
     actionTimeout: options.settings.actionTimeout,
     documentAt: () => activity.documentAt,
-    gone: (operation) =>
-      new BrowserError({
-        operation,
-        reason: new Closed({ cause: options.closedBy() }),
-        dispatched: false,
-      }),
+    gone: (operation) => undispatched(operation, new Closed({ cause: options.closedBy() })),
     scope,
   });
 
