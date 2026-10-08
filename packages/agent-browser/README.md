@@ -1,11 +1,11 @@
-# effect-browser-agent
+# effect-agent-browser
 
 [`effect-browser`](../browser) pages as [Yielded Agent](https://github.com/yielded-dev/agent)'s
 browser ports, with the tools an agent drives them by. Yielded runs the agent: its loop, policy,
 budgets, approval, context and run events. This package gives that agent a browser.
 
 ```sh
-npm install effect-browser-agent@beta effect-browser@beta @yielded/agent@beta effect playwright-core
+npm install effect-agent-browser@beta effect-browser@beta @yielded/agent@beta effect playwright-core
 ```
 
 | Module         | What it holds                                                                  |
@@ -18,8 +18,8 @@ npm install effect-browser-agent@beta effect-browser@beta @yielded/agent@beta ef
 ```ts
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Effect, Layer, Schema } from "effect";
+import { BrowserTools } from "effect-agent-browser";
 import { Browser } from "effect-browser";
-import { BrowserTools } from "effect-browser-agent";
 
 const tools = BrowserTools.make();
 

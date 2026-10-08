@@ -25,7 +25,7 @@ if [ $# -gt 0 ]; then
   archives="$(cd "$1" && pwd)"
 else
   archives="$work/archives"
-  for dir in browser browserbase human-strokes agent; do
+  for dir in browser browserbase human-strokes agent-browser; do
     (cd "$root/packages/$dir" && bun run build > /dev/null && bun pm pack --destination "$archives" --quiet > /dev/null)
   done
 fi
@@ -33,7 +33,7 @@ fi
 consumer="$work/consumer"
 mkdir "$consumer"
 echo '{ "private": true, "type": "module" }' > "$consumer/package.json"
-names=(effect-browser effect-browserbase effect-browser-human-strokes effect-browser-agent)
+names=(effect-browser effect-browserbase effect-browser-human-strokes effect-agent-browser)
 archived=()
 for name in "${names[@]}"; do archived+=("$archives/$name-$version.tgz"); done
 npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund \

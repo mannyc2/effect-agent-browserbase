@@ -64,7 +64,7 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   function that the bridge in `internal/page/bridge.ts` composes into the injected script.
 - `packages/browserbase` (`effect-browserbase`): the Browserbase client and sessions as a
   `Browser`. It depends on `effect-browser` through its public entry points.
-- `packages/agent` (`effect-browser-agent`): `effect-browser` pages as Yielded Agent's browser
+- `packages/agent-browser` (`effect-agent-browser`): `effect-browser` pages as Yielded Agent's browser
   ports, `BrowserActions` and `BrowserControl`, and the tools an agent drives them by. It depends on
   `effect-browser` through its public entry points and on `@yielded/agent`, pinned exactly.
 - `packages/human-strokes` (`effect-browser-human-strokes`): an optional pointer planner over
@@ -72,7 +72,7 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   code is MIT; its bundled stroke data is CC BY 4.0, with attribution in its README and
   `LICENSE-data`.
 - `bench`: private graded tasks, depending on `effect-browser`, `effect-browserbase` and
-  `effect-browser-agent`, whose agents run on Yielded.
+  `effect-agent-browser`, whose agents run on Yielded.
 - `tools/`: the pinned-toolchain installer, and `check-packed.sh`, which checks the packed
   packages in a clean consumer. Releases are `.github/workflows/publish.yml`; see
   `docs/RELEASING.md`.

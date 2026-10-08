@@ -5,7 +5,7 @@
 // acts by pixels. Understand tasks differ only in arm 1, whose moments add the outline.
 import { Agent, AgentRuntime, BrowserUse, InMemory, type RunEvent } from "@yielded/agent";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import * as BrowserTools from "effect-browser-agent/BrowserTools";
+import * as BrowserTools from "effect-agent-browser/BrowserTools";
 import type { Page } from "effect-browser/Page";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 

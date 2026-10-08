@@ -54,7 +54,7 @@ Agent, the renamed Effect Agent:
   times. The core planner, `Motion.lognormal`, uses the tuned two-stroke sigma-lognormal model; a
   presenter takes either as a value. Complete bounded plans are validated and admitted before
   publication and input.
-- `effect-browser-agent`: pages as Yielded Agent's browser ports, `BrowserActions` and
+- `effect-agent-browser`: pages as Yielded Agent's browser ports, `BrowserActions` and
   `BrowserControl`, pinned to one page or following a browser's tabs without taking the screen,
   and the tools an agent drives them by: Yielded's own, and pointer tools for what has no ref, such
   as a canvas game or a chart. An observation is the page's outline with its controls as values,
@@ -94,7 +94,7 @@ Agent, the renamed Effect Agent:
   from requests and recorded events. A 77-control labelled corpus grades the facts in `ready`.
   `Policy` adds judges over `effect/ai` (`reviewer` on a `LanguageModel`, `decider` on a
   `DecisionModel` such as Jev) and `make`, a guard that denies a risk the task does not ask for and
-  fails closed on input with facts when its judge fails; `effect-browser-agent`'s tools give it
+  fails closed on input with facts when its judge fails; `effect-agent-browser`'s tools give it
   the run's task. The judges are tested with scripted models; `bun run bench judges` in
   the bench grades them against the corpus, with paid arms only on opt-in.
 - What changed on a page: `Page.changes({ since, until })` reads, in one call, what visibly
@@ -201,8 +201,8 @@ Agent, the renamed Effect Agent:
   human-versus-raw input and scripted understanding replays are recorded; model comparisons and a
   policy demo are not yet.
 
-`effect-agent-browser`, the 0.2 adapter, is gone; `effect-browser-agent` replaces it on Yielded
-Agent, and 0.3's own loop on `effect/ai`'s `Chat` went with the move. The tests run against real local Chromium, a fake Browserbase API
+`effect-agent-browser` is rebuilt on Yielded Agent in place of the 0.2 adapter on Effect Agent,
+and 0.3's own loop on `effect/ai`'s `Chat` went with the move. The tests run against real local Chromium, a fake Browserbase API
 and scripted models. `bun run ready` runs all formatting, lint, type, test and build checks without
 paid calls.
 
@@ -253,7 +253,7 @@ and each becoming the next beta.
   the presenter and the wait after input: `humanize` and its fixed sleeps are gone. And so have
   windows: a page's events, changes and frames over a window that can end in the past, moments as
   windows that end at a picture and record what they could not read rather than fail,
-  `stillness`, and `page.state`. The agent then moved onto Yielded Agent: `effect-browser-agent`
+  `stillness`, and `page.state`. The agent then moved onto Yielded Agent: `effect-agent-browser`
   implements its browser ports over pages, with the tab following and the receipts of what an
   action caused that the phase built for its own tools, and the bench's arms are Yielded agents.
   The phase's own agent loop, its tools, their page operation contracts and RPC group went. The
@@ -288,7 +288,7 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
 | `effect-browser`               | 8,871 → 14,616                 | 11,064 → 15,428 | 129 → 159                 |
-| `effect-browser-agent`         | 935                            | 725             | 14                        |
+| `effect-agent-browser`         | 935                            | 725             | 14                        |
 | `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,376     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
@@ -307,7 +307,7 @@ state, 214 source lines, 393 test lines and 4 exports, which deleting `Moment`'s
 `latestFrame` and the browser's own listeners for loads paid for in part. Moving the agent onto
 Yielded took 949 source lines, 1,764 test lines and 30 exports out of the package, its loop and
 tools, against the reads Yielded's ports need: controls as values, a selector's scope, condition
-waits, a key on a ref and PNG pictures; the new `effect-browser-agent` is 935 source lines and 700
+waits, a key on a ref and PNG pictures; the rebuilt `effect-agent-browser` is 935 source lines and 700
 test lines, so the two together are smaller than the package was. The phase's simplify pass took
 66 source lines out, `waitForText` and its page-side wait. Phase 4's contexts,
 resume and keep added 32 source lines and 73 test lines there, the supervisor's `keep`, and the
@@ -336,9 +336,8 @@ The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` a
 `effect-agent-browser`, published on 2 October 2026 from tag `v0.2.0-beta.9` (`976d316`) on the
 `beta` dist-tag. 0.3 is not released. It will be released by plain npm trusted publishing from
 `.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase`,
-`effect-browser-human-strokes` and `effect-browser-agent`, once `@yielded/agent` `0.1.0-beta.168`
-is on npm and `effect-browser-agent`'s name is reserved for trusted publishing;
-[RELEASING.md](RELEASING.md) has the steps, and
+`effect-browser-human-strokes` and `effect-agent-browser`, once `@yielded/agent` `0.1.0-beta.168`
+is on npm; [RELEASING.md](RELEASING.md) has the steps, and
 [CHANGELOG.md](../CHANGELOG.md) lists what each release changes. Before it publishes, the workflow
 installs the packed archives in a clean consumer, typechecks every entry point's declarations with
 `skipLibCheck: false` and imports each one, with `tools/check-packed.sh`, which runs locally too.
