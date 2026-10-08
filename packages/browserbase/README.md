@@ -10,11 +10,13 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 - `Browserbase`: `open` and `layer` create a session and release it when their scope closes, so
   billing stops then rather than at the session's timeout. `attach` connects to a running session
   without taking ownership of it. `supervise` keeps sessions open across losses and session ends,
-  and `reconcile` ends a stored context's sessions.
+  and `reconcile` ends a stored context's sessions. A persisting open that will not write to a
+  context whose sessions may still save to it fails with `ContextHeld`.
 - `BrowserbaseClient`: sessions, Live View, stored contexts, extensions, Search and Fetch.
   `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
 - `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
-  `Transport`, `Decode`, `InvalidRequest` or `ContextHeld`.
+  `Transport`, `Decode` or `InvalidRequest`. A request Browserbase refuses as malformed, such as a
+  session id that is not a UUID, is `InvalidRequest`, as is one this client refuses before sending.
 
 The API key travels only in the `x-bb-api-key` header, which logs and traces redact, and the client
 refuses redirects so the key never follows one. Each request attempt has a deadline
@@ -44,7 +46,9 @@ from `session`. A lost session is published at once and replaced on the `reopen`
 next session opens `rotateBefore` ahead of the current one's `expiresAt`, or on `rotate`, before
 the current one is released. `states` reports each session's release outcome. Sessions that
 persist to a stored context are exclusive: a rotation releases the current session, and lets its
-save settle, before the next one opens.
+save settle, before the next one opens. An open Browserbase refused, as for a bad key or an invalid
+request, is `Down` at once with its cause, since no new try mends it; everything else, a held
+context included, is tried again on the schedule.
 
 ```ts
 const program = Effect.gen(function* () {
@@ -97,21 +101,27 @@ Two sessions saving to one context at once can lose one's changes, and sites may
 when another uses its login. So `Browserbase.open` and `layer` let one persisting session at a time
 hold each context in this process; another waits. The writer's release keeps holding the context
 until Browserbase reports the session ended and then `contextSettle` (10 seconds by default)
-longer, because the save lands after the session ends and Browserbase does not acknowledge it. A
-release left `Unconfirmed` keeps the context held, since its session may still save to it.
+longer, because the save lands after the session ends and Browserbase does not acknowledge it.
 Writers in other processes are the application's to exclude: take its own lock first, in the same
 scope, and the lock is released only after the save has settled. `attach` never holds a context.
 `deleteContext` is permanent.
 
-`open` labels each persisting session with its context in Browserbase's user metadata, as
-`persistsContext`. `reconcile(contextId)` finds the context's running sessions by that label, ends
-them, confirms they ended and, after `contextSettle`, lets the context go: the way out of an
-`Unconfirmed` release, and of sessions other processes left running.
+Two things leave a session that may still be saving to the context: a release left `Unconfirmed`,
+and a create whose answer was lost, which may have made a session nobody can see. Either marks the
+context, and the next `open` on it clears the mark before it writes: it ends the context's sessions,
+which `open` labels with `persistsContext: <context id>` in Browserbase's user metadata, confirms
+they ended, waits `contextSettle` and goes on. While they cannot be confirmed ended it fails with
+`ContextHeld`, which leaves the mark, so the open after it tries again. A lost create's own open
+ends that session the same way and then fails with the create's error. No context is ever held with
+no way out, and no two sessions write to one context.
 
-A persisting create whose answer is lost may still have made a session nobody can see, which
-would save to the context. `open` then ends the context's sessions itself before it lets the
-context go, and fails with the create's error. When they can't be confirmed ended, it fails with
-`ContextHeld` instead, and the context stays held until `reconcile`.
+`reconcile(contextId)` does that clearing without opening a session: the way to end sessions another
+process left running. It waits for a writer this process has open, and a session still running at
+its deadline makes it `Unconfirmed` and leaves the context marked.
+
+A supervised persisting session reopens through the same path, so a held context is tried again on
+the `reopen` schedule. An open that Browserbase refused outright, as for a bad key, is `Down` at
+once instead, with its cause: a schedule would only hide a configuration error.
 
 ## Extensions
 
@@ -136,6 +146,8 @@ Browserbase, for free. Sessions run until released or until their timeout on the
 `TestClock` ends them. A `Script` loses a create, leaves a release pending, refuses it, or fails
 status reads, in turn. `connectUrl` gives each session a DevTools address, such as a local
 Chromium's. It keeps sessions and stored contexts only, and fails a test that calls anything else.
+Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase does: it
+refuses a session id of any other shape, where it answers an unknown well-formed one as not found.
 `BrowserbaseContract.checks` are what this package relies on Browserbase to do, each an Effect over
 `BrowserbaseClient`; the fake passes them. Its answers also have the shapes Browserbase's published
 API reference gives them, which the package's tests check against a copy of it, except that a

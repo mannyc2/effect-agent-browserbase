@@ -418,7 +418,8 @@ waiting never interrupts a half-open browser. `browser` gives the current genera
 `waitTimeout` while one opens. A lost browser is published at once, and the next one opens on the
 `reopen` schedule, which also retries a failed open until it gives up, unless the provider deems
 the failure `definite`, such as a refused key: then the generation is `Down` at once, with its
-cause. `rotate`, or the time
+cause, which `Unavailable` also gives anyone waiting, because a schedule would only hide a
+configuration error. `rotate`, or the time
 `rotateBefore` ahead of a generation's `expiresAt`, opens the next generation before it releases
 the current one, unless generations are `exclusive`: then the current one is released first.
 `retire` stops reopening at once and releases what is open; closing the scope retires too. `states`

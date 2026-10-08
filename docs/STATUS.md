@@ -9,15 +9,19 @@
 - `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`. Stored contexts
   and uploaded extensions are managed through the client; `Browserbase.open` lets one persisting
   session at a time write to each context in a process and holds it until the save settles. A
-  release confirms the session ended and says so, `Settled` or `Unconfirmed`; an unconfirmed one
-  keeps its context held until `Browserbase.reconcile` ends the context's sessions, which `open`
-  labels in their user metadata. `effect-browserbase/testing` holds the Browserbase API in memory,
-  with scripted faults, and the contract checks it passes.
+  release confirms the session ended and says so, `Settled` or `Unconfirmed`. An unconfirmed
+  release, or a create whose answer was lost, marks the context: the next `open` on it ends the
+  context's sessions, which `open` labels in their user metadata, before it writes, and fails
+  `ContextHeld` while they cannot be confirmed ended, so no context is held with no way out and no
+  two sessions write to one. `Browserbase.reconcile` does the same without opening a session.
+  `effect-browserbase/testing` holds the Browserbase API in memory, with scripted faults and
+  Browserbase's own answer to each id shape, and the contract checks it passes.
 - Sessions that survive: `Supervisor` keeps a browser open as generations from any provider,
   reopening a lost one on a schedule, rotating ahead of a session's end (make before break, or
-  break first for sessions saving to one stored context), and stopping at once on `retire`. Each
-  generation's changes stream as `states`, with its release outcome last. `Browserbase.supervise`
-  supervises hosted sessions.
+  break first for sessions saving to one stored context), and stopping at once on `retire`. A
+  failure the provider deems definite, such as a refused key, is `Down` at once with its cause,
+  rather than hidden behind the schedule. Each generation's changes stream as `states`, with its
+  release outcome last. `Browserbase.supervise` supervises hosted sessions.
 - `effect-browser-human-strokes`: an optional layer with 32,130 recorded, attributed CC BY 4.0
   pointer strokes, retaining their original sample coordinates and times. The core pointer planner
   uses the tuned two-stroke sigma-lognormal model; browsers capture the motion service once.
@@ -123,7 +127,9 @@ and each becoming the next beta.
   capture failing or widening the clock's estimate. Its beta, `0.3.0-beta.1`, is prepared in the
   changelog and the package versions; it waits for those fixes, and is not tagged.
 - **Phase 2, identity and lifetime, is under way.** `Supervisor`, the Browserbase release outcomes
-  and `effect-browserbase/testing` have landed.
+  and `effect-browserbase/testing` have landed, with the review's follow-up: a context whose
+  session may still be saving to it is cleared by the next writer rather than held with no way out,
+  a definite failure goes `Down` at once, and the fake answers each id shape as Browserbase does.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.

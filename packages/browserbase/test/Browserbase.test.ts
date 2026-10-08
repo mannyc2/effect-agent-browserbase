@@ -693,50 +693,61 @@ describe("Browserbase", () => {
     }),
   );
 
-  it.effect("holds the context while a lost create's session runs on, until reconcile ends it", () =>
-    Effect.gen(function* () {
-      const connectUrl = yield* nowhere;
+  it.effect(
+    "holds the context while a lost create's session runs on, until reconcile ends it",
+    () =>
+      Effect.gen(function* () {
+        const connectUrl = yield* nowhere;
 
-      yield* Effect.gen(function* () {
-        const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
-        const open = Browserbase.open({ session: persisting(id) }).pipe(Effect.scoped, Effect.flip);
-        const error = yield* finish(yield* Effect.forkChild(open));
+        yield* Effect.gen(function* () {
+          const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) =>
+            client.createContext(),
+          );
 
-        assert.deepStrictEqual(
-          [error._tag, error._tag === "ContextHeld" && error.context],
-          ["ContextHeld", id],
-        );
-        assert.deepStrictEqual(
-          (yield* kept).map(({ status }) => status),
-          ["RUNNING"],
-        );
-        assert.strictEqual(
-          (yield* finish(yield* Effect.forkChild(Browserbase.reconcile(id))))._tag,
-          "Settled",
-        );
+          const open = Browserbase.open({ session: persisting(id) }).pipe(
+            Effect.scoped,
+            Effect.flip,
+          );
 
-        // Reconciled, the context is let go: the next writer looks for no other session first.
-        const listed = (yield* asked).filter((request) => request.startsWith("GET /v1/sessions?"));
+          const error = yield* finish(yield* Effect.forkChild(open));
 
-        assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
-        assert.deepStrictEqual(
-          (yield* asked).filter((request) => request.startsWith("GET /v1/sessions?")),
-          listed,
+          assert.deepStrictEqual(
+            [error._tag, error._tag === "ContextHeld" && error.context],
+            ["ContextHeld", id],
+          );
+          assert.deepStrictEqual(
+            (yield* kept).map(({ status }) => status),
+            ["RUNNING"],
+          );
+          assert.strictEqual(
+            (yield* finish(yield* Effect.forkChild(Browserbase.reconcile(id))))._tag,
+            "Settled",
+          );
+
+          // Reconciled, the context is let go: the next writer looks for no other session first.
+          const listed = (yield* asked).filter((request) =>
+            request.startsWith("GET /v1/sessions?"),
+          );
+
+          assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
+          assert.deepStrictEqual(
+            (yield* asked).filter((request) => request.startsWith("GET /v1/sessions?")),
+            listed,
+          );
+          assert.deepStrictEqual(
+            (yield* kept).map(({ status }) => status),
+            ["COMPLETED", "COMPLETED"],
+          );
+        }).pipe(
+          Effect.provide(
+            TestBrowserbase.layer({
+              connectUrl,
+              creates: [{ _tag: "Lost" }],
+              releases: [{ _tag: "Pending" }],
+            }),
+          ),
         );
-        assert.deepStrictEqual(
-          (yield* kept).map(({ status }) => status),
-          ["COMPLETED", "COMPLETED"],
-        );
-      }).pipe(
-        Effect.provide(
-          TestBrowserbase.layer({
-            connectUrl,
-            creates: [{ _tag: "Lost" }],
-            releases: [{ _tag: "Pending" }],
-          }),
-        ),
-      );
-    }),
+      }),
   );
 });
 
