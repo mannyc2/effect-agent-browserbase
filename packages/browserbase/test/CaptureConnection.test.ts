@@ -125,6 +125,18 @@ it.live(
           assert.isAtMost(stats.ackBacklog, 32);
           assert.isAtLeast(stats.received, stats.accepted);
           assert.isAtLeast(stats.accepted, frames.length);
+
+          // A wait for a still screen with a capture on air asks the page twice on the control
+          // connection, as on the page's own session, and ends with one round trip on the capture
+          // connection.
+          const still = yield* browser.newPage(html("<p>Still</p>"));
+
+          yield* still.snapshot();
+          yield* recorded(still);
+          from = proxy.commands.length;
+          yield* still.ready({ quietMillis: 200 });
+          assert.strictEqual(sentOn(proxy, control, from).length, 2);
+          assert.deepStrictEqual(methods(sentOn(proxy, capturing, from)), ["Page.getFrameTree"]);
         }),
       );
 

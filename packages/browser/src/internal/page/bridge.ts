@@ -80,7 +80,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 12) return installed;
+  if (installed !== undefined && installed.version === 13) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
@@ -97,7 +97,7 @@ const install = (
   const readiness = makeReady(walked, texts, kept);
 
   const api: PageApi = {
-    version: 12,
+    version: 13,
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
