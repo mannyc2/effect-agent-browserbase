@@ -99,7 +99,7 @@ export interface CaptureSource {
   /**
    * A session on the page's target, for the scope. `event` gets the session's events in the order
    * the browser sent them, its target's detach among them, until the scope closes; `lost` gets
-   * the connection's failure, once, if it fails first.
+   * the connection's failure, once, if it fails first. Its calls never throw: a failure rejects.
    */
   readonly attach: (
     target: string,

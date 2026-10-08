@@ -15,7 +15,10 @@
   `ContextHeld` while they cannot be confirmed ended, so no context is held with no way out and no
   two sessions write to one. `Browserbase.reconcile` does the same without opening a session.
   `effect-browserbase/testing` holds the Browserbase API in memory, with scripted faults and
-  Browserbase's own answer to each id shape, and the contract checks it passes.
+  Browserbase's own answer to each id shape, and the contract checks it passes. Pages' screencasts
+  run on a capture connection of their own, a second, read-only connection to the session, so a
+  frame never waits behind a large message on the one that drives the page; a provider supplies
+  one through `Cdp.Options.capture`.
 - Sessions that survive: `Supervisor` keeps a browser open as generations from any provider,
   reopening a lost one on a schedule, rotating ahead of a session's end (make before break, or
   break first for sessions saving to one stored context), and stopping at once on `retire`. A
@@ -152,19 +155,23 @@ and each becoming the next beta.
   session may still be saving to it is cleared by the next writer rather than held with no way out,
   a definite failure goes `Down` at once, and the fake answers each id shape as Browserbase does.
   Pages keep their target ids across connections, and their lifecycle, the browser's loss with its
-  cause, `consequence`, redacted addresses and per-origin init scripts are in.
+  cause, `consequence`, redacted addresses and per-origin init scripts are in. So is the capture
+  connection: on Browserbase, pages' screencasts run on a second, read-only connection to the
+  session, and on a hosted session the on-air page's longest wait between frames, while another
+  tab read and uploaded, fell from 1,802 ms to 352 ms.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 12,431                 | 11,064 → 14,736 | 129 → 167                 |
-| `effect-browserbase`           | 807 → 1,062, and 588 `testing` | 611 → 1,204     | 32 → 36, and 14 `testing` |
+| `effect-browser`               | 8,871 → 12,755                 | 11,064 → 14,779 | 129 → 168                 |
+| `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,593     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
 `effect-browser`'s figures include phase 2 so far: the supervisor, 602 source lines, 506 test lines
-and 7 exports, and pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports.
+and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports; and
+the capture connection's port and transport, 324 source lines, 43 test lines and 1 export.
 Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
 11,000 through phase 4.
 

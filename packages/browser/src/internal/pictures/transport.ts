@@ -193,16 +193,7 @@ export const apart = (
           end(scope, error(new Error("Target page has been closed")));
       };
 
-      const call = yield* source.attach(page.id, { event, lost: (lost) => end(scope, lost) });
-
-      // A provider's call that throws rejects instead, as a transport's must.
-      const send: typeof call = (method, params) => {
-        try {
-          return call(method, params);
-        } catch (cause) {
-          return Promise.reject(cause);
-        }
-      };
+      const send = yield* source.attach(page.id, { event, lost: (lost) => end(scope, lost) });
 
       // Tracked from the frame tree's answer on, set as it arrives so that no commit after it is
       // missed.
