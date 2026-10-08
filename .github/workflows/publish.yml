@@ -67,6 +67,12 @@ jobs:
             # bun writes the version each workspace:* range resolves to.
             (cd "$dir" && bun pm pack --destination "$RUNNER_TEMP/packages" --quiet)
           done
+      # The archives as a consumer gets them: installed outside the workspace, their declarations
+      # typechecked with skipLibCheck false and every entry point imported.
+      - name: Check the archives in a clean consumer
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: tools/check-packed.sh "$RUNNER_TEMP/packages"
       - name: npm publish --dry-run
         env:
           DIST_TAG: ${{ steps.tag.outputs.dist-tag }}
