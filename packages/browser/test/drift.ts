@@ -1,7 +1,8 @@
 // Plan 016's drift site: a small portal with a nav, a markets table with tabs, news, search and a
-// canvas game.
+// canvas game, and the phase 1 review's pages: a shop, a team list and a sign-in form.
 // Each page is served under one drift operator at a time, seeded, and says in `data-truth` where
-// a visit ended, so a replay that succeeds in the wrong place is caught.
+// a visit ended, so a replay that succeeds in the wrong place is caught. `remove` takes away what
+// a walk acted on and leaves something like it, and `insert` puts a new one before it.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -18,6 +19,8 @@ export const operators = [
   "offscreen",
   "redirect",
   "variant",
+  "remove",
+  "insert",
 ] as const;
 
 export type Operator = (typeof operators)[number];
@@ -101,8 +104,30 @@ const layout = (drift: Drift, truth: string, title: string, main: string) => {
 <body data-truth="${truth}"${slow ? ` style="visibility:hidden"` : ""}>${reveal}${banner}${body}${footer}${overlay}</body>`;
 };
 
+// What `remove` and `insert` do to a list: the item a walk acted on goes, or another takes its
+// place, or a new one comes first.
+const edited = <A>(
+  drift: Drift,
+  items: ReadonlyArray<A>,
+  removed: (item: A) => A | undefined,
+  added: A,
+): ReadonlyArray<A> =>
+  drift.operator === "remove"
+    ? items.map(removed).filter((item) => item !== undefined)
+    : drift.operator === "insert"
+      ? [added, ...items]
+      : drift.operator === "reorder"
+        ? shuffled(items, drift.seed)
+        : items;
+
 const markets = (drift: Drift) => {
-  const rows = drift.operator === "reorder" ? shuffled(coins, drift.seed) : coins;
+  // ETH is delisted, and a wrapped token whose name holds its own stays.
+  const rows = edited<readonly [string, string]>(
+    drift,
+    coins,
+    (coin) => (coin[0] === "ETH" ? ["Wrapped ETH", "$3,090"] : coin),
+    ["USDT", "$1.00"],
+  );
 
   const promo =
     drift.operator === "duplicate" ? `<p>New here? <a href="/buy?coin=BTC">Buy</a></p>` : "";
@@ -110,8 +135,8 @@ const markets = (drift: Drift) => {
   const listing =
     drift.operator === "variant"
       ? `<ul>${rows.map(([coin, price]) => `<li><strong>${coin}</strong> <span>${price}</span> <a href="/buy?coin=${coin}">Buy</a></li>`).join("")}</ul>`
-      : `<table><thead><tr><th>Coin</th><th>Price</th><th>Trade</th></tr></thead><tbody>
-${rows.map(([coin, price]) => `<tr><td>${coin}</td><td>${price}</td><td><a href="/buy?coin=${coin}">Buy</a></td></tr>`).join("")}
+      : `<table><thead><tr><th>#</th><th>Coin</th><th>Price</th><th>Trade</th></tr></thead><tbody>
+${rows.map(([coin, price], rank) => `<tr><td>${rank + 1}</td><td>${coin}</td><td>${price}</td><td><a href="/buy?coin=${coin}">Buy</a></td></tr>`).join("")}
 </tbody></table>`;
 
   return `<h1>Markets</h1>${promo}
@@ -121,7 +146,14 @@ ${listing}`;
 };
 
 const news = (drift: Drift) => {
-  const items = drift.operator === "reorder" ? shuffled(stories, drift.seed) : stories;
+  // Only one story stays, and it is not the one a walk read.
+  const items = edited<readonly [string, string, string]>(
+    drift,
+    stories,
+    (story) => (story[0] === "mine" ? story : undefined),
+    ["new", "Exchange opens", "A new venue started trading."],
+  );
+
   const box = drift.operator === "variant" ? ["div", "h3"] : ["article", "h2"];
 
   return `<h1>News</h1>${items
@@ -133,7 +165,12 @@ const news = (drift: Drift) => {
 };
 
 const search = (drift: Drift) => {
-  const items = drift.operator === "reorder" ? shuffled(results, drift.seed) : results;
+  const items = edited<readonly [string, string]>(
+    drift,
+    results,
+    (result) => (result[0] === "bitcoin-price" ? undefined : result),
+    ["bitcoin-guide", "Bitcoin guide"],
+  );
 
   return `<h1>Results</h1><ul>${items.map(([id, title]) => `<li><a href="/result/${id}">${title}</a></li>`).join("")}</ul>`;
 };
@@ -154,6 +191,43 @@ const game = `<h1>Game</h1><canvas width="600" height="400"></canvas>
 const home = `<h1>Portal</h1>
 <form action="/search"><label>Search <input name="q"></label> <button>Go</button></form>`;
 
+const truly = (truth: string) => `onclick="document.body.dataset.truth = '${truth}'"`;
+
+// A product sold out: the one "Add to cart" left is a recommendation's.
+const shop = (drift: Drift) => {
+  const product = (name: string, price: string, sold = false) =>
+    `<h2>${name}</h2><p>${sold ? "Out of stock" : price}</p>${sold ? "" : `<button ${truly(`cart:${name}`)}>Add to cart</button>`}`;
+
+  const removed = drift.operator === "remove";
+
+  return `${drift.operator === "insert" ? product("Green cap", "$15") : ""}${product("Blue T-shirt", "$20", removed)}
+<h2>Recommended</h2><h3>Red mug</h3><p>$9</p>${removed ? `<button ${truly("cart:Red mug")}>Add to cart</button>` : ""}`;
+};
+
+// A list, not a table, where only the words beside each button say whose it is. Once Bob has
+// gone, Alice's is the one "Remove" left.
+const team = (drift: Drift) =>
+  `<h1>Team</h1><ul>${edited(
+    drift,
+    ["Alice", "Bob"],
+    (name) => (name === "Bob" ? undefined : name),
+    "Carol",
+  )
+    .map((name) => `<li>${name} <button ${truly(`removed:${name}`)}>Remove</button></li>`)
+    .join("")}</ul>`;
+
+// A sign-in form that gains a field between the two a walk fills, or, in its variant, shows the
+// password as it is typed. Its truth is what each field holds.
+const signin = (drift: Drift) => {
+  const field = (label: string, id: string, type = "text") =>
+    `<label>${label} <input id=${id} type=${type} oninput="document.body.dataset.truth = 'signin:' + u.value + ':' + p.value.length + ':' + (window.c?.value.length ?? 0)"></label>`;
+
+  const company = drift.operator === "insert" ? field("Company", "c") : "";
+  const password = field("Password", "p", drift.operator === "variant" ? "text" : "password");
+
+  return `<h1>Sign in</h1><form onsubmit="return false">${field("Username", "u")}${company}${password}<button>Sign in</button></form>`;
+};
+
 /** The page for a path under a drift, or a redirect, or nothing. */
 const route = (
   url: URL,
@@ -166,6 +240,9 @@ const route = (
     return { to: `${path}-moved${url.search}` };
   if (path === "/") return { html: layout(drift, "home", "Portal", home) };
   if (path === "/game") return { html: layout(drift, "spins:0", "Game", game) };
+  if (path === "/shop") return { html: layout(drift, "shop", "Shop", shop(drift)) };
+  if (path === "/team") return { html: layout(drift, "team", "Team", team(drift)) };
+  if (path === "/signin") return { html: layout(drift, "signin", "Sign in", signin(drift)) };
   if (path === "/markets" || path === "/markets-moved")
     return { html: layout(drift, "markets:spot", "Markets", markets(drift)) };
   if (path === "/news" || path === "/news-moved")

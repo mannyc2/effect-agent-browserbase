@@ -40,6 +40,11 @@ export interface Proxy {
   /** Answer a command with an empty result instead of sending it on. */
   swallow: (command: Command) => boolean;
   /**
+   * Hold everything one way for a while, then send it on in order, as a stalled connection does:
+   * toward the client, frames and answers alike; toward the browser, acknowledgements and commands.
+   */
+  stall: (toward: "client" | "browser", millis: number) => void;
+  /**
    * How long a command takes to reach the browser, every later message on its connection waiting
    * behind it, as behind a large upload on a slow link. None by default.
    */
@@ -51,6 +56,24 @@ export interface Proxy {
   /** Cut every connection open now, or the one numbered `connection`, as a network fault would. */
   readonly drop: (connection?: number) => void;
 }
+
+// One direction of a connection: messages pass at once, except while it stalls, when they wait and
+// then go in the order they came.
+const direction = (until: () => number, deliver: (message: string) => void) => {
+  const held: Array<string> = [];
+
+  const release = () => {
+    const wait = until() - performance.now();
+
+    if (wait > 0) return void setTimeout(release, wait);
+    for (const message of held.splice(0)) deliver(message);
+  };
+
+  return (message: string) => {
+    if (held.length === 0 && performance.now() >= until()) return deliver(message);
+    if (held.push(message) === 1) setTimeout(release, Math.max(0, until() - performance.now()));
+  };
+};
 
 // The messages a client sends over a WebSocket: each frame is masked, and a message can span
 // several frames.
@@ -118,13 +141,13 @@ const frame = (text: string) => {
 const accept = (key: string) =>
   createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
 
-const sleep = (millis: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, millis);
-  });
-
 // Relay each connection to the browser, counting what it sends and swallowing what it asks to.
-const relay = (browser: URL, proxy: Proxy, connections: Map<number, Socket>) =>
+const relay = (
+  browser: URL,
+  proxy: Proxy,
+  stalled: { client: number; browser: number },
+  connections: Map<number, Socket>,
+) =>
   createServer((client) => {
     const connection = proxy.connected++;
     const attaching = new Set<number>();
@@ -132,14 +155,32 @@ const relay = (browser: URL, proxy: Proxy, connections: Map<number, Socket>) =>
     let rounds = 0;
     let upstream: WebSocket | undefined;
     let request = Buffer.alloc(0);
-    // Each direction keeps its order: a held message holds the ones after it, and a lagging
-    // answer the ones after it.
-    let sending = Promise.resolve();
-    let receiving = Promise.resolve();
-    let receivedLast = 0;
+    // Until when this connection's held command holds what follows it, and when its latest
+    // message toward the client arrives, which none after it precedes.
+    let heldUntil = 0;
+    let arrives = 0;
 
     connections.set(connection, client);
     client.on("close", () => connections.delete(connection));
+
+    const toBrowser = direction(
+      () => Math.max(stalled.browser, heldUntil),
+      (text) => upstream?.send(text),
+    );
+
+    const toClient = direction(
+      () => stalled.client,
+      (text) => {
+        arrives = Math.max(performance.now() + proxy.lag(connection), arrives);
+        const wait = arrives - performance.now();
+
+        if (wait <= 0) client.write(frame(text));
+        else
+          setTimeout(() => {
+            if (!client.destroyed) client.write(frame(text));
+          }, wait);
+      },
+    );
 
     const fromClient = messages(
       (text) => {
@@ -159,16 +200,11 @@ const relay = (browser: URL, proxy: Proxy, connections: Map<number, Socket>) =>
 
         proxy.commands.push(command);
         if (method === "Target.attachToTarget") attaching.add(id);
-        if (proxy.swallow(command))
-          client.write(frame(JSON.stringify({ id, result: {}, sessionId })));
+        if (proxy.swallow(command)) toClient(JSON.stringify({ id, result: {}, sessionId }));
         else {
           if (!acknowledging) awaiting.add(id);
-          const held = proxy.hold(command);
-
-          sending = sending.then(async () => {
-            if (held > 0) await sleep(held);
-            upstream?.send(text);
-          });
+          heldUntil = Math.max(heldUntil, performance.now() + proxy.hold(command));
+          toBrowser(text);
         }
       },
       () => {
@@ -206,13 +242,7 @@ const relay = (browser: URL, proxy: Proxy, connections: Map<number, Socket>) =>
         }
         if (id !== undefined && attaching.delete(id) && result?.sessionId !== undefined)
           proxy.attached.add(result.sessionId);
-        const at = Math.max(performance.now() + proxy.lag(connection), receivedLast);
-
-        receivedLast = at;
-        receiving = receiving.then(async () => {
-          if (at > performance.now()) await sleep(at - performance.now());
-          if (!client.destroyed) client.write(frame(data));
-        });
+        toClient(data);
       });
       socket.addEventListener("close", () => client.destroy());
     });
@@ -283,6 +313,7 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
     Effect.sync(stop),
   );
 
+  const stalled = { client: 0, browser: 0 };
   const connections = new Map<number, Socket>();
 
   const proxy: Proxy = {
@@ -291,6 +322,9 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
     answers: new Map(),
     attached: new Set(),
     swallow: () => false,
+    stall: (toward, millis) => {
+      stalled[toward] = Math.max(stalled[toward], performance.now() + millis);
+    },
     hold: () => 0,
     lag: () => 0,
     connected: 0,
@@ -302,7 +336,7 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
 
   const server = yield* Effect.acquireRelease(
     Effect.callback<Server>((resume) => {
-      const listening = relay(endpoint, proxy, connections).listen(0, "127.0.0.1", () =>
+      const listening = relay(endpoint, proxy, stalled, connections).listen(0, "127.0.0.1", () =>
         resume(Effect.succeed(listening)),
       );
     }),

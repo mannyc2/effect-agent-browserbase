@@ -20,17 +20,20 @@ export interface InputMarks {
   readonly touched: Effect.Effect<void>;
   readonly at: (point: Point) => Effect.Effect<void>;
   /** What the input acts on, and for a drag where it ends, as the page names them now. */
-  readonly on: (subject: ResolvedTarget, to?: ResolvedTarget) => Effect.Effect<void>;
+  readonly on: (subject: Named, to?: Named) => Effect.Effect<void>;
   /** The action's text is not bound for a secret field, so its record may keep it. */
   readonly reveal: Effect.Effect<void>;
   readonly input: Replies.Run;
 }
 
-const subjectOf = (target: ResolvedTarget) =>
+/** What the page names a target: a resolved one, or the field that has focus. */
+type Named = Pick<ResolvedTarget, "role" | "name" | "tag" | "context" | "box">;
+
+const subjectOf = (target: Named) =>
   new Subject({ role: target.role, name: target.name, tag: target.tag, context: target.context });
 
 /** What an action records of what it acted on: subjects, and a point target's box. */
-const actedOn = (subject: ResolvedTarget, to?: ResolvedTarget) => ({
+const actedOn = (subject: Named, to?: Named) => ({
   subject: subjectOf(subject),
   box: subject.box,
   ...(to === undefined ? {} : { to: subjectOf(to) }),
@@ -98,7 +101,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
         sent: Ref.set(sent, true).pipe(Effect.andThen(touch)),
         touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
-        on: (subject: ResolvedTarget, to?: ResolvedTarget) => Ref.set(acted, actedOn(subject, to)),
+        on: (subject: Named, to?: Named) => Ref.set(acted, actedOn(subject, to)),
         reveal: Effect.sync(() => {
           revealed = true;
         }),

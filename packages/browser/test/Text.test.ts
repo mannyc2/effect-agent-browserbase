@@ -18,7 +18,8 @@ const open = (path: string) =>
 
 // What the account page's fields hold, none of it shown unless asked for.
 const held = ["ada@example.com", "Ring twice", "Chile", "Likes chess"];
-const secrets = ["424242", "hunter2-secret"];
+// A one-time code, a password typed in, and a PIN whose field only its style masks.
+const secrets = ["424242", "hunter2-secret", "4321"];
 
 /** The ref of the one element a query finds. */
 const only = (page: Page, role: string, name: string) =>

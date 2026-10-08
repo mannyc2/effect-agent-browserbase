@@ -76,11 +76,11 @@ top viewport. A ref that no longer names an element of the current documents, in
 frame that has since navigated, fails with `StaleRef` naming that ref, with or without a guard.
 
 A subject names an element durably: its role, accessible name and tag, and its context, the words
-around it that say which one it is. In a table, `row` is the row's header or first cell with text
-and `column` the header over it, spanned cells counted; elsewhere, `label` is the words just before
-it in its row, item, group or block. `heading` is the nearest heading above it, left out for what
-is pinned to the viewport. The page binds each to the element, so a value is never read under
-another column's header.
+around it that say which one it is. In a table, `row` is the row's header, or else its first cell
+with letters, so a rank or a price never names it, and `column` is the header over it, spanned cells
+counted; elsewhere, `label` is the words just before it in its row, item, group or block. `heading`
+is the nearest heading above it, left out for what is pinned to the viewport. The page binds each to
+the element, so a value is never read under another column's header.
 
 `Page.find` reads structure without the outline, in one call to the page. It returns every element
 that matches a query, in tree order, each a `Found`: a ref the actions take, its `subject`, its box,
@@ -97,27 +97,39 @@ failure. `scope: "document"` reads the whole page; the default is the viewport.
 call to the page: a line per block, table cells apart by tabs, cut at a line after `maxChars`
 (12,000 by default). Like the outline, it leaves out what the page hides from assistive technology,
 such as icon glyphs. What a field holds reads `••••` unless `unmask` is set, and a secret field's
-always does, as does one that was secret when the library saw it, such as a password its page now
-reveals. The outline shows what fields hold, as the agent needs, but masks a secret field the same
-way.
+always does: a password, a one-time code or a card field, one whose style shows dots for what it
+holds, as a PIN field's may, and one that was secret when the library saw it, such as a password
+its page now reveals. The outline shows what fields hold, as the agent needs, but masks a secret
+field the same way.
 
 Reading the viewport, the outline, `find` and `text` skip a subtree whose box lies outside it before
 styling anything in it, so a long table costs only its rows in view. A box says nothing of what is
-positioned out of it, so a subtree is kept when its box is empty, or when it holds what is painted
-at the viewport's edges, corners or middle, or in its top layer; something pinned elsewhere, inside
-a subtree out of view, is missed. The outline's `above` and `below` count the parts skipped, each an
-element out of view with all it holds.
+positioned out of it, so a subtree is kept when its box is empty; when it holds what is painted at
+the viewport's edges, corners or middle, beneath any transparent layer too, or in its top layer; or
+when it holds what its style attribute pins in view. Something a stylesheet pins inside a subtree
+out of view, away from those points or ignoring the pointer, is missed. The outline's `above` and
+`below` count the parts skipped, each an element out of view with all it holds.
 
-`Page.ready` waits until a page is ready to be shown, asking the page in one call every 100 ms:
-its document is parsed and has painted since, nothing that ends is animating in view, its fonts
-and the images in view have loaded, and the viewport shows something. A hidden tab, which paints
-nothing, is never ready. With `quietMillis`, the screen must then also stay still that long: no
-screencast frame comes, counted from the first frame of a capture the wait starts itself, since a
-hosted browser sends that frame over half a second late. Stillness is a heuristic on a canvas: a
+`Page.ready` waits until a page is ready to be shown, in one call that checks in the page until it
+is, or until the time is up: its document is parsed and has painted since, nothing that ends is
+animating in view, its fonts and the images in view have loaded, nothing in view is marked busy
+(`aria-busy`), and the viewport shows something: text, a canvas drawn on, a picture or drawing
+larger than an icon, a video or a frame. A canvas mounted blank, as chart libraries mount theirs,
+or a spinner alone is still loading. A screen that only says "Loading…" in words reads as ready,
+and a WebGL canvas drawn once, without keeping its drawing, reads as blank. A hidden tab, which
+paints nothing, is never ready.
+
+With `quietMillis`, the screen must then also stay still that long: no screencast frame comes,
+counted from the first frame of a capture the wait starts itself, since a hosted browser sends that
+frame over half a second late. A capture's silence alone proves little: a stalled connection holds
+frames on their way, and Chromium sends frames only while few acknowledgements are unanswered. So
+the spell counts only while every acknowledgement is answered, and it ends with one more call to the
+page, whose answer arrives behind every frame sent before it; a frame that comes first starts the
+spell again. That call costs the wait one round trip. Stillness is a heuristic on a canvas: a
 canvas that keeps drawing, such as a live chart, is never still, and one that pauses longer than
-`quietMillis` between phases reads as still. On the slot machine fixture, 0 of 130 waits, at
-local speed, with the CPU slowed four times, and behind 70 and 300 ms round trips, ended while
-the reels spun.
+`quietMillis` between phases reads as still. On the slot machine fixture, with the connection
+stalled for 450 to 900 ms toward either end while the reels spun, none of 132 waits ended early,
+where all 36 did before.
 
 `Plan` rehearses a walk once and replays it later, near live, with no model call.
 `Plan.fromEvents(page.recentEvents)` keeps one page's completed actions with their subjects and
@@ -125,15 +137,21 @@ the options they were given, its navigations with the address asked for and the 
 what was typed as an input slot named for its field, never the text itself. `Plan.replay(page,
 plan, { inputs })` takes the steps in turn: before each that acts, it waits for `Page.ready`
 (`settle` sets how, or `false` not to wait), finds the one element the step's subject names with
-`Plan.locate`, and acts on it. Context decides between equal candidates: one in another row or
-under another column is not the subject, and the rest rank by how much of the recorded context
-they repeat; a tie is `Ambiguous`, since there is no ordinal. An element step never falls back to
-coordinates. A step recorded at a point presses the same place within the element found, brought
-into view first, and only when a press there reaches that element, not something over it. Replay
-stops at the first step it cannot take, with a `ReplayError` naming the step and why: `Missing`,
-`Ambiguous`, `Drifted` (the subject is only in another row, or the walk ended on another site), or
-the step's `BrowserError`. Nothing is replayed automatically, and a plan of another version does
-not decode.
+`Plan.locate`, and acts on it. An element that does not repeat every part of the recorded context
+is another subject: its row read whole, so a row named "Wrapped BTC" is not the row "BTC" (laid out
+again without rows, as cards, one of its fields must start with the row's words), its column where
+it is under one, and its label and heading read the same or found as words in order. So the one
+element left once the recorded one has gone, such as Alice's "Remove" after Bob's, drifts rather
+than stands in. The rest rank by how much they read the same; a tie is `Ambiguous`, since there is
+no ordinal. Text typed into whatever had focus went into the focused field, which the action
+records as its subject, so replay types into that field wherever focus has gone; and text first
+typed into a secret field is typed only into one. An element step never falls back to coordinates.
+A step recorded at a point presses the same place within the element found, brought into view
+first, and only when a press there reaches that element, not something over it. Replay stops at
+the first step it cannot take, with a `ReplayError` naming the step and why: `Missing`,
+`Ambiguous`, `Drifted` (nothing with the subject's role and name repeats its context, or the walk
+ended on another site), or the step's `BrowserError`. Nothing is replayed automatically, and a plan
+of another version does not decode.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
@@ -275,16 +293,18 @@ stops the unsent suffix and releases held input.
 Typing sends key pairs for printable US characters in both plain and humanized modes; other text
 uses Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
 link or change a select, so `type` refuses before any input when its `into` ref is not a text field
-or, without `into`, when focus is on such a control; `press` sends keys to those. Humanized typing
-aims for about 75 WPM including slower word starts, with key holds around 110 ms that can overlap.
-The ordered schedule releases a repeated physical key before pressing it again. Keys follow that
-schedule without waiting for each network reply. Pending replies are bounded and drained before an
-action succeeds; interruption stops new input and releases every submitted held key. Shortcut chords
-retain Playwright’s platform-specific editing behavior. Before each key, typing and repeated presses
-check that the page is still in the document the action began in, and stop with a dispatched
-`NotActionable` once it has moved on. The browser reports a new document as it commits, so a key
-sent within about one protocol round trip of that commit can still reach it. Under a guard, typing's
-submit Enter and each repeated Enter or Space are first checked against the approved element.
+or, without `into`, when focus is on such a control; `press` sends keys to those. With `secret`,
+`type` also refuses a field the page does not mark secret, so a password goes only where the page
+hides it, as a replayed password does. Humanized typing aims for about 75 WPM including slower word
+starts, with key holds around 110 ms that can overlap. The ordered schedule releases a repeated
+physical key before pressing it again. Keys follow that schedule without waiting for each network
+reply. Pending replies are bounded and drained before an action succeeds; interruption stops new
+input and releases every submitted held key. Shortcut chords retain Playwright’s platform-specific
+editing behavior. Before each key, typing and repeated presses check that the page is still in the
+document the action began in, and stop with a dispatched `NotActionable` once it has moved on. The
+browser reports a new document as it commits, so a key sent within about one protocol round trip of
+that commit can still reach it. Under a guard, typing's submit Enter and each repeated Enter or
+Space are first checked against the approved element.
 
 `Page.type(text, { prose: true })` opts eligible textarea or contenteditable prose into occasional
 corrected slips when humanized, with an explicit `into` ref and whole-field replacement. The

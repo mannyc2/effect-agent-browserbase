@@ -24,7 +24,7 @@ const maybe = (values: ReadonlyArray<string>) =>
   Arbitrary.schema(Schema.Union([Schema.Undefined, Schema.Literals(values)]));
 
 const context = Arbitrary.all({
-  row: maybe(["BTC", "ETH", "SOL"]),
+  row: maybe(["BTC", "ETH", "Wrapped BTC"]),
   column: maybe(["Trade", "Price"]),
   label: maybe(["BTC $64,210", "ETH $3,105", "New here?"]),
   heading: maybe(["Prices", "News"]),
@@ -64,12 +64,23 @@ const shape = (choice: {
   readonly count?: number;
 }) => (choice.found === undefined ? JSON.stringify(choice) : `One ${choice.found.ref}`);
 
-// Whether a context names a row, read as words, independently of how `choose` reads it.
-const names = (subject: SubjectContext, row: string) =>
-  Object.values(subject).some(
-    (value) =>
-      typeof value === "string" && value.toLowerCase().split(/\s+/).includes(row.toLowerCase()),
-  );
+// Whether a context repeats one recorded field, read as words, independently of how `choose`
+// reads it: a row whole, or leading a field where there are no rows; a column where there is one;
+// a label or heading as words in order in any field.
+const repeats = (subject: SubjectContext, field: keyof SubjectContext, value: string) => {
+  const words = (text: string) => ` ${text.toLowerCase().split(/\s+/).join(" ")} `;
+  const own = subject[field];
+  const all = Object.values(subject).filter((other) => typeof other === "string");
+
+  if (field === "row")
+    return own === undefined
+      ? all.some((other) => words(other).startsWith(words(value)))
+      : words(own) === words(value);
+
+  return field === "column"
+    ? own === undefined || own === value
+    : all.some((other) => words(other).includes(words(value)));
+};
 
 describe("Plan's choice of a subject", () => {
   it.prop(
@@ -95,20 +106,17 @@ describe("Plan's choice of a subject", () => {
   );
 
   it.prop(
-    "never chooses an element in another row or under another column",
+    "never chooses an element that leaves out any part of the recorded context",
     { recorded: context, found: candidates },
     ({ recorded, found }) => {
       const choice = decide(buy(recorded).subject, found);
 
       if (choice._tag !== "One") return;
-      const chosen = choice.found.subject.context;
+      for (const field of ["row", "column", "label", "heading"] as const) {
+        const value = recorded[field];
 
-      assert.isTrue(recorded.row === undefined || names(chosen, recorded.row));
-      assert.isTrue(
-        recorded.column === undefined ||
-          chosen.column === undefined ||
-          chosen.column === recorded.column,
-      );
+        assert.isTrue(value === undefined || repeats(choice.found.subject.context, field, value));
+      }
     },
   );
 
@@ -307,7 +315,7 @@ const ref = (page: Page, query: FindQuery) =>
       ),
     );
 
-type Walk = "buy" | "read" | "search" | "game";
+type Walk = "buy" | "read" | "search" | "game" | "cart" | "team" | "signin";
 
 const walks: Record<
   Walk,
@@ -348,6 +356,24 @@ const walks: Record<
       // The SPIN button, by point, as a model playing from a screenshot would press it.
       yield* page.click({ x: (canvas?.box.x ?? 0) + 300, y: (canvas?.box.y ?? 0) + 320 });
     }),
+  cart: (page, url) =>
+    Effect.gen(function* () {
+      yield* page.goto(url("/shop"));
+      yield* page.click(yield* ref(page, { role: "button", name: "Add to cart" }));
+    }),
+  team: (page, url) =>
+    Effect.gen(function* () {
+      yield* page.goto(url("/team"));
+      yield* page.click(yield* ref(page, { role: "button", name: "Remove", near: "Bob" }));
+    }),
+  signin: (page, url) =>
+    Effect.gen(function* () {
+      yield* page.goto(url("/signin"));
+      yield* page.type("alice", { into: yield* ref(page, { role: "textbox", name: "Username" }) });
+      // Then into focus, as a model that tabbed to the next field types.
+      yield* page.press("Tab");
+      yield* page.type("hunter2");
+    }),
 };
 
 // What each replay should do under each operator: replay, or fail with this reason.
@@ -356,6 +382,11 @@ const expected = (operator: Operator, walk: Walk): string => {
   if (operator === "overlay") return "NotActionable";
   if (operator === "rename" && (walk === "buy" || walk === "read")) return "Missing";
   if (operator === "duplicate" && walk === "buy") return "Ambiguous";
+  // What the walk acted on has gone, and what is left beside it is another subject.
+  if (operator === "remove" && walk === "search") return "Missing";
+  if (operator === "remove" && walk !== "game" && walk !== "signin") return "Drifted";
+  // A password is never typed into a field that shows it.
+  if (operator === "variant" && walk === "signin") return "NotActionable";
 
   return "replayed";
 };
@@ -417,42 +448,50 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
         const outcomes: Record<string, string> = {};
         const wanted: Record<string, string> = {};
         const timings: Record<string, number> = {};
+        const recorded = new Map<Walk, { readonly plan: Plan.Plan; readonly truth: string }>();
+        const inputs = { search: "bitcoin", username: "alice", password: "hunter2" };
 
+        yield* site.drift({ operator: "none", seed: 1 });
         for (const walk of Object.keys(walks) as Array<Walk>) {
-          yield* site.drift({ operator: "none", seed: 1 });
           const recording = yield* fresh;
 
           yield* walks[walk](recording, site.url);
-          const plan = Plan.fromEvents(yield* recording.recentEvents);
-          const truth = yield* truthOf(recording);
-
-          for (const operator of operators)
-            for (let seed = 1; seed <= seeds; seed++) {
-              yield* site.drift({ operator, seed });
-              const page = yield* fresh;
-              const key = `${walk} ${operator} ${seed}`;
-
-              const started = performance.now();
-
-              outcomes[key] = yield* Plan.replay(page, plan, {
-                inputs: { search: "bitcoin" },
-              }).pipe(
-                Effect.andThen(truthOf(page)),
-                Effect.map((reached) =>
-                  reached === truth ? "replayed" : `wrong place: ${reached}`,
-                ),
-                Effect.catchTag("ReplayError", (error) =>
-                  Effect.succeed(
-                    error.reason._tag === "BrowserError"
-                      ? error.reason.reason._tag
-                      : error.reason._tag,
-                  ),
-                ),
-              );
-              wanted[key] = expected(operator, walk);
-              timings[key] = Math.round(performance.now() - started);
-            }
+          recorded.set(walk, {
+            plan: Plan.fromEvents(yield* recording.recentEvents),
+            truth: yield* truthOf(recording),
+          });
         }
+        // Under one operator at a time, the walks replay side by side, each on a page of its own.
+        for (const operator of operators)
+          for (let seed = 1; seed <= seeds; seed++) {
+            yield* site.drift({ operator, seed });
+            yield* Effect.forEach(
+              recorded,
+              ([walk, { plan, truth }]) =>
+                Effect.gen(function* () {
+                  const page = yield* fresh;
+                  const key = `${walk} ${operator} ${seed}`;
+                  const started = performance.now();
+
+                  outcomes[key] = yield* Plan.replay(page, plan, { inputs }).pipe(
+                    Effect.andThen(truthOf(page)),
+                    Effect.map((reached) =>
+                      reached === truth ? "replayed" : `wrong place: ${reached}`,
+                    ),
+                    Effect.catchTag("ReplayError", (error) =>
+                      Effect.succeed(
+                        error.reason._tag === "BrowserError"
+                          ? error.reason.reason._tag
+                          : error.reason._tag,
+                      ),
+                    ),
+                  );
+                  wanted[key] = expected(operator, walk);
+                  timings[key] = Math.round(performance.now() - started);
+                }).pipe(Effect.scoped),
+              { concurrency: 4, discard: true },
+            );
+          }
         if (process.env["DRIFT_OUT"] !== undefined)
           writeFileSync(process.env["DRIFT_OUT"], JSON.stringify({ outcomes, timings }, null, 2));
         assert.deepStrictEqual(outcomes, wanted);

@@ -11,25 +11,11 @@ export const names = () => {
   const byRef = new Map<string, WeakRef<Element>>();
   const refs = { next: 1 };
 
-  const interactiveRoles = new Set([
-    "button",
-    "link",
-    "checkbox",
-    "radio",
-    "tab",
-    "menuitem",
-    "menuitemcheckbox",
-    "menuitemradio",
-    "option",
-    "switch",
-    "slider",
-    "combobox",
-    "listbox",
-    "textbox",
-    "searchbox",
-    "spinbutton",
-    "treeitem",
-  ]);
+  const interactiveRoles = new Set(
+    "button link checkbox radio tab menuitem menuitemcheckbox menuitemradio option switch slider combobox listbox textbox searchbox spinbutton treeitem".split(
+      " ",
+    ),
+  );
 
   const containers: Record<string, string> = {
     HEADER: "banner",
@@ -62,15 +48,9 @@ export const names = () => {
   const isDocument = (node: Node): node is Document => node.nodeType === Node.DOCUMENT_NODE;
 
   // Controls whose text is a value or a choice, not words of a label around them.
-  const valueRoles = new Set([
-    "combobox",
-    "listbox",
-    "option",
-    "textbox",
-    "searchbox",
-    "spinbutton",
-    "slider",
-  ]);
+  const valueRoles = new Set(
+    "combobox listbox option textbox searchbox spinbutton slider".split(" "),
+  );
 
   /**
    * A label's own words, without the options or values of the controls inside it, native or
@@ -278,11 +258,16 @@ export const names = () => {
   // A field once secret stays secret, such as a password its page lets the user reveal.
   const secrets = new WeakSet<Element>();
 
-  /** A field the DOM marks as secret, by its type or its autocomplete tokens, now or before. */
+  /**
+   * A field the DOM marks as secret, now or before: by its type, its autocomplete tokens, or a
+   * style that shows dots for what it holds, as a PIN field may.
+   */
   const isSecret = (element: Element): boolean => {
     if (
       (isInput(element) && element.type === "password") ||
-      secretToken.test(element.getAttribute("autocomplete") ?? "")
+      secretToken.test(element.getAttribute("autocomplete") ?? "") ||
+      ((isInput(element) || isTextArea(element)) &&
+        !/^(none)?$/.test(getComputedStyle(element).getPropertyValue("-webkit-text-security")))
     )
       secrets.add(element);
 

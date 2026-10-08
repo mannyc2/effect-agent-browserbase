@@ -281,10 +281,10 @@ const typeText = (input: Parts) => {
 
           // A typed space or letter can press a focused button or change a control. Refuse
           // those before any input, on every path.
+          const asked = scriptCall("typeable", into ?? null, typeOptions.secret === true);
+
           const typeable = yield* (
-            approval === undefined
-              ? evaluate("type", scriptCall("typeable", into ?? null))
-              : mutate("type", scriptCall("typeable", into ?? null), approval)
+            approval === undefined ? evaluate("type", asked) : mutate("type", asked, approval)
           ).pipe(Effect.flatMap(decodeWith("type", Script.TypeableResultSchema)));
 
           if ("error" in typeable)
@@ -294,6 +294,7 @@ const typeText = (input: Parts) => {
                 ? new StaleRef({ ref: into })
                 : new NotActionable({ detail: typeable.detail }),
             );
+          if (typeable.subject !== undefined) yield* marks.on(typeable.subject);
 
           const since = yield* currentDocument("type");
           let secret = typeable.secret;
