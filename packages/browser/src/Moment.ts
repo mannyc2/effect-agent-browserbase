@@ -345,6 +345,7 @@ const recordOf = (moment: Moment) =>
 /** The moment's changes and events as lines, most notable first when its changes are recorded. */
 const account = (moment: Moment): ReadonlyArray<string> => {
   const record = recordOf(moment);
+
   const { lines, named } =
     record === undefined
       ? { lines: new Array<Line>(), named: new Set<Action>() }

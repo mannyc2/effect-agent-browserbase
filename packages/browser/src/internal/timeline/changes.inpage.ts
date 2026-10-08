@@ -94,13 +94,19 @@ export const changes = (
       const moved = new Set<Element | null>();
       let still = losses.every((lost) => lost >= at || lost < at - stillMillis);
 
-      for (const { key, changes } of tracks) {
-        const prior = changes.filter((change) => change.at < at && change.at >= at - fluxMillis);
+      for (const { key, kind, initial, samples } of tracks) {
+        // Whether each change in the 10 s before came or went: it, or what it followed, showed
+        // nothing. A field's own edits are the input's, not the page's.
+        const prior = samples.flatMap(({ at: when, shown }, index) =>
+          kind === "value" || when >= at || when < at - fluxMillis
+            ? []
+            : [shown === null || (index === 0 ? initial : samples[index - 1]?.shown) === null],
+        );
 
         if (prior.length > 0) changed.add(key);
         if (prior.length === 0 || (key instanceof Element && key.contains(target))) continue;
-        if (prior.some((change) => change.moved)) moved.add(parentOf(key));
-        if (prior.some((change) => change.at >= at - stillMillis)) still = false;
+        if (prior.includes(true)) moved.add(parentOf(key));
+        if (samples.some(({ at: when }) => when < at && when >= at - stillMillis)) still = false;
       }
 
       return { at, target, changed, moved, still };
