@@ -4,7 +4,7 @@ Browser automation for [Effect](https://effect.website) agents, over Playwright:
 compact page outline for models, screencast frames, a record of what visibly changed on a page,
 windows over a page's events, changes and frames, and moments, an account in pictures and words of
 what a page showed and what changed on it. An agent drives its pages through
-[`effect-browser-agent`](../agent), with Yielded Agent's browser tools.
+[`effect-agent-browser`](../agent-browser), with Yielded Agent's browser tools.
 
 ```sh
 npm install effect-browser@beta effect playwright-core
@@ -287,7 +287,7 @@ const browser = Layer.unwrap(
 );
 ```
 
-The task comes from `Policy.Task`, which `effect-browser-agent`'s tools provide to their inputs
+The task comes from `Policy.Task`, which `effect-agent-browser`'s tools provide to their inputs
 from the run's `task`; elsewhere, provide it yourself, or risky input is denied for want of one. A judge sees the task, the action, the typed
 text and the facts as trusted, and the page's text only as evidence. It never sees the agent's own
 words. A judgement only adds to structure: a `secret` fact counts whatever the judge reads. A judge
