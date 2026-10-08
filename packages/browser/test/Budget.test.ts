@@ -265,6 +265,21 @@ it.live(
     }).pipe(Effect.scoped),
 );
 
+// After a click that navigates nowhere, the page settles in one call: a task and a frame in the
+// page, where a 120 ms sleep used to be.
+it.live("waits after a click that navigates nowhere with one call", () =>
+  Effect.gen(function* () {
+    const { proxy, browser } = yield* opened();
+    const page = yield* browser.newPage(still("clicked"));
+
+    yield* page.click({ x: 5, y: 5 });
+    const sent = yield* sentBy(proxy, page.click({ x: 5, y: 5 }));
+    const input = sent.findLastIndex((command) => command.method === "Input.dispatchMouseEvent");
+
+    holds(sent.slice(input + 1), 1, 1);
+  }).pipe(Effect.scoped),
+);
+
 // The change record costs a page nothing until something reads its changes: no registration, no
 // call. The first read registers the recorder beside the read, in one round trip, and every later
 // read is one call; a moment of a page on air adds that one call to its free picture.

@@ -1,10 +1,10 @@
 /**
- * Pointer motion as a complete, bounded schedule, independent of browser input and transport.
- * A browser captures this service once; an optional layer can replace the default planner.
+ * Pointer motion as a complete, bounded schedule, independent of browser input and transport. A
+ * presenter takes a planner as a value: `lognormal` here, or another, such as recorded strokes.
  *
  * @since 0.3.0
  */
-import { Context, Effect, Random, Schema } from "effect";
+import { Effect, Random, Schema } from "effect";
 
 export const maximumSamples = 2048;
 export const maximumDurationMillis = 5000;
@@ -40,9 +40,8 @@ export type Plan = typeof Plan.Type;
 export interface Service {
   /**
    * Offsets start when the performer publishes the plan, before its first input. The browser
-   * decodes the result as a `Plan` whose last sample must be exactly `to`. Glide time counts
-   * against the browser's `actionTimeout`, and one action can glide more than once: a drag
-   * performs two glides, so two 5-second plans exceed the 10-second default.
+   * decodes the result as a `Plan` whose last sample must be exactly `to`. Glide time has a budget
+   * of its own, outside the browser's `actionTimeout`, so a drag may glide twice for 5 seconds.
    */
   readonly plan: (from: Point, to: Point) => Effect.Effect<ReadonlyArray<Sample>>;
 }
@@ -160,6 +159,8 @@ const plan: Service["plan"] = Effect.fnUntraced(function* (from, to) {
   return samples;
 });
 
-export const Motion: Context.Reference<Service> = Context.Reference("effect-browser/Motion", {
-  defaultValue: () => ({ plan }),
-});
+/**
+ * The research's tuned two-stroke sigma-lognormal model: a fast stroke toward the target and a
+ * slower one that homes in on it, with a little bend, drawn from `Random`.
+ */
+export const lognormal: Service = { plan };

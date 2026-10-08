@@ -5,6 +5,8 @@ import type { BrowserContext, CDPSession } from "playwright-core";
 import { Browser, make as makeBrowser, type Service as BrowserService } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
+import * as Presentation from "../src/Presentation.ts";
+import { unpaused } from "./fixtures.ts";
 
 interface NativeInput {
   readonly type?: string;
@@ -36,7 +38,8 @@ interface RecordedWindow {
   clicks: number;
 }
 
-const setup = Effect.fnUntraced(function* (humanize = true) {
+// Each page opened performed has a presenter of its own, so its pointer is its own.
+const setup = Effect.fnUntraced(function* (performed = true) {
   const native = (yield* Browser).context.browser();
   const clock = yield* Clock.Clock;
 
@@ -82,10 +85,11 @@ const setup = Effect.fnUntraced(function* (humanize = true) {
     return session;
   };
 
-  const browser = yield* makeBrowser(context, { id: "track-test", provider: "test" }, { humanize });
+  const browser = yield* makeBrowser(context, { id: "track-test", provider: "test" });
 
   const open = Effect.gen(function* () {
-    const page = yield* browser.newPage();
+    const plain = yield* browser.newPage();
+    const page = performed ? (yield* Presentation.make({ pacing: unpaused })).view(plain) : plain;
 
     yield* Effect.promise(() =>
       page.playwright.setContent(
@@ -283,8 +287,8 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           );
           const cursors = events.filter((event) => event._tag === "CursorChanged");
 
-          // Humanized scroll now inspects the wheel origin, so it can report the actual
-          // center hit's cursor instead of carrying the previous button's crosshair forward.
+          // A performed scroll inspects the wheel origin, so it can report the actual center
+          // hit's cursor instead of carrying the previous button's crosshair forward.
           assert.deepStrictEqual(
             cursors.slice(cursorCount).map(({ page, cursor }) => ({ page, cursor })),
             [{ page: first.id, cursor: "auto" }],

@@ -64,7 +64,7 @@ describe("hosted trials", () => {
       // its session was made, and the session is released.
       const { client, handle, sent } = yield* recorded();
 
-      const failure = yield* Layer.build(hostedBrowser(false)).pipe(
+      const failure = yield* Layer.build(hostedBrowser()).pipe(
         Effect.scoped,
         Effect.provide(client),
         Effect.flip,
@@ -99,7 +99,7 @@ describe("hosted trials", () => {
 
         yield* Effect.gen(function* () {
           const context = yield* Layer.build(
-            hostedBrowser(false).pipe(
+            hostedBrowser().pipe(
               Layer.provide(
                 Relay.client((command) => commands.push(command)).pipe(Layer.provide(client)),
               ),

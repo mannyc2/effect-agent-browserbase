@@ -91,7 +91,6 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
     isSelect,
     isTextArea,
     lookup,
-    nameOf,
     parentOf,
     refFor,
     roleOf,
@@ -212,10 +211,7 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
       : undefined;
   };
 
-  const sensitive =
-    /password|passwd|secret|credential|token|username|user.?name|login|sign.?in|one.?time|otp|security|auth|email|e-mail|url|website|phone|tel(?:ephone)?|account|card|payment|billing|order|trade|quantity|amount|price|postal|zip|address|iban|routing|cc-/i;
-
-  // Attributes that say what a field is for. They bind an approval and decide prose eligibility.
+  // Attributes that say what a field is for. They bind an approval.
   const purpose = (control: Element, form: HTMLFormElement | null) => [
     control.getAttribute("id"),
     control.getAttribute("name"),
@@ -226,26 +222,6 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
     form?.getAttribute("name"),
     form?.getAttribute("aria-label"),
   ];
-
-  /** Free prose only: never numbers, addresses, credentials, payment or order fields. */
-  const proseEligible = (control: Element): boolean => {
-    const form = isTextArea(control) ? control.form : null;
-    const submitter = form === null ? undefined : defaultSubmitter(form);
-    const inputMode = control.getAttribute("inputmode");
-
-    return (
-      (isTextArea(control) || (isHtml(control) && control.isContentEditable)) &&
-      !isDisabled(control) &&
-      !control.hasAttribute("readonly") &&
-      control.getAttribute("aria-readonly") !== "true" &&
-      (inputMode === null || inputMode === "" || inputMode === "text") &&
-      ![
-        ...purpose(control, form),
-        nameOf(control, roleOf(control)),
-        submitter === undefined ? null : nameOf(submitter, roleOf(submitter)),
-      ].some((value) => value !== null && value !== undefined && sensitive.test(value))
-    );
-  };
 
   // What an approval binds of a URL. A fragment that names a place on the page, which scroll-spy
   // and feed pages rewrite as they scroll, is left out. A hash route (#/… or #!…) stays: it
@@ -361,11 +337,9 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
         ? metadata.name
         : null;
 
-    // Approval and prose eligibility share the same immutable inspection. A focus or scroll
-    // handler changing these attributes must not leave an old permission behind.
+    // A focus or scroll handler changing these attributes must not leave an old permission behind.
     const fingerprint = JSON.stringify([
       purpose(control, form),
-      proseEligible(control),
       element.tagName,
       element.id,
       role,
@@ -590,7 +564,7 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
     return promise.then(() => validate(plan, prepared, options));
   };
 
-  return { prepareInput, proseEligible, textEntry, typingRefusal, validateInput };
+  return { prepareInput, textEntry, typingRefusal, validateInput };
 };
 
 export type Guard = ReturnType<typeof guard>;

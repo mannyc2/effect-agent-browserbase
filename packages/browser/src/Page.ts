@@ -79,8 +79,6 @@ export interface TypeOptions {
   readonly replace?: boolean | undefined;
   /** Press Enter afterwards. */
   readonly submit?: boolean | undefined;
-  /** Allow corrected slips when replacing an explicit eligible prose ref while humanized. Sensitive fields stay exact. */
-  readonly prose?: boolean | undefined;
   /**
    * The text is a secret: type it only into a field the page marks secret, such as a password,
    * and otherwise refuse with `NotActionable` before any input. A replayed password asks this.
@@ -327,17 +325,6 @@ export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect
 
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
-
-export interface Settings {
-  readonly actionTimeout: Duration.Duration;
-  readonly policyTimeout: Duration.Duration;
-  readonly navigationTimeout: Duration.Duration;
-  /** Move the pointer along curved paths and type with human pacing, for watched browsing. */
-  readonly humanize: boolean;
-  /** How long screencast frames stay in `recentFrames`, measured back from the newest. */
-  readonly frameHistory: Duration.Duration;
-  readonly guard: InputGuard | undefined;
-}
 
 export interface Page {
   /** The page's CDP target id: the same page has it again after a reconnect to its browser. */

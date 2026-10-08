@@ -12,6 +12,7 @@ import * as Input from "../src/internal/input/replies.ts";
 import * as Lane from "../src/internal/page/lane.ts";
 import { maximumSamples } from "../src/Motion.ts";
 import { failFast, type Page } from "../src/Page.ts";
+import * as Presentation from "../src/Presentation.ts";
 
 interface Receipt {
   readonly kind: string;
@@ -729,22 +730,22 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    // Release review M2: a 58-character query typed humanized on a background page held an on-air
-    // click on another page for about 9.5 s; 100 characters made it fail undispatched at 10 s.
-    it.effect("never holds a click on one page behind humanized typing on another", () =>
+    // Release review M2: a 58-character query typed at a person's pace on a background page held an
+    // on-air click on another page for about 9.5 s; 100 characters made it fail undispatched at 10 s.
+    it.effect("never holds a click on one page behind performed typing on another", () =>
       Effect.gen(function* () {
-        const { browser } = yield* browserWith({ humanize: true });
+        const { browser } = yield* browserWith({});
         const typing = yield* browser.newPage(blank);
         const other = yield* browser.newPage(blank);
+        const presenter = yield* Presentation.make();
 
         yield* Effect.promise(() => typing.playwright.locator("input").focus());
-        const typed = yield* typing.type("x".repeat(58)).pipe(Effect.forkChild);
+        const typed = yield* presenter.view(typing).type("x".repeat(58)).pipe(Effect.forkChild);
 
         yield* keysUnderWay(browser);
         const { exit, millis } = yield* elapsed(other.click({ x: 10, y: 10 }));
 
-        // The click takes its own glide and pauses, 1.4–2.7 s locally, and no part of the typing's
-        // 9 s, which the lock made it wait out.
+        // The click waits for no part of the typing's 9 s, which the lock made it wait out.
         assert.isTrue(Exit.isSuccess(exit));
         assert.isUndefined(typed.pollUnsafe(), "the typing goes on");
         assert.isBelow(millis, 6000);

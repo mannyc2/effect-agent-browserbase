@@ -9,8 +9,9 @@ import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
 import * as PageImpl from "../src/internal/page/page.ts";
 import * as BrowserClock from "../src/internal/pictures/clock.ts";
-import * as Motion from "../src/Motion.ts";
 import type * as Page from "../src/Page.ts";
+import * as Presentation from "../src/Presentation.ts";
+import { unpaused } from "./fixtures.ts";
 
 interface RecordedKey {
   readonly type: string;
@@ -59,7 +60,7 @@ const value = (page: Page.Page) =>
 // every character, permit unbounded retained work, or lose a release when an action is interrupted.
 const setup = Effect.fnUntraced(function* (
   oneWayMillis: number,
-  options: { readonly humanize?: boolean; readonly guard?: Page.InputGuard } = {},
+  options: { readonly performed?: boolean; readonly guard?: Page.InputGuard } = {},
 ) {
   const native = (yield* Browser).context.browser();
 
@@ -218,13 +219,13 @@ const setup = Effect.fnUntraced(function* (
   const { targetInfo } = yield* Effect.promise(() => cdp.send("Target.getTargetInfo"));
   const paging = cdp.send("Page.enable");
 
-  const page = yield* PageImpl.make({
+  const plain = yield* PageImpl.make({
     id: targetInfo.targetId,
+    session: "input-test",
     playwright,
     cdp,
     clock,
     mapping,
-    motion: yield* Motion.Motion,
     publish: (event) => {
       track.push(event);
 
@@ -237,7 +238,6 @@ const setup = Effect.fnUntraced(function* (
     paging: () => Effect.promise(() => paging),
     closedBy: () => "page",
     settings: {
-      humanize: options.humanize ?? true,
       actionTimeout: Duration.seconds(30),
       policyTimeout: Duration.seconds(30),
       navigationTimeout: Duration.seconds(30),
@@ -245,6 +245,12 @@ const setup = Effect.fnUntraced(function* (
       guard: options.guard,
     },
   });
+
+  // Performed by default, as watched typing is the pace these tests hold.
+  const page =
+    options.performed === false
+      ? plain
+      : (yield* Presentation.make({ pacing: unpaused })).view(plain);
 
   yield* page.snapshot();
   dispatches.splice(0);
@@ -460,7 +466,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
     it.effect("keeps Chromium's receipt time for input until a capture has mapped the clock", () =>
       Effect.gen(function* () {
-        const relay = yield* setup(35, { humanize: false });
+        const relay = yield* setup(35, { performed: false });
 
         yield* relay.page.click({ x: 500, y: 300 });
         yield* relay.page.type("ab");
@@ -576,10 +582,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
     it.effect("types plain text through trusted keys and inserts newlines without submitting", () =>
       Effect.gen(function* () {
         const requests: Array<Page.InputRequest> = [];
-        const plain = yield* setup(0, { humanize: false });
+        const plain = yield* setup(0, { performed: false });
 
         const guarded = yield* setup(0, {
-          humanize: false,
+          performed: false,
           guard: (request) =>
             Effect.sync(() => {
               requests.push(request);

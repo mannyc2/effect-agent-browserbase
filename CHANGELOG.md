@@ -24,6 +24,29 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Browser.Options.maxPages`, with the new reason `Limit`: at that many open pages, those a site
   opened included, `newPage` waits within the action timeout for one to close, then fails `Limit`,
   or fails at once under `Page.failFast`.
+- `Stage`: the source of a live output. `Stage.make({ quality, size })` is scoped, one per output;
+  `stage.present(page, { at })` switches it to a page, in the same browser session or another, at
+  `at` or at once, and returns `Presented { page, at, latency }`, stamped with when the switch took
+  effect on the frame clock. It starts the new page's capture ahead, turns on its first frame once
+  `at` has come and input under way on the old page has ended, then stops the old capture: the
+  captures overlap, so a switch shows no dark spell. On Browserbase, two captures in one session ran
+  together at the frame rate of one, where stopping first left 250 to 295 ms dark. A first frame
+  that does not come in time fails `present` with `Timeout`, and the old page stays; a capture that
+  fails restarts on its page while the page and browser stand. `stage.frames`, `stage.current` and
+  `stage.stats({ window })`, the presented page's capture counts.
+- `Presentation`: input performed for viewers, as an explicit view. `Presentation.make({ pacing,
+  motion })` is scoped and owns one drawn pointer; `presenter.view(page)` is the page with its
+  actions performed, while the page itself stays plain. Each action first waits as a person reacts,
+  by `Presentation.human`'s medians: 280 ms after an expected change, 600 ms after a new document
+  and 1 second on another page. The pointer glides from where viewers last saw it, on whichever
+  page; a field is clicked before typing; keys go at 70 words a minute; the wheel turns in 100 px
+  notches, in bursts. One view acts at a time, and presentation time, its glides and typing, has a
+  budget of its own outside `actionTimeout`, so a drag may glide twice for 5 seconds.
+  `view.aim(target)` starts the glide as soon as a target is known, as in a model's streamed tool
+  call, and the action on that target completes it.
+- `Motion.lognormal`, the tuned two-stroke planner, as a value, and `HumanStrokes.motion`, which
+  loads the recorded strokes as a planner, for `Presentation.make`.
+- `Frame.session`: every frame names its browser session, as `Browser.Service.id` gives it.
 
 ### Changed
 
@@ -31,15 +54,23 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
   `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
 - A page waits only for itself: the browser-wide input lock is gone. A click on one page no longer
-  waits for humanized typing on another, which held an on-air click for about 9.5 s in the release
-  review, and failed it undispatched at 10 s with 100 characters.
+  waits for typing at a person's pace on another, which held an on-air click for about 9.5 s in the
+  release review, and failed it undispatched at 10 s with 100 characters.
 - Guarded typing approves a field once. Plain text goes into the approved field in one insertion,
   so a guarded 2,000-character paste takes 15 ms locally and half a second at a 70 ms round trip,
   where each key used to wait for the keys before it and a focus check: 6.3 s locally and
-  4.8 minutes at 70 ms. Humanized typing checks that the field still has focus before each space,
-  which could press a button, and after its last key, rather than before every key.
+  4.8 minutes at 70 ms. Typing key by key, as a presenter's view does, checks that the field still
+  has focus before each space, which could press a button, and after its last key, rather than
+  before every key.
 - `title` and `viewport` read in the page's turn, within the action timeout; `title` used to wait
   for a busy page without bound.
+- The wait after input has no fixed sleep. After a click, a key, a submit or a scroll, the page gets
+  a task and a frame, in one call, which also spans any navigation the input asked for, as a link,
+  a form or a handler's timer does; a document that committed meanwhile is waited for until it is
+  parsed. A click used to sleep 120 ms (250 ms humanized) and a scroll 150 ms: ten clicks on a page
+  that navigates nowhere took 1.65 s locally and 3.75 s at a 70 ms round trip, and take 0.5 s and
+  3.25 s. `pushState` and a 204 answer wait for nothing, and a navigation a handler starts once a
+  fetch answers is the next look's to see, as it was.
 
 ### Breaking
 
@@ -52,7 +83,16 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - Under a guard, plain typing sends no key events: the text arrives in one insertion once its field
   is approved, so a page listening for key events sees none.
 - Each page has its own pointer, where its own last move left it; a glide on a page starts there,
-  or mid-viewport, not where input on another tab left the pointer.
+  or mid-viewport, not where input on another tab left the pointer. A presenter's views share its
+  one drawn pointer instead.
+- `Browser.Options.humanize`, `TypeOptions.prose`, the `prose` parameter of `browser_type` and the
+  `prose` action option are gone: input is plain, and a presenter's view performs it. Corrected
+  slips go with `prose`. Plain input never glides, holds a press or types key by key at a person's
+  pace, whatever presents its page.
+- `Motion.Motion` is gone, and with it `HumanStrokes.layer` and `HumanStrokes.provideTo`: a planner
+  is a value given to `Presentation.make`, so a misplaced layer can no longer be ignored in silence.
+- `Page.Settings` is internal.
+- `Frame` has a `session`, which a program that builds frames must give.
 
 ## 0.3.0-beta.2 (unreleased)
 
