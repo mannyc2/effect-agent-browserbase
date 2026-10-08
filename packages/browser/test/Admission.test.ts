@@ -743,9 +743,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* keysUnderWay(browser);
         const { exit, millis } = yield* elapsed(other.click({ x: 10, y: 10 }));
 
+        // The click takes its own glide and pauses, 1.4–2.7 s locally, and no part of the typing's
+        // 9 s, which the lock made it wait out.
         assert.isTrue(Exit.isSuccess(exit));
         assert.isUndefined(typed.pollUnsafe(), "the typing goes on");
-        assert.isBelow(millis, 3000);
+        assert.isBelow(millis, 6000);
         yield* Fiber.interrupt(typed);
       }),
     );
