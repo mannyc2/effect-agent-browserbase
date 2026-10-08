@@ -1,9 +1,10 @@
 import { assert, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Layer, Stream } from "effect";
+import { Clock, Duration, Effect, Layer, Schedule, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
+import type { Frame } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 
@@ -154,6 +155,36 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(later.frames[0]?.hostTime, 7000);
       }),
   );
+  // A capture on air runs for hours, so its frames must not keep the estimate it started with.
+  it.effect("times a running capture's later frames by the browser's newest clock estimate", () =>
+    Effect.gen(function* () {
+      const time = { wall: 1_900_000_000_000, monotonic: 5000 };
+      const { page } = yield* setup(controlledClock(yield* Clock.Clock, time));
+      const frames: Array<Frame> = [];
+
+      yield* page.goto(
+        "data:text/html,<canvas id=c width=300 height=300></canvas><script>const g=c.getContext('2d');(function f(t){g.fillStyle='hsl('+(t/5%360)+',80%,50%)';g.fillRect(0,0,300,300);requestAnimationFrame(f)})(0)</script>",
+      );
+      yield* page.screencast().pipe(
+        Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+        Effect.forkScoped,
+      );
+
+      const paintedAfter = (hostTime: number) =>
+        Effect.sync(() => frames.at(-1)?.hostTime ?? Number.NEGATIVE_INFINITY).pipe(
+          Effect.repeat({ until: (newest) => newest > hostTime, schedule: Schedule.spaced(20) }),
+          Effect.timeout("5 seconds"),
+        );
+
+      yield* paintedAfter(0);
+      assert.closeTo(frames[0]?.hostTime ?? 0, 5000, 1000);
+      // A minute on by the owner's clock, the estimate is due again: the capture measures it while
+      // its frames flow, finds the clocks moved, and times its later frames by the new estimate.
+      time.monotonic += 60_000;
+      yield* paintedAfter(60_000);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps page pacing and deadlines on the owner clock under a caller's TestClock", () =>
     Effect.gen(function* () {
       const live = yield* Clock.Clock;

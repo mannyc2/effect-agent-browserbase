@@ -10,6 +10,7 @@ import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Image as BrowserImage } from "../src/Frame.ts";
+import * as Moment from "../src/Moment.ts";
 import { type Page, redacted } from "../src/Page.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
@@ -481,6 +482,37 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         [...arrivals].sort((a, b) => a - b),
       );
     }),
+  );
+
+  // The red page keeps painting until the blue one, which the server answers late, commits, so its
+  // own frames are the newest when the navigation returns: every read must show the blue one.
+  it.effect("shows the page a navigation reached, never the one it left", () =>
+    Effect.gen(function* () {
+      const site = yield* Site;
+      const page = yield* open("/spinning");
+
+      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+
+      const reads: Record<string, Effect.Effect<BrowserImage | undefined, BrowserError>> = {
+        screenshot: page.screenshot(),
+        frame: Effect.map(page.frame(), (frame) => frame.image),
+        "frame after input": Effect.map(page.frame({ after: "input" }), (frame) => frame.image),
+        moment: Effect.map(
+          Moment.capture(page, { frames: 1 }),
+          (moment) => moment.frames[0]?.image,
+        ),
+      };
+
+      for (const [read, image] of Object.entries(reads)) {
+        yield* page.goto(site.url("/spinning"));
+        yield* Effect.sleep(Duration.millis(300));
+        yield* page.goto(site.url("/late"));
+        const shown = yield* image;
+        const [red = 0, , blue = 0] = shown === undefined ? [] : yield* centerPixel(page, shown);
+
+        assert.isTrue(red < 80 && blue > 180, `${read} showed rgb ${red}, _, ${blue}`);
+      }
+    }).pipe(Effect.scoped),
   );
 
   it.effect("takes JPEG screenshots in viewport pixels", () =>

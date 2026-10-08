@@ -83,7 +83,8 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Cap
   /**
    * Frames dropped because they may have been painted, or arrived, while the library took a clipped
    * or scaled picture of the page, such as a zoom: Chromium draws those into the screencast too.
-   * The page's own frames from that time are among them.
+   * Where Playwright emulates the viewport, the page's own frames from that time are among them; a
+   * crop on the page's own session leaves out only frames of another size than the page's.
    */
   duringPictures: Count,
   /**

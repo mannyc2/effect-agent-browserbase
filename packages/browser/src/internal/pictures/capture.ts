@@ -21,7 +21,14 @@ interface Options {
   /** Its calls, counted into the operation that sends them. */
   readonly send: CDPSession["send"];
   readonly clock: Clock.Clock;
+  /** The estimate a capture starts with, once the page can be captured. */
   readonly calibrate: Effect.Effect<Estimate, BrowserError>;
+  /** The browser's newest estimate, which times each frame. */
+  readonly latest: () => Estimate | undefined;
+  /** Measure the clock again if it is due, while frames flow. */
+  readonly renew: Effect.Effect<void>;
+  /** What the page needs from its own session while frames flow, sent as a capture starts. */
+  readonly watch: Effect.Effect<unknown, BrowserError>;
   /** How long frames are kept, measured back from the newest. */
   readonly frameHistory: Duration.Duration;
   /** The viewport in CSS pixels; a capture is scaled to fit it, as screenshots are. */
@@ -78,14 +85,22 @@ export interface Controller {
   /** Lifetime counts, or those of the latest `windowMillis`, at most `countsKept`. */
   readonly stats: (windowMillis?: number) => Effect.Effect<CaptureStats>;
   readonly active: Effect.Effect<boolean>;
-  /** Run a clipped or scaled picture of the page, keeping what it draws out of the capture. */
-  readonly excluding: <A, E, R>(picture: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /**
+   * Run a clipped or scaled picture of the page, keeping what it draws out of the capture: every
+   * frame meanwhile, or only those of another size than the page's where the picture is `resized`,
+   * drawn at its own size.
+   */
+  readonly excluding: <A, E, R>(
+    picture: Effect.Effect<A, E, R>,
+    resized?: boolean,
+  ) => Effect.Effect<A, E, R>;
 }
 
 /** When the library took a clipped picture: from its call to its reply, in host milliseconds. */
 interface Excluded {
   readonly from: number;
   until: number;
+  readonly resized: boolean;
 }
 
 const replyCapacity = 32;
@@ -205,28 +220,31 @@ const excludedFor = Duration.seconds(10);
 const settling = Duration.millis(50);
 
 /**
- * Chromium draws the library's own clipped pictures into the running screencast, with the page's
- * device size and shape when the crop has the viewport's proportions, and nothing in a frame tells
- * it apart. A frame painted, or arriving, while one is taken is left out, the page's own included.
+ * Chromium draws the library's own clipped pictures into the running screencast. Where Playwright
+ * emulates the viewport they keep the page's device size, and its shape when the crop has the
+ * viewport's proportions, so nothing in a frame tells them apart: a frame painted, or arriving,
+ * while one is taken is left out, the page's own included. A crop on the page's own session is
+ * drawn at the crop's size, so there only a frame of another size than the page's is left out.
  */
 const pictureWindows = (now: () => number) => {
   let windows: ReadonlyArray<Excluded> = [];
 
   return {
-    painted: ({ hostTime, timing, receivedAt }: Frame) =>
+    drawn: ({ hostTime, timing, receivedAt }: Frame, foreign: boolean) =>
       windows.some((window) => {
         const until = window.until + Duration.toMillis(settling);
 
         return (
-          (hostTime + timing.uncertaintyMillis >= window.from &&
+          (foreign || !window.resized) &&
+          ((hostTime + timing.uncertaintyMillis >= window.from &&
             hostTime - timing.uncertaintyMillis <= until) ||
-          (receivedAt >= window.from && receivedAt <= until)
+            (receivedAt >= window.from && receivedAt <= until))
         );
       }),
-    excluding: <A, E, R>(picture: Effect.Effect<A, E, R>) =>
+    excluding: <A, E, R>(picture: Effect.Effect<A, E, R>, resized = false) =>
       Effect.acquireUseRelease(
         Effect.sync(() => {
-          const window = { from: now(), until: Number.POSITIVE_INFINITY };
+          const window = { from: now(), until: Number.POSITIVE_INFINITY, resized };
           const since = window.from - Duration.toMillis(excludedFor);
 
           windows = [...windows.filter((kept) => kept.until > since), window];
@@ -240,6 +258,40 @@ const pictureWindows = (now: () => number) => {
           }),
       ),
   };
+};
+
+/**
+ * A native frame as readers get it: its picture's size, else the capture's or its device's, and
+ * its paint mapped by the browser's newest estimate, which may be older than the frame and says
+ * less about later paint.
+ */
+const timed = (
+  options: Options,
+  native: NativeFrame,
+  timestamp: number,
+  generation: Pick<Generation, "calibration" | "size">,
+) => {
+  const data = Buffer.from(native.data, "base64");
+  const image = options.imageSize(data);
+  const device = { width: native.metadata.deviceWidth, height: native.metadata.deviceHeight };
+  const size = image ?? generation.size ?? device;
+  const estimate = options.latest() ?? generation.calibration;
+  const hostTime = toHostTime(estimate, timestamp);
+
+  const frame = new Frame({
+    page: options.id,
+    data,
+    timing: new BrowserPaint({
+      timestamp,
+      hostTime,
+      uncertaintyMillis: uncertaintyAt(estimate, hostTime),
+    }),
+    receivedAt: Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6,
+    width: size.width,
+    height: size.height,
+  });
+
+  return { frame, image, device };
 };
 
 // A page too busy to report its viewport in time reads as null.
@@ -331,6 +383,8 @@ const sizeFilter = (
         end();
         expected = viewport;
       },
+      /** Whether a frame of this device size shows the page, as far as the capture knows. */
+      expects: (device: Size) => expected !== null && sameSize(device, expected),
       offer: (frame: Frame, timestamp: number, image: Size | undefined, device: Size) => {
         if (image !== undefined && !sameShape(image, device)) {
           drop(1);
@@ -396,6 +450,18 @@ export const make = (options: Options) =>
 
     const sizes = yield* sizeFilter(options, deliver, (frames) =>
       counts.count("foreignSize", frames),
+    );
+
+    // On air a capture runs for hours, and its frames are timed by the browser's newest estimate,
+    // so arriving frames renew it: a check at most each second, a measurement once it is due.
+    const renewing = yield* Queue.sliding<void>(1);
+
+    yield* Queue.take(renewing).pipe(
+      Effect.andThen(options.renew),
+      Effect.andThen(Effect.sleep(Duration.seconds(1))),
+      Effect.provideService(Clock.Clock, options.clock),
+      Effect.forever,
+      Effect.forkScoped,
     );
 
     const notifyFailure = (current: Generation, failure: BrowserError) => {
@@ -555,30 +621,11 @@ export const make = (options: Options) =>
                 if (!Number.isFinite(timestamp)) return counts.count("missingTimestamp");
                 if (created.predecessor !== undefined && timestamp <= created.predecessor)
                   return counts.count("late");
-                const receivedAt = now();
-                const data = Buffer.from(native.data, "base64");
-                const image = options.imageSize(data);
-                const { deviceWidth, deviceHeight } = native.metadata;
-                const device = { width: deviceWidth, height: deviceHeight };
-                const size = image ?? created.size ?? device;
+                Queue.offerUnsafe(renewing, undefined);
+                const { frame, image, device } = timed(options, native, timestamp, created);
 
-                const hostTime = toHostTime(created.calibration, timestamp);
-
-                // The estimate may be older than the capture, and says less about later paint.
-                const frame = new Frame({
-                  page: options.id,
-                  data,
-                  timing: new BrowserPaint({
-                    timestamp,
-                    hostTime,
-                    uncertaintyMillis: uncertaintyAt(created.calibration, hostTime),
-                  }),
-                  receivedAt,
-                  width: size.width,
-                  height: size.height,
-                });
-
-                if (pictures.painted(frame)) return counts.count("duringPictures");
+                if (pictures.drawn(frame, !sizes.expects(device)))
+                  return counts.count("duringPictures");
                 sizes.offer(frame, timestamp, image, device);
               },
             };
@@ -621,7 +668,7 @@ export const make = (options: Options) =>
             options.cdp.on("Page.screencastFrame", current.onFrame);
             const { quality, size } = current;
 
-            const started = yield* Effect.tryPromise({
+            const screencast = Effect.tryPromise({
               try: () =>
                 options.send("Page.startScreencast", {
                   format: "jpeg",
@@ -629,6 +676,10 @@ export const make = (options: Options) =>
                   ...(size === null ? {} : { maxWidth: size.width, maxHeight: size.height }),
                 }),
               catch: options.error,
+            });
+
+            const started = yield* Effect.all([options.watch, screencast], {
+              concurrency: 2,
             }).pipe(
               Effect.interruptible,
               Effect.timeoutOrElse({

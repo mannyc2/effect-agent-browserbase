@@ -8,6 +8,7 @@ import { chromium } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
+import type { Frame } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as Tools from "../src/Tools.ts";
 import { behindProxy } from "./protocol.ts";
@@ -139,6 +140,59 @@ it.live("captures an unsized page at its CSS viewport and reuses current frames"
     }
     assert.isAbove(reused, 0);
   }).pipe(Effect.scoped, Effect.provide(attachedWith(["--force-device-scale-factor=2"]))),
+);
+
+// Over CDP a crop is taken on the page's own session, and Chromium draws it into the running
+// screencast at the crop's own size. So only frames of another size are the crop's: they never
+// reach readers, nor even the size filter, which holds a run of them until it could pass for a
+// resize, as it would on a still page. The page's own frames keep reaching readers, so on a page
+// that keeps painting they arrive right after each crop, within the 50 ms the library would
+// otherwise wait past its reply.
+it.live("keeps a crop's frames out of a running capture, but not the page's own", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+    const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+
+    const zoomed = (body: string) =>
+      Effect.gen(function* () {
+        const page = yield* browser.newPage(`data:text/html,${encodeURIComponent(body)}`);
+        const { width, height } = yield* page.viewport;
+        const frames: Array<Frame> = [];
+        const replies: Array<number> = [];
+
+        yield* page.screencast().pipe(
+          Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+          Effect.forkScoped,
+        );
+        yield* Effect.sleep("500 millis");
+        for (let index = 0; index < 10; index++) {
+          yield* page.zoom({ x: 5, y: 5, width: 160, height: 90 });
+          replies.push(yield* browser.now);
+          yield* Effect.sleep("250 millis");
+        }
+        yield* Effect.sleep("1200 millis");
+
+        return {
+          crops: frames.filter((frame) => frame.width !== width || frame.height !== height),
+          afterCrops: frames.filter((frame) =>
+            replies.some((at) => frame.receivedAt >= at && frame.receivedAt <= at + 40),
+          ),
+          stats: yield* page.captureStats(),
+        };
+      });
+
+    const moving = yield* zoomed(
+      "<canvas id=c width=300 height=300></canvas><script>const g=c.getContext('2d');(function f(t){g.fillStyle='hsl('+(t/5%360)+',80%,50%)';g.fillRect(0,0,300,300);requestAnimationFrame(f)})(0)</script>",
+    );
+
+    const still = yield* zoomed("<h1>Still</h1>");
+
+    assert.deepStrictEqual(
+      [moving.crops.length, moving.stats.foreignSize, still.crops.length, still.stats.foreignSize],
+      [0, 0, 0, 0],
+    );
+    assert.isNotEmpty(moving.afterCrops);
+  }).pipe(Effect.scoped),
 );
 
 // Animation frames a page runs in a second, read from its own counter.
