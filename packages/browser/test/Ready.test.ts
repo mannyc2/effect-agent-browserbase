@@ -1,5 +1,5 @@
 import { assert, it, layer } from "@effect/vitest";
-import { Duration, Effect, Stream } from "effect";
+import { Duration, Effect, Option, Schedule, Stream } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
@@ -171,5 +171,40 @@ it.live("never takes a stalled connection for a still screen", () =>
       yield* page.ready({ quietMillis: 400, timeout: Duration.seconds(10) });
       assert.isAtLeast((yield* browser.now) - clicked, 1200, `stalled toward the ${toward}`);
     }
+  }).pipe(Effect.scoped),
+);
+
+// A price that ticks for 1.2 s once started, then rests.
+const ticking = `data:text/html,${encodeURIComponent(`<!doctype html><body style="margin:0">
+<p>BTC <span id=btc>64,000</span></p><script>
+  window.tick = () => {
+    const started = performance.now();
+    const timer = setInterval(() => {
+      btc.textContent = String(64000 + Math.round(Math.random() * 500));
+      if (performance.now() - started > 1200) clearInterval(timer);
+    }, 50);
+  };
+</script></body>`)}`;
+
+// Frames held back inside the browser, as by an encoder's backlog, leave a capture silent while the
+// page still changes, so frames alone would call the screen still. Where the page's changes are
+// recorded, what changed in view leads.
+it.live("never takes frames held back for a still screen where the page's changes are recorded", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+    const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+    const page = yield* browser.newPage(ticking);
+
+    yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+    yield* page.latestFrame.pipe(
+      Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: Option.isSome }),
+    );
+    yield* page.changes();
+    proxy.withhold = (method) => method === "Page.screencastFrame";
+    const started = yield* browser.now;
+
+    yield* evaluate(page, () => (window as unknown as { tick: () => void }).tick());
+    yield* page.ready({ quietMillis: 300, timeout: Duration.seconds(10) });
+    assert.isAtLeast((yield* browser.now) - started, 1200);
   }).pipe(Effect.scoped),
 );

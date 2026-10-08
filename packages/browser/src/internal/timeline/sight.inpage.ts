@@ -104,6 +104,7 @@ export const sight = (names: Names, walked: Walk, texts: Texts, kept: History) =
           element.isConnected && walked.inView(element.getBoundingClientRect()) && visible(element);
 
         judge(element, pending, seen, viewed.get(element) ?? false);
+        viewed.set(element, seen);
       }
       waiting.clear();
       for (const key of kept.forgotten()) if (key instanceof Element) unwatch(key);

@@ -6,6 +6,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Option, Schedule, Stream, Tracer } from "effect";
 
 import * as Cdp from "../src/Cdp.ts";
+import * as Moment from "../src/Moment.ts";
 import type { Page } from "../src/Page.ts";
 import { behindProxy, type Command, type Proxy } from "./protocol.ts";
 
@@ -209,6 +210,41 @@ it.live("a read costs two calls on a new document, and one warm", () =>
       ),
     );
     holds(yield* sentBy(proxy, page.find({ role: "button", scope: "document" })), 1, 1);
+  }).pipe(Effect.scoped),
+);
+
+// The change record costs a page nothing until something reads its changes: no registration, no
+// call. The first read registers the recorder beside the read, in one round trip, and every later
+// read is one call; a moment of a page on air adds that one call to its free picture.
+it.live("a read of changes costs one call, its first a registration beside it", () =>
+  Effect.gen(function* () {
+    const { proxy, browser } = yield* opened();
+    const page = yield* browser.newPage(animated);
+    // Registrations on the library's own session; Playwright registers scripts on its own.
+    const registrations = () =>
+      proxy.commands.filter(
+        (command) =>
+          command.method === "Page.addScriptToEvaluateOnNewDocument" &&
+          proxy.attached.has(command.sessionId ?? ""),
+      );
+
+    yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+    yield* framesArrive(page);
+    yield* page.snapshot();
+    yield* page.ready();
+    yield* page.goto(still("unread"));
+    yield* page.snapshot();
+    // Reads, pictures and a new document register only the page script.
+    assert.strictEqual(registrations().length, 1);
+    yield* page.goto(animated);
+    yield* framesArrive(page);
+    yield* page.snapshot();
+
+    holds(yield* sentBy(proxy, page.changes()), 2, 1);
+    assert.strictEqual(registrations().length, 2);
+    holds(yield* sentBy(proxy, page.changes()), 1, 1);
+    yield* Moment.capture(page);
+    holds(yield* sentBy(proxy, Moment.capture(page)), 1, 1);
   }).pipe(Effect.scoped),
 );
 
