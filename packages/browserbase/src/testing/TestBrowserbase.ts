@@ -8,7 +8,8 @@
  * It keeps sessions and stored contexts and nothing else: any other endpoint fails the test with a
  * defect. It doesn't model regions, quotas or billing, and a context is only a record, with no
  * browser state. Every session hands out the script's `connectUrl`, such as the DevTools address
- * of a local Chromium.
+ * of a local Chromium. Its ids are UUIDs, as Browserbase's are, and as Browserbase does, it refuses
+ * a session id of any other shape as invalid, where it answers an unknown one as not found.
  *
  * @category testing
  * @since 0.3.0
@@ -146,11 +147,17 @@ interface Fake {
   readonly requests: Array<string>;
   readonly sessions: Map<string, Row>;
   readonly contexts: Map<string, number>;
-  /** How many sessions and contexts it has made, for their ids. */
-  readonly made: { sessions: number; contexts: number };
+  /** How many sessions and contexts it has made, together, for their ids. */
+  readonly made: { count: number };
 }
 
 const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
+
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The next id, a UUID as Browserbase's are, counted so that every run hands out the same. */
+const nextId = (fake: Fake) =>
+  `00000000-0000-4000-8000-${(++fake.made.count).toString(16).padStart(12, "0")}`;
 
 /** How the session ended by now, or undefined while it runs. */
 const endOf = (fake: Fake, row: Row) => {
@@ -241,6 +248,9 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
   if (request.headers["x-bb-api-key"] !== apiKey)
     return answer(401, { message: "Invalid API key" });
   if (version !== "v1") return unsupported(`serves only /v1, not ${url.pathname}`);
+  // Browserbase refuses a session id that is not a UUID before it looks for the session.
+  if (kind === "sessions" && id !== undefined && !uuid.test(id))
+    return answer(400, { message: "Invalid Session ID" });
 
   switch (
     `${request.method} ${kind}${id === undefined ? "" : " id"}${rest === undefined ? "" : ` ${rest}`}`
@@ -260,7 +270,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
       const createdAt = fake.now();
 
       const created: Row = {
-        id: `session-${++fake.made.sessions}`,
+        id: nextId(fake),
         createdAt,
         expiresAt: createdAt + (body?.timeout ?? 300) * 1000,
         keepAlive: body?.keepAlive ?? false,
@@ -327,7 +337,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
       return reply._tag === "Lost" ? lost : answer(200, describe(fake, row, false));
     }
     case "POST contexts": {
-      const created = `context-${++fake.made.contexts}`;
+      const created = nextId(fake);
 
       fake.contexts.set(created, fake.now());
 
@@ -375,7 +385,7 @@ export const make = Effect.fnUntraced(function* (script: Script = {}) {
     requests: [],
     sessions: new Map(),
     contexts: new Map(),
-    made: { sessions: 0, contexts: 0 },
+    made: { count: 0 },
   };
 
   const handle: Handle = {

@@ -5,7 +5,8 @@
  * `make` opens the first generation at once with the provider's `open`, in a scope of its own, so
  * a caller that stops waiting never interrupts a half-open browser. `browser` gives the current
  * generation; callers wait, bounded, and share one open. A loss is published at once and the next
- * generation opens on the `reopen` schedule, which also retries a failed open. `rotate` opens the
+ * generation opens on the `reopen` schedule, which also retries a failed open, unless the provider
+ * deems its failure `definite`: that goes `Down` at once, with its cause. `rotate` opens the
  * next generation now, and so does the time `rotateBefore` ahead of a generation's `expiresAt`. A
  * rotation makes the next generation before it breaks the current one, unless generations are
  * `exclusive`, as sessions saving to one stored context must be: then the current one is released
@@ -62,11 +63,12 @@ export class Generation extends Schema.Class<Generation>("effect-browser/Generat
 
 /**
  * No browser to give: none opened within `waitTimeout` (`opening`), the latest generation failed
- * to open (`down`), or the supervisor was retired.
+ * to open (`down`, with what it failed with as `cause`), or the supervisor was retired.
  */
 export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable", {
   reason: Schema.Literals(["opening", "down", "retired"]),
   detail: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
 }) {
   override get message() {
     return `no browser: ${this.detail}`;
@@ -90,6 +92,11 @@ export interface Options<E, R> {
   readonly open: Effect.Effect<Opened, E, R>;
   /** When to try a failed open again. Defaults to exponential from 1 second, for 5 minutes. */
   readonly reopen?: Schedule.Schedule<unknown, E> | undefined;
+  /**
+   * Failures no new try mends, such as a refused key: an open that fails so is `Down` at once.
+   * Defaults to none.
+   */
+  readonly definite?: ((error: E) => boolean) | undefined;
   /**
    * Rotate this long ahead of a generation's `expiresAt`, but no sooner than halfway through its
    * life. Without it, a generation's end is a loss.
@@ -160,7 +167,11 @@ const waitFor = <A extends { readonly opened: Opened }>(
           resolution._tag === "Serve"
             ? Effect.succeed(resolution.live.value.opened.browser)
             : Effect.fail(
-                new Unavailable({ reason: resolution.reason, detail: resolution.detail }),
+                new Unavailable({
+                  reason: resolution.reason,
+                  detail: resolution.detail,
+                  cause: resolution.cause,
+                }),
               ),
       }),
     ),
@@ -194,6 +205,7 @@ export const make = Effect.fn("Supervisor.make")(function* <E, R>(
   const context = yield* Effect.context<Exclude<R, Scope.Scope>>();
   const own = yield* Scope.fork(yield* Effect.scope);
   const exclusive = options.exclusive ?? false;
+  const definite = options.definite ?? (() => false);
 
   const reopen: Schedule.Schedule<unknown, E> =
     options.reopen ??
@@ -262,7 +274,12 @@ export const make = Effect.fn("Supervisor.make")(function* <E, R>(
               Effect.flatMap(Option.match({ onNone: () => Effect.void, onSome: Fiber.await })),
             );
 
-      return restore(previous.pipe(Effect.andThen(Effect.retry(openOnce, reopen)))).pipe(
+      const tries = Effect.retry(openOnce, {
+        schedule: reopen,
+        while: (error) => !definite(error),
+      });
+
+      return restore(previous.pipe(Effect.andThen(tries))).pipe(
         Effect.exit,
         Effect.flatMap((exit) => {
           if (Exit.isSuccess(exit))
@@ -270,7 +287,12 @@ export const make = Effect.fn("Supervisor.make")(function* <E, R>(
 
           return Cause.hasInterruptsOnly(exit.cause)
             ? apply({ _tag: "Abandoned", number })
-            : apply({ _tag: "Failed", number, detail: describe(exit.cause) });
+            : apply({
+                _tag: "Failed",
+                number,
+                detail: describe(exit.cause),
+                cause: Cause.squash(exit.cause),
+              });
         }),
       );
     });

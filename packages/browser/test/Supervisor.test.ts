@@ -5,7 +5,7 @@
 import { EventEmitter } from "node:events";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Arbitrary, DateTime, Effect, Fiber, Schedule, Schema, Stream } from "effect";
+import { Arbitrary, DateTime, Effect, Fiber, Option, Schedule, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import type * as Browser from "../src/Browser.ts";
@@ -151,7 +151,10 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
             live: { number: opening.number, value: `browser ${opening.number}` },
           }),
         ],
-        ["give up", tried({ _tag: "Failed", number: opening.number, detail: "refused" })],
+        [
+          "give up",
+          tried({ _tag: "Failed", number: opening.number, detail: "refused", cause: "refused" }),
+        ],
       );
     if (world.cancelling)
       actions.push([
@@ -444,6 +447,36 @@ describe("Supervisor", () => {
       yield* TestClock.adjust("20 seconds");
       yield* published(supervisor, "1 Open");
       yield* supervisor.browser;
+    }),
+  );
+
+  it.effect("goes down at once, with its cause, on a failure the provider deems definite", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const open = Effect.suspend(() => Effect.fail(++attempts === 1 ? "refused key" : "busy"));
+
+      const supervisor = yield* Supervisor.make({
+        open,
+        reopen: Schedule.spaced("1 second"),
+        definite: (error) => error === "refused key",
+      });
+
+      // Trying again would have tried several times within these seconds.
+      yield* TestClock.adjust("5 seconds");
+      assert.strictEqual(attempts, 1);
+
+      const down = yield* supervisor.states.pipe(
+        Stream.filter(({ state }) => state._tag === "Down"),
+        Stream.runHead,
+      );
+
+      assert.deepStrictEqual(
+        down.pipe(Option.map(({ state }) => state._tag === "Down" && state.cause)),
+        Option.some("refused key"),
+      );
+      const unavailable = yield* Effect.flip(supervisor.browser);
+
+      assert.deepStrictEqual([unavailable.reason, unavailable.cause], ["down", "refused key"]);
     }),
   );
 
