@@ -223,12 +223,11 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       );
 
       // A deadline measured on the caller's clock would never expire.
-      const missing = yield* caller(page.waitForText("never shown", Duration.millis(300))).pipe(
-        Effect.flip,
-        Effect.timeout("5 seconds"),
-      );
+      const missing = yield* caller(
+        page.waitFor({ text: "never shown" }, Duration.millis(300)),
+      ).pipe(Effect.flip, Effect.timeout("5 seconds"));
 
-      assert.strictEqual(missing.reason._tag, "NotFound");
+      assert.strictEqual(missing.reason._tag, "Timeout");
     }),
   );
 });

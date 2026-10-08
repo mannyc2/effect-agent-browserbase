@@ -5,7 +5,7 @@
  */
 import { Duration, Effect, Ref, Schema } from "effect";
 
-import { InvalidRequest, NotFound, StaleRef, Timeout } from "../../BrowserError.ts";
+import { InvalidRequest, StaleRef, Timeout } from "../../BrowserError.ts";
 import { type FindQuery, Found, Text, type TextOptions, type WaitCondition } from "../../Page.ts";
 import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
@@ -146,47 +146,9 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
     ).pipe(span("Page.text", { scope: scope === "viewport" ? "viewport" : "ref" }), owned);
   };
 
-  // One call, which the page answers once `find` matches the text or at the deadline. It follows the
+  // One call, which the page answers once the condition holds or at the deadline. It follows the
   // action in flight, as a read does, but holds no later one back while it waits, and it waits on
   // in a document that replaces the one it began in.
-  const waitForText = (text: string, timeout: Duration.Input = Duration.seconds(10)) => {
-    const missing = () => failWith("waitForText", new NotFound({ target: JSON.stringify(text) }));
-
-    const look = Effect.gen(function* () {
-      const request: FindRequest = {
-        role: null,
-        name: null,
-        text,
-        near: null,
-        at: null,
-        scope: "document",
-        firstRef: yield* Ref.get(nextRef),
-      };
-
-      // JSON has no infinity; the deadline here ends a wait without one in any case.
-      const millis = Math.min(Duration.toMillis(timeout), Number.MAX_SAFE_INTEGER);
-
-      const result = yield* evaluate(
-        "waitForText",
-        scriptCall("waitForText", request, millis),
-      ).pipe(Effect.flatMap(decodeWith("waitForText", FindResults)));
-
-      yield* counted(result.nextRef);
-      if (result.found.length === 0) return yield* missing();
-    });
-
-    return lane
-      .read("waitForText")(Effect.void)
-      .pipe(
-        Effect.andThen(Effect.retry(look, { while: contextGone })),
-        Effect.timeoutOrElse({ duration: timeout, orElse: missing }),
-        span("Page.waitForText"),
-        owned,
-      );
-  };
-
-  // One call, as `waitForText` is, which the page answers once the condition holds or at the
-  // deadline.
   const waitFor = (condition: WaitCondition, timeout: Duration.Input = Duration.seconds(10)) => {
     const request: ConditionRequest = {
       selector: condition.selector ?? null,
@@ -223,7 +185,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
   const viewedSince = (since: number) =>
     viewed !== undefined && viewed.at > since ? viewed : undefined;
 
-  return { snapshot, find, text, waitForText, waitFor, viewedSince };
+  return { snapshot, find, text, waitFor, viewedSince };
 });
 
 export type Reading = Effect.Success<ReturnType<typeof make>>;

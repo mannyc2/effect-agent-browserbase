@@ -464,7 +464,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         });
         yield* Effect.sleep(Duration.millis(700));
         yield* page.click(yield* button(page, "Place order"));
-        yield* page.waitForText("Order placed");
+        yield* page.waitFor({ text: "Order placed" });
         yield* Effect.sleep(Duration.millis(200));
         const moment = yield* Moment.capture(page, { since: Duration.seconds(2) });
         const changes = moment.changes?.changes ?? [];
@@ -590,7 +590,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           (yield* page.find({ role: "menuitem", name: "Share" }))[0]?.ref ?? "no menu",
         );
         yield* page.click(yield* button(page, "Place order"));
-        yield* page.waitForText("Order placed");
+        yield* page.waitFor({ text: "Order placed" });
         yield* Effect.sleep(Duration.millis(100));
         const moment = yield* Moment.capture(page, { since: Duration.seconds(3) });
         const changes = moment.changes?.changes ?? [];

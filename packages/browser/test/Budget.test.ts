@@ -217,7 +217,7 @@ it.live("a read costs two calls on a new document, and one warm", () =>
         setTimeout(() => document.body.insertAdjacentHTML("beforeend", "<p>Arrived</p>"), 600);
       }),
     );
-    holds(yield* sentBy(proxy, page.waitForText("Arrived")), 1, 1);
+    holds(yield* sentBy(proxy, page.waitFor({ text: "Arrived" })), 1, 1);
     // However long the page is, a read is one call.
     yield* Effect.promise(() =>
       page.playwright.evaluate(() =>

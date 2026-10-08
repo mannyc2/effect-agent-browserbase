@@ -546,7 +546,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* Effect.promise(() =>
         page.playwright.evaluate(() => setTimeout(() => location.assign("/hop/1"), 100)),
       );
-      yield* page.waitForText("Arrived after three hops");
+      yield* page.waitFor({ text: "Arrived after three hops" });
     }),
   );
 
@@ -1021,7 +1021,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.isBelow(asked.millis, 400);
       assert.include(yield* shows(fetching), "Fetch");
-      yield* fetching.waitForText("The next page");
+      yield* fetching.waitFor({ text: "The next page" });
 
       for (const [role, name] of [
         ["button", "Push"],
