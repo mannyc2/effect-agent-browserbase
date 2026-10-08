@@ -316,6 +316,23 @@ it.live("a read of changes costs one call, its first a registration beside it", 
   }).pipe(Effect.scoped),
 );
 
+// Times of changes map through the browser's one clock mapping, which a capture measures as it
+// starts. Where none has, a browser's first read of changes measures it, once: a world without the
+// page script, then three probes in turn, then the registration beside the read. The next page's
+// first read is those two.
+it.live("a browser's first read of changes maps its clock, once, where no capture has", () =>
+  Effect.gen(function* () {
+    const { proxy, browser } = yield* opened();
+    const first = yield* browser.newPage(still("first"));
+    const second = yield* browser.newPage(still("second"));
+
+    yield* first.snapshot();
+    yield* second.snapshot();
+    holds(yield* sentBy(proxy, first.changes()), 6, 5);
+    holds(yield* sentBy(proxy, second.changes()), 2, 1);
+  }).pipe(Effect.scoped),
+);
+
 // A wait for a still screen asks the page before its quiet spell and once more to end it, whose
 // answer comes behind any frame still on its way. With no capture running, it starts one, reading
 // the viewport first, and stops it.
