@@ -170,14 +170,20 @@ prompt.
   origin; clicks still use viewport coordinates. A batch can request at most eight crops.
 - Pictures go to the model in a user message after the tool results. Only the latest few stay in
   the conversation, and older ones are replaced several at a time, so the prompt cache keeps working.
+- A page waits only for itself. An action has its page to itself, in the order actions were asked,
+  and reads share it after the action in flight, so a read describes the page an action left. A
+  wait behind other operations on the page fails `Busy`, and `Page.failFast` fails it at once.
+  Identical reads in flight share one call, and a read whose caller gave up serves the next caller
+  to ask the same. `Browser.Options.maxPages` bounds the open pages, failing `Limit`.
 - `Browser.Options.guard` checks input and navigation, including hover, scroll and a new tab's URL.
   It receives the facts the page's structure establishes (form submissions, other-origin
   destinations, downloads, uploads, secret fields, script-only controls and unnamed targets) and
   the page text around the target as evidence, never a field's value; no fact comes from an
   element's words, and typed secrets are redacted. Its effect succeeds to allow, fails with
   `PolicyDenied` to deny, or waits for an external signal to hold. Holds have a separate
-  `policyTimeout` (five minutes by default) and leave the page unlocked. Changed targets fail before
-  input when a hold resumes. With no guard, every action is allowed.
+  `policyTimeout` (five minutes by default) and leave the page free for other operations. Changed
+  targets fail before input when a hold resumes. A field is approved once: plain text goes into it
+  in one insertion. With no guard, every action is allowed.
 - `Policy.make` builds a guard for unattended runs. A judge, `Policy.reviewer` over a
   `LanguageModel` or `Policy.decider` over a `DecisionModel` such as Jev, reads what an input
   means: a payment, an account, access, a deletion, a message or a secret. The guard denies a risk
@@ -201,8 +207,8 @@ prompt.
   separate provenance. `Page.captureStats` reports frame gaps, filtering, late frames apart from
   lost ones and the acknowledgement backlog, over a page's life or a window of the latest minute.
 - `Browser.events()` carries the timed input track for the consumer’s cursor rendering: complete
-  glide plans, submission receipts, button and key phases, wheel input and cursor shape. Pointer
-  position is shared across tabs. Events have sequence cursors for bounded replay; a lagging reader
+  glide plans, submission receipts, button and key phases, wheel input and cursor shape. Each page
+  has its own pointer position. Events have sequence cursors for bounded replay; a lagging reader
   gets an explicit history-expired error instead of missing events silently.
 - `additionalTools` accepts an `effect/ai` toolkit, merged after the browser tools. Supply its
   handlers through their usual layer; on a name clash with a browser tool the added toolkit wins.

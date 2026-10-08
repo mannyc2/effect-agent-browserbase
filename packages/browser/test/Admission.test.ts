@@ -2,14 +2,16 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Exit, Fiber, Option, Schedule } from "effect";
+import { Arbitrary, Deferred, Duration, Effect, Exit, Fiber, Schedule, Schema } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
+import { BrowserError, Closed, consequence } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import * as Input from "../src/internal/input/replies.ts";
+import * as Lane from "../src/internal/page/lane.ts";
 import { maximumSamples } from "../src/Motion.ts";
-import type { Page } from "../src/Page.ts";
+import { failFast, type Page } from "../src/Page.ts";
 
 interface Receipt {
   readonly kind: string;
@@ -313,6 +315,244 @@ describe("Input admission", () => {
   );
 });
 
+/**
+ * A lane's run as a model: random tickets ask and leave, and after each step the lane must keep
+ * its rules. `live` holds the tickets that asked and have not left, and whether each holds it.
+ */
+const runLane = (choices: ReadonlyArray<number>) => {
+  let state = Lane.initial;
+  let asked = 0;
+  let writes = 0;
+  let newest = 0;
+  const live = new Map<number, { readonly ticket: Lane.Ticket; holding: boolean }>();
+
+  const apply = (input: Lane.Input) => {
+    const next = Lane.step(state, input);
+
+    state = next.state;
+    if (input._tag === "Leave") live.delete(input.ticket.id);
+    else {
+      live.set(input.ticket.id, { ticket: input.ticket, holding: false });
+      if (input.ticket.kind === "write") writes += 1;
+    }
+    for (const ticket of next.admitted) {
+      const entry = live.get(ticket.id);
+
+      assert.isFalse(entry?.holding ?? true, `ticket ${ticket.id} waited, and goes in once`);
+      // In the order asked: no read passes a write asked before it, and writes keep their order.
+      assert.isAbove(ticket.id, newest, `ticket ${ticket.id} goes in after ${newest}`);
+      newest = ticket.id;
+      if (entry !== undefined) entry.holding = true;
+    }
+
+    const entries = [...live.values()];
+    const holding = entries.filter((entry) => entry.holding);
+    const writing = holding.filter((entry) => entry.ticket.kind === "write").length;
+
+    // A write holds the lane alone, and reads hold it together.
+    assert.isTrue(writing === 0 || holding.length === 1, "a write holds the lane alone");
+    assert.deepStrictEqual(
+      state.turn,
+      holding.length === 0
+        ? { _tag: "Free" }
+        : writing === 1
+          ? { _tag: "Writing" }
+          : { _tag: "Reading", count: holding.length },
+    );
+    assert.deepStrictEqual(
+      state.queue.map((ticket) => ticket.id),
+      entries.filter((entry) => !entry.holding).map((entry) => entry.ticket.id),
+    );
+    // The first in the queue waits only for what excludes it: a write for anyone, a read for a write.
+    if (state.queue[0] !== undefined)
+      assert.isAbove(
+        state.queue[0].kind === "write" ? holding.length : writing,
+        0,
+        "a wait has a cause",
+      );
+    assert.strictEqual(state.epoch, writes);
+    state.queue.forEach((ticket, index) =>
+      assert.strictEqual(Lane.ahead(state, ticket.id), holding.length + index),
+    );
+    for (const kind of ["read", "write"] as const)
+      assert.strictEqual(
+        Lane.admitsNow(state, kind),
+        Lane.step(state, { _tag: "Ask", ticket: { id: asked + 1, kind } }).admitted.length > 0,
+      );
+  };
+
+  for (const choice of choices) {
+    const entries = [...live.values()];
+    const leaving = entries[Math.floor(choice / 3) % Math.max(1, entries.length)];
+
+    if (choice % 3 === 2 && leaving !== undefined) apply({ _tag: "Leave", ticket: leaving.ticket });
+    else apply({ _tag: "Ask", ticket: { id: ++asked, kind: choice % 3 === 0 ? "read" : "write" } });
+  }
+  // However its tickets leave, holding or waiting, the lane comes free with no one waiting.
+  for (const [, { ticket }] of live) apply({ _tag: "Leave", ticket });
+  assert.deepStrictEqual(state, { turn: { _tag: "Free" }, queue: [], epoch: writes });
+};
+
+describe("A page's lane", () => {
+  it.prop(
+    "keeps its rules through any run of reads and writes asking and leaving",
+    {
+      choices: Arbitrary.array(
+        Arbitrary.schema(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1000 }))),
+        { minLength: 20, maxLength: 200 },
+      ),
+    },
+    ({ choices }) => runLane(choices),
+    { arbitrary: { runs: 1000, size: 200 } },
+  );
+});
+
+const laneOf = Effect.gen(function* () {
+  const scope = yield* Effect.scope;
+
+  return Lane.make({
+    now: () => performance.now(),
+    actionTimeout: Duration.seconds(5),
+    documentAt: () => 0,
+    gone: (operation) =>
+      new BrowserError({ operation, reason: new Closed({ cause: "page" }), dispatched: false }),
+    scope,
+  });
+});
+
+/** Reads the test answers, each in the order it began. */
+const answered = () => {
+  const begun: Array<Deferred.Deferred<string>> = [];
+
+  return {
+    begun,
+    read: Effect.suspend(() => {
+      const answer = Deferred.makeUnsafe<string>();
+
+      begun.push(answer);
+
+      return Deferred.await(answer);
+    }),
+    answer: (index: number, value: string) => {
+      const answer = begun[index];
+
+      if (answer !== undefined) Deferred.doneUnsafe(answer, Exit.succeed(value));
+    },
+  };
+};
+
+const settle = Effect.sleep("20 millis");
+
+const elapsed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const started = performance.now();
+    const exit = yield* Effect.exit(effect);
+
+    return { exit, millis: performance.now() - started };
+  });
+
+describe("Shared reads", () => {
+  it.live("an identical read asked while one is in flight joins it", () =>
+    Effect.gen(function* () {
+      const snapshot = (yield* laneOf).shared<string>("snapshot", true);
+      const { begun, read, answer } = answered();
+      const first = yield* snapshot("outline", read).pipe(Effect.forkChild);
+      const second = yield* snapshot("outline", read).pipe(Effect.forkChild);
+
+      yield* settle;
+      assert.strictEqual(begun.length, 1);
+      answer(0, "the page");
+      assert.deepStrictEqual(
+        [yield* Fiber.join(first), yield* Fiber.join(second)],
+        ["the page", "the page"],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "a read its callers gave up serves the next caller in its epoch, once, and none after a write",
+    () =>
+      Effect.gen(function* () {
+        const lane = yield* laneOf;
+        const snapshot = lane.shared<string>("snapshot", true);
+        const { begun, read, answer } = answered();
+        const abandoned = snapshot("outline", read).pipe(Effect.timeout("5 millis"), Effect.ignore);
+
+        yield* abandoned;
+        answer(0, "kept");
+        yield* settle;
+        assert.strictEqual(yield* snapshot("outline", read), "kept");
+        assert.strictEqual(begun.length, 1);
+
+        const again = yield* snapshot("outline", read).pipe(Effect.forkChild);
+
+        yield* settle;
+        answer(1, "read again");
+        assert.strictEqual(yield* Fiber.join(again), "read again");
+
+        yield* abandoned;
+        answer(2, "before the click");
+        yield* settle;
+        yield* lane.write("click", Duration.seconds(1))(Effect.void);
+        const after = yield* snapshot("outline", read).pipe(Effect.forkChild);
+
+        yield* settle;
+        answer(3, "after the click");
+        assert.strictEqual(yield* Fiber.join(after), "after the click");
+      }).pipe(Effect.scoped),
+  );
+
+  it.live("a write stops a read nobody awaits, rather than wait for it", () =>
+    Effect.gen(function* () {
+      const lane = yield* laneOf;
+
+      yield* lane
+        .shared<string>("snapshot", true)("outline", Effect.never)
+        .pipe(Effect.timeout("5 millis"), Effect.ignore);
+
+      const { exit, millis } = yield* elapsed(
+        lane.write("click", Duration.seconds(1))(Effect.void),
+      );
+
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.isBelow(millis, 500);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("a turn not given in time fails Busy, and at once when asked to fail fast", () =>
+    Effect.gen(function* () {
+      const lane = yield* laneOf;
+      const held = yield* Deferred.make<void>();
+
+      const writing = yield* lane
+        .write(
+          "click",
+          Duration.seconds(1),
+        )(Deferred.await(held))
+        .pipe(Effect.forkChild);
+
+      yield* settle;
+      const waited = yield* Effect.flip(lane.write("press", Duration.millis(50))(Effect.void));
+      const fast = yield* Effect.flip(failFast(lane.read("snapshot")(Effect.void)));
+
+      for (const [error, least, most] of [
+        [waited, 50, 1000],
+        [fast, 0, 0],
+      ] as const) {
+        assert.strictEqual(error.reason._tag, "Busy");
+        if (error.reason._tag === "Busy") {
+          assert.isAtLeast(error.reason.waitedMillis, least);
+          assert.isAtMost(error.reason.waitedMillis, most);
+          assert.strictEqual(error.reason.ahead, 1);
+        }
+        assert.deepStrictEqual(consequence(error), { lost: "nothing", repeat: "safe" });
+      }
+      yield* Deferred.succeed(held, undefined);
+      yield* Fiber.join(writing);
+    }).pipe(Effect.scoped),
+  );
+});
+
 const browserWith = Effect.fnUntraced(function* (options: Options) {
   const native = (yield* Browser).context.browser();
 
@@ -326,9 +566,10 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
   const createSession = context.newCDPSession.bind(context);
   const gate = Promise.withResolvers<void>();
   let stalled: unknown;
+  let blind: unknown;
 
   // Input replies for one page can be withheld after Chromium runs the input, as a stalled
-  // renderer or transport would.
+  // renderer or transport would, and another page can fail its pictures.
   context.newCDPSession = async (target) => {
     const cdp = await createSession(target);
     const send = cdp.send.bind(cdp);
@@ -336,7 +577,9 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
     const observed: CDPSession["send"] = (method, params) =>
       target === stalled && method.startsWith("Input.")
         ? send(method, params).then((value) => gate.promise.then(() => value))
-        : send(method, params);
+        : target === blind && method === "Page.captureScreenshot"
+          ? Promise.reject(new Error("this page takes no pictures"))
+          : send(method, params);
 
     cdp.send = observed;
 
@@ -351,16 +594,11 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
     stall: (page: Page) => {
       stalled = page.playwright;
     },
+    blind: (page: Page) => {
+      blind = page.playwright;
+    },
   };
 });
-
-const elapsed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    const started = performance.now();
-    const exit = yield* Effect.exit(effect);
-
-    return { exit, millis: performance.now() - started };
-  });
 
 const blank = "data:text/html,<title>Blank</title><input aria-label=Text>";
 
@@ -392,9 +630,19 @@ const slowSite = Effect.acquireRelease(
   }),
 );
 
+/** Wait until the browser has published a key, as typing under way does. */
+const keysUnderWay = (browser: Browser["Service"]) =>
+  browser.recentEvents.pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced("10 millis"),
+      until: (events) => events.some((event) => event._tag === "KeyChanged"),
+    }),
+  );
+
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
-  "Input admission across pages",
+  "Admission across pages",
   (it) => {
+    // A page that does not answer its input fails as slow, `Timeout`: it is not a wait in a queue.
     it.effect("waits for a page's own unresolved replies without holding other pages", () =>
       Effect.gen(function* () {
         const { browser, stall } = yield* browserWith({ actionTimeout: Duration.seconds(2) });
@@ -416,31 +664,44 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("queues input behind its own page's navigation without holding other pages", () =>
-      Effect.gen(function* () {
-        const url = yield* slowSite;
-        const { browser } = yield* browserWith({ actionTimeout: Duration.seconds(2) });
-        const navigating = yield* browser.newPage(url("/fast"));
-        const other = yield* browser.newPage(url("/fast"));
+    it.effect(
+      "queues input behind its own page's navigation, failing Busy, without holding other pages",
+      () =>
+        Effect.gen(function* () {
+          const url = yield* slowSite;
+          const { browser } = yield* browserWith({ actionTimeout: Duration.seconds(2) });
+          const navigating = yield* browser.newPage(url("/fast"));
+          const other = yield* browser.newPage(url("/fast"));
 
-        yield* navigating.click({ x: 5, y: 5 });
-        yield* other.click({ x: 5, y: 5 });
-        const navigation = yield* navigating.goto(url("/slow")).pipe(Effect.forkChild);
+          yield* navigating.click({ x: 5, y: 5 });
+          yield* other.click({ x: 5, y: 5 });
+          const navigation = yield* navigating.goto(url("/slow")).pipe(Effect.forkChild);
 
-        yield* Effect.sleep("200 millis");
-        // This click waits for its own page's navigation, and only for its own deadline.
-        const queued = yield* navigating.click({ x: 5, y: 5 }).pipe(Effect.flip, Effect.forkChild);
+          yield* Effect.sleep("200 millis");
 
-        yield* Effect.sleep("200 millis");
-        const { exit, millis } = yield* elapsed(other.click({ x: 5, y: 5 }));
-        const error = yield* Fiber.join(queued);
+          // This click waits for its own page's navigation, and only for its own deadline, and a
+          // read asked to fail fast does not wait at all.
+          const queued = yield* navigating
+            .click({ x: 5, y: 5 })
+            .pipe(Effect.flip, Effect.forkChild);
 
-        assert.isTrue(Exit.isSuccess(exit));
-        assert.isBelow(millis, 1000);
-        assert.strictEqual(error.reason._tag, "Timeout");
-        assert.isFalse(error.dispatched);
-        yield* Fiber.join(navigation);
-      }),
+          const fast = yield* elapsed(Effect.flip(failFast(navigating.snapshot())));
+
+          yield* Effect.sleep("200 millis");
+          const { exit, millis } = yield* elapsed(other.click({ x: 5, y: 5 }));
+          const error = yield* Fiber.join(queued);
+
+          assert.isTrue(Exit.isSuccess(exit));
+          assert.isBelow(millis, 1000);
+          assert.deepStrictEqual([error.reason._tag, error.dispatched], ["Busy", false]);
+          if (error.reason._tag === "Busy") {
+            assert.isAtLeast(error.reason.waitedMillis, 1900);
+            assert.strictEqual(error.reason.ahead, 1);
+          }
+          assert.isBelow(fast.millis, 200);
+          assert.isTrue(Exit.isSuccess(fast.exit) && fast.exit.value.reason._tag === "Busy");
+          yield* Fiber.join(navigation);
+        }),
     );
 
     it.effect("navigates while another page holds input", () =>
@@ -468,37 +729,96 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("ends a wait for the browser-wide input lock at the action's own deadline", () =>
+    // Release review M2: a 58-character query typed humanized on a background page held an on-air
+    // click on another page for about 9.5 s; 100 characters made it fail undispatched at 10 s.
+    it.effect("never holds a click on one page behind humanized typing on another", () =>
       Effect.gen(function* () {
-        const { browser } = yield* browserWith({
-          humanize: true,
-          actionTimeout: Duration.seconds(1),
-        });
-
+        const { browser } = yield* browserWith({ humanize: true });
         const typing = yield* browser.newPage(blank);
         const other = yield* browser.newPage(blank);
 
-        // Humanized typing extends its own deadline by the text's typing budget.
         yield* Effect.promise(() => typing.playwright.locator("input").focus());
-        const typed = yield* typing.type("x".repeat(40)).pipe(Effect.forkChild);
+        const typed = yield* typing.type("x".repeat(58)).pipe(Effect.forkChild);
 
-        yield* browser.recentEvents.pipe(
-          Effect.repeat({
-            schedule: Schedule.spaced("10 millis"),
-            until: (events) => events.some((event) => event._tag === "KeyChanged"),
-          }),
-        );
+        yield* keysUnderWay(browser);
         const { exit, millis } = yield* elapsed(other.click({ x: 10, y: 10 }));
 
-        assert.isTrue(Exit.isFailure(exit));
-        if (Exit.isFailure(exit)) {
-          const error = Option.getOrThrow(Exit.findErrorOption(exit));
-
-          assert.strictEqual(error.reason._tag, "Timeout");
-          assert.isFalse(error.dispatched);
-        }
-        assert.isBelow(millis, 3000);
+        // The click takes its own glide and pauses, 1.4–2.7 s locally, and no part of the typing's
+        // 9 s, which the lock made it wait out.
+        assert.isTrue(Exit.isSuccess(exit));
+        assert.isUndefined(typed.pollUnsafe(), "the typing goes on");
+        assert.isBelow(millis, 6000);
         yield* Fiber.interrupt(typed);
+      }),
+    );
+
+    it.effect("keeps a browser within maxPages, waiting for a page to close or failing Limit", () =>
+      Effect.gen(function* () {
+        const { browser } = yield* browserWith({ maxPages: 2, actionTimeout: "500 millis" });
+        const first = yield* browser.newPage(blank);
+
+        yield* browser.newPage(blank);
+        const refused = yield* elapsed(Effect.flip(browser.newPage(blank)));
+        const fast = yield* elapsed(Effect.flip(failFast(browser.newPage(blank))));
+
+        for (const [{ exit, millis }, least, most] of [
+          [refused, 450, 2000],
+          [fast, 0, 200],
+        ] as const) {
+          assert.isTrue(Exit.isSuccess(exit) && exit.value.reason._tag === "Limit");
+          assert.isAtLeast(millis, least);
+          assert.isBelow(millis, most);
+        }
+
+        const waiting = yield* browser.newPage(blank).pipe(Effect.forkChild);
+
+        yield* Effect.sleep("100 millis");
+        yield* first.close;
+        yield* Fiber.join(waiting);
+        assert.strictEqual((yield* browser.pages).length, 2);
+      }),
+    );
+
+    it.effect("observes what it can, and says why the rest is missing", () =>
+      Effect.gen(function* () {
+        const { browser, blind } = yield* browserWith({});
+        const page = yield* browser.newPage(blank);
+
+        blind(page);
+        const observed = yield* page.observe();
+
+        assert.include(observed.snapshot?.text ?? "", "Text");
+        assert.isUndefined(observed.image);
+        assert.deepStrictEqual(
+          observed.missing.map((error) => error.operation),
+          ["screenshot"],
+        );
+        // Nothing asked for could be read, so the observation fails.
+        const error = yield* Effect.flip(page.observe({ mode: "screenshot" }));
+
+        assert.strictEqual(error.operation, "screenshot");
+      }),
+    );
+
+    // A renderer busy with its own script answers nothing; `title` waited for it, without bound.
+    it.effect("bounds a title read by the action timeout", () =>
+      Effect.gen(function* () {
+        const { browser } = yield* browserWith({ actionTimeout: "500 millis" });
+        const page = yield* browser.newPage(blank);
+
+        yield* Effect.promise(() =>
+          page.playwright.evaluate(() => {
+            setTimeout(() => {
+              const until = Date.now() + 3000;
+
+              while (Date.now() < until);
+            }, 0);
+          }),
+        );
+        const { exit, millis } = yield* elapsed(Effect.flip(page.title));
+
+        assert.isTrue(Exit.isSuccess(exit) && exit.value.reason._tag === "Timeout");
+        assert.isBelow(millis, 2000);
       }),
     );
   },

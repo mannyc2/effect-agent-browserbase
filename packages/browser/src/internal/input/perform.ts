@@ -1,8 +1,8 @@
 /**
- * Performing one action: admission to the page and the browser-wide input lock, the input
- * guard's step, the input run that owns its replies, and the action's record.
+ * Performing one action: its turn on the page, the input guard's step, the input run that owns its
+ * replies, and the action's record.
  */
-import { Deferred, Duration, Effect, Exit, Option, Ref } from "effect";
+import { Duration, Effect, Exit, Option, Ref } from "effect";
 
 import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
 import { Action, type ActionOptions, Subject } from "../../BrowserEvent.ts";
@@ -57,18 +57,17 @@ export interface Call {
   readonly text?: string | undefined;
   /** The text may be a secret: it is recorded only once the action reveals that it is not. */
   readonly secret?: boolean | undefined;
-  /** False for navigation, which sends no input and leaves the browser-wide lock free. */
+  /** False for navigation, which sends no input. */
   readonly input?: boolean | undefined;
 }
 
 export const make = (page: PageContext, sender: Dispatch) => {
-  const { id, settings, mapping, inputLock, lock, publish, now, noteInput, span, owned } = page;
-  const { activity } = page;
+  const { id, settings, mapping, lane, publish, now, noteInput, span, owned } = page;
   const { inputClocks, flush } = sender;
   const input = Replies.make();
 
-  // Record the whole operation, but never keep the page locked or spend its action timeout
-  // while a policy is waiting. Validation binds approval to the document and targets it saw.
+  // Record the whole operation, but never hold the page's turn or spend its action timeout while
+  // a policy is waiting. Validation binds approval to the document and targets it saw.
   const perform = <A>(
     name: string,
     info: Call,
@@ -83,16 +82,10 @@ export const make = (page: PageContext, sender: Dispatch) => {
       const at = yield* Ref.make(Option.none<Point>());
       const acted = yield* Ref.make<Pick<Action, "subject" | "to" | "box">>({});
 
-      // The page may react to preparatory input, so no cached paint is current while the action
-      // runs, but only the action's own input can have given it effect. `touched` covers both and
-      // changes in one step with `changing`, so an interruption cannot unbalance the count.
-      let touched = false;
-
-      const touch = Effect.sync(() => {
-        if (!touched) activity.changing += 1;
-        touched = true;
-        noteInput();
-      });
+      // The page may react to preparatory input, as to script changes such as a selection, so
+      // paint from before either is not current; only the action's own input can have given it
+      // effect.
+      const touch = Effect.sync(noteInput);
 
       // A failure before the action checks its field, a denial included, records no text.
       let revealed = info.secret !== true;
@@ -121,10 +114,9 @@ export const make = (page: PageContext, sender: Dispatch) => {
         duration: Duration.Duration,
       ) => effect.pipe(Effect.timeoutOrElse({ duration, orElse: () => timedOut(duration) }));
 
-      // Admission waits only on this page's own unresolved replies. It runs under the page lock
-      // but before the browser-wide input lock, so a stalled page cannot delay input on other
-      // pages. The run re-checks the replies under both locks. Input never waits for the clock
-      // mapping: until a capture has measured one, it keeps Chromium's own receipt time.
+      // Admission waits only on this page's own unresolved replies, in its turn, so a stalled page
+      // cannot delay input on other pages. Input never waits for the clock mapping: until a
+      // capture has measured one, it keeps Chromium's own receipt time.
       let estimate: BrowserClock.Estimate | undefined;
 
       const admit = input.idle.pipe(
@@ -162,36 +154,38 @@ export const make = (page: PageContext, sender: Dispatch) => {
           ),
         );
 
-      // How long admission and the locks kept the action waiting, once it held them.
+      // How long its turn and the page's replies kept the action waiting, once it had both.
       let queuedMillis: number | undefined;
 
-      // Admission and lock waits end at the action's deadline, undispatched. Holding the locks
-      // starts a full deadline of its own, so contention never truncates input under way.
-      // Locks are always taken page first, then browser-wide, and the browser-wide one is never
-      // held while waiting for anything on one page: its navigation, zoom, replies or clock.
+      // The page's turn and its earlier input's replies are waited for within the action's
+      // deadline, undispatched: a turn not given by then is `Busy`, and replies not answered by
+      // then a `Timeout`. The turn starts a full deadline of its own, so a wait never truncates
+      // input under way.
       const dispatch = <Value>(action: Effect.Effect<Value, BrowserError>) =>
-        Effect.gen(function* () {
-          const held = yield* Deferred.make<void>();
+        Effect.suspend(() => {
           const asked = now();
 
-          const acquired = Effect.sync(() => {
-            queuedMillis = Math.round(now() - asked);
-          }).pipe(
-            Effect.andThen(Deferred.succeed(held, undefined)),
-            Effect.andThen(bounded(action, timeout)),
-          );
-
-          const deadline = Effect.sleep(timeout).pipe(
-            Effect.andThen(Deferred.isDone(held)),
-            Effect.flatMap((done) => (done ? Effect.never : timedOut(timeout))),
-          );
-
-          return yield* Effect.raceFirst(
-            admit.pipe(
-              Effect.andThen(sendsInput ? inputLock.withPermits(1)(acquired) : acquired),
-              lock.withPermits(1),
+          return lane.write(
+            name,
+            timeout,
+          )(
+            Effect.suspend(() =>
+              admit.pipe(
+                Effect.timeoutOrElse({
+                  duration: Duration.millis(
+                    Math.max(0, Duration.toMillis(timeout) - (now() - asked)),
+                  ),
+                  orElse: () => timedOut(timeout),
+                }),
+              ),
+            ).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  queuedMillis = Math.round(now() - asked);
+                }),
+              ),
+              Effect.andThen(bounded(action, timeout)),
             ),
-            deadline,
           );
         });
 
@@ -202,10 +196,9 @@ export const make = (page: PageContext, sender: Dispatch) => {
         guard === undefined
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
-              const plan = yield* bounded(
-                lock.withPermits(1)(prepare),
-                settings.actionTimeout,
-              ).pipe(span("Page.prepare", {}, "Debug"));
+              const plan = yield* lane
+                .read(name)(bounded(prepare, settings.actionTimeout))
+                .pipe(span("Page.prepare", {}, "Debug"));
 
               // A hold lasts as long as this span; a judge's model call is its child.
               yield* guard(plan.request).pipe(
@@ -244,8 +237,6 @@ export const make = (page: PageContext, sender: Dispatch) => {
           const dispatched = yield* Ref.get(sent);
           const point = yield* Ref.get(at);
           const { subject, to, box } = yield* Ref.get(acted);
-
-          if (touched) activity.changing -= 1;
           const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
 
           // What the Action records, less its text: only a revealed text's length.

@@ -58,7 +58,8 @@ The model gets one outline and screenshot at the start and after each turn. `obs
 the model is told why and the run goes on; when no page can be had at all, as after the browser
 closed, the run fails with that `BrowserError` instead of calling the model again. The turn
 before it is still reported to `onStep`, and an answer it gave with `done` is still returned. `Page.observe` returns that observation as
-a schema value. `Tools.make` returns receipts. A caller writing its own loop spreads a fresh
+a schema value: what it could read, with `missing` saying why the rest could not, which the model
+is told too. It fails only when nothing asked for could be read. `Tools.make` returns receipts. A caller writing its own loop spreads a fresh
 `yield* tools.batch` into each `generateText` call: it carries the toolkit with the same ordered,
 halting execution and the `concurrency: 1` that `effect/ai` needs to keep calls in order.
 `Tools.batch` does the same for any toolkit with handlers. After the batch, the caller observes
@@ -292,10 +293,13 @@ under the pointer, such as a hover menu, stops the action before the button goes
 button or other control nested inside the target between it and the press point stops it too, since
 the approval inspected the target, not that control. Each
 further press of a double or triple click is checked the same way after the earlier clicks' handlers
-have run. Typing checks before each further key that the approved control still has focus, so a key
-handler that moves focus stops the typing before any key reaches another control; this waits for
-each key's answer, about two protocol round trips per key, and the typing deadline allows 250 ms
-per key for it. A policy timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
+have run. Typing approves its field once. Plain text then goes into it in one insertion, which no
+key handler can split, so the page sees one `input` event and no keys, and a paste's time does not
+grow with its length: 2,000 characters took half a second at a 70 ms round trip. Humanized typing checks that the approved
+control still has focus once the keys before are answered, before each space, which could press a
+focused button, and after its last key, so a key handler that moves focus stops the typing before
+its next space; each check is about two protocol round trips, and the typing deadline allows
+250 ms for it. A policy timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
 receipts. Without a guard, actions are allowed and nothing is revalidated. Canvas and opaque frames
 expose their outer element's metadata.
 
@@ -365,7 +369,7 @@ never shorten that wait.
 `Browser.now`, event stamps, frame `receivedAt` and `Moment.at` share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.
 Page operations also pace input and measure their deadlines on that clock, so a caller running
-under another `Clock`, such as a `TestClock`, cannot stall an action or the browser-wide input lock.
+under another `Clock`, such as a `TestClock`, cannot stall an action or a page's turns.
 Compare these stamps only within that clock: they are not epoch dates or comparable across hosts.
 `Frame.timing` distinguishes `BrowserPaint` from `Screenshot`. Native frames retain browser epoch
 milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
@@ -375,9 +379,10 @@ A picture states how old it may be. `Page.frame({ maxAge, after })` serves the n
 frame when it has the viewport's size and was painted at most `maxAge` ago, at the earliest its
 timing allows: 250 ms by default, while 0 always takes a new screenshot. With `after: "input"` the
 frame must also follow the page's latest submitted input, including input of an interrupted action,
-while no action is changing the page: what a caller that has just acted needs. `Page.screenshot`
-always applies that rule, so a caller that acts and then looks sees what its action did; a deck or a
-narrator that wants a picture of a stated age reads `frame`. A screencast sends only changes and can
+and the read waits for the action in flight: what a caller that has just acted needs.
+`Page.screenshot` always applies that rule, so a caller that acts and then looks sees what its
+action did; a deck or a narrator that wants a picture of a stated age reads `frame`, which a frame
+that qualifies serves at once, even while an action runs. A screencast sends only changes and can
 miss a final paint, so a frame is only ever as current as its age. No read reuses a frame painted
 before the page's current document began, when the page's own session saw its main frame commit
 it: a page that keeps painting while the next document loads would otherwise leave its own frames
@@ -531,14 +536,33 @@ submission, including cleanup releases. Cursor shape comes from resolved target 
 `TrackEvent` is the schema union for these presentation events; `Moment` excludes them from its
 narrative timeline. Compositing remains the consumer’s job.
 
-The pointer starts at the first active viewport’s center and belongs to the browser across tabs.
-Input actions share ownership of it, one at a time across tabs; navigation and a policy hold leave
-that ownership free. An action first waits for its own page (another operation there, or its
-unresolved input replies) and only then queues for the browser-wide turn, so one slow tab never
-holds the others up. The action's timeout bounds those waits before a full timeout bounds the
-action itself. Every sent
-move updates the position, including a partially cancelled glide. A later viewport clamps the
-starting point to its bounds if necessary.
+A page waits only for itself. Its operations take turns in one lane of its own: an action, which
+sends input or navigates, has the page to itself, in the order actions were asked; reads (the
+outline, `find`, `text`, `changes`, pictures, zooms, `title` and the viewport) share it, after the action in
+flight and every action asked before them, so a read describes the page an action left, never one
+an action is still changing. `ready` follows the action in flight too, and holds none back while it
+watches. An action then waits for its page's unresolved input replies. Its timeout bounds those
+waits before a full timeout bounds the action itself: a turn not given in time fails `Busy`, with
+how long it waited and how many operations were ahead, and replies not answered in time fail
+`Timeout`, as for a page that does not answer. `Page.failFast(effect)` runs operations that fail
+`Busy` at once instead of waiting. A policy hold leaves the page's turn free.
+
+Reads keep their work. An identical read asked while one is in flight on the page, with no action
+asked between them, joins it, and costs no call of its own. Each read runs in the page's scope under
+the action timeout whoever gives up, so a caller's own `Effect.timeout` loses nothing: a read that
+ends after all its callers gave up serves the next caller to ask the same within an action timeout,
+unless an action or a new document came first. An action stops the reads nobody awaits rather than
+wait for them. Pictures and `changes` only join: a picture's caller says how old it may be, and a
+window of changes ends as it is read.
+
+`Browser.Options.maxPages` bounds the pages a browser keeps open, those a site opened included,
+which are never refused: at the limit, `newPage` waits within the action timeout for one to close,
+then fails `Limit`, or fails at once under `Page.failFast`.
+
+Each page has its own pointer, where its last move left it, which is also where Chromium has it:
+its first glide starts mid-viewport, and each later one where the one before ended, whatever
+input on another tab does meanwhile. Every sent move updates the position, including a partially
+cancelled glide. A later viewport clamps the starting point to its bounds if necessary.
 
 `Supervisor.make` keeps a browser open across losses and session ends, as generations, each a new
 browser from the provider's `open`. Opens run in the supervisor's own scope, so a caller that stops
@@ -591,10 +615,12 @@ provider request is its HTTP child), its tool calls and the observation after th
 call's span, so read a model call's own time from its HTTP child. Every page operation is a
 `Page.<name>` span, such as `Page.click`, `Page.type` or `Page.navigate`, with what its `Action`
 records except text: the target, the subject's role, name and tag, whether input was dispatched,
-`queuedMillis` spent waiting for admission and the locks, and a failure's reason as `error.type`.
+`queuedMillis` spent waiting for its turn and the page's replies, and a failure's reason as
+`error.type`. A read that shared another's work says so in `shared`: `joined` or `kept`.
 `Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
-`Page.observe`, `Page.snapshot`, `Page.find`, `Page.text`, `Page.screenshot` and `Page.frame` (with
+`Page.observe`, `Page.snapshot`, `Page.find`, `Page.text`, `Page.title`, `Page.viewport`,
+`Page.screenshot` and `Page.frame` (with
 `source`: a reused screencast `frame` or a new `screenshot`), `Page.zoom`, `Page.ready` and the
 other waits are spans, as are `Plan.replay` and `Plan.locate`, and so is each round trip to the
 page's script (`Page.evaluate`) and its registration (`Page.register`). Each page span reports its cost on the page's own protocol session: `calls`,

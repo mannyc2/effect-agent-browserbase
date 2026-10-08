@@ -18,14 +18,13 @@ import {
   Exit,
   Option,
   Queue,
-  Ref,
   Scope,
   Semaphore,
   type Stream,
 } from "effect";
 import type { BrowserContext, Dialog, Page as PlaywrightPage } from "playwright-core";
 
-import { BrowserError, Failed, InvalidRequest } from "./BrowserError.ts";
+import { BrowserError, Failed, InvalidRequest, Limit } from "./BrowserError.ts";
 import {
   type BrowserEvent,
   DialogShown,
@@ -39,6 +38,7 @@ import {
   SessionEnding,
 } from "./BrowserEvent.ts";
 import { call } from "./internal/page/context.ts";
+import { FailFast } from "./internal/page/lane.ts";
 import * as PageImpl from "./internal/page/page.ts";
 import * as Url from "./internal/page/url.ts";
 import * as BrowserClock from "./internal/pictures/clock.ts";
@@ -80,6 +80,12 @@ export interface Options {
   readonly policyTimeout?: Duration.Input | undefined;
   /** Scripts that new documents run before their own, each where its `match` allows. */
   readonly initScripts?: ReadonlyArray<InitScript> | undefined;
+  /**
+   * The most pages the browser keeps open, those a site opens included, which are never refused. At
+   * it, `newPage` waits for one to close, within the action timeout, then fails `Limit`; under
+   * `Page.failFast` it fails at once. A positive safe integer; no limit when left out.
+   */
+  readonly maxPages?: number | undefined;
 }
 
 export interface EventOptions {
@@ -186,11 +192,14 @@ const settingsOf = Effect.fnUntraced(function* (options: Options) {
   };
 
   const eventHistory = options.eventHistory ?? 4096;
+  const { maxPages } = options;
 
   if (!Number.isSafeInteger(eventHistory) || eventHistory < 1)
     return yield* invalid("eventHistory must be a positive safe integer");
+  if (maxPages !== undefined && (!Number.isSafeInteger(maxPages) || maxPages < 1))
+    return yield* invalid("maxPages must be a positive safe integer");
 
-  return { settings, eventHistory };
+  return { settings, eventHistory, maxPages };
 });
 
 /**
@@ -346,6 +355,67 @@ const eventsOf = (recent: Effect.Effect<ReadonlyArray<RecordedEvent>>, page: str
 const scoped = ({ match, source }: InitScript) =>
   match === undefined ? source : `if (${String(match)}.test(location.href)) {\n${source}\n}`;
 
+/**
+ * At most `maxPages` open pages, those a site opened included, which are never refused: an open
+ * past it waits for one to close, within `wait` on the owner's clock, then fails `Limit`, or fails
+ * at once under `FailFast`. An open counts until its page is tracked.
+ */
+const pageBudget = (
+  maxPages: number | undefined,
+  tracked: () => number,
+  wait: Duration.Duration,
+  clock: Clock.Clock,
+) => {
+  let opening = 0;
+  // Completed as a page closes or an open ends, so the opens waiting look again.
+  let roomMade = Deferred.makeUnsafe<void>();
+
+  const makeRoom = () => {
+    Deferred.doneUnsafe(roomMade, Exit.void);
+    roomMade = Deferred.makeUnsafe<void>();
+  };
+
+  const full = (limit: number) => tracked() + opening >= limit;
+
+  const room = (limit: number) =>
+    Effect.gen(function* () {
+      const refused = new BrowserError({
+        operation: "newPage",
+        reason: new Limit({ maxPages: limit }),
+        dispatched: false,
+      });
+
+      if ((yield* FailFast) && full(limit)) return yield* refused;
+      yield* Effect.gen(function* () {
+        while (full(limit)) yield* Deferred.await(roomMade);
+        opening += 1;
+      }).pipe(
+        Effect.timeoutOrElse({ duration: wait, orElse: () => Effect.fail(refused) }),
+        Effect.provideService(Clock.Clock, clock),
+      );
+    });
+
+  const open = <A, E, R>(opened: Effect.Effect<A, E, R>) =>
+    maxPages === undefined
+      ? opened
+      : Effect.uninterruptibleMask((restore) =>
+          restore(room(maxPages)).pipe(
+            Effect.andThen(
+              restore(opened).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    opening -= 1;
+                    makeRoom();
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+
+  return { makeRoom, open };
+};
+
 /** A call sent now and awaited later, by whatever needs its answer. */
 const sentNow = <A>(sent: Promise<A>) => {
   void sent.catch(() => undefined);
@@ -373,7 +443,7 @@ export const make = Effect.fn("Browser.make")(function* (
   const clock = yield* Clock.Clock;
   const motion = yield* Motion.Motion;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
-  const { settings, eventHistory } = yield* settingsOf(options);
+  const { settings, eventHistory, maxPages } = yield* settingsOf(options);
   // Measured on first need: the first capture of any page measures it, and input never waits.
   const mapping = BrowserClock.mapping(now);
 
@@ -384,10 +454,6 @@ export const make = Effect.fn("Browser.make")(function* (
 
   if (info.expiresAt !== undefined)
     publish(new SessionEnding({ at: now(), expiresAt: info.expiresAt }));
-
-  // One visible pointer belongs to the browser, including when input changes tabs.
-  const pointer = yield* Ref.make(Option.none<Page.Point>());
-  const inputLock = yield* Semaphore.make(1);
 
   const { lostBy, lost, lose, untilLost } = yield* watchLoss(
     context,
@@ -406,6 +472,7 @@ export const make = Effect.fn("Browser.make")(function* (
     call(operation, run, () => lostBy() ?? "page");
 
   const release = releaseNative(clock);
+  const budget = pageBudget(maxPages, () => registry.size, settings.actionTimeout, clock);
 
   // Each tab owns its protocol session, capture and listeners in a scope of its own. It closes
   // with the tab, so a closed tab retains nothing, and with the browser, so a caller's context
@@ -470,8 +537,6 @@ export const make = Effect.fn("Browser.make")(function* (
             mapping,
             publish,
             recentEvents: eventsOf(timeline.recent, id),
-            pointer,
-            inputLock,
             focused: call("focus", () => focusing, closedBy).pipe(Effect.asVoid),
             paging: (operation) => call(operation, () => paging, closedBy).pipe(Effect.asVoid),
             closedBy,
@@ -481,6 +546,7 @@ export const make = Effect.fn("Browser.make")(function* (
           const close = () => {
             if (registry.get(playwright) !== page) return;
             registry.delete(playwright);
+            budget.makeRoom();
             Queue.offerUnsafe(closing, { scope, page: id, cause: crashed ? "crashed" : "page" });
           };
 
@@ -514,10 +580,12 @@ export const make = Effect.fn("Browser.make")(function* (
   const pages = Effect.sync(() => [...registry.values()]);
 
   const newPage = Effect.fn("Browser.newPage")(function* (url?: string) {
-    const playwright = yield* native("newPage", () => context.newPage());
-
-    const page = yield* register(playwright).pipe(
-      Effect.onError(() => release(() => playwright.close())),
+    const page = yield* budget.open(
+      native("newPage", () => context.newPage()).pipe(
+        Effect.flatMap((playwright) =>
+          register(playwright).pipe(Effect.onError(() => release(() => playwright.close()))),
+        ),
+      ),
     );
 
     // A rejected or interrupted navigation must not leave the newly allocated blank tab behind.
