@@ -238,8 +238,8 @@ it.live(
       const { proxy, browser } = yield* opened();
       const page = yield* browser.newPage(still("kept"));
 
-      yield* page.text();
-      yield* Effect.promise(() =>
+      // The page's own script keeps it busy for a second, so a read's caller gives up first.
+      const abandoned = Effect.promise(() =>
         page.playwright.evaluate(() => {
           setTimeout(() => {
             const until = Date.now() + 1000;
@@ -247,10 +247,15 @@ it.live(
             while (Date.now() < until);
           }, 0);
         }),
+      ).pipe(
+        Effect.andThen(page.text().pipe(Effect.timeout("100 millis"), Effect.ignore)),
+        Effect.andThen(Effect.sleep("1500 millis")),
       );
-      yield* page.text().pipe(Effect.timeout("100 millis"), Effect.ignore);
-      yield* Effect.sleep("1500 millis");
+
+      yield* page.text();
+      yield* abandoned;
       holds(yield* sentBy(proxy, page.text()), 0, 0);
+      yield* abandoned;
       yield* page.press("Shift");
       holds(yield* sentBy(proxy, page.text()), 1, 1);
     }).pipe(Effect.scoped),
