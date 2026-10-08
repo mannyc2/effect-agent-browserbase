@@ -151,6 +151,30 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("names what a hover and a scroll acted on, and nothing for a scroll of the page", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const snapshot = yield* page.snapshot();
+
+      yield* page.hover(refOf(snapshot, "link", "Next page"));
+      yield* page.scroll({ at: refOf(snapshot, "textbox", "Amount"), dy: 200 });
+      yield* page.scroll({ dy: 200 });
+
+      assert.deepStrictEqual(
+        (yield* page.recentEvents).flatMap((event) =>
+          event._tag === "Action" && (event.name === "hover" || event.name === "scroll")
+            ? [[event.name, event.subject?.role, event.subject?.name, event.subject?.tag]]
+            : [],
+        ),
+        [
+          ["hover", "link", "Next page", "a"],
+          ["scroll", "textbox", "Amount", "input"],
+          ["scroll", undefined, undefined, undefined],
+        ],
+      );
+    }),
+  );
+
   it.effect("names an editable secret field without the text typed into it", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
@@ -369,6 +393,65 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         tag: "StaleRef",
         dispatched: false,
       });
+    }),
+  );
+
+  it.effect("gives no ref twice on a page, so one from an earlier document names nothing", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const site = yield* Site;
+      const first = yield* page.snapshot();
+      const submit = refOf(first, "button", "Submit");
+      const given = new Set(Array.from(first.text.matchAll(/\[ref=(e\d+)\]/g), ([, ref]) => ref));
+
+      // The same form again, each time read first by an outline or by `find`, which number refs
+      // apart: the old Submit's ref would name the new one if either began again at `e1`.
+      for (const read of [
+        page.snapshot().pipe(
+          Effect.map((snapshot) => Array.from(snapshot.text.matchAll(/\[ref=(e\d+)\]/g))),
+          Effect.map((matches) => matches.map(([, ref]) => ref)),
+        ),
+        page.find({ role: "button" }).pipe(Effect.map((found) => found.map(({ ref }) => ref))),
+      ]) {
+        yield* page.goto(site.url("/form"));
+        const refs = yield* read;
+
+        assert.isNotEmpty(refs);
+        assert.deepStrictEqual(
+          refs.filter((ref) => given.has(ref)),
+          [],
+        );
+        for (const ref of refs) given.add(ref);
+        assert.deepStrictEqual(yield* reason(page.click(submit)), {
+          tag: "StaleRef",
+          dispatched: false,
+        });
+      }
+    }),
+  );
+
+  it.effect("waits for text on through documents that replace one another meanwhile", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      // Each hop sends the tab on 100 ms after it loads, and the third shows the text.
+      yield* Effect.promise(() =>
+        page.playwright.route(/\/hop\/\d$/, (route) => {
+          const hop = Number(route.request().url().slice(-1));
+
+          return route.fulfill({
+            contentType: "text/html",
+            body:
+              hop < 3
+                ? `<script>setTimeout(() => location.assign("/hop/${hop + 1}"), 100)</script>`
+                : "<p>Arrived after three hops</p>",
+          });
+        }),
+      );
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => setTimeout(() => location.assign("/hop/1"), 100)),
+      );
+      yield* page.waitForText("Arrived after three hops");
     }),
   );
 
