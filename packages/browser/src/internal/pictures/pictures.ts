@@ -294,7 +294,7 @@ export const make = Effect.fnUntraced(function* (
   bridge: Bridge,
   viewport: Viewport,
 ) {
-  const { id, clock, playwright, settings, mapping, now, span, owned, lock, within } = page;
+  const { id, clock, settings, mapping, now, span, owned, lock, within } = page;
   const calibrateClock = calibrator(page, bridge);
 
   // A failure from a capture connection is already the capture's own.
@@ -331,14 +331,6 @@ export const make = Effect.fnUntraced(function* (
     watch: bridge.currentDocument("screencast"),
     frameHistory: settings.frameHistory,
     viewport: Effect.suspend(() => viewport.viewportFor("screencast")),
-    onClose: (listener) => {
-      playwright.on("close", listener);
-      if (playwright.isClosed()) listener();
-
-      return () => {
-        playwright.off("close", listener);
-      };
-    },
     imageSize: jpegSize,
     error,
   });

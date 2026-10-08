@@ -33,7 +33,6 @@ interface Options {
   readonly viewport: Effect.Effect<Size, BrowserError>;
   readonly imageSize: (data: Uint8Array) => Size | undefined;
   readonly error: (cause: unknown) => BrowserError;
-  readonly onClose: (callback: () => void) => () => void;
 }
 
 type Envelope =
@@ -509,58 +508,43 @@ export const make = (options: Options) =>
       stop(current);
     };
 
-    const removeCloseListener = yield* Effect.sync(() =>
-      options.onClose(() => {
-        closed = true;
-        if (generation !== undefined)
-          fail(generation, options.error(new Error("Target page has been closed")));
-      }),
-    );
-
+    const gone = () => options.error(new Error("Target page has been closed"));
     const stopDeadline = () => options.error(new Error("screencast stop exceeded its deadline"));
 
-    const awaitStop = (current: Generation) =>
-      Effect.suspend(() =>
-        current.stopReply === undefined
+    // A stop's reply, awaited for at most `deadline`; `late` is what a stop past it means.
+    const settled = <E>(reply: () => Promise<void> | undefined, late: Effect.Effect<void, E>) =>
+      Effect.suspend(() => {
+        const pending = reply();
+
+        return pending === undefined
           ? Effect.void
-          : Effect.promise(() => current.stopReply ?? Promise.resolve()).pipe(
+          : Effect.promise(() => pending).pipe(
               Effect.interruptible,
-              Effect.timeoutOrElse({
-                duration: deadline,
-                orElse: () => Effect.sync(() => notifyFailure(current, stopDeadline())),
-              }),
-            ),
-      ).pipe(Effect.provideService(Clock.Clock, options.clock));
+              Effect.timeoutOrElse({ duration: deadline, orElse: () => late }),
+            );
+      }).pipe(Effect.provideService(Clock.Clock, options.clock));
+
+    const awaitStop = (current: Generation) =>
+      settled(() => current.stopReply, Effect.sync(() => notifyFailure(current, stopDeadline())));
 
     // A late stop only delays the next capture; once its reply settles, capture can start again.
-    const awaitPreviousStop = Effect.suspend(() =>
-      unsettledStop === undefined
-        ? Effect.void
-        : Effect.promise(() => unsettledStop ?? Promise.resolve()).pipe(
-            Effect.interruptible,
-            Effect.timeoutOrElse({
-              duration: deadline,
-              orElse: () => Effect.fail(stopDeadline()),
-            }),
-          ),
-    ).pipe(Effect.provideService(Clock.Clock, options.clock));
+    const awaitPreviousStop = settled(() => unsettledStop, Effect.fail(stopDeadline()));
 
-    const release = (current: Generation, subscription: Queue.Queue<Envelope>) =>
-      lock.withPermits(1)(
-        Effect.gen(function* () {
-          current.subscribers.delete(subscription);
-          yield* Queue.shutdown(subscription);
-          if (current.subscribers.size !== 0) return;
-          yield* Effect.sync(() => stop(current));
-          yield* awaitStop(current);
-          if (generation === current) generation = undefined;
-        }),
-      );
+    // A reader leaves; the last one stops its generation.
+    const leave = (current: Generation, subscription: Queue.Queue<Envelope>) =>
+      Effect.gen(function* () {
+        current.subscribers.delete(subscription);
+        yield* Queue.shutdown(subscription);
+        if (current.subscribers.size !== 0) return;
+        yield* Effect.sync(() => stop(current));
+        yield* awaitStop(current);
+        if (generation === current) generation = undefined;
+      });
 
     const acquire = (screencast: ScreencastOptions) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
-          if (closed) return yield* options.error(new Error("Target page has been closed"));
+          if (closed) return yield* gone();
           let current = generation;
           const starting = current === undefined;
 
@@ -569,7 +553,7 @@ export const make = (options: Options) =>
             const [transport, { calibration, viewport }] = yield* prepare(options, screencast);
             const size = screencast.size ?? viewport;
 
-            if (closed) return yield* options.error(new Error("Target page has been closed"));
+            if (closed) return yield* gone();
 
             const created: Generation = {
               subscribers: new Set(),
@@ -687,11 +671,7 @@ export const make = (options: Options) =>
             );
 
             if (Exit.isFailure(started)) {
-              current.subscribers.delete(subscription);
-              yield* Effect.sync(() => stop(current));
-              yield* awaitStop(current);
-              generation = undefined;
-              yield* Queue.shutdown(subscription);
+              yield* leave(current, subscription);
 
               return yield* Effect.failCause(started.cause);
             }
@@ -706,7 +686,7 @@ export const make = (options: Options) =>
         Effect.gen(function* () {
           const lease = yield* Effect.acquireRelease(
             acquire(screencast),
-            ({ current, subscription }) => release(current, subscription),
+            ({ current, subscription }) => lock.withPermits(1)(leave(current, subscription)),
           );
 
           let previous = lease.baseline;
@@ -730,18 +710,17 @@ export const make = (options: Options) =>
         }),
       );
 
+    // The page's scope closes once the page has gone, when its browser's loss, if any, is known.
     yield* Effect.addFinalizer(() =>
       lock.withPermits(1)(
-        Effect.gen(function* () {
-          closed = true;
-          removeCloseListener();
+        Effect.suspend(() => {
           const current = generation;
 
-          if (current === undefined) return;
-          yield* Effect.sync(() =>
-            fail(current, options.error(new Error("Target page has been closed"))),
-          );
-          yield* awaitStop(current);
+          closed = true;
+          if (current === undefined) return Effect.void;
+          fail(current, gone());
+
+          return awaitStop(current);
         }),
       ),
     );

@@ -129,6 +129,10 @@ describe("a loss", () => {
       const other = yield* browser.newPage(still("two"));
       const from = (yield* browser.recentEvents).length;
 
+      const watching = yield* other
+        .screencast()
+        .pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
+
       yield* holdRenderer(page, 2000);
       const reading = yield* Effect.forkChild(Effect.flip(page.text()));
       const navigating = yield* Effect.forkChild(Effect.flip(other.goto(site.url("/late"))));
@@ -140,6 +144,7 @@ describe("a loss", () => {
       for (const [error, dispatched] of [
         [yield* Fiber.join(reading), false],
         [yield* Fiber.join(navigating), true],
+        [yield* Fiber.join(watching), false],
         [yield* Effect.flip(page.snapshot()), false],
       ] as const) {
         assert.deepStrictEqual(lossOf(error), {
