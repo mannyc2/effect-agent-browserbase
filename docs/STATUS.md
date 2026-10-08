@@ -141,12 +141,12 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 11,882                 | 11,064 → 13,854 | 129 → 158                 |
+| `effect-browser`               | 8,871 → 11,886                 | 11,064 → 13,857 | 129 → 158                 |
 | `effect-browserbase`           | 807 → 1,007, and 560 `testing` | 611 → 1,053     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
 `effect-browser`'s figures include phase 2's supervisor: 602 source lines, 506 test lines and 7
-exports. Without it, phase 1 leaves the package at 11,280 source lines, against a soft ceiling of
+exports. Without it, phase 1 leaves the package at 11,284 source lines, against a soft ceiling of
 about 11,000 through phase 4.
 
 ## Not rebuilt yet
