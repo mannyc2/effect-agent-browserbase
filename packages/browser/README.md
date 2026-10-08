@@ -192,10 +192,13 @@ record as any read of changes does. `since` is a previous window, to go on exact
 frame, a host time, or a `Duration` back from `until`; `until` is a frame or a host time, now by
 default. A consumer that airs a frame seconds after it was painted reads the window that ends at
 that frame, so that a line it writes now tells what its viewers will see. A part that cannot be
-read is in `missing`, with why: a window fails only for bounds that are not finite.
+read is in `missing`, with why: a window fails only for bounds that are not finite, or a negative
+reach back.
 `Moment.stillness(window)` says how long the page had been still at the window's end, by the last
-change in view its record shows or its last frame. Frames show paint only while a capture runs,
-and the record does not see a canvas, so a canvas that draws with no capture running reads as still.
+change in view its record shows or the last paint among its screencast frames; a screenshot shows
+the page, not when it changed. Frames show paint only while a capture runs, and the record does
+not see a canvas, so a canvas that draws with no capture running reads as still. A wait for a still
+screen is `Page.ready({ quietMillis })`, which also holds through a stalled connection.
 
 `Moment.capture` is a window that ends at a picture of the page now. It takes the picture first,
 then the window up to its paint, from where a previous window or moment ended, so the changes hold

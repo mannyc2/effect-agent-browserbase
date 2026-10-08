@@ -53,7 +53,8 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   can go on exactly where a previous one ended. Its events and frames cost no call and its changes
   one. A part that cannot be read is in `missing`, with why, and the window is still made.
 - `Moment.stillness(window)`: how long a window's page had been still at its end, by the last
-  change in view its record shows or its last frame, and nothing where neither could see.
+  change in view its record shows or the last paint among its screencast frames, and nothing where
+  neither could see.
 - `Page.state`: what the library already knows of a page, at no call and with no wait for its turn:
   its address, its document and when it was committed, how far it has loaded, its newest frame,
   and the viewport's text and title as last read, each with when it was learned.

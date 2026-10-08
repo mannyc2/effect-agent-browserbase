@@ -203,7 +203,7 @@ and each becoming the next beta.
   refuses the review's six drifts rather than act in the wrong place, `ready` waits out a loading
   screen in one call to the page, and a stalled connection no longer reads as a still screen. Its
   beta, `0.3.0-beta.1`, is prepared in the changelog and the package versions, and is not tagged.
-- **Phase 2, identity and lifetime, is built, and its adversarial review is under way.**
+- **Phase 2, identity and lifetime, is built, with its review's fixes (#241, #242).**
   `Supervisor`, the Browserbase release outcomes and `effect-browserbase/testing` have landed, with
   the review's follow-up: a context whose session may still be saving to it is cleared by the next
   writer rather than held with no way out, a definite failure goes `Down` at once, and the fake
@@ -228,20 +228,21 @@ and each becoming the next beta.
   outline's links too, and replay goes to an address it withheld only where told; and a lost
   create's session is found by its own nonce and ended. Its beta, `0.3.0-beta.2`, is prepared in
   the changelog and the package versions, and is not tagged.
-- **Phase 3, concurrency and presentation, has begun.** Per-page admission is in: the browser-wide
-  input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
-  pages have a budget, and guarded typing approves its field once. So are the stage, the presenter
-  and the wait after input: `humanize` and its fixed sleeps are gone. And so are windows: a page's
-  events, changes and frames over a window that can end in the past, moments as windows that end at
-  a picture and record what they could not read rather than fail, `stillness`, and `page.state`.
+- **Phase 3, concurrency and presentation, is under way.** Per-page admission has landed: the
+  browser-wide input lock is gone, reads follow the action in flight and keep their work, a wait
+  fails `Busy`, pages have a budget, and guarded typing approves its field once. So have the stage,
+  the presenter and the wait after input: `humanize` and its fixed sleeps are gone. And so have
+  windows: a page's events, changes and frames over a window that can end in the past, moments as
+  windows that end at a picture and record what they could not read rather than fail,
+  `stillness`, and `page.state`.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 15,286                 | 11,064 → 16,488 | 129 → 186                 |
-| `effect-browserbase`           | 807 → 1,410, and 595 `testing` | 611 → 1,813     | 32 → 36, and 14 `testing` |
+| `effect-browser`               | 8,871 → 15,500                 | 11,064 → 16,881 | 129 → 190                 |
+| `effect-browserbase`           | 807 → 1,410, and 595 `testing` | 611 → 1,819     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
 `effect-browser`'s figures include phase 2, as each part landed: the supervisor, 602 source lines,
@@ -254,8 +255,10 @@ added 95 source lines and 78 test lines, and those for captures, readiness, addr
 508 source lines, 411 test lines and 3 exports, most of it the lane, which deleting the
 browser-wide input lock paid for only in part; and the stage, the presenter and the wait after
 input, 525 source lines, 359 test lines and 9 exports, which deleting `humanize`, its prose slips
-and the fixed sleeps paid for in part. Without them, phase 1 leaves the package at 11,431 source
-lines, against a soft ceiling of about 11,000 through phase 4.
+and the fixed sleeps paid for in part; and windows, moments as windows, `stillness` and the page's
+state, 214 source lines, 393 test lines and 4 exports, which deleting `Moment`'s own window,
+`latestFrame` and the browser's own listeners for loads paid for in part. Without them, phase 1
+leaves the package at 11,431 source lines, against a soft ceiling of about 11,000 through phase 4.
 
 ## Not rebuilt yet
 
