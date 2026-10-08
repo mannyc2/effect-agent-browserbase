@@ -1,7 +1,7 @@
 // The stage over real Chromium: switches within one browser and across two, what each stamps and
 // stops, a first frame that never comes, a capture that fails, and frames of other sizes.
 import { assert, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Option, Schedule, Stream } from "effect";
+import { Clock, Duration, Effect, Fiber, Option, Schedule, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
@@ -177,6 +177,26 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.isBelow(started?.at ?? Infinity, asked - 300);
           assert.isAtLeast(stopped?.at ?? -Infinity, asked);
         }),
+    );
+
+    it.effect("turns only once input under way on the old page has ended", () =>
+      Effect.gen(function* () {
+        const { browser } = yield* session("one");
+        const first = yield* browser.newPage(animated);
+        const second = yield* browser.newPage(animated);
+        const stage = yield* Stage.make();
+
+        yield* stage.present(first);
+        const pressing = yield* first
+          .press("Shift", { holdMillis: 1500 })
+          .pipe(Effect.andThen(browser.now), Effect.forkScoped);
+
+        yield* Effect.sleep("200 millis");
+        yield* stage.present(second);
+        const turned = yield* browser.now;
+
+        assert.isAtLeast(turned, yield* Fiber.join(pressing));
+      }),
     );
 
     it.effect("fails a switch whose first frame is late, and the old page stays on the stage", () =>
