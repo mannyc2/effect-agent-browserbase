@@ -10,7 +10,7 @@ import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
 import { type FrameOptions, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
 import type { Bridge } from "../page/bridge.ts";
-import { decodeWith, failWith, type PageContext, reasonOf } from "../page/context.ts";
+import { decodeWith, failWith, type PageContext, reasonOf, undispatched } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import * as Capture from "./capture.ts";
 import * as BrowserClock from "./clock.ts";
@@ -301,11 +301,7 @@ export const make = Effect.fnUntraced(function* (
   const error = (cause: unknown) =>
     Schema.is(BrowserError)(cause)
       ? cause
-      : new BrowserError({
-          operation: "screencast",
-          reason: reasonOf(cause, undefined, page.closedBy()),
-          dispatched: false,
-        });
+      : undispatched("screencast", reasonOf(cause, undefined, page.closedBy()));
 
   // Input and capture share the owner's monotonic clock; caller-provided clocks cannot move it.
   // Registration measures nothing: a page that is busy while it opens, such as a popup running
@@ -386,13 +382,8 @@ export const make = Effect.fnUntraced(function* (
       .withPermits(1)(
         Effect.gen(function* () {
           const region = yield* Schema.decodeEffect(Region)(requested).pipe(
-            Effect.mapError(
-              (error) =>
-                new BrowserError({
-                  operation: "zoom",
-                  reason: new InvalidRequest({ detail: error.message }),
-                  dispatched: false,
-                }),
+            Effect.mapError((error) =>
+              undispatched("zoom", new InvalidRequest({ detail: error.message })),
             ),
           );
 

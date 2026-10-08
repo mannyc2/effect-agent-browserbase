@@ -10,8 +10,8 @@ import { type DateTime, Effect, Layer, Redacted } from "effect";
 import { chromium } from "playwright-core";
 
 import * as Browser from "./Browser.ts";
-import { BrowserError, Failed, type Reason } from "./BrowserError.ts";
-import { reasonOf } from "./internal/page/context.ts";
+import { type BrowserError, Failed, type Reason } from "./BrowserError.ts";
+import { reasonOf, undispatched } from "./internal/page/context.ts";
 import * as Url from "./internal/page/url.ts";
 
 export interface Options extends Browser.Options {
@@ -63,11 +63,7 @@ export const open = Effect.fn("Cdp.open")(function* (options: Options) {
   const timeout = options.connectTimeoutMillis ?? 30_000;
 
   const failed = (cause: unknown, timeoutMillis?: number) =>
-    new BrowserError({
-      operation: "connect",
-      reason: withoutEndpoint(endpoint, reasonOf(cause, timeoutMillis)),
-      dispatched: false,
-    });
+    undispatched("connect", withoutEndpoint(endpoint, reasonOf(cause, timeoutMillis)));
 
   // The endpoint is often a credential, so the connect span names no part of it.
   const connected = yield* Effect.acquireRelease(

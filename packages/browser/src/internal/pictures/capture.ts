@@ -4,8 +4,9 @@
  */
 import { Clock, Duration, Effect, Exit, Option, Queue, Semaphore, Stream } from "effect";
 
-import { BrowserError, InvalidRequest } from "../../BrowserError.ts";
+import { type BrowserError, InvalidRequest } from "../../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../../Frame.ts";
+import { undispatched } from "../page/context.ts";
 import { type Estimate, toHostTime, uncertaintyAt } from "./clock.ts";
 import type { NativeFrame, Transport } from "./transport.ts";
 
@@ -525,7 +526,10 @@ export const make = (options: Options) =>
       }).pipe(Effect.provideService(Clock.Clock, options.clock));
 
     const awaitStop = (current: Generation) =>
-      settled(() => current.stopReply, Effect.sync(() => notifyFailure(current, stopDeadline())));
+      settled(
+        () => current.stopReply,
+        Effect.sync(() => notifyFailure(current, stopDeadline())),
+      );
 
     // A late stop only delays the next capture; once its reply settles, capture can start again.
     const awaitPreviousStop = settled(() => unsettledStop, Effect.fail(stopDeadline()));
@@ -616,17 +620,16 @@ export const make = (options: Options) =>
           )
             // One native capture serves every reader; silently giving a reader other settings
             // than it asked for would misstate its frames.
-            return yield* new BrowserError({
-              operation: "screencast",
-              reason: new InvalidRequest({
+            return yield* undispatched(
+              "screencast",
+              new InvalidRequest({
                 detail: `a screencast with quality ${current.quality}${
                   current.size === null
                     ? ""
                     : ` and size ${current.size.width}x${current.size.height}`
                 } is already running on this page; read it without options or with the same ones`,
               }),
-              dispatched: false,
-            });
+            );
           // The callback API must apply sliding synchronously; PubSub.publishUnsafe skips it.
           const subscription = yield* Queue.sliding<Envelope>(subscriberCapacity);
 

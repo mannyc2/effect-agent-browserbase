@@ -25,7 +25,7 @@ import {
 } from "effect";
 import type { BrowserContext, Dialog, Page as PlaywrightPage } from "playwright-core";
 
-import { BrowserError, Failed, InvalidRequest } from "./BrowserError.ts";
+import { type BrowserError, Failed, InvalidRequest } from "./BrowserError.ts";
 import {
   type BrowserEvent,
   DialogShown,
@@ -38,7 +38,7 @@ import {
   type RecordedEvent,
   SessionEnding,
 } from "./BrowserEvent.ts";
-import { call } from "./internal/page/context.ts";
+import { call, failWith, undispatched } from "./internal/page/context.ts";
 import * as PageImpl from "./internal/page/page.ts";
 import * as Url from "./internal/page/url.ts";
 import * as BrowserClock from "./internal/pictures/clock.ts";
@@ -154,12 +154,7 @@ export class Browser extends Context.Service<Browser, Service>()("effect-browser
 
 /** The settings every page shares, and how many events the browser keeps, from its options. */
 const settingsOf = Effect.fnUntraced(function* (options: Options) {
-  const invalid = (detail: string) =>
-    new BrowserError({
-      operation: "make",
-      reason: new InvalidRequest({ detail }),
-      dispatched: false,
-    });
+  const invalid = (detail: string) => undispatched("make", new InvalidRequest({ detail }));
 
   // Every bound guards a lock or a held key, so each must be a real, finite deadline.
   const bound = (name: string, input: Duration.Input | undefined, fallback: Duration.Duration) => {
@@ -407,11 +402,9 @@ export const make = Effect.fn("Browser.make")(function* (
 
   const release = releaseNative(clock);
 
-  // Each tab owns its protocol session, capture and listeners in a scope of its own. It closes
-  // with the tab, so a closed tab retains nothing, and with the browser, so a caller's context
-  // keeps none of our listeners, such as the dialog handler, after this browser is gone. A dropped
-  // connection closes every page, then the context, and `Disconnected` stands for all of them: the
-  // queue hands a close to its fiber in a later turn, once Playwright has reported the context's.
+  // Each tab's scope closes with the tab or the browser. A dropped connection closes every page,
+  // then the context, and `Disconnected` stands for all of them: the queue hands a close to its
+  // fiber in a later turn, once Playwright has reported the context's.
   const closing = yield* Queue.unbounded<{
     readonly scope: Scope.Closeable;
     readonly page: string;
@@ -436,11 +429,7 @@ export const make = Effect.fn("Browser.make")(function* (
 
         if (known !== undefined) return known;
         if (playwright.isClosed())
-          return yield* new BrowserError({
-            operation: "newPage",
-            reason: new Failed({ detail: "the page closed as it opened" }),
-            dispatched: false,
-          });
+          return yield* failWith("newPage", new Failed({ detail: "the page closed as it opened" }));
         const scope = yield* Scope.fork(pagesScope);
 
         return yield* Effect.gen(function* () {

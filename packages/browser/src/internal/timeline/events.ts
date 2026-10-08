@@ -4,8 +4,9 @@
  */
 import { Cause, Deferred, Effect, Stream } from "effect";
 
-import { BrowserError, EventHistoryExpired, InvalidRequest } from "../../BrowserError.ts";
+import { type BrowserError, EventHistoryExpired, InvalidRequest } from "../../BrowserError.ts";
 import { type BrowserEvent, RecordedEvent } from "../../BrowserEvent.ts";
+import { undispatched } from "../page/context.ts";
 
 /** The owning Browser validates capacity and closes this timeline with its scope. */
 export const make = (capacity: number) => {
@@ -41,14 +42,13 @@ export const make = (capacity: number) => {
 
         if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > sequence)
           return Stream.fail(
-            new BrowserError({
-              operation: "events",
-              reason: new InvalidRequest({
+            undispatched(
+              "events",
+              new InvalidRequest({
                 detail:
                   "the event cursor must be a nonnegative integer no greater than the latest sequence",
               }),
-              dispatched: false,
-            }),
+            ),
           );
 
         return Stream.fromEffectRepeat(
@@ -57,11 +57,10 @@ export const make = (capacity: number) => {
               const oldest = records[0]?.sequence ?? sequence + 1;
 
               if (cursor < oldest - 1)
-                return yield* new BrowserError({
-                  operation: "events",
-                  reason: new EventHistoryExpired({ after: cursor, oldest, latest: sequence }),
-                  dispatched: false,
-                });
+                return yield* undispatched(
+                  "events",
+                  new EventHistoryExpired({ after: cursor, oldest, latest: sequence }),
+                );
               const next = records[cursor - oldest + 1];
 
               if (next !== undefined) {

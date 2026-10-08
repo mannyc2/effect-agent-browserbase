@@ -13,9 +13,9 @@
 import { Effect, Exit, Option, Schema, Scope } from "effect";
 
 import type { CaptureSource } from "../../Browser.ts";
-import { BrowserError, Failed } from "../../BrowserError.ts";
+import { type BrowserError, Failed } from "../../BrowserError.ts";
 import type { Bridge } from "../page/bridge.ts";
-import type { PageContext } from "../page/context.ts";
+import { type PageContext, undispatched } from "../page/context.ts";
 import * as Url from "../page/url.ts";
 
 /**
@@ -153,11 +153,10 @@ export const apart = (
     if (attached) listening?.lost(ended);
   };
 
-  const unreadable = new BrowserError({
-    operation: "screencast",
-    reason: new Failed({ detail: "the capture connection sent an event it could not read" }),
-    dispatched: false,
-  });
+  const unreadable = undispatched(
+    "screencast",
+    new Failed({ detail: "the capture connection sent an event it could not read" }),
+  );
 
   const attach = (scope: Scope.Closeable) =>
     Effect.gen(function* () {

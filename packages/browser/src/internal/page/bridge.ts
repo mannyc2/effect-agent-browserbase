@@ -10,7 +10,7 @@
  */
 import { Effect, Semaphore } from "effect";
 
-import { BrowserError, Failed } from "../../BrowserError.ts";
+import { type BrowserError, Failed } from "../../BrowserError.ts";
 import { Navigated } from "../../BrowserEvent.ts";
 import { edit, type Edit } from "../input/edit.inpage.ts";
 import { evidence } from "../input/evidence.inpage.ts";
@@ -30,7 +30,7 @@ import { history } from "../timeline/history.inpage.ts";
 import { marks } from "../timeline/marks.inpage.ts";
 import { record, type Recorder } from "../timeline/record.inpage.ts";
 import { sight } from "../timeline/sight.inpage.ts";
-import { contextGone, failWith, type PageContext } from "./context.ts";
+import { contextGone, failWith, type PageContext, undispatched } from "./context.ts";
 import * as Url from "./url.ts";
 
 /** What the script installs: a version, and a function of one of its parts for each call. */
@@ -263,7 +263,10 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       Effect.flatMap(({ result, exceptionDetails: thrown }) =>
         thrown === undefined
           ? Effect.succeed<unknown>(result.value)
-          : failWith(operation, new Failed({ detail: thrown.exception?.description ?? thrown.text })),
+          : failWith(
+              operation,
+              new Failed({ detail: thrown.exception?.description ?? thrown.text }),
+            ),
       ),
     );
 
@@ -275,12 +278,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     ).pipe(
       Effect.filterOrFail(
         (value) => value !== missing,
-        () =>
-          new BrowserError({
-            operation,
-            reason: new Failed({ detail: missing }),
-            dispatched: false,
-          }),
+        () => undispatched(operation, new Failed({ detail: missing })),
       ),
       // One round trip to the page. Its arguments can hold typed text, so only the call is named.
       span("Page.evaluate", { function: call.split("(")[0] }, "Trace"),
