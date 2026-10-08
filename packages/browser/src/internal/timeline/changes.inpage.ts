@@ -85,7 +85,9 @@ export const changes = (
    */
   const before = () => {
     const inputs = recorder.inputs();
-    const { tracks, losses } = kept.recent((inputs[0]?.at ?? Infinity) - fluxMillis);
+
+    if (inputs.length === 0) return [];
+    const { tracks, losses } = kept.recent();
 
     return inputs.map(({ at, target }) => {
       const changed = new Set<object>();
