@@ -122,7 +122,7 @@ const slotFor = (taken: Set<string>, field: string | undefined) => {
 export const fromEvents = (events: Iterable<BrowserEvent>): Plan => {
   const all = Array.from(events);
   const page = all.find((event) => event._tag === "Action")?.page;
-  const mine = all.filter((event) => event.page === page);
+  const mine = all.filter((event) => "page" in event && event.page === page);
   const steps = mine.filter(isStep);
   const opened = mine.find((event) => event._tag === "PageOpened")?.url ?? "";
   const moves = mine.filter((event): event is Navigated => event._tag === "Navigated");

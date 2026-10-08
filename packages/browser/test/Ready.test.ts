@@ -8,7 +8,7 @@ import type { Page } from "../src/Page.ts";
 const blank = Effect.gen(function* () {
   const browser = yield* Browser;
 
-  return yield* Effect.acquireRelease(browser.newPage(), (page) => page.close);
+  return yield* Effect.acquireRelease(browser.newPage(), (page) => Effect.ignore(page.close));
 });
 
 const show = (page: Page, html: string) =>

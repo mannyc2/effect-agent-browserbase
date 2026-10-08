@@ -39,6 +39,8 @@ const shot = (hostTime: number, byte: number) =>
     receivedAt: hostTime,
     width: 800,
     height: 600,
+    document: 1,
+    url: "https://shop.example/",
   });
 
 const isTrackEvent = Schema.is(TrackEvent);
@@ -81,7 +83,13 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
         ok: true,
         dispatched: true,
       }),
-      new Navigated({ at: 9000, page: "p1", url: "https://shop.example/paid" }),
+      new Navigated({
+        at: 9000,
+        page: "p1",
+        url: "https://shop.example/paid",
+        document: 2,
+        sameDocument: false,
+      }),
       new DialogShown({ at: 9500, page: "p1", kind: "alert", message: "Paid" }),
     ],
   });
@@ -224,7 +232,10 @@ it("says when nothing happened, and leaves out an outline the capture left out",
 const start = (path: string) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const page = yield* Effect.acquireRelease(browser.newPage(), (page) => page.close);
+
+    const page = yield* Effect.acquireRelease(browser.newPage(), (page) =>
+      Effect.ignore(page.close),
+    );
 
     yield* page.goto((yield* Site).url(path));
     yield* page.bringToFront;

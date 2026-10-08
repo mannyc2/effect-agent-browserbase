@@ -54,9 +54,14 @@ export class Transport extends Schema.TaggedError<Transport>()("Transport", {
   }
 }
 
-/** The answer did not have the expected shape. */
+/**
+ * The answer did not have the expected shape. For a create whose answer named its session,
+ * `released` says whether the client then released that session; without it, a session may be
+ * left running.
+ */
 export class Decode extends Schema.TaggedError<Decode>()("Decode", {
   detail: Schema.String,
+  released: Schema.optional(Schema.Boolean),
 }) {
   override get message() {
     return `unexpected response: ${this.detail}`;

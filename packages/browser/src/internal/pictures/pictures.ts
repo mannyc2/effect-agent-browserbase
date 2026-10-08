@@ -328,8 +328,13 @@ export const make = Effect.fnUntraced(function* (
       };
     },
     imageSize: jpegSize,
+    frameTag: bridge.frameTag,
     error: (cause) =>
-      new BrowserError({ operation: "screencast", reason: reasonOf(cause), dispatched: false }),
+      new BrowserError({
+        operation: "screencast",
+        reason: reasonOf(cause, undefined, page.closedBy()),
+        dispatched: false,
+      }),
   });
 
   const picture = camera(page, viewport, capture);
@@ -374,6 +379,7 @@ export const make = Effect.fnUntraced(function* (
         receivedAt: finishedAt,
         width: image.width,
         height: image.height,
+        ...bridge.frameTag(),
       });
     }).pipe(span("Page.frame"), owned);
 

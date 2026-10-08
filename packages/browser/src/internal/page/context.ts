@@ -21,11 +21,20 @@ import type { BrowserEvent } from "../../BrowserEvent.ts";
 import type * as Motion from "../../Motion.ts";
 import type { Point, Settings } from "../../Page.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
+import * as Url from "./url.ts";
+
+/** Why a page is gone. */
+export type ClosedCause = Closed["cause"];
 
 export interface MakeOptions {
+  /** The page's CDP target id, which is also its main frame's id. */
   readonly id: string;
+  /** The page's address when the browser began tracking it. */
+  readonly url: string;
   readonly playwright: PlaywrightPage;
   readonly cdp: CDPSession;
+  /** A call's reply, or a failure as for a closed page once the browser is lost first. */
+  readonly untilLost: <A>(reply: Promise<A>) => Promise<A>;
   readonly settings: Settings;
   readonly motion: Motion.Service;
   readonly clock: Clock.Clock;
@@ -38,6 +47,10 @@ export interface MakeOptions {
   readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
   /** Succeeds once the page's own session holds focus emulation, which keeps it painting behind. */
   readonly focused: Effect.Effect<void, BrowserError>;
+  /** Succeeds once the page's own session has the Page domain on, so it sees every later commit. */
+  readonly paging: (operation: string) => Effect.Effect<void, BrowserError>;
+  /** Why the page is gone, once it is: its browser's loss, else its own close or crash. */
+  readonly closedBy: () => ClosedCause;
 }
 
 const messageOf = (cause: unknown): string =>
@@ -47,19 +60,45 @@ const closedPattern =
   /has been closed|Target closed|Session closed|browser has disconnected|Target page, context or browser/i;
 
 /**
- * Map a Playwright or protocol failure to a reason. A call that gives Playwright a timeout passes
- * the same bound, so its `Timeout` reports it; without one, Playwright's own message stays.
+ * Map a Playwright or protocol failure to a reason, `Closed` with `closed` as its cause for a page
+ * or browser that is gone. A call that gives Playwright a timeout passes the same bound, so its
+ * `Timeout` reports it; without one, Playwright's own message stays.
  */
-export const reasonOf = (cause: unknown, timeoutMillis?: number): Reason => {
+export const reasonOf = (
+  cause: unknown,
+  timeoutMillis?: number,
+  closed: ClosedCause = "connection",
+): Reason => {
   const message = messageOf(cause);
 
-  if (closedPattern.test(message)) return new Closed();
+  if (closedPattern.test(message)) return new Closed({ cause: closed });
   if (cause instanceof Error && cause.name === "TimeoutError" && timeoutMillis !== undefined)
     return new Timeout({ millis: timeoutMillis });
   const line = message.split("\n")[0] ?? message;
 
-  return new Failed({ detail: line.replace(/^[\w.]+: /, "") });
+  return new Failed({ detail: Url.redactWithin(line.replace(/^[\w.]+: /, "")) });
 };
+
+/**
+ * One Playwright or protocol call, failing undispatched. A closed page says why it is gone as the
+ * browser knows then: the library's own calls fail with the browser's loss, and Playwright fails
+ * its calls on a dropped connection after reporting the context closed.
+ */
+export const call = <A>(
+  operation: string,
+  run: () => Promise<A>,
+  closedBy: () => ClosedCause,
+  timeoutMillis?: number,
+) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) =>
+      new BrowserError({
+        operation,
+        reason: reasonOf(cause, timeoutMillis, closedBy()),
+        dispatched: false,
+      }),
+  });
 
 export const contextGone = (error: BrowserError) =>
   error.reason._tag === "Failed" &&
@@ -169,7 +208,7 @@ export const make = (options: MakeOptions, lock: Semaphore.Semaphore) => {
       each.bytesOut += bytesOut;
       if (each.awaiting++ === 0) each.awaitingSince = sentAt;
     }
-    const reply = options.cdp.send(method, params);
+    const reply = options.untilLost(options.cdp.send(method, params));
 
     if (cost === undefined) return reply;
 
@@ -199,11 +238,7 @@ export const make = (options: MakeOptions, lock: Semaphore.Semaphore) => {
   // Every protocol or Playwright call. Errors are undispatched here; `perform` marks them
   // dispatched once input has gone out.
   const native = <A>(operation: string, run: () => Promise<A>, timeoutMillis?: number) =>
-    Effect.tryPromise({
-      try: run,
-      catch: (cause) =>
-        new BrowserError({ operation, reason: reasonOf(cause, timeoutMillis), dispatched: false }),
-    });
+    call(operation, run, options.closedBy, timeoutMillis);
 
   /** Fail with `Timeout` once `duration` has passed, the action timeout unless another is given. */
   const within =

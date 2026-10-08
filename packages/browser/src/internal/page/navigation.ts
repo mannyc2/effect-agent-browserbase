@@ -25,8 +25,11 @@ export const make = (
   const { playwright, settings, native } = page;
   const { send } = page.protocol;
 
-  const navigation = (name: string, run: () => Promise<unknown>, url: string) =>
-    perform(
+  // `address` is where `run` goes, as the action, the guard and a failure report it.
+  const navigation = (name: string, run: () => Promise<unknown>, address: string) => {
+    const url = Url.redact(address);
+
+    return perform(
       name,
       { target: url, input: false },
       settings.navigationTimeout,
@@ -47,6 +50,7 @@ export const make = (
           Effect.asVoid,
         ),
     );
+  };
 
   const history = native("back", () => send("Page.getNavigationHistory"));
 
@@ -70,7 +74,7 @@ export const make = (
     const previous = before.entries[before.currentIndex - 1];
 
     if (previous === undefined) return yield* noPrevious;
-    const plan = yield* preparePolicy("back", {}, [], { destination: previous.url });
+    const plan = yield* preparePolicy("back", {}, [], { destination: Url.redact(previous.url) });
 
     return {
       request: plan.request,
@@ -141,7 +145,10 @@ export const make = (
       parsed === null ||
       !["http:", "https:", "about:", "data:", "file:"].includes(parsed.protocol)
     )
-      return failWith("navigate", new InvalidRequest({ detail: `"${url}" is not a URL` }));
+      return failWith(
+        "navigate",
+        new InvalidRequest({ detail: `"${Url.redact(url)}" is not a URL` }),
+      );
 
     return navigation(
       "navigate",

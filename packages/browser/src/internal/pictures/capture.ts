@@ -34,6 +34,8 @@ interface Options {
   /** The viewport in CSS pixels; a capture is scaled to fit it, as screenshots are. */
   readonly viewport: Effect.Effect<Size, BrowserError>;
   readonly imageSize: (data: Uint8Array) => Size | undefined;
+  /** The page's current document and address, which each frame carries from its arrival. */
+  readonly frameTag: () => { readonly document: number; readonly url: string };
   readonly error: (cause: unknown) => BrowserError;
   readonly onClose: (callback: () => void) => () => void;
 }
@@ -289,6 +291,7 @@ const timed = (
     receivedAt: Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6,
     width: size.width,
     height: size.height,
+    ...options.frameTag(),
   });
 
   return { frame, image, device };

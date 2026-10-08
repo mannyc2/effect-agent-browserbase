@@ -225,8 +225,12 @@ const setup = Effect.fnUntraced(function* (
     () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6 + ahead,
   );
 
+  // Registered as `Browser` registers a page: its target id, and the Page domain turned on.
+  const { targetInfo } = yield* Effect.promise(() => cdp.send("Target.getTargetInfo"));
+  const paging = cdp.send("Page.enable");
+
   const page = yield* PageImpl.make({
-    id: "input-test",
+    id: targetInfo.targetId,
     playwright,
     cdp,
     clock,
@@ -240,7 +244,11 @@ const setup = Effect.fnUntraced(function* (
       return ++sequence;
     },
     recentEvents: Effect.sync(() => [...track]),
+    url: targetInfo.url,
+    untilLost: (reply) => reply,
     focused: Effect.void,
+    paging: () => Effect.promise(() => paging),
+    closedBy: () => "page",
     settings: {
       humanize: options.humanize ?? true,
       actionTimeout: Duration.seconds(30),

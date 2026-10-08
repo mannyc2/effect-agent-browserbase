@@ -6,7 +6,7 @@ import { Deferred, Duration, Effect, Fiber, Option, Schedule, Schema, Stream } f
 import type * as Agent from "effect-browser/Agent";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
-import { Frame, Screenshot } from "effect-browser/Frame";
+import type { Frame } from "effect-browser/Frame";
 import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import type { Snapshot } from "effect-browser/Snapshot";
@@ -180,7 +180,7 @@ const open = (path: string, seed = 0, pages: Readonly<Record<string, string>> = 
     const browser = yield* Browser;
 
     yield* serve(browser, seed, pages);
-    const page = yield* browser.page;
+    const page = yield* browser.firstPage;
 
     yield* page.goto(`${origin}${path}`);
 
@@ -320,26 +320,6 @@ export const operate = <A, I>(spec: {
 const after = (frame: Frame, frameAfter: number) =>
   frame.timestamp !== undefined && frame.timestamp >= frameAfter;
 
-const freshFrame = (page: Page) =>
-  Effect.gen(function* () {
-    const browser = yield* Browser;
-    const startedAt = yield* browser.now;
-    const image = yield* page.screenshot({ maxAge: 0 });
-    const finishedAt = yield* browser.now;
-
-    return new Frame({
-      page: page.id,
-      data: image.data,
-      timing: new Screenshot({
-        hostTime: startedAt + (finishedAt - startedAt) / 2,
-        uncertaintyMillis: (finishedAt - startedAt) / 2,
-      }),
-      receivedAt: finishedAt,
-      width: image.width,
-      height: image.height,
-    });
-  });
-
 const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly name: string;
   readonly summary: string;
@@ -403,7 +383,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
 
       // A screencast can drop the final paint of a page that then stays still. A fresh screenshot
       // still shows that state; it keeps its own capture timing and never claims a paint time.
-      const shot = reached ? undefined : yield* freshFrame(page);
+      const shot = reached ? undefined : yield* page.frame({ maxAge: 0 });
 
       // Time spent waiting for a paint that never arrived must not push earlier frames out of
       // the evidence window.

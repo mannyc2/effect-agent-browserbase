@@ -258,6 +258,7 @@ const connect = (operation: string, session: Session, options: Options) =>
         endpoint: session.connectUrl,
         id: session.id,
         provider: "browserbase",
+        expiresAt: Option.getOrUndefined(DateTime.make(session.expiresAt)),
       });
 
 /**
@@ -371,13 +372,7 @@ const refused = (error: BrowserError | BrowserbaseError | ContextHeld) =>
  */
 export const supervise = (options: SuperviseOptions = {}) =>
   Supervisor.make({
-    open: open(options).pipe(
-      Effect.map(({ browser, session, release }) => ({
-        browser,
-        release,
-        expiresAt: Option.getOrUndefined(DateTime.make(session.expiresAt)),
-      })),
-    ),
+    open: open(options),
     exclusive: options.session?.browserSettings?.context?.persist === true,
     reopen: options.reopen,
     definite: refused,

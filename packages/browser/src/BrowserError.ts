@@ -3,12 +3,14 @@
  *
  * `reason` says what went wrong and `dispatched` says whether the action's own input (a press,
  * key, wheel, selection or hover, not the pointer travelling toward a press) or a navigation
- * reached the browser first. When `dispatched` is true the action may have taken effect, so it
- * must not be retried blindly: look at the page again first.
+ * reached the browser first. `consequence` says what that leaves: what was lost, and whether the
+ * call can be repeated. `message` is a sentence for operators.
  *
  * @since 0.3.0
  */
 import { Schema } from "effect";
+
+import { DisconnectCause } from "./BrowserEvent.ts";
 
 /** The operation did not finish in time. */
 export class Timeout extends Schema.TaggedError<Timeout>()("Timeout", {
@@ -24,7 +26,7 @@ export class StaleRef extends Schema.TaggedError<StaleRef>()("StaleRef", {
   ref: Schema.String,
 }) {
   override get message() {
-    return `${this.ref} is not on the page any more; take a new snapshot`;
+    return `${this.ref} is not on the page any more`;
   }
 }
 
@@ -56,10 +58,23 @@ export class NavigationFailed extends Schema.TaggedError<NavigationFailed>()("Na
   }
 }
 
-/** The page or the browser is closed. */
-export class Closed extends Schema.TaggedError<Closed>()("Closed", {}) {
+const closedBy = {
+  page: "the page was closed",
+  crashed: "the page crashed",
+  connection: "the connection to the browser was lost",
+  session: "the browser's session ended",
+  released: "the browser was released",
+};
+
+/**
+ * The page is gone: it was closed (`page`) or crashed, or its browser was lost for one of the
+ * browser's `DisconnectCause`s.
+ */
+export class Closed extends Schema.TaggedError<Closed>()("Closed", {
+  cause: Schema.Literals(["page", "crashed", ...DisconnectCause.literals]),
+}) {
   override get message() {
-    return "the page is closed";
+    return closedBy[this.cause];
   }
 }
 
@@ -137,8 +152,44 @@ export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserErr
   dispatched: Schema.Boolean,
 }) {
   override get message() {
-    const effect = this.dispatched ? " (it may have taken effect)" : "";
-
-    return `${this.operation} failed: ${this.reason.message}${effect}`;
+    return `${this.operation} failed${this.dispatched ? " after it was sent" : ""}: ${this.reason.message}`;
   }
 }
+
+/**
+ * What a failure leaves. `lost` is `"page"` when the page is gone and its browser stands, and
+ * `"session"` when the browser is gone with its pages. `repeat` says whether the call can be made
+ * again, on what still stands: `"safe"`, as nothing reached the browser; `"check"`, as it may have
+ * taken effect, so look first; `"pointless"`, as it fails again unless something changes, such as
+ * a new ref; or `"resume"`, reading events again from a newer cursor.
+ */
+export interface Consequence {
+  readonly lost: "nothing" | "page" | "session";
+  readonly repeat: "safe" | "check" | "pointless" | "resume";
+}
+
+/** What `error` leaves, from its reason and whether it was dispatched alone. */
+export const consequence = ({ reason, dispatched }: BrowserError): Consequence => {
+  const repeat = dispatched ? "check" : "safe";
+
+  switch (reason._tag) {
+    case "Closed":
+      return {
+        lost: reason.cause === "page" || reason.cause === "crashed" ? "page" : "session",
+        repeat,
+      };
+    case "Timeout":
+    case "Failed":
+    case "NavigationFailed":
+      return { lost: "nothing", repeat };
+    case "EventHistoryExpired":
+      return { lost: "nothing", repeat: "resume" };
+    case "StaleRef":
+    case "NotFound":
+    case "NotActionable":
+    case "InvalidRequest":
+    case "PolicyDenied":
+    case "PolicyTimeout":
+      return { lost: "nothing", repeat: "pointless" };
+  }
+};

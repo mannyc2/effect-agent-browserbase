@@ -14,6 +14,7 @@ import * as Ready from "../reading/ready.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
+import * as Url from "./url.ts";
 import * as Viewport from "./viewport.ts";
 
 export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
@@ -30,13 +31,14 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const assembled: Page = {
     id,
     playwright,
-    url: Effect.sync(() => playwright.url()),
+    url: Effect.sync(() => Url.redact(playwright.url())),
     title: native("title", () => playwright.title()),
     goto: navigation.goto,
     back: navigation.back,
     reload: navigation.reload,
     bringToFront: native("bringToFront", () => playwright.bringToFront()),
-    close: Effect.tryPromise(() => playwright.close()).pipe(Effect.ignore),
+    // Playwright answers once the page has closed, and at once for one already closed.
+    close: native("close", () => playwright.close()),
     snapshot: reading.snapshot,
     screenshot: pictures.screenshot,
     frame: pictures.frame,

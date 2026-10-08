@@ -260,6 +260,13 @@ const statusReason = (status: number, detail: string): Reason => {
   return new Status({ status, detail });
 };
 
+/** A create's answer that did not decode though it named session `id`, released or not since. */
+const undecoded = (detail: string, id: string, released: boolean) =>
+  new Decode({
+    detail: `${detail}; session ${id} ${released ? "was released" : "could not be released and ends at its timeout"}`,
+    released,
+  });
+
 /** Run the request with fetch's redirect mode set to manual, keeping any other fetch options. */
 const refuseRedirects = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
   Effect.contextWith((context: Context.Context<never>) =>
@@ -396,14 +403,9 @@ export const make = Effect.fnUntraced(function* (options: Options) {
               onSome: ({ id }) =>
                 releaseSession(id).pipe(
                   Effect.exit,
-                  Effect.flatMap((released) =>
+                  Effect.flatMap((release) =>
                     Effect.fail(
-                      failure(
-                        "createSession",
-                        new Decode({
-                          detail: `${detail}; session ${id} ${Exit.isSuccess(released) ? "was released" : "could not be released and ends at its timeout"}`,
-                        }),
-                      ),
+                      failure("createSession", undecoded(detail, id, Exit.isSuccess(release))),
                     ),
                   ),
                 ),

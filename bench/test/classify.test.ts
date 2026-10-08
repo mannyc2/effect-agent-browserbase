@@ -101,7 +101,11 @@ describe("classify", () => {
     assert.strictEqual(
       classify(
         Exit.fail(
-          new BrowserError({ operation: "goto", reason: new Closed({}), dispatched: false }),
+          new BrowserError({
+            operation: "goto",
+            reason: new Closed({ cause: "page" }),
+            dispatched: false,
+          }),
         ),
         noCalls,
       ).reason,

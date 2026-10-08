@@ -5,6 +5,7 @@ import {
   Action,
   Navigated,
   PageClosed,
+  PageLoaded,
   PageOpened,
   RecordedEvent,
   TrackPerformed,
@@ -77,12 +78,20 @@ describe("pointerAt", () => {
 describe("shownFrames", () => {
   const frame = (page: string, hostTime: number) => ({ page, hostTime });
 
+  // A page that finishes loading behind another does not take the screen.
   it("shows the page the latest event concerned, and every page after it closes", () => {
     const events = recorded(
       new PageOpened({ at: 0, page: "p1", url: "about:blank" }),
-      new Navigated({ at: 10, page: "p1", url: "https://bench.test/" }),
+      new Navigated({
+        at: 10,
+        page: "p1",
+        url: "https://bench.test/",
+        document: 1,
+        sameDocument: false,
+      }),
       new PageOpened({ at: 100, page: "p2", url: "about:blank" }),
-      new PageClosed({ at: 200, page: "p2" }),
+      new PageLoaded({ at: 120, page: "p1", state: "load" }),
+      new PageClosed({ at: 200, page: "p2", cause: "page" }),
     );
 
     const frames = [

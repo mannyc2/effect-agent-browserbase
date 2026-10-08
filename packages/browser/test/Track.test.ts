@@ -221,7 +221,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             [button, field, button],
           );
           assert.deepStrictEqual(
-            plans.map((record) => record.event.page),
+            plans.map(({ event }) => ("page" in event ? event.page : undefined)),
             [first.id, second.id, first.id, first.id],
           );
 

@@ -17,6 +17,13 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 - `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
   `Transport`, `Decode` or `InvalidRequest`. A request Browserbase refuses as malformed, such as a
   session id that is not a UUID, is `InvalidRequest`, as is one this client refuses before sending.
+  A create whose answer named its session but did not decode is `Decode` with `released`, whether
+  the client released that session.
+
+Each page keeps its CDP target id as its `id` across connections, so after a dropped connection
+`attach` to the same session finds a page stored before it with `browser.page(id)`. The browser
+carries the session's `expiresAt`, announces it as a `SessionEnding` event, and reports a loss at or
+after it as the session's end (`Disconnected` with cause `session`), any other drop as `connection`.
 
 The API key travels only in the `x-bb-api-key` header, which logs and traces redact, and the client
 refuses redirects so the key never follows one. Each request attempt has a deadline
@@ -42,9 +49,9 @@ session.
 ## Supervised sessions
 
 `supervise` keeps a browser on Browserbase as `Supervisor` generations, each a new session made
-from `session`. A lost session is published at once and replaced on the `reopen` schedule; the
-next session opens `rotateBefore` ahead of the current one's `expiresAt`, or on `rotate`, before
-the current one is released. `states` reports each session's release outcome. Sessions that
+from `session`. A lost session is published at once, `Lost` with its cause, and replaced on the
+`reopen` schedule; the next session opens `rotateBefore` ahead of the current browser's
+`expiresAt`, or on `rotate`, before the current one is released. `states` reports each session's release outcome. Sessions that
 persist to a stored context are exclusive: a rotation releases the current session, and lets its
 save settle, before the next one opens. An open Browserbase refused, as for a bad key or an invalid
 request, is `Down` at once with its cause, since no new try mends it; everything else, a held

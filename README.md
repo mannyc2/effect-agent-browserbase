@@ -23,7 +23,7 @@ import { FetchHttpClient } from "effect/http";
 import { Agent, Browser, Chromium } from "effect-browser";
 
 const program = Effect.gen(function* () {
-  const page = yield* (yield* Browser.Browser).page;
+  const page = yield* (yield* Browser.Browser).firstPage;
 
   yield* page.goto("https://news.ycombinator.com");
 
@@ -79,7 +79,7 @@ const VideoPrompt = Schema.Struct({
 });
 
 const watch = Effect.gen(function* () {
-  const page = yield* (yield* Browser.Browser).page;
+  const page = yield* (yield* Browser.Browser).firstPage;
 
   yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
   yield* page.goto("https://example.com/live-chart");

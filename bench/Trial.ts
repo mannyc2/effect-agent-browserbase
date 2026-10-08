@@ -261,8 +261,7 @@ const uncertainCreate = (error: BrowserbaseError): boolean => {
     case "Status":
       return reason.status >= 500 || reason.status === 408;
     case "Decode":
-      // The client reports a release it completed only in the detail; it has no field for it.
-      return !/; session [\w-]+ was released$/.test(reason.detail);
+      return reason.released !== true;
     case "RateLimited":
     case "Unauthorized":
     case "NotFound":
