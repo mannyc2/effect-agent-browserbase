@@ -206,8 +206,13 @@ and each becoming the next beta.
   changes, at the start of each later document, and moments lead with it. The phase's simplify pass
   shared what its parts wrote twice, made a screencast's readers on a dropped connection fail as
   every other call does, by the connection rather than as the page's close, and killed the five of
-  its eleven planted bugs that the suite let through. Its beta, `0.3.0-beta.2`, is prepared in the
-  changelog and the package versions, and is not tagged.
+  its eleven planted bugs that the suite let through. Of its review's fixes, the change record's
+  are in: a change names an input only if it was not in flux before it, and, out of the input's
+  reach, only on a page that was still, so an inert click beside boards ticking every 0.25 to 6 s
+  was credited with none of 401 ticks and 96 chat lines, where it had been with about half the
+  slower boards' ticks and every line; a moment tells an action that changes followed but none
+  names as a step, and claims nothing of a window its record did not see. Its beta,
+  `0.3.0-beta.2`, is prepared in the changelog and the package versions, and is not tagged.
 - **Phase 3, concurrency and presentation, has begun.** Per-page admission is in: the browser-wide
   input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
   pages have a budget, and guarded typing approves its field once. So are the stage, the presenter
@@ -218,7 +223,7 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 15,093                 | 11,064 → 16,261 | 129 → 186                 |
+| `effect-browser`               | 8,871 → 15,188                 | 11,064 → 16,339 | 129 → 186                 |
 | `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,643     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
@@ -226,12 +231,13 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 506 test lines and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9
 exports; the capture connection's port and transport, 324 source lines, 43 test lines and 1 export;
 and the change record, 1,423 source lines, 728 test lines and 6 exports. The phase's simplify pass
-took 118 source lines back out. The figures include phase 3's per-page admission too, 508 source
-lines, 411 test lines and 3 exports, most of it the lane, which deleting the browser-wide input lock
-paid for only in part; and the stage, the presenter and the wait after input, 525 source lines, 359
-test lines and 9 exports, which deleting `humanize`, its prose slips and the fixed sleeps paid for
-in part. Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of
-about 11,000 through phase 4.
+took 118 source lines back out, and its review's fixes for the change record's causes and moments
+added 95 source lines and 78 test lines. The figures include phase 3's per-page admission too,
+508 source lines, 411 test lines and 3 exports, most of it the lane, which deleting the
+browser-wide input lock paid for only in part; and the stage, the presenter and the wait after
+input, 525 source lines, 359 test lines and 9 exports, which deleting `humanize`, its prose slips
+and the fixed sleeps paid for in part. Without them, phase 1 leaves the package at 11,431 source
+lines, against a soft ceiling of about 11,000 through phase 4.
 
 ## Not rebuilt yet
 

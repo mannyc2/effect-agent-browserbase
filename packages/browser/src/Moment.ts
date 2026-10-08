@@ -6,8 +6,9 @@
  * a moment into one user message for any `effect/ai` call: a structured answer from
  * `LanguageModel.generateObject`, a caption from `generateText`, or one turn of a `Chat` that
  * follows moment after moment. It leads with what changed, news before what keeps changing, and
- * names an action only as what a change followed, or where its effect is drawn rather than
- * written, as on a canvas, which only the screenshots show.
+ * names an action as what a change followed; as a step where changes followed it but none names
+ * it, or where its effect is drawn rather than written, as on a canvas, which only the screenshots
+ * show; and claims nothing of what changed where the record did not see.
  *
  * Frames come from a running screencast, as far back as the browser's `frameHistory` keeps them.
  * The last frame is the page now: the newest frame if it was painted after the page's latest input
@@ -48,7 +49,8 @@ export class Moment extends Schema.Class<Moment>("effect-browser/Moment")({
   events: Schema.Array(BrowserEvent),
   /**
    * What visibly changed after `from`, up to the last frame's paint; absent when the page could not
-   * say, as while it navigated. A page's first moment starts its record, so it holds none.
+   * say, as while it navigated. A page's first moment starts its record, so its record sees none of
+   * the window, and `toPrompt` says what changed was not recorded.
    */
   changes: Schema.optional(Changes),
 }) {}
@@ -280,9 +282,13 @@ interface Line {
 /** At most this many lines of what happened; the least notable are counted, not listed. */
 const maxLines = 24;
 
-/** The changes as lines, news first; cells of one column that changed together as one line. */
-const changed = (moment: Moment, record: Changes): ReadonlyArray<Line> => {
+/**
+ * The changes as lines, news first, and the actions they name; cells of one column that changed
+ * together as one line.
+ */
+const changed = (moment: Moment, record: Changes) => {
   const actions = moment.events.filter((event): event is Action => event._tag === "Action");
+  const named = new Set<Action>();
 
   // The action whose input a change followed: one that ran while the input arrived, give or take
   // the clock's mapping, so input the library did not send names no action.
@@ -294,7 +300,10 @@ const changed = (moment: Moment, record: Changes): ReadonlyArray<Line> => {
         ? undefined
         : actions.findLast((event) => event.startedAt <= input + 100 && event.at >= input - 100);
 
-    return action === undefined ? "" : `, after ${step(action)}`;
+    if (action === undefined) return "";
+    named.add(action);
+
+    return `, after ${step(action)}`;
   };
 
   const columns = Map.groupBy(
@@ -324,21 +333,40 @@ const changed = (moment: Moment, record: Changes): ReadonlyArray<Line> => {
         text: describe(change) + cause(change),
       });
 
-  return lines;
+  return { lines, named };
 };
+
+/** A moment's record of changes, if it saw any of the window: a page's first moment has none. */
+const recordOf = (moment: Moment) =>
+  moment.changes !== undefined && moment.changes.from < moment.changes.until
+    ? moment.changes
+    : undefined;
 
 /** The moment's changes and events as lines, most notable first when its changes are recorded. */
 const account = (moment: Moment): ReadonlyArray<string> => {
-  const record = moment.changes;
-  const lines = [...(record === undefined ? [] : changed(moment, record))];
+  const record = recordOf(moment);
 
-  // With a record, an action is told only where its effect is drawn, or the record began after it
-  // started, as on the document a click opened.
+  const { lines, named } =
+    record === undefined
+      ? { lines: new Array<Line>(), named: new Set<Action>() }
+      : changed(moment, record);
+
+  // Whether anything but a field's own edit changed after an action began.
+  const followed = (event: Action) =>
+    record?.changes.some((change) => change.kind !== "value" && change.at > event.startedAt) ===
+    true;
+
+  // With a record, an action is told as a step where changes followed it and none names it, so a
+  // click whose effect a busy page leaves uncredited is not lost; where its effect is drawn; or
+  // where it started before the record began, as on the document a click opened. An attempt that
+  // nothing followed, a failed one, a hover and a scroll are left out.
   const told = (event: Action) =>
     !(event.ok && ["navigate", "back", "reload"].includes(event.name)) &&
     (record === undefined ||
       event.startedAt <= record.from ||
-      (onDrawn(event) && event.name !== "scroll"));
+      (event.ok &&
+        event.name !== "scroll" &&
+        (onDrawn(event) || (event.name !== "hover" && !named.has(event) && followed(event)))));
 
   for (const event of moment.events)
     if (event._tag === "Action" && event.page === moment.page && told(event))
@@ -376,15 +404,11 @@ const account = (moment: Moment): ReadonlyArray<string> => {
     ...kept.map((line) => `${seconds(moment, line.at)} ${line.text}`),
     ...(ordered.length > maxLines ? [`…and ${ordered.length - maxLines} less notable`] : []),
     ...(record === undefined
-      ? [
-          kept.length === 0
-            ? "(nothing happened in the window)"
-            : "What changed on the page was not recorded.",
-        ]
+      ? ["What changed on the page was not recorded."]
       : record.changes.length > 0
         ? []
         : [
-            `No text in view changed${drawing ? "; what is drawn, such as a canvas, shows only in the screenshots" : ""}.`,
+            `No text in view changed${begins > moment.from ? ` after ${seconds(moment, begins)}` : ""}${drawing ? "; what is drawn, such as a canvas, shows only in the screenshots" : ""}.`,
           ]),
     ...(record !== undefined && record.dropped > 0
       ? [
@@ -399,9 +423,10 @@ const account = (moment: Moment): ReadonlyArray<string> => {
 
 /**
  * The moment as one user message: the page's outline when the moment has one, what changed, most
- * notable first, with the actions that the changes followed or that drew what only the
- * screenshots show, and its frames captioned with their times, the last one "the moment". Give a
- * model its task with `Prompt.setSystem`, and add what the caller knows about the page as more text.
+ * notable first, with the actions that the changes followed, that changes followed though none
+ * names them, or that drew what only the screenshots show, and its frames captioned with their
+ * times, the last one "the moment". Give a model its task with `Prompt.setSystem`, and add what
+ * the caller knows about the page as more text.
  */
 export const toPrompt = (moment: Moment): Prompt.Prompt => {
   const count = moment.frames.length;
@@ -415,7 +440,7 @@ export const toPrompt = (moment: Moment): Prompt.Prompt => {
             "One moment of a browser session. Rely only on what this material shows, and prefer concrete details: numbers, names, colours, positions and motion.",
             "",
             ...(moment.snapshot === undefined ? [] : [moment.snapshot.rendered, ""]),
-            `${moment.changes === undefined ? "What happened" : "What changed, most notable first"} (seconds before the moment, over ${((moment.at - moment.from) / 1000).toFixed(1)}s):`,
+            `${recordOf(moment) === undefined ? "What happened" : "What changed, most notable first"} (seconds before the moment, over ${((moment.at - moment.from) / 1000).toFixed(1)}s):`,
             ...account(moment),
             "",
             count === 1

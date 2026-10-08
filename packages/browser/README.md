@@ -148,22 +148,31 @@ end, how often that changed, the lowest and highest of a number that changed mor
 it last changed before the window, so news stands apart from what keeps changing, and its
 `subject` with the context that binds it: a price under its row and column. A field's value reads
 `••••` unless `unmask` is set, and a secret field's always does. A change names its `cause`, the
-trusted input it followed, only where it was that input's doing: it had not changed in the second
-before, and it changed within 500 ms, or within 3 s inside what the input acted on or its row, form,
-dialog or controlled element, so "Order placed" a server's reply later keeps its click, and a
-ticker's next tick after a click names none.
+trusted input it followed, only where it was that input's doing. It must not have been in flux: in
+the 10 s before the input it had not changed, and nothing had come into or left what it sits in, so
+a ticker's next tick or a feed's next line names no click. Then it changed within 3 s inside what
+the input acted on or its row, form, dialog or controlled element, so "Order placed" a server's
+reply later keeps its click; or elsewhere within 500 ms, on a page where nothing had changed in the
+2 s before the input, so a menu a portal puts at the end of the page keeps its click, and a chat
+line beside a ticking board does not. What holds the input's target, as a menu holds its item, does
+not count against it. Against inert clicks on boards whose 2 to 20 cells tick every 0.25 to 6 s,
+the rule credited none of 401 ticks and none of 96 chat lines, where a second's quiet on the element
+and 500 ms anywhere had credited about half the ticks of the slower boards and every chat line.
+What a busy page costs is the credit for an effect out of a click's reach, which a moment then
+tells as a step; on a still page, an unrelated line 250 ms after a click is still credited.
 
 A page records once something reads its changes: the first read starts it, and finds nothing yet.
 From then the page's own session starts the recorder at the start of each later document, once it
 is parsed, until nobody has read it for two minutes; a page nobody reads records nothing and costs
 nothing. The first read also registers the recorder, in the same round trip, and every later read
-is one call. While it runs, a MutationObserver marks what changed: a text-only element, as most
-prices are, is read at once, and anything else, with whether it was in view, as the page renders
-it, through an IntersectionObserver that forces no layout. A change counts as seen when it was in
-the viewport as the page rendered it, its style showing it, so one scrolled away later is still
-told, and something removed or hidden only if it was in view before. On a 2,000-cell table
-rewritten every 50 ms, locally, the page's busy time went from about 100 ms per 3 s to about 230
-recording, where an empty observer costs about 180.
+is one call. A browser whose clock no capture has mapped yet maps it on its first read of changes,
+once, in four round trips more. While it runs, a MutationObserver marks what changed: a text-only
+element, as most prices are, is read at once, and anything else, with whether it was in view, as
+the page renders it, through an IntersectionObserver that forces no layout. A change counts as seen
+when it was in the viewport as the page rendered it, its style showing it, so one scrolled away
+later is still told, and something removed or hidden only if it was in view before. On a
+2,000-cell table rewritten every 50 ms, locally, the page's busy time went from about 100 ms per
+3 s to about 230 recording, where an empty observer costs about 180.
 
 The record keeps 256 elements with their last 32 changes, for a minute. On a busier page, an
 element that keeps changing gives way first, then one never seen in view, then one that has gone,
@@ -178,11 +187,14 @@ page, though its later changes it does.
 
 `Moment.capture` reads what changed up to its last frame's paint, from where the previous moment's
 changes ended, and `Moment.toPrompt` leads with it: news first, then what keeps changing, with the
-cells of a column that changed together on one line. It names an action only as what a change
-followed, or as a step where its effect is drawn, such as a click on a canvas, which only the
-screenshots show, or came before the record began; hovers, scrolls and attempts that changed
-nothing are left out. A moment of a page whose changes could not be read, as while it navigated,
-has none, and its prompt lists every step instead.
+cells of a column that changed together on one line. It names an action as what a change followed,
+or as a step: where changes followed it but none names it, as when its effect landed out of its
+reach on a busy page; where its effect is drawn, such as a click on a canvas, which only the
+screenshots show; or where it came before the record began. Hovers, scrolls and attempts that
+nothing followed are left out. A moment whose record saw none of its window, as a page's first,
+whose read starts the record, or whose changes could not be read, as while it navigated, says that
+what changed was not recorded and lists every step instead; one whose record began within the
+window says nothing changed only after that.
 
 `Plan` rehearses a walk once and replays it later, near live, with no model call.
 `Plan.fromEvents(page.recentEvents)` keeps one page's completed actions with their subjects and

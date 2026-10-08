@@ -209,6 +209,8 @@ export const history = (
     lose,
     note,
     read,
+    /** Each element's history, and when the record let changes go, for a read to judge causes. */
+    recent: () => ({ tracks: [...tracks.values()], losses: losses.map(([at]) => at) }),
     /** A track moves to the element that took its key's place, as a re-rendered price does. */
     rekey: (from: object, to: object): boolean => {
       const track = tracks.get(from);

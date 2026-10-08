@@ -203,53 +203,68 @@ const textOf = (prompt: Prompt.Prompt) =>
   )[0] ?? "";
 
 describe("a moment's account", () => {
+  const click = (name: string, startedAt: number) =>
+    new Action({
+      at: startedAt + 100,
+      startedAt,
+      page: "p1",
+      name: "click",
+      subject: new Subject({ role: "button", name, tag: "button", context: {} }),
+      ok: true,
+      dispatched: true,
+    });
+
+  const appeared = (after: string, at: number, cause?: number) =>
+    new Change({
+      kind: "appeared",
+      subject: new Subject({ role: null, name: "", tag: "li", context: {} }),
+      startedAt: at,
+      at,
+      after,
+      count: 1,
+      cause,
+    });
+
+  const recorded = (from: number, changes: ReadonlyArray<Change>) =>
+    new Changes({ document: 0, from, until: 10_000, cursor: 0, dropped: 0, changes });
+
+  const moment = (events: ReadonlyArray<Action>, changes?: Changes) =>
+    textOf(
+      Moment.toPrompt(
+        new Moment.Moment({ page: "p1", from: 5000, at: 10_000, frames: [], events, changes }),
+      ),
+    );
+
   it("names as a cause only an action that ran as the input arrived", () => {
-    const button = new Subject({ role: "button", name: "Place order", tag: "button", context: {} });
+    // The line that tells what appeared after a click that began at `startedAt`.
+    const placed = (startedAt: number) =>
+      moment([click("Place order", startedAt)], recorded(0, [appeared("Order placed", 8600, 8000)]))
+        .split("\n")
+        .find((line) => line.includes('"Order placed"'));
 
-    const told = (startedAt: number) =>
-      textOf(
-        Moment.toPrompt(
-          new Moment.Moment({
-            page: "p1",
-            from: 5000,
-            at: 10_000,
-            frames: [],
-            events: [
-              new Action({
-                at: startedAt + 100,
-                startedAt,
-                page: "p1",
-                name: "click",
-                subject: button,
-                ok: true,
-                dispatched: true,
-              }),
-            ],
-            changes: new Changes({
-              document: 0,
-              from: 0,
-              until: 10_000,
-              cursor: 0,
-              dropped: 0,
-              changes: [
-                new Change({
-                  kind: "appeared",
-                  subject: new Subject({ role: null, name: "", tag: "p", context: {} }),
-                  startedAt: 8600,
-                  at: 8600,
-                  after: "Order placed",
-                  count: 1,
-                  cause: 8000,
-                }),
-              ],
-            }),
-          }),
-        ),
-      );
-
-    assert.include(told(7950), '"Place order"');
+    assert.include(placed(7950), '"Place order"');
     // A click that had ended before the input came did not send it.
-    assert.notInclude(told(6000), '"Place order"');
+    assert.notInclude(placed(6000), '"Place order"');
+  });
+
+  it("tells as a step an action that changes followed and none names, and no other", () => {
+    const text = moment(
+      [click("Options", 6000), click("Load more", 7000), click("Menu", 9000)],
+      recorded(0, [appeared("Share", 6050, 6050), appeared("Result 2", 7800)]),
+    );
+
+    // Options is named once, as what its menu followed; Load more, whose results came out of its
+    // reach, as a step; and Menu, which nothing followed, not at all.
+    assert.strictEqual(text.split('"Options"').length, 2, text);
+    assert.include(text, '"Load more"');
+    assert.notInclude(text, '"Menu"');
+  });
+
+  it("says no more of a window its record did not see than with no record", () => {
+    const events = [click("Load more", 7000)];
+
+    // A page's first moment: its record begins as the moment ends.
+    assert.strictEqual(moment(events, recorded(10_000, [])), moment(events));
   });
 
   it.prop(
@@ -488,7 +503,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("names no cause for a tick that follows an inert click", () =>
+  it.effect("names no cause for what changes on its own after an inert click", () =>
     Effect.gen(function* () {
       const page = yield* start("/desk");
       const menu = yield* button(page, "Menu");
@@ -499,42 +514,88 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         if (btc !== null) btc.textContent = `$61,${Number(btc.textContent?.slice(-3)) + 10}`;
       });
 
-      yield* page.changes();
-      // It ticked 400 ms before the click, so it was already changing when the click came.
-      yield* tick;
-      yield* Effect.sleep(Duration.millis(400));
-      const before = yield* page.changes();
+      // The page's own feed adds a line elsewhere 250 ms on, as a chat does.
+      const line = run(page, () => {
+        setTimeout(
+          () => document.querySelector("#alerts")?.insertAdjacentHTML("beforeend", "<p>gg wp</p>"),
+          250,
+        );
+      });
 
+      yield* page.changes();
+      // A line follows a click on a page that ticked a second before.
+      yield* tick;
+      yield* Effect.sleep(Duration.millis(1000));
+      const ticked = yield* page.changes();
+
+      yield* line;
+      yield* page.click(menu);
+      yield* Effect.sleep(Duration.millis(2500));
+      const busy = yield* page.changes({ since: ticked });
+
+      // On a page still for two seconds, a slow ticker ticks just after a click, and the feed
+      // adds a line again.
+      yield* line;
       yield* page.click(menu);
       yield* tick;
-      yield* Effect.sleep(Duration.millis(300));
-      const after = yield* page.changes({ since: before });
+      yield* Effect.sleep(Duration.millis(400));
+      const still = yield* page.changes({ since: busy });
 
-      assert.isNotEmpty(after.changes);
-      assert.isTrue(after.changes.every((change) => change.cause === undefined));
+      assert.deepStrictEqual(told(busy), [["appeared", undefined, "gg wp"]]);
+      assert.sameDeepMembers(told(still), [
+        ["text", "$61,250", "$61,260"],
+        ["appeared", undefined, "gg wp"],
+      ]);
+      // None names the click: the line on a busy page, the slow tick, nor the feed's next line.
+      assert.deepStrictEqual(
+        [busy, still].flatMap(({ changes }) =>
+          changes.flatMap((change) => (change.cause === undefined ? [] : [change.after])),
+        ),
+        [],
+      );
     }),
   );
 
-  it.effect("names the click a delayed answer inside its form followed", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
+  it.effect(
+    "names the click its effects followed, out of its reach on a still page or later in its form",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* start("/desk");
 
-      yield* page.changes();
-      yield* page.click(yield* button(page, "Place order"));
-      yield* page.waitForText("Order placed");
-      yield* Effect.sleep(Duration.millis(100));
-      const moment = yield* Moment.capture(page, { since: Duration.seconds(3) });
-      const placed = moment.changes?.changes.find((change) => change.after === "Order placed");
+        // Menu opens a menu where a portal puts it, at the end of the body, and its item a dialog.
+        yield* run(page, () =>
+          document.addEventListener("click", ({ target }) => {
+            const opens =
+              target instanceof Element && target.id === "menu"
+                ? '<div role="menu" style="position:fixed;top:40px;left:200px"><button type="button" role="menuitem">Share</button></div>'
+                : target instanceof Element && target.getAttribute("role") === "menuitem"
+                  ? '<div role="dialog" style="position:fixed;top:80px;left:200px">Share this page</div>'
+                  : "";
 
-      const click = moment.events.find(
-        (event) => event._tag === "Action" && event.name === "click",
-      );
+            document.body.insertAdjacentHTML("beforeend", opens);
+          }),
+        );
+        yield* page.changes();
+        yield* page.click(yield* button(page, "Menu"));
+        yield* page.click(
+          (yield* page.find({ role: "menuitem", name: "Share" }))[0]?.ref ?? "no menu",
+        );
+        yield* page.click(yield* button(page, "Place order"));
+        yield* page.waitForText("Order placed");
+        yield* Effect.sleep(Duration.millis(100));
+        const moment = yield* Moment.capture(page, { since: Duration.seconds(3) });
+        const changes = moment.changes?.changes ?? [];
+        const changed = (after: string) => changes.find((change) => change.after === after);
+        const [menu, sheet, placed] = ["Share", "Share this page", "Order placed"].map(changed);
 
-      // 600 ms on, too late to be direct, but inside the form whose button was clicked.
-      assert.isDefined(placed?.cause);
-      assert.isAbove(placed?.startedAt ?? 0, (placed?.cause ?? 0) + 500);
-      assert.isAtLeast(placed?.cause ?? 0, (click?.at ?? Infinity) - 1000);
-    }),
+        // At once, out of reach: the menu, and the dialog, though the menu holding the item that
+        // opened it came just before.
+        assert.isDefined(menu?.cause);
+        assert.isAbove(sheet?.cause ?? 0, menu?.cause ?? Infinity);
+        // 600 ms on, too late to be direct, but inside the form whose button was clicked.
+        assert.isAbove(placed?.cause ?? 0, sheet?.cause ?? Infinity);
+        assert.isAbove(placed?.startedAt ?? 0, (placed?.cause ?? Infinity) + 500);
+      }),
   );
 
   it.effect("masks what a field holds unless asked, and ends a window at a frame's paint", () =>
