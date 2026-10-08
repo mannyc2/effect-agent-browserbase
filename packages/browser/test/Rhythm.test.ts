@@ -6,8 +6,9 @@ import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import { PolicyDenied } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
+import * as Presentation from "../src/Presentation.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
-import * as Tools from "../src/Tools.ts";
+import { unpaused } from "./fixtures.ts";
 
 interface Input {
   readonly type?: string;
@@ -67,13 +68,9 @@ const setup = Effect.fnUntraced(function* (html: string, options: Options = {}) 
     return cdp;
   };
 
-  const browser = yield* makeBrowser(
-    context,
-    { id: "rhythm-test", provider: "test" },
-    { humanize: true, ...options },
-  );
-
-  const page = yield* browser.newPage();
+  const browser = yield* makeBrowser(context, { id: "rhythm-test", provider: "test" }, options);
+  // Performed, as viewers watch it, with no wait before each action.
+  const page = (yield* Presentation.make({ pacing: unpaused })).view(yield* browser.newPage());
 
   yield* Effect.promise(() => page.playwright.setContent(html));
   yield* Effect.promise(() =>
@@ -273,206 +270,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("corrects opted-in prose through the public tool and records native key events", () =>
-      Effect.gen(function* () {
-        const text = "Please bring bread.";
-
-        const { browser, page, snapshot, calls } = yield* setup(
-          '<label>Notes<textarea id="notes"></textarea></label>',
-        );
-
-        const ref = refOf(snapshot, "Notes");
-        const tools = yield* Tools.make().pipe(Effect.provideService(Browser, browser));
-
-        yield* page.hover(ref);
-        yield* tools.handlers.browser_type({ ref, text, prose: true }).pipe(Random.withSeed(0));
-        assert.strictEqual(
-          yield* Effect.promise(() => page.playwright.locator("#notes").inputValue()),
-          text,
-        );
-
-        const observed = (yield* events(page)).filter(
-          (event) => event.type === "keydown" || event.type === "keyup",
-        );
-
-        const corrections = observed.filter(
-          (event) => event.type === "keydown" && event.key === "Backspace",
-        );
-
-        assert.strictEqual(corrections.length, 1);
-        assert.isTrue(observed.every((event) => event.trusted));
-        assert.deepStrictEqual(
-          (yield* browser.recentEvents)
-            .filter((event) => event._tag === "KeyChanged")
-            .map(({ key, phase }) => ({ key, phase })),
-          observed.map((event) => ({
-            key: event.key,
-            phase: event.type === "keydown" ? "down" : "up",
-          })),
-        );
-        assert.strictEqual(calls.filter((call) => call.method === "Input.insertText").length, 0);
-
-        const editor = yield* setup(
-          '<div role="textbox" aria-label="Notes" id="notes" contenteditable="true" style="width:300px;height:100px"></div>',
-        );
-
-        const editorRef = refOf(editor.snapshot, "Notes");
-
-        yield* editor.page.hover(editorRef);
-        yield* editor.page.type(text, { into: editorRef, prose: true }).pipe(Random.withSeed(0));
-        assert.strictEqual(
-          yield* Effect.promise(() => editor.page.playwright.locator("#notes").innerText()),
-          text,
-        );
-        assert.strictEqual(
-          (yield* events(editor.page)).filter(
-            (event) => event.type === "keydown" && event.key === "Backspace",
-          ).length,
-          1,
-        );
-      }),
-    );
-
-    it.effect("keeps sensitive fields exact even when prose is requested", () =>
-      Effect.gen(function* () {
-        for (const html of [
-          '<label>Notes<input id="notes"></label>',
-          '<label>Notes<textarea id="notes" inputmode="decimal"></textarea></label>',
-          '<label>Notes<textarea id="notes" autocomplete="new-password"></textarea></label>',
-          '<form id="order"><label>Notes<textarea id="notes"></textarea></label><button>Place order</button></form>',
-        ]) {
-          const { page, snapshot } = yield* setup(html);
-          const ref = refOf(snapshot, "Notes");
-          const text = "Please bring bread.";
-
-          yield* page.hover(ref);
-          yield* page.type(text, { into: ref, prose: true }).pipe(Random.withSeed(0));
-          assert.strictEqual(
-            yield* Effect.promise(() => page.playwright.locator("#notes").inputValue()),
-            text,
-          );
-          assert.isEmpty((yield* events(page)).filter((event) => event.key === "Backspace"));
-        }
-      }),
-    );
-
-    it.effect("keeps numeric, address-like, implicit, appended and ordinary text exact", () =>
-      Effect.gen(function* () {
-        for (const text of [
-          "Please bring bread. 2",
-          "Please bring bread. https://example.test",
-          "Please bring bread. example.test, thanks",
-          "Please bring bread. hello@example.test",
-        ]) {
-          const { page, snapshot } = yield* setup(
-            '<label>Notes<textarea id="notes"></textarea></label>',
-          );
-
-          const ref = refOf(snapshot, "Notes");
-
-          yield* page.hover(ref);
-          yield* page.type(text, { into: ref, prose: true }).pipe(Random.withSeed(0));
-          assert.strictEqual(
-            yield* Effect.promise(() => page.playwright.locator("#notes").inputValue()),
-            text,
-          );
-          assert.isEmpty((yield* events(page)).filter((event) => event.key === "Backspace"));
-        }
-        for (const mode of ["ordinary", "append", "implicit", "plain"] as const) {
-          const { page, snapshot } = yield* setup(
-            '<label>Notes<textarea id="notes"></textarea></label>',
-            { humanize: mode !== "plain" },
-          );
-
-          const ref = refOf(snapshot, "Notes");
-          const text = "Please bring bread.";
-
-          yield* page.hover(ref);
-          yield* Effect.promise(() => page.playwright.locator("#notes").focus());
-          yield* page
-            .type(text, {
-              into: mode === "implicit" ? undefined : ref,
-              prose: mode !== "ordinary",
-              replace: mode !== "append",
-            })
-            .pipe(Random.withSeed(0));
-          assert.strictEqual(
-            yield* Effect.promise(() => page.playwright.locator("#notes").inputValue()),
-            text,
-          );
-          assert.isEmpty((yield* events(page)).filter((event) => event.key === "Backspace"));
-        }
-      }),
-    );
-
-    it.effect(
-      "refuses Enter when a page prevents correction from producing the requested prose",
-      () =>
-        Effect.gen(function* () {
-          const { browser, page, snapshot } = yield* setup(
-            '<label>Notes<textarea id="notes" onkeydown="if(event.key===\'Backspace\')event.preventDefault()"></textarea></label>',
-          );
-
-          const ref = refOf(snapshot, "Notes");
-
-          yield* page.hover(ref);
-
-          const error = yield* page
-            .type("Please bring bread.", { into: ref, prose: true, submit: true })
-            .pipe(Random.withSeed(0), Effect.flip);
-
-          assert.strictEqual(error.reason._tag, "NotActionable");
-          assert.isTrue(error.dispatched);
-          assert.notStrictEqual(
-            yield* Effect.promise(() => page.playwright.locator("#notes").inputValue()),
-            "Please bring bread.",
-          );
-          const observed = yield* events(page);
-
-          assert.strictEqual(
-            observed.filter((event) => event.type === "keydown" && event.key === "Backspace")
-              .length,
-            1,
-          );
-          assert.isEmpty(observed.filter((event) => event.key === "Enter"));
-          assert.strictEqual(
-            (yield* browser.recentEvents).filter(
-              (event) => event._tag === "Action" && event.name === "type",
-            ).length,
-            1,
-          );
-        }),
-    );
-
-    it.effect("decides prose eligibility after focus handlers change the field", () =>
-      Effect.gen(function* () {
-        const html =
-          '<label>Notes<textarea id="notes" onfocus="this.autocomplete=\'new-password\'"></textarea></label>';
-
-        // Without a guard the field is typed exactly; under one, the changed field is refused.
-        const exact = yield* setup(html);
-
-        yield* exact.page
-          .type("Please bring bread.", { into: refOf(exact.snapshot, "Notes"), prose: true })
-          .pipe(Random.withSeed(0));
-        assert.strictEqual(
-          yield* Effect.promise(() => exact.page.playwright.locator("#notes").inputValue()),
-          "Please bring bread.",
-        );
-        assert.isEmpty((yield* events(exact.page)).filter((event) => event.key === "Backspace"));
-
-        const guarded = yield* setup(html, { guard: () => Effect.void });
-
-        const error = yield* guarded.page
-          .type("Please bring bread.", { into: refOf(guarded.snapshot, "Notes"), prose: true })
-          .pipe(Random.withSeed(0), Effect.flip);
-
-        assert.strictEqual(error.reason._tag, "NotActionable");
-        assert.isTrue(error.dispatched);
-        assert.isEmpty((yield* events(guarded.page)).filter((event) => event.type === "keydown"));
-      }),
-    );
-    it.effect("does not revalidate humanized input when no guard is set", () =>
+    it.effect("does not revalidate performed input when no guard is set", () =>
       Effect.gen(function* () {
         // Text that changes between any two tasks: there is no approval to invalidate.
         const { page } = yield* setup(
@@ -509,32 +307,6 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(error.reason._tag, "NotActionable");
         assert.isTrue(error.dispatched);
         assert.strictEqual(yield* page.title, "Armed");
-      }),
-    );
-
-    it.effect("keeps functional navigation settling when the presentation pause is short", () =>
-      Effect.gen(function* () {
-        const { page, snapshot } = yield* setup(
-          '<button id="target" onclick="setTimeout(()=>location.href=\'https://rhythm.test/next\',200)">Continue</button>',
-        );
-
-        yield* Effect.promise(() =>
-          page.playwright.context().route("https://rhythm.test/next", (route) =>
-            route.fulfill({
-              contentType: "text/html",
-              body: "<title>Arrived</title><h1>The next page</h1>",
-            }),
-          ),
-        );
-        // The minimum presentation pause must finish before the 200ms navigation. A constant
-        // Random service keeps this regression sensitive when earlier sampling changes.
-        yield* page.click(refOf(snapshot, "Continue")).pipe(
-          Effect.provideService(Random.Random, {
-            nextIntUnsafe: () => 0,
-            nextDoubleUnsafe: () => 0,
-          }),
-        );
-        assert.strictEqual(yield* page.title, "Arrived");
       }),
     );
   },

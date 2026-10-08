@@ -4,7 +4,7 @@ import { Effect, Random, Schema } from "effect";
 import * as Motion from "../src/Motion.ts";
 
 const plan = (from: Motion.Point, to: Motion.Point): Effect.Effect<ReadonlyArray<Motion.Sample>> =>
-  Effect.flatMap(Motion.Motion, (motion) => motion.plan(from, to));
+  Motion.lognormal.plan(from, to);
 
 const tick = 16.7;
 
@@ -43,7 +43,7 @@ const ticks = (from: Motion.Point, samples: ReadonlyArray<Motion.Sample>) =>
   );
 
 describe("Motion", () => {
-  it.effect("provides a deterministic seeded default without a layer", () =>
+  it.effect("plans a deterministic seeded glide", () =>
     Effect.gen(function* () {
       const from = { x: 20, y: 40 };
       const to = { x: 620.25, y: 340.75 };

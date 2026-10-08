@@ -6,7 +6,8 @@
  * frame. So a canvas mounted blank, or a spinner alone, is still loading. A screen that only says
  * "Loading…" in words reads as ready, and a WebGL canvas drawn once, without keeping its drawing,
  * reads as blank. Asked for a quiet spell, where the page's changes are recorded, nothing in view
- * may have changed for that long either. See `names.inpage.ts` for what a page-side part may use.
+ * may have changed for that long either. After input, it waits a task and a frame. See
+ * `names.inpage.ts` for what a page-side part may use.
  */
 import { Schema } from "effect";
 
@@ -136,5 +137,18 @@ export const ready = (walked: Walk, texts: Texts, kept: History) => {
     }
   };
 
-  return { wait };
+  /**
+   * One task, then a frame: what the page's handlers for input did at once has run, a navigation
+   * one of them started in a timer has been asked for, and their effect has painted. Says whether
+   * the page painted, which a hidden one does not.
+   */
+  const settle = (): Promise<boolean> => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    setTimeout(resolve, 0);
+
+    return promise.then(painted);
+  };
+
+  return { wait, settle };
 };

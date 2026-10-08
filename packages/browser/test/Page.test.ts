@@ -76,6 +76,19 @@ const centerPixel = (page: Page, image: BrowserImage) =>
     ),
   );
 
+/** What the page shows, read as the next look after an action reads it. */
+const shows = (page: Page) => Effect.map(page.text(), (read) => read.text);
+
+/** How long `effect` took, on the browser's clock. */
+const timed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const browser = yield* Browser;
+    const started = yield* browser.now;
+    const value = yield* effect;
+
+    return { value, millis: (yield* browser.now) - started };
+  });
+
 const reason = <A>(effect: Effect.Effect<A, BrowserError>) =>
   Effect.flip(effect).pipe(
     Effect.map((error) => ({ tag: error.reason._tag, dispatched: error.dispatched })),
@@ -786,6 +799,73 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  // After input a page gets a task and a frame, and a document only if the input asked for one:
+  // a link and a handler's timer do, whether the server answers at once or 300 ms later; a
+  // fetch's answer comes too late to tell; `pushState` and a link the server answers with no
+  // content ask for none.
+  it.effect("waits after a click for the document it asked for, and for nothing else", () =>
+    Effect.gen(function* () {
+      for (const [role, name] of [
+        ["link", "Link"],
+        ["button", "Timer"],
+      ] as const) {
+        const page = yield* open("/navigating");
+
+        yield* page.click(refOf(yield* page.snapshot(), role, name));
+        assert.include(yield* shows(page), "The next page", name);
+      }
+      for (const [role, name] of [
+        ["link", "Later"],
+        ["button", "Delayed"],
+      ] as const) {
+        const page = yield* open("/navigating");
+
+        yield* page.click(refOf(yield* page.snapshot(), role, name));
+        assert.match((yield* page.text()).url, /\/late$/, name);
+      }
+
+      // A document whose end comes 300 ms after its start is parsed as the click returns.
+      const streaming = yield* open("/navigating");
+
+      yield* streaming.click(refOf(yield* streaming.snapshot(), "link", "Streaming"));
+      assert.include(yield* shows(streaming), "The bottom");
+
+      const fetching = yield* open("/navigating");
+
+      const asked = yield* timed(
+        fetching.click(refOf(yield* fetching.snapshot(), "button", "Fetch")),
+      );
+
+      assert.isBelow(asked.millis, 400);
+      assert.include(yield* shows(fetching), "Fetch");
+      yield* fetching.waitForText("The next page");
+
+      for (const [role, name] of [
+        ["button", "Push"],
+        ["link", "Empty"],
+      ] as const) {
+        const page = yield* open("/navigating");
+        const clicked = yield* timed(page.click(refOf(yield* page.snapshot(), role, name)));
+
+        assert.isBelow(clicked.millis, 1000, name);
+        assert.include(yield* shows(page), "Still", name);
+      }
+    }),
+  );
+
+  // The fixed sleeps after clicks alone took 1.2 s per ten.
+  it.effect("settles ten clicks in a fraction of the time the fixed sleeps took", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/navigating");
+      const still = refOf(yield* page.snapshot(), "button", "Still");
+
+      yield* page.click(still);
+      const ten = yield* timed(Effect.repeat(page.click(still), { times: 9 }));
+
+      assert.isBelow(ten.millis, 1200);
+    }),
+  );
+
   it.effect("checks every input with the guard, and refuses before sending", () =>
     Effect.gen(function* () {
       const site = yield* Site;
@@ -808,27 +888,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(yield* text(page, "#outcome"), "Not ordered");
         yield* page.click(refOf(snapshot, "checkbox", "I agree"));
       }).pipe(Effect.provide(guarded));
-    }),
-  );
-
-  it.effect("moves the pointer along a path when humanized", () =>
-    Effect.gen(function* () {
-      const site = yield* Site;
-
-      yield* Effect.gen(function* () {
-        const browser = yield* Browser;
-        const page = yield* browser.newPage(site.url("/form"));
-
-        yield* page.click(refOf(yield* page.snapshot(), "button", "Submit"));
-        assert.strictEqual(yield* text(page, "#outcome"), "Ordered 10 btc");
-
-        const moves = (yield* browser.recentEvents).filter(
-          (event) => event._tag === "TrackPlanned",
-        );
-
-        assert.strictEqual(moves.length, 1);
-        assert.isAbove(moves[0]?.samples.length ?? 0, 5);
-      }).pipe(Effect.provide(Chromium.layer({ humanize: true })));
     }),
   );
 });

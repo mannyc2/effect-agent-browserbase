@@ -157,9 +157,9 @@ describe("bundled human strokes", () => {
     });
   });
 
-  it.effect("builds a ready seeded service and keeps tiny moves immediate", () =>
+  it.effect("loads a ready seeded planner and keeps tiny moves immediate", () =>
     Effect.gen(function* () {
-      const planner = yield* Motion.Motion;
+      const planner = yield* HumanStrokes.motion;
       const from = { x: 640, y: 360 };
       const to = { x: 796, y: 372 };
       const first = yield* planner.plan(from, to).pipe(Random.withSeed("retarget-seed"));
@@ -178,7 +178,7 @@ describe("bundled human strokes", () => {
       assert.deepStrictEqual(yield* planner.plan(from, { x: 641, y: 360 }), [
         { x: 641, y: 360, afterMillis: 0 },
       ]);
-    }).pipe(Effect.provide(HumanStrokes.layer)),
+    }),
   );
 
   it.effect("fails with a typed DataError for a corrupt or oversized compressed asset", () =>

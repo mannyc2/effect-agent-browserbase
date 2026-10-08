@@ -136,7 +136,6 @@ export const ActionOptions = Schema.Struct({
   holdMillis: Schema.optional(Schema.Finite),
   replace: Schema.optional(Schema.Boolean),
   submit: Schema.optional(Schema.Boolean),
-  prose: Schema.optional(Schema.Boolean),
   times: Schema.optional(Schema.Finite),
   dx: Schema.optional(Schema.Finite),
   dy: Schema.optional(Schema.Finite),

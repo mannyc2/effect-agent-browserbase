@@ -2,9 +2,11 @@
  * The page implementation behind `Page.Page`. `Browser` constructs pages and owns the state they
  * share (the clock mapping and event publication), so construction stays internal. A page is
  * assembled here from its domains: the script bridge, pictures, reading, input and navigation.
+ * What a presenter and a stage need of a page, and no caller should, it keeps out of sight.
  */
-import { Effect } from "effect";
+import { type Effect as Eff, Effect } from "effect";
 
+import type { BrowserError } from "../../BrowserError.ts";
 import type { Page } from "../../Page.ts";
 import * as Actions from "../input/actions.ts";
 import * as Pictures from "../pictures/pictures.ts";
@@ -16,6 +18,31 @@ import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
 import * as Url from "./url.ts";
 import * as Viewport from "./viewport.ts";
+
+export interface Internals {
+  /** The page's input, in any style. */
+  readonly input: Actions.Input;
+  /** Completes once the input asked of the page so far has ended, failing `Busy` if it lasts. */
+  readonly inputEnded: Eff.Effect<void, BrowserError>;
+  /** The page's documents so far, counted as `Navigated` counts them. */
+  readonly document: () => number;
+}
+
+/** A page this library built: it keeps its internals where only this module reaches them. */
+class Built {
+  readonly #internals: Internals;
+
+  constructor(internals: Internals) {
+    this.#internals = internals;
+  }
+
+  static internalsOf(page: Page): Internals | undefined {
+    return page instanceof Built ? page.#internals : undefined;
+  }
+}
+
+/** What a page this library built keeps out of sight; nothing for any other `Page`. */
+export const internalsOf = (page: Page) => Built.internalsOf(page);
 
 export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const page = Context.make(options, yield* Effect.scope);
@@ -60,12 +87,12 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     find: reading.find,
     text: reading.text,
     changes: Changes.make(page, bridge, pictures.estimate),
-    click: input.click,
-    hover: input.hover,
-    drag: input.drag,
-    type: input.type,
-    press: input.press,
-    scroll: input.scroll,
+    click: (target, options) => input.click(target, options),
+    hover: (target) => input.hover(target),
+    drag: (from, to) => input.drag(from, to),
+    type: (text, options) => input.type(text, options),
+    press: (keys, options) => input.press(keys, options),
+    scroll: (options) => input.scroll(options),
     select: input.select,
     waitForText: reading.waitForText,
     ready: Ready.make(page, bridge, capture),
@@ -76,5 +103,11 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     recentEvents: options.recentEvents,
   };
 
-  return assembled;
+  const internals: Internals = {
+    input,
+    inputEnded: lane.read("inputEnded")(Effect.void).pipe(owned),
+    document: () => bridge.frameTag().document,
+  };
+
+  return Object.assign(new Built(internals), assembled);
 });

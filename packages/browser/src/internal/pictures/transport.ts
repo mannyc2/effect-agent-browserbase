@@ -35,8 +35,12 @@ export interface Transport {
     readonly frame: (frame: NativeFrame) => void;
     readonly lost: (error: BrowserError) => void;
   }) => () => void;
-  /** What a frame arriving now shows: the document it followed and the page's address then. */
-  readonly frameTag: () => { readonly document: number; readonly url: string };
+  /** What a frame arriving now shows: its session, the document it followed and the address then. */
+  readonly frameTag: () => {
+    readonly session: string;
+    readonly document: number;
+    readonly url: string;
+  };
 }
 
 /** The page's own session. */
@@ -187,7 +191,7 @@ export const apart = (
             if (listening === on) listening = undefined;
           };
         },
-        frameTag: tracked.tag,
+        frameTag: () => ({ session: page.session, ...tracked.tag() }),
       } satisfies Transport;
     }).pipe(Scope.provide(scope));
 

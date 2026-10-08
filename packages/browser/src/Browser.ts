@@ -37,13 +37,12 @@ import {
   type RecordedEvent,
   SessionEnding,
 } from "./BrowserEvent.ts";
-import { call, failWith, undispatched } from "./internal/page/context.ts";
+import { call, failWith, type Settings, undispatched } from "./internal/page/context.ts";
 import { FailFast } from "./internal/page/lane.ts";
 import * as PageImpl from "./internal/page/page.ts";
 import * as Url from "./internal/page/url.ts";
 import * as BrowserClock from "./internal/pictures/clock.ts";
 import * as Timeline from "./internal/timeline/events.ts";
-import * as Motion from "./Motion.ts";
 import type * as Page from "./Page.ts";
 
 /** A script that documents run before their own, such as a consent-banner remover. */
@@ -58,11 +57,10 @@ export interface InitScript {
 }
 
 export interface Options {
-  /** Move the pointer along curved paths and type with human pacing. Defaults to false. */
-  readonly humanize?: boolean | undefined;
   /**
-   * Bound on each action; finite and positive. Defaults to 10 seconds. Humanized pointer glides,
-   * up to 5 seconds each and two per drag, count against it.
+   * Bound on each action; finite and positive. Defaults to 10 seconds. What a presenter's view
+   * takes to show an action, such as its glides and typing at a person's pace, does not count
+   * against it.
    */
   readonly actionTimeout?: Duration.Input | undefined;
   /** Bound on each navigation; finite and positive. Defaults to 30 seconds. */
@@ -173,8 +171,7 @@ const settingsOf = Effect.fnUntraced(function* (options: Options) {
       : Effect.fail(invalid(`${name} must be finite and greater than zero`));
   };
 
-  const settings: Page.Settings = {
-    humanize: options.humanize ?? false,
+  const settings: Settings = {
     actionTimeout: yield* bound("actionTimeout", options.actionTimeout, Duration.seconds(10)),
     navigationTimeout: yield* bound(
       "navigationTimeout",
@@ -436,7 +433,6 @@ export const make = Effect.fn("Browser.make")(function* (
   options: Options = {},
 ) {
   const clock = yield* Clock.Clock;
-  const motion = yield* Motion.Motion;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   const { settings, eventHistory, maxPages } = yield* settingsOf(options);
   // Measured on first need: the first capture of any page measures it, and input never waits.
@@ -516,12 +512,12 @@ export const make = Effect.fn("Browser.make")(function* (
 
           const page = yield* PageImpl.make({
             id,
+            session: info.id,
             url: targetInfo.url,
             playwright,
             cdp,
             untilLost,
             settings,
-            motion,
             clock,
             mapping,
             publish,

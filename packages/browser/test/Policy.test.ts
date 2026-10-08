@@ -6,9 +6,10 @@ import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { type InputRequest, type Page, redacted } from "../src/Page.ts";
+import * as Presentation from "../src/Presentation.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
 import * as Tools from "../src/Tools.ts";
-import { Site, SiteLayer } from "./fixtures.ts";
+import { Site, SiteLayer, unpaused } from "./fixtures.ts";
 
 const refOf = (snapshot: Snapshot, role: string, name: string): string => {
   const ref = new RegExp(role + ' "' + name + '"[^\\n]*?\\[ref=(e\\d+)\\]').exec(
@@ -20,7 +21,11 @@ const refOf = (snapshot: Snapshot, role: string, name: string): string => {
   return ref ?? "";
 };
 
-const setup = Effect.fnUntraced(function* (options: BrowserOptions) {
+// A performed page is a presenter's view of it, with no wait before each action.
+const setup = Effect.fnUntraced(function* ({
+  performed = false,
+  ...options
+}: BrowserOptions & { readonly performed?: boolean }) {
   const host = yield* Browser;
   const native = host.context.browser();
 
@@ -32,7 +37,8 @@ const setup = Effect.fnUntraced(function* (options: BrowserOptions) {
   );
 
   const browser = yield* makeBrowser(context, { id: "policy-test", provider: "test" }, options);
-  const page = yield* browser.newPage();
+  const plain = yield* browser.newPage();
+  const page = performed ? (yield* Presentation.make({ pacing: unpaused })).view(plain) : plain;
   const url = (yield* Site).url("/form");
 
   // Fixture loading bypasses the policy so denied navigation remains independently testable.
@@ -496,15 +502,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  for (const humanize of [false, true]) {
-    const mode = humanize ? "humanized" : "plain";
+  for (const performed of [false, true]) {
+    const mode = performed ? "performed" : "plain";
 
-    // Humanized keys check focus before each space, which could press a button; plain text goes in
+    // Performed keys check focus before each space, which could press a button; plain text goes in
     // one insertion that no key handler can split, so no key reaches another control either way.
     it.effect("sends no key to a control focused while typing, " + mode, () =>
       Effect.gen(function* () {
         const { page } = yield* setup({
-          humanize,
+          performed,
           guard: (request) =>
             request.facts.includes("form-submit")
               ? Effect.fail(new PolicyDenied({ detail: "submission is denied" }))
@@ -540,8 +546,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.deepStrictEqual(
           { result, typed: yield* valueOf(page, "#query"), ...effects },
           {
-            result: humanize ? { tag: "NotActionable", dispatched: true } : undefined,
-            typed: humanize ? "a" : "a b",
+            result: performed ? { tag: "NotActionable", dispatched: true } : undefined,
+            typed: performed ? "a" : "a b",
             submitted: undefined,
             activated: undefined,
           },
@@ -552,7 +558,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     it.effect("stops a double-click before pressing a replacement control, " + mode, () =>
       Effect.gen(function* () {
         const { page } = yield* setup({
-          humanize,
+          performed,
           guard: (request) =>
             request.facts.includes("form-submit")
               ? Effect.fail(new PolicyDenied({ detail: "submission is denied" }))
@@ -864,7 +870,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     'danger.id = "danger"; danger.textContent = "Delete account"; danger.style.cssText = "position:fixed;inset:0;z-index:10";' +
     'danger.onmousedown = () => (document.body.dataset.deleted = "yes"); document.body.append(danger); });</script>';
 
-  for (const [label, humanize, act] of [
+  for (const [label, performed, act] of [
     [
       "clicking a ref",
       false,
@@ -872,12 +878,12 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     ],
     ["clicking a point", false, (page: Page) => page.click({ x: 200, y: 130 })],
     [
-      "a humanized click",
+      "a performed click",
       true,
       (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "button", "Settings")),
     ],
     [
-      "humanized typing",
+      "performed typing",
       true,
       (page: Page, snapshot: Snapshot) =>
         page.type("12", { into: refOf(snapshot, "textbox", "Notes") }),
@@ -894,7 +900,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         const requests: Array<InputRequest> = [];
 
         const { page } = yield* setup({
-          humanize,
+          performed,
           guard: (request) => Effect.sync(() => requests.push(request)),
         });
 
@@ -934,19 +940,19 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     'remove.setAttribute("aria-hidden", "true"); remove.style.cssText = "position:absolute;inset:0";' +
     'remove.onmousedown = () => (document.body.dataset.deleted = "yes"); mail.append(remove); });</script>';
 
-  for (const [label, humanize, act] of [
+  for (const [label, performed, act] of [
     [
       "clicking a ref",
       false,
       (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "option", "Quarterly report")),
     ],
     [
-      "a humanized click",
+      "a performed click",
       true,
       (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "option", "Quarterly report")),
     ],
     ["clicking a point", false, (page: Page) => page.click({ x: 250, y: 330 })],
-    ["a humanized point click", true, (page: Page) => page.click({ x: 250, y: 330 })],
+    ["a performed point click", true, (page: Page) => page.click({ x: 250, y: 330 })],
   ] as const) {
     it.effect(
       "refuses " + label + " when the pointer's arrival nests a control in the target",
@@ -955,7 +961,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           const requests: Array<InputRequest> = [];
 
           const { page } = yield* setup({
-            humanize,
+            performed,
             guard: (request) => Effect.sync(() => requests.push(request)),
           });
 
@@ -1316,7 +1322,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   for (const [label, options] of [
     ["unguarded", {}],
     ["guarded", { guard: () => Effect.void }],
-    ["guarded and humanized", { guard: () => Effect.void, humanize: true }],
+    ["guarded and performed", { guard: () => Effect.void, performed: true }],
   ] as const) {
     it.effect("follows a scroll-spy fragment to an off-screen control, " + label, () =>
       Effect.gen(function* () {

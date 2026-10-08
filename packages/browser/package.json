@@ -85,10 +85,20 @@
       "types": "./dist/Policy.d.mts",
       "default": "./dist/Policy.mjs"
     },
+    "./Presentation": {
+      "@effect-browser/source": "./src/Presentation.ts",
+      "types": "./dist/Presentation.d.mts",
+      "default": "./dist/Presentation.mjs"
+    },
     "./Snapshot": {
       "@effect-browser/source": "./src/Snapshot.ts",
       "types": "./dist/Snapshot.d.mts",
       "default": "./dist/Snapshot.mjs"
+    },
+    "./Stage": {
+      "@effect-browser/source": "./src/Stage.ts",
+      "types": "./dist/Stage.d.mts",
+      "default": "./dist/Stage.mjs"
     },
     "./Supervisor": {
       "@effect-browser/source": "./src/Supervisor.ts",
