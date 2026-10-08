@@ -1349,45 +1349,51 @@ describe("Browserbase.supervise", () => {
     }),
   );
 
-  it.live("ends a writer kept beside the one it adopts, as it would any writer of the context", () =>
-    Effect.gen(function* () {
-      const connectUrl = yield* chromiumEndpoint;
+  it.live(
+    "ends a writer kept beside the one it adopts, as it would any writer of the context",
+    () =>
+      Effect.gen(function* () {
+        const connectUrl = yield* chromiumEndpoint;
 
-      yield* Effect.gen(function* () {
-        const client = yield* BrowserbaseClient;
-        const { id } = yield* createContext;
+        yield* Effect.gen(function* () {
+          const client = yield* BrowserbaseClient;
+          const { id } = yield* createContext;
 
-        // Two writers kept under the name, as a process that ended mid-rotation leaves them.
-        const writer = {
-          ...persisting(id),
-          keepAlive: true,
-          userMetadata: { keptAs: "air", persistsContext: id },
-        };
+          // Two writers kept under the name, as a process that ended mid-rotation leaves them.
+          const writer = {
+            ...persisting(id),
+            keepAlive: true,
+            userMetadata: { keptAs: "air", persistsContext: id },
+          };
 
-        const older = yield* client.createSession(writer);
+          const older = yield* client.createSession(writer);
 
-        yield* Effect.sleep("5 millis");
-        const newer = yield* client.createSession(writer);
+          yield* Effect.sleep("5 millis");
+          const newer = yield* client.createSession(writer);
 
-        const adopted = yield* Effect.flatMap(
-          Browserbase.supervise({ keep: "air", session: persisting(id), contextSettle: "10 millis" }),
-          (sessions) => Effect.map(sessions.browser, (browser) => browser.id),
-        ).pipe(Effect.scoped);
+          const adopted = yield* Effect.flatMap(
+            Browserbase.supervise({
+              keep: "air",
+              session: persisting(id),
+              contextSettle: "10 millis",
+            }),
+            (sessions) => Effect.map(sessions.browser, (browser) => browser.id),
+          ).pipe(Effect.scoped);
 
-        const requests = yield* asked;
+          const requests = yield* asked;
 
-        assert.strictEqual(adopted, newer.id);
-        assert.deepStrictEqual(
-          (yield* kept).map(({ status }) => status),
-          ["COMPLETED", "RUNNING"],
-        );
-        // The older was confirmed ended before the newer was taken on.
-        assert.isBelow(
-          requests.lastIndexOf(`GET /v1/sessions/${older.id}`),
-          requests.indexOf(`GET /v1/sessions/${newer.id}`),
-        );
-      }).pipe(Effect.provide(hostedFake({ connectUrl })));
-    }),
+          assert.strictEqual(adopted, newer.id);
+          assert.deepStrictEqual(
+            (yield* kept).map(({ status }) => status),
+            ["COMPLETED", "RUNNING"],
+          );
+          // The older was confirmed ended before the newer was taken on.
+          assert.isBelow(
+            requests.lastIndexOf(`GET /v1/sessions/${older.id}`),
+            requests.indexOf(`GET /v1/sessions/${newer.id}`),
+          );
+        }).pipe(Effect.provide(hostedFake({ connectUrl })));
+      }),
   );
 
   it.effect("goes down at once on a name it cannot keep sessions under", () =>
