@@ -151,13 +151,18 @@ it.live("a picture of a still page costs one call, on a new document too", () =>
   }).pipe(Effect.scoped),
 );
 
-it.live("a crop costs two calls", () =>
+// A crop is the layout metrics, then the clipped picture. A page's first also reads the screen the
+// page reads, beside the metrics, and holds a copy of it on the page's own session before the
+// picture, so that the crop leaves the screen another session emulates as it was.
+it.live("a crop costs two calls, and a page's first two more to hold its screen", () =>
   Effect.gen(function* () {
     const { proxy, browser } = yield* opened();
     const page = yield* browser.newPage(still("crop"));
 
     yield* page.screenshot({ maxAge: 0 });
-    holds(yield* sentBy(proxy, page.zoom({ x: 10, y: 10, width: 120, height: 90 })), 2, 2);
+    yield* page.snapshot();
+    holds(yield* sentBy(proxy, page.zoom({ x: 10, y: 10, width: 120, height: 90 })), 4, 3);
+    holds(yield* sentBy(proxy, page.zoom({ x: 20, y: 10, width: 120, height: 90 })), 2, 2);
   }).pipe(Effect.scoped),
 );
 

@@ -197,6 +197,87 @@ it.live("keeps a crop's frames out of a running capture, but not the page's own"
   }).pipe(Effect.scoped),
 );
 
+// Another session emulates the page's screen, as a Browserbase session's own does. Chromium takes a
+// crop through the emulation of the session that asks for it and then restores that session's
+// own, so a crop on a session that emulates nothing would leave the page reading Chromium's real
+// screen: here 800x600, and `device-width` queries with it.
+it.live("keeps the screen another session emulates through crops and pictures", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+    const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+    const page = yield* browser.newPage("data:text/html,<h1>Screen</h1>");
+
+    const other = yield* Effect.promise(() =>
+      page.playwright.context().newCDPSession(page.playwright),
+    );
+
+    const reads = Effect.promise(() =>
+      page.playwright.evaluate(() => [
+        screen.width,
+        screen.height,
+        matchMedia("(device-width: 1280px)").matches,
+      ]),
+    );
+
+    yield* Effect.promise(() =>
+      other.send("Emulation.setDeviceMetricsOverride", {
+        width: 0,
+        height: 0,
+        deviceScaleFactor: 0,
+        mobile: false,
+        screenWidth: 1280,
+        screenHeight: 720,
+      }),
+    );
+    assert.deepStrictEqual(yield* reads, [1280, 720, true]);
+    yield* page.zoom({ x: 10, y: 10, width: 160, height: 90 });
+    assert.deepStrictEqual(yield* reads, [1280, 720, true]);
+    yield* page.zoom({ x: 40, y: 20, width: 90, height: 160 });
+    yield* page.screenshot({ maxAge: 0 });
+    assert.deepStrictEqual(yield* reads, [1280, 720, true]);
+  }).pipe(Effect.scoped),
+);
+
+// A picture saves the view's size and the emulation it finds, and restores them once taken, so a
+// second picture taken during a crop would restore the crop's own: the page's view would stay
+// the crop's size. Pictures of a page go one at a time, so another session's whole picture of a
+// still page is the same after two crops asked together.
+it.live("leaves the page's view as it was after crops asked together", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+    const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+
+    const page = yield* browser.newPage(
+      "data:text/html,<body style='margin:0;background:linear-gradient(90deg,white,navy)'><h1>View</h1></body>",
+    );
+
+    const other = yield* Effect.promise(() =>
+      page.playwright.context().newCDPSession(page.playwright),
+    );
+
+    const whole = Effect.promise(() =>
+      other.send("Page.captureScreenshot", { format: "png" }).then(({ data }) => data),
+    );
+
+    yield* page.screenshot({ maxAge: 0 });
+    const before = yield* whole;
+
+    yield* Effect.all(
+      [
+        page.zoom({ x: 10, y: 10, width: 200, height: 100 }),
+        page.zoom({ x: 300, y: 50, width: 120, height: 300 }),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const after = yield* whole;
+
+    assert.isTrue(
+      after === before,
+      `a whole picture went from ${before.length} to ${after.length} B`,
+    );
+  }).pipe(Effect.scoped),
+);
+
 // Animation frames a page runs in a second, read from its own counter.
 const paintRate = (page: Page) =>
   Effect.gen(function* () {

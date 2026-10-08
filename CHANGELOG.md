@@ -148,6 +148,16 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   the caller that acted, is left out.
 - `PageLoaded` comes from the page's own session, as `Navigated` does, so a document's load always
   follows its commit.
+- A crop leaves the page's screen as it was. Chromium takes a clipped picture through the device
+  emulation of the session that asks for it, then restores what that session emulated, so a crop on
+  the page's own session, as over CDP and on Browserbase, cleared a screen another session
+  emulates: on Browserbase, `screen` went from the session's 1280×720 to Chromium's default
+  800×600, `device-width` media queries with it, until the page next navigated to another site. The
+  page's own session now holds a copy of the screen the page reads from the page's first clipped
+  picture on, which costs that picture two more calls, and every later picture restores it.
+- A page's pictures go one at a time. Each restores the view's size it found, so two crops asked
+  together left the page's view at the first one's size: in ten tries of two zooms at once,
+  another session's whole picture of each page then showed only the first region.
 
 ### Breaking
 
@@ -432,9 +442,6 @@ session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `P
   as over CDP and on Browserbase, has frames of the crop's own size, so only those are left out and
   the page's own keep flowing; where Playwright emulates the viewport, every frame from the
   picture's call until 50 ms after its reply is.
-- A crop on the page's own session, as on Browserbase, clears a screen size another session
-  emulates, for the rest of the session: on Browserbase, `screen` went from the session's 1280×720
-  to Chromium's default 800×600, while the viewport and the device pixel ratio stayed as they were.
 - Each page's own session holds focus emulation, so a tab behind another keeps painting whatever
   else is attached. A capture starts once the browser has confirmed it, and fails with `Timeout` at
   the action timeout if a renderer stuck in a script never does.

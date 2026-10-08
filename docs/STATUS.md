@@ -167,7 +167,9 @@
   provenance; a frame read states how old it may be, and whether it must follow the latest input,
   which a screenshot always must, and never shows a document the page has left.
 - Pictures and reads on each page's own protocol session, counted: a picture is one call, or two
-  for a crop or another device pixel ratio; the page script is registered once per page session, so
+  for a crop or another device pixel ratio, and a page's pictures go one at a time; a page's first
+  clipped picture also holds a copy of the screen the page reads, in two more calls, so a crop leaves
+  a screen another session emulates as it was; the page script is registered once per page session, so
   a document's first read is two calls and a warm read one, `ready` included however long the page
   takes, and a wait for a still screen two calls while a capture runs; the library's own clipped
   pictures stay out of a running screencast, which keeps the page's own frames where the crop is on
@@ -270,14 +272,18 @@ and each becoming the next beta.
   reported the session's end. A context's `updatedAt` did not move when a session saved to it, so
   nothing in the API tells when a save has landed, and `contextSettle` stays a fixed wait. And a
   raw crop changed what the page reads as its screen from 1280×720 to 800×600 for the rest of the
-  session, `device-width` media queries with it, while the window stayed 1280×720.
+  session, `device-width` media queries with it, while the window stayed 1280×720. A crop now
+  leaves the screen as it was, in a local repro of that finding: from a page's first clipped
+  picture on, the page's own session holds a copy of the screen the page reads, which every later
+  picture restores. A page's pictures also go one at a time, since two crops at once left the
+  page's view at the first one's size.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 15,782                 | 11,064 → 17,089 | 129 → 186                 |
+| `effect-browser`               | 8,871 → 15,836                 | 11,064 → 17,180 | 129 → 186                 |
 | `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,376     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
@@ -294,7 +300,7 @@ input, 525 source lines, 359 test lines and 9 exports, which deleting `humanize`
 and the fixed sleeps paid for in part; and windows, moments as windows, `stillness` and the page's
 state, 214 source lines, 393 test lines and 4 exports, which deleting `Moment`'s own window,
 `latestFrame` and the browser's own listeners for loads paid for in part; and page-bound tools,
-receipts and the open agent, 250 source lines and 135 test lines, with 4 exports fewer, which
+receipts and the open agent, 248 source lines and 140 test lines, with 4 exports fewer, which
 deleting the hand-written tools, `Page.observe` and its observation types paid for in part, as the
 bench's copy of the agent's loop, 280 lines outside the package, did. Phase 4's contexts,
 resume and keep added 32 source lines and 73 test lines there, the supervisor's `keep`, and the

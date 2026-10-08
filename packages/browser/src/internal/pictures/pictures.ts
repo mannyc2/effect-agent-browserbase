@@ -1,15 +1,15 @@
 /**
  * Pictures of a page: screenshots, frames of a stated age, zooms, and its screencast with the clock
- * that times its frames. A new picture is taken on the page's own protocol session: one call where
- * a device pixel is a CSS pixel and nothing is cropped, and two otherwise, unless Playwright
- * emulates the viewport.
+ * that times its frames. A new picture is taken on the page's own protocol session, one at a time:
+ * one call where a device pixel is a CSS pixel and nothing is cropped, and two otherwise, unless
+ * Playwright emulates the viewport. The page's first clipped picture also holds the screen it reads.
  */
-import { Duration, Effect, Option, Schedule, Schema } from "effect";
+import { Duration, Effect, Option, Schedule, Schema, Semaphore } from "effect";
 
 import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
 import { type FrameOptions, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
-import type { Bridge } from "../page/bridge.ts";
+import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext, reasonOf, undispatched } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import * as Capture from "./capture.ts";
@@ -143,17 +143,61 @@ const calibrator = (page: PageContext, bridge: Bridge) => {
   );
 };
 
+// The screen as the page reads it.
+const ScreenSize = Schema.Struct({ width: Schema.Int, height: Schema.Int });
+
 // A new picture in CSS pixels. Where a device pixel is not a CSS pixel, or for a crop, it is
 // Playwright's clip over fresh layout metrics: document coordinates from the visual viewport's
 // place, and its pinch scale divided by the device's. Chromium draws such a capture into a
 // running screencast, so the capture leaves out what is painted meanwhile.
-const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controller) => {
+//
+// Chromium takes a clipped picture through the device emulation of the session that asks for it,
+// then restores the view's size and what that session emulated. The page's own session emulated
+// nothing, so its crops cleared a screen another session emulates, as Browserbase's own does: so
+// before its first clipped picture, it holds a copy of the screen the page reads, which every later
+// picture restores. And a picture taken during another would restore the other's clip, so they go
+// one at a time.
+const camera = (
+  page: PageContext,
+  bridge: Bridge,
+  viewport: Viewport,
+  capture: Capture.Controller,
+) => {
   const { playwright, settings, native, within } = page;
   const { send } = page.protocol;
   const actionMillis = Duration.toMillis(settings.actionTimeout);
   // Device pixels per CSS pixel, as the page's layout metrics last gave it. A picture taken in one
   // call is checked by its size, so a page whose ratio changes is measured again.
   let ratio = 1;
+  const alone = Semaphore.makeUnsafe(1).withPermits(1);
+  let screenHeld = false;
+
+  // The copy has the screen alone: the view keeps its own size, and the device its pixel ratio.
+  const holdScreen = (operation: string) =>
+    Effect.suspend(() =>
+      screenHeld
+        ? Effect.void
+        : bridge.evaluate(operation, scriptCall("screenSize")).pipe(
+            Effect.flatMap(decodeWith(operation, ScreenSize)),
+            Effect.flatMap(({ width, height }) =>
+              native(operation, () =>
+                send("Emulation.setDeviceMetricsOverride", {
+                  width: 0,
+                  height: 0,
+                  deviceScaleFactor: 0,
+                  mobile: false,
+                  screenWidth: width,
+                  screenHeight: height,
+                }),
+              ).pipe(alone),
+            ),
+            Effect.andThen(
+              Effect.sync(() => {
+                screenHeld = true;
+              }),
+            ),
+          ),
+    );
 
   const decoded = (operation: string, data: Uint8Array) => {
     const size = jpegSize(data);
@@ -175,6 +219,7 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
         ...(clip === undefined ? {} : { clip }),
       }),
     ).pipe(
+      alone,
       untilPainted,
       Effect.flatMap(({ data }) => decoded(operation, Buffer.from(data, "base64"))),
     );
@@ -193,6 +238,7 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
         }),
       actionMillis,
     ).pipe(
+      alone,
       untilPainted,
       Effect.flatMap((data) => decoded(operation, data)),
     );
@@ -206,8 +252,7 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
         whole = yield* jpeg(operation, quality);
         if (whole.width === known?.width && whole.height === known.height) return whole;
       }
-      // A clipped capture restores its own session's device emulation afterwards, which would
-      // clear the viewport Playwright emulates on its session, so there Playwright takes it.
+      // Where Playwright emulates the viewport, on its own session, its own picture restores it.
       const emulated = playwright.viewportSize();
 
       if (emulated !== null) {
@@ -216,8 +261,14 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
         return yield* capture.excluding(emulatedJpeg(operation, quality, crop));
       }
 
-      const metrics = yield* native(operation, () => send("Page.getLayoutMetrics")).pipe(
-        Effect.flatMap(decodeWith(operation, LayoutMetrics)),
+      const [metrics] = yield* Effect.all(
+        [
+          native(operation, () => send("Page.getLayoutMetrics")).pipe(
+            Effect.flatMap(decodeWith(operation, LayoutMetrics)),
+          ),
+          crop === undefined ? Effect.void : holdScreen(operation),
+        ],
+        { concurrency: 2 },
       );
 
       const measured = metrics.contentSize.width / metrics.cssContentSize.width;
@@ -232,6 +283,8 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
       }
       const rect = crop ?? { x: 0, y: 0, ...(known ?? (yield* viewport.viewportFor(operation))) };
       const { pageX, pageY, scale } = metrics.cssVisualViewport;
+
+      yield* holdScreen(operation);
 
       // A crop on this session draws its frames at the crop's own size, so only those leave the
       // capture, and the page's own keep flowing.
@@ -332,7 +385,7 @@ export const make = Effect.fnUntraced(function* (
     error,
   });
 
-  const picture = camera(page, viewport, capture);
+  const picture = camera(page, bridge, viewport, capture);
   const reusable = reuse(page, viewport, capture);
   // Pictures in flight are shared, never kept: their callers say how old one may be.
   const screenshots = lane.shared<Image>("screenshot", false);

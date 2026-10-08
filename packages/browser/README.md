@@ -497,14 +497,18 @@ final paint or later input never presents older paint as the page an action left
 A new picture goes on the page's own protocol session. Where a device pixel is a CSS pixel and
 nothing is cropped, it is one `Page.captureScreenshot`; a crop, or another device pixel ratio, adds
 the page's layout metrics for Playwright's clip formula. Where Playwright knows no viewport, as in
-the default context over CDP, the page's first picture also learns it. Where Playwright emulates the viewport, as `Chromium.layer` does, a crop or a
-scaled picture is Playwright's own screenshot, on its own session: a clipped capture on another
-session would clear that emulation when it restores its own. Such a picture sends Playwright's
-335 KB injected script with a document's first one, as it would over CDP once a caller gives
-Playwright a viewport. A crop on the page's own session, as on Browserbase, likewise clears a
-screen size another session emulates, for the rest of the session: on Browserbase, `screen` went
-from the session's 1280×720 to Chromium's default 800×600, while the viewport and the device pixel
-ratio stayed as they were.
+the default context over CDP, the page's first picture also learns it. Chromium takes a clipped
+picture through the device emulation of the session that asks for it, then restores the view's size
+and what that session emulated, so a page's pictures go one at a time. Where Playwright emulates the
+viewport, as `Chromium.layer` does, a crop or a scaled picture is Playwright's own screenshot, on its
+own session, which sends Playwright's 335 KB injected script with a document's first one, as it
+would over CDP once a caller gives Playwright a viewport. Elsewhere, as on Browserbase, whose own
+session emulates the screen, the page's own session holds a copy of the screen the page reads from
+the page's first clipped picture on, at two calls once, so a crop leaves the screen as it was, and
+`device-width` media queries with it. The copy is the screen as the page read it then, and every
+later picture restores it, so a session that changes the screen afterwards sees its change undone.
+When the library's session leaves the page, as when a kept session's process ends, Chromium clears
+the emulation, as a crop used to.
 
 Reads go to the page script in an isolated world. The page's own session registers the script at the
 library's first read of the page, so every later document runs it from its start: a document's
