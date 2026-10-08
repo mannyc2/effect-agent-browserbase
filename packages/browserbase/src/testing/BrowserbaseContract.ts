@@ -78,12 +78,20 @@ export const checks: ReadonlyArray<Check> = [
       yield* expect(again.status === "COMPLETED", `released twice, it is ${again.status}`);
     }),
   ),
-  check("an unknown session is not found", (expect) =>
+  check("a well-formed id no session has is not found", (expect) =>
+    Effect.gen(function* () {
+      const client = yield* BrowserbaseClient;
+      const read = yield* failure(client.getSession("00000000-0000-4000-8000-000000000000"));
+
+      yield* expect(read === "NotFound", `reading it failed with ${read}`);
+    }),
+  ),
+  check("a session id of another shape is refused as invalid", (expect) =>
     Effect.gen(function* () {
       const client = yield* BrowserbaseClient;
       const read = yield* failure(client.getSession("not-a-session-of-this-project"));
 
-      yield* expect(read === "NotFound", `reading it failed with ${read}`);
+      yield* expect(read === "InvalidRequest", `reading it failed with ${read}`);
     }),
   ),
   check("sessions are found by status and user metadata", (expect) =>
@@ -93,19 +101,29 @@ export const checks: ReadonlyArray<Check> = [
       const session = yield* client.createSession({ timeout: 60, userMetadata: { label } });
       const query = (value: string) => `user_metadata['label']:'${value}'`;
 
-      const found = yield* client.listSessions({ status: "RUNNING", query: query(label) });
-      const other = yield* client.listSessions({ status: "RUNNING", query: query(`${label}-x`) });
+      // A new session is PENDING or RUNNING, and may change between the two queries, so the
+      // package looks under both statuses; a check of one alone would fail a compliant API.
+      const running = (value: string) =>
+        Effect.map(
+          Effect.forEach(["PENDING", "RUNNING"], (status) =>
+            client.listSessions({ status, query: query(value) }),
+          ),
+          (found) => new Set(found.flat().map(({ id }) => id)),
+        );
+
+      const found = yield* running(label);
+      const other = yield* running(`${label}-x`);
 
       yield* client.releaseSession(session.id);
       yield* ended(client, session.id);
-      const gone = yield* client.listSessions({ status: "RUNNING", query: query(label) });
+      const gone = yield* running(label);
 
       yield* expect(
-        found.map(({ id }) => id).join() === session.id,
-        `${found.length} running sessions had its label`,
+        found.size === 1 && found.has(session.id),
+        `${found.size} unended sessions had its label`,
       );
-      yield* expect(other.length === 0, `${other.length} sessions had another label`);
-      yield* expect(gone.length === 0, `${gone.length} still ran once it had ended`);
+      yield* expect(other.size === 0, `${other.size} sessions had another label`);
+      yield* expect(gone.size === 0, `${gone.size} still ran once it had ended`);
     }),
   ),
   check("a stored context reads back, and is gone once deleted", (expect) =>

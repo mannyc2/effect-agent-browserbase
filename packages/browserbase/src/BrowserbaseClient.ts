@@ -252,6 +252,7 @@ const statusReason = (status: number, detail: string): Reason => {
       detail: "redirected; redirects are refused so the API key stays with Browserbase",
     });
   }
+  if (status === 400) return new InvalidRequest({ detail });
   if (status === 401 || status === 403) return new Unauthorized({ detail });
   if (status === 404) return new NotFound({ detail });
   if (status === 429) return new RateLimited({ detail });

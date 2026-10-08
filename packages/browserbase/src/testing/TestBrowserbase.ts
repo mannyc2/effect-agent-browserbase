@@ -147,7 +147,7 @@ interface Fake {
   readonly requests: Array<string>;
   readonly sessions: Map<string, Row>;
   readonly contexts: Map<string, number>;
-  /** How many sessions and contexts it has made, for their ids. */
+  /** How many sessions and contexts it has made, together, for their ids. */
   readonly made: { count: number };
 }
 
@@ -248,6 +248,9 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
   if (request.headers["x-bb-api-key"] !== apiKey)
     return answer(401, { message: "Invalid API key" });
   if (version !== "v1") return unsupported(`serves only /v1, not ${url.pathname}`);
+  // Browserbase refuses a session id that is not a UUID before it looks for the session.
+  if (kind === "sessions" && id !== undefined && !uuid.test(id))
+    return answer(400, { message: "Invalid Session ID" });
 
   switch (
     `${request.method} ${kind}${id === undefined ? "" : " id"}${rest === undefined ? "" : ` ${rest}`}`
@@ -267,7 +270,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
       const createdAt = fake.now();
 
       const created: Row = {
-        id: `session-${++fake.made.sessions}`,
+        id: nextId(fake),
         createdAt,
         expiresAt: createdAt + (body?.timeout ?? 300) * 1000,
         keepAlive: body?.keepAlive ?? false,
@@ -334,7 +337,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
       return reply._tag === "Lost" ? lost : answer(200, describe(fake, row, false));
     }
     case "POST contexts": {
-      const created = `context-${++fake.made.contexts}`;
+      const created = nextId(fake);
 
       fake.contexts.set(created, fake.now());
 
@@ -382,7 +385,7 @@ export const make = Effect.fnUntraced(function* (script: Script = {}) {
     requests: [],
     sessions: new Map(),
     contexts: new Map(),
-    made: { sessions: 0, contexts: 0 },
+    made: { count: 0 },
   };
 
   const handle: Handle = {
