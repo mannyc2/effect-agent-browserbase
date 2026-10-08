@@ -123,6 +123,9 @@ session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `P
   as over CDP and on Browserbase, has frames of the crop's own size, so only those are left out and
   the page's own keep flowing; where Playwright emulates the viewport, every frame from the
   picture's call until 50 ms after its reply is.
+- A crop on the page's own session, as on Browserbase, clears a screen size another session
+  emulates, for the rest of the session: on Browserbase, `screen` went from the session's 1280×720
+  to Chromium's default 800×600, while the viewport and the device pixel ratio stayed as they were.
 - Each page's own session holds focus emulation, so a tab behind another keeps painting whatever
   else is attached. A capture starts once the browser has confirmed it, and fails with `Timeout` at
   the action timeout if a renderer stuck in a script never does.

@@ -326,7 +326,10 @@ the default context over CDP, the page's first picture also learns it. Where Pla
 scaled picture is Playwright's own screenshot, on its own session: a clipped capture on another
 session would clear that emulation when it restores its own. Such a picture sends Playwright's
 335 KB injected script with a document's first one, as it would over CDP once a caller gives
-Playwright a viewport.
+Playwright a viewport. A crop on the page's own session, as on Browserbase, likewise clears a
+screen size another session emulates, for the rest of the session: on Browserbase, `screen` went
+from the session's 1280×720 to Chromium's default 800×600, while the viewport and the device pixel
+ratio stayed as they were.
 
 Reads go to the page script in an isolated world. The page's own session registers the script at the
 library's first read of the page, so every later document runs it from its start: a document's
