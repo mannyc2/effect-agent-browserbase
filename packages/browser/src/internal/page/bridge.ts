@@ -6,7 +6,7 @@
  * the order they depend on one another. At the first read of a page's changes, its session
  * registers the recorder too, so every later document records from its start.
  */
-import { Effect, Semaphore } from "effect";
+import { Effect, Schema, Semaphore } from "effect";
 
 import { type BrowserError, Failed } from "../../BrowserError.ts";
 import { Navigated } from "../../BrowserEvent.ts";
@@ -133,6 +133,40 @@ const missing = "effect-browser: no __effectBrowser in this world";
 const isMissing = (error: BrowserError) =>
   error.reason._tag === "Failed" && error.reason.detail === missing;
 
+/** A frame as a page session reports its commit. */
+export const Commit = Schema.Struct({
+  parentId: Schema.optionalKey(Schema.String),
+  loaderId: Schema.String,
+  url: Schema.String,
+  urlFragment: Schema.optionalKey(Schema.String),
+});
+
+/** `Page.frameNavigated` or `Page.navigatedWithinDocument`, as far as `mainFrame` reads them. */
+export const MainFrameEvent = Schema.Union([
+  Schema.Struct({ frame: Commit }),
+  Schema.Struct({ frameId: Schema.String, url: Schema.String }),
+]);
+
+/** A commit's loader and its address, redacted. */
+export const commitOf = ({ loaderId, url, urlFragment = "" }: typeof Commit.Type) => ({
+  loader: loaderId,
+  url: Url.redact(url + urlFragment),
+});
+
+/**
+ * What a page session's commit or move says of `page`'s main frame: a new document's `loader` and
+ * its address, or a move's address; nothing for another frame. Only a commit is a new document:
+ * `frameStartedLoading` also fires on `pushState`, a move within the document.
+ */
+export const mainFrame = (page: string, event: typeof MainFrameEvent.Type) =>
+  "frame" in event
+    ? event.frame.parentId === undefined
+      ? commitOf(event.frame)
+      : undefined
+    : event.frameId === page
+      ? { loader: undefined, url: Url.redact(event.url) }
+      : undefined;
+
 /** A call to the page script, its arguments quoted as JavaScript literals. */
 export const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
@@ -154,28 +188,28 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   // sees the same commits, and numbers its frames by them.
   const loaders = new Map<string, number>();
 
-  const navigated = (next: string, sameDocument: boolean) => {
-    url = Url.redact(next);
+  const onMainFrame = (event: typeof MainFrameEvent.Type) => {
+    const seen = mainFrame(id, event);
+
+    if (seen === undefined) return;
+    if (seen.loader !== undefined) {
+      documents++;
+      loaders.delete(seen.loader);
+      loaders.set(seen.loader, documents);
+      const [oldest] = loaders.keys();
+
+      if (loaders.size > 8 && oldest !== undefined) loaders.delete(oldest);
+      page.activity.documentAt = now();
+      world = undefined;
+    }
+    url = seen.url;
+    const sameDocument = seen.loader === undefined;
+
     publish(new Navigated({ at: now(), page: id, url, document: documents, sameDocument }));
   };
 
-  // Only a commit is a new document: `frameStartedLoading` also fires on `pushState`, which the
-  // main frame reports as a navigation within its document.
-  cdp.on("Page.frameNavigated", ({ frame }) => {
-    if (frame.parentId !== undefined) return;
-    documents++;
-    loaders.delete(frame.loaderId);
-    loaders.set(frame.loaderId, documents);
-    const [oldest] = loaders.keys();
-
-    if (loaders.size > 8 && oldest !== undefined) loaders.delete(oldest);
-    page.activity.documentAt = now();
-    world = undefined;
-    navigated(frame.url + (frame.urlFragment ?? ""), false);
-  });
-  cdp.on("Page.navigatedWithinDocument", (moved) => {
-    if (moved.frameId === id) navigated(moved.url, true);
-  });
+  cdp.on("Page.frameNavigated", onMainFrame);
+  cdp.on("Page.navigatedWithinDocument", onMainFrame);
 
   /**
    * The main-frame commits seen so far, once the Page domain, which registration turned on, has
