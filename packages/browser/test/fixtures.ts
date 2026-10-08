@@ -1,6 +1,7 @@
 // Pages for the tests, served from loopback: an order form, a canvas slot machine, a canvas
-// price chart, a price table, a long page with pinned parts, and an account form. The slot machine
-// has no DOM controls at all, so only point input can play it.
+// price chart, a price table, a long page with pinned parts, an account form, and a red page that
+// keeps painting beside a blue one the server answers late. The slot machine has no DOM controls
+// at all, so only point input can play it.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -129,7 +130,18 @@ const account = `<!doctype html><title>Account</title>
 <table><tr><th>Plan</th><th>Price</th></tr><tr><td>Pro</td><td>$9</td></tr></table>
 <section role="region" aria-label="Story"><p>First part</p><div style="height:2000px"></div><p>Last part</p></section>`;
 
+// Going from the first to the second, the first keeps painting until the second's document
+// commits, 300 ms on, so its own frames are the newest when the navigation returns.
+const spinning = `<!doctype html><title>Spinning</title>
+<body style="margin:0;height:100vh;background:rgb(255,0,0)">
+<div id="square" style="width:40px;height:40px;background:#000"></div>
+<script>let turn = 0; (function spin() { square.style.rotate = turn++ * 6 + "deg"; requestAnimationFrame(spin); })();</script>`;
+
+const late = `<!doctype html><title>Late</title><body style="margin:0;height:100vh;background:rgb(0,0,255)">`;
+
 const pages: Record<string, string> = {
+  "/spinning": spinning,
+  "/late": late,
   "/ticker": ticker,
   "/pinned": pinned,
   "/account": account,
@@ -153,10 +165,15 @@ export const SiteLayer = Layer.effect(
         const server = createServer((request, response) => {
           const page = pages[request.url ?? ""];
 
-          response.writeHead(page === undefined ? 404 : 200, {
-            "content-type": "text/html; charset=utf-8",
-          });
-          response.end(page ?? "<title>Not found</title>");
+          const answer = () => {
+            response.writeHead(page === undefined ? 404 : 200, {
+              "content-type": "text/html; charset=utf-8",
+            });
+            response.end(page ?? "<title>Not found</title>");
+          };
+
+          if (request.url === "/late") setTimeout(answer, 300);
+          else answer();
         });
 
         server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));

@@ -178,6 +178,11 @@ const busy = `<h1 style="font-size:80px">Busy</h1><script>
   setTimeout(spin, 50);
 </script>`;
 
+// One task holds the renderer for longer than the clock's whole deadline.
+const blocked = `<h1 style="font-size:80px">Blocked</h1><script>
+  setTimeout(() => { const end = performance.now() + 6000; while (performance.now() < end) {} }, 50);
+</script>`;
+
 const busyContext = Effect.fnUntraced(function* () {
   const native = (yield* Browser).context.browser();
 
@@ -577,12 +582,30 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("fails a busy page's first capture, undispatched, only while no mapping exists", () =>
+    it.effect("starts a busy page's first capture with the clock probes it answered in time", () =>
       Effect.gen(function* () {
         const browser = yield* busyContext();
         const page = yield* browser.newPage();
 
         yield* Effect.promise(() => page.playwright.setContent(busy));
+        yield* Effect.sleep("300 millis");
+        const frame = (yield* firstFrame(page))[0];
+
+        // Each probe waited behind a task of up to 800 ms, and the frame's uncertainty says so.
+        assert.isAtMost(frame?.timing.uncertaintyMillis ?? Infinity, 450);
+        assert.isAtMost(
+          frame?.hostTime ?? Infinity,
+          (frame?.receivedAt ?? 0) + (frame?.timing.uncertaintyMillis ?? 0) + 5,
+        );
+      }),
+    );
+
+    it.effect("fails a page's first capture, undispatched, when the page answers no probe", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext();
+        const page = yield* browser.newPage();
+
+        yield* Effect.promise(() => page.playwright.setContent(blocked));
         yield* Effect.sleep("300 millis");
         const error = yield* firstFrame(page).pipe(Effect.flip);
 
@@ -590,6 +613,49 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         if (error._tag !== "BrowserError") return;
         assert.strictEqual(error.operation, "calibrate");
         assert.isFalse(error.dispatched);
+      }),
+    );
+
+    // A renderer stuck in a script never confirms focus emulation; here its reply is withheld.
+    it.effect("fails a capture's start, undispatched, when focus emulation goes unconfirmed", () =>
+      Effect.gen(function* () {
+        const native = (yield* Browser).context.browser();
+
+        if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+        const context = yield* Effect.acquireRelease(
+          Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+          (context) => Effect.promise(() => context.close()),
+        );
+
+        const createSession = context.newCDPSession.bind(context);
+
+        context.newCDPSession = async (target) => {
+          const cdp = await createSession(target);
+          const send = cdp.send.bind(cdp);
+
+          cdp.send = ((method: string, params?: object) =>
+            method === "Emulation.setFocusEmulationEnabled"
+              ? new Promise<never>(() => {})
+              : send(method as never, params as never)) as typeof cdp.send;
+
+          return cdp;
+        };
+
+        const browser = yield* makeBrowser(
+          context,
+          { id: "unfocused", provider: "test" },
+          { actionTimeout: Duration.seconds(1) },
+        );
+
+        const error = yield* firstFrame(yield* browser.newPage()).pipe(Effect.flip);
+
+        assert.deepStrictEqual(
+          error._tag === "BrowserError"
+            ? [error.operation, error.reason._tag, error.dispatched]
+            : error._tag,
+          ["focus", "Timeout", false],
+        );
       }),
     );
 

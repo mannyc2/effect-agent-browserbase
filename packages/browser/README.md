@@ -311,7 +311,10 @@ frame must also follow the page's latest submitted input, including input of an 
 while no action is changing the page: what a caller that has just acted needs. `Page.screenshot`
 always applies that rule, so a caller that acts and then looks sees what its action did; a deck or a
 narrator that wants a picture of a stated age reads `frame`. A screencast sends only changes and can
-miss a final paint, so a frame is only ever as current as its age. Otherwise a new screenshot is
+miss a final paint, so a frame is only ever as current as its age. No read reuses a frame painted
+before the page's current document began, when the page's own session saw its main frame commit
+it: a page that keeps painting while the next document loads would otherwise leave its own frames
+the newest when the navigation returns. Otherwise a new screenshot is
 taken, which `frame` returns as a `Screenshot`-timed frame. `observe` takes a screenshot and a
 `Moment`'s last frame uses `after: "input"`, so a stopped capture, a lost final paint or later input
 never presents older paint as the page an action left.
@@ -321,7 +324,12 @@ nothing is cropped, it is one `Page.captureScreenshot`; a crop, or another devic
 the page's layout metrics for Playwright's clip formula. Where Playwright knows no viewport, as in
 the default context over CDP, the page's first picture also learns it. Where Playwright emulates the viewport, as `Chromium.layer` does, a crop or a
 scaled picture is Playwright's own screenshot, on its own session: a clipped capture on another
-session would clear that emulation when it restores its own.
+session would clear that emulation when it restores its own. Such a picture sends Playwright's
+335 KB injected script with a document's first one, as it would over CDP once a caller gives
+Playwright a viewport. A crop on the page's own session, as on Browserbase, likewise clears a
+screen size another session emulates, for the rest of the session: on Browserbase, `screen` went
+from the session's 1280×720 to Chromium's default 800×600, while the viewport and the device pixel
+ratio stayed as they were.
 
 Reads go to the page script in an isolated world. The page's own session registers the script at the
 library's first read of the page, so every later document runs it from its start: a document's
@@ -334,11 +342,15 @@ reused by later outlines, so read `subject` rather than resolving `target` again
 
 Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its
 pages. Opening a browser measures nothing: the browser's first capture measures the mapping, with
-three read-only probes in a world of their own, and waits for that one estimate. A later capture
-starts with the estimate there is and, once it is ten seconds old, measures again alongside, for the
-captures after it. A busy page's capture fails, undispatched, only while its browser has no estimate
-at all. An estimate says less about the offset as it ages, by up to 100 parts per million of its
-age, and a frame carries the uncertainty of its capture's estimate at its paint. A new measurement
+three read-only probes in a world of their own, and waits for that one estimate. A busy page answers
+each probe late, behind its own work, so the probes it answered within two seconds serve: the
+estimate is as uncertain as the page made the wait, and the capture fails, undispatched, only if
+the page answered none. A later capture starts with the estimate there is. While frames flow, a
+capture measures again once the estimate is ten seconds old, and every frame is timed by the
+browser's newest estimate, so a wide first estimate narrows once a probe finds the page idle, and
+hours on air leave frames as certain as a fresh capture's. An estimate says less about the offset
+as it ages, by up to 100 parts per million of its age, and a frame carries its estimate's
+uncertainty at its paint. A new measurement
 replaces the estimate only if it says more about the offset than the aged one, or if its interval
 cannot contain the current offset (the clocks moved); a probe slowed by one busy tab cannot skew
 every tab's stamps. Transport asymmetry remains in the reported uncertainty.
@@ -362,15 +374,21 @@ returning drops them, while the page reporting a viewport of their size, or thei
 delivers them as a real resize, so a page that cannot answer, or that measures in other units as
 under browser zoom, is never stalled. `foreignSize` therefore also counts some of the page's own
 frames: those of a new size still unconfirmed when another size replaced it, when the capture
-stopped, or beyond the 16 held. The library's own clipped pictures are left out by time instead:
-every frame painted or delivered from the picture's call until 50 ms after its reply is dropped,
-the page's own included, so a crop with the viewport's own proportions never reaches readers
-either. Such a crop
-taken by someone else still passes where Chromium keeps the device's size during the capture, as in
-browsers launched through Playwright, `Chromium.layer` included.
+stopped, or beyond the 16 held. The library's own clipped pictures are left out while they are
+taken: from the picture's call until 50 ms after its reply, by when a frame arrived or by its paint
+time widened by the clock's uncertainty either side. A crop on the page's own session, as over CDP
+and on Browserbase, is drawn at the crop's own size, so there only frames of another size are left
+out, and the page's own keep reaching readers. Where Playwright emulates the viewport, as
+`Chromium.layer` does, a crop keeps the device's size, so every frame in that window is left out,
+the page's own included: the capture pauses for the picture's round trip, plus 50 ms, plus twice
+the clock's uncertainty, about 100 ms a zoom locally, and a crop with the viewport's own
+proportions never reaches readers either. A clip someone else takes passes where Chromium keeps
+the device's size during it and the clip has the viewport's proportions, and on a page that paints
+nothing after it, a clip of any shape lasts long enough to pass for a resize.
 Each page's own session holds focus emulation, so a tab behind another keeps painting and its
 capture keeps delivering, whatever else is attached; a capture starts once the browser has
-confirmed it.
+confirmed it, and fails with `Timeout` at the action timeout if a renderer stuck in a script never
+does.
 Concurrent readers share one native screencast and its quality and size: a reader without options
 joins whatever is running, and one whose explicit options differ fails with `InvalidRequest` rather
 than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
@@ -475,9 +493,9 @@ makes on its own sessions, such as navigation, are not counted. `Chromium.launch
 `Browser.newPage` cover opening a browser; `Browserbase.open` records its session's id and region,
 `Browserbase.release` a release and its outcome, and `Browserbase.holdContext` the wait for a
 stored context another session writes to. `Page.calibrateClock` maps the browser's clock onto the
-host's with three probes, each a `Page.evaluate` of `clock`, and records the fastest probe's
-`roundTripMillis`: the round trip to the browser. One that runs alongside a capture shows its
-failure only there.
+host's with three probes, each a `Page.evaluate` of `clock`, and records the fastest answered
+probe's `roundTripMillis`: the round trip to the browser, plus any wait behind the page's own work.
+One that runs alongside a capture shows its failure only there.
 
 Spans never carry typed text. A tool span keeps a browser tool's parameters with `text` replaced by
 `redacted`, and only the names of any other tool's parameters, which may hold anything; a script

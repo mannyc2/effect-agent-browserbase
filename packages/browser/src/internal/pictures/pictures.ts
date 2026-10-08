@@ -68,7 +68,10 @@ const untilPainted = <A, R>(capture: Effect.Effect<A, BrowserError, R>) =>
 /**
  * Measure this page's clock against the browser's, in a world without the page script: no DOM
  * markers, input, navigation or extra tabs. Each of three probes reads the browser's time between
- * two stamps of the owner's clock, and the fastest bounds the offset best.
+ * two stamps of the owner's clock, and the fastest bounds the offset best. A busy page answers each
+ * probe late, behind its own work, so the probes that answered within two seconds serve, and the
+ * measurement fails only if none did: a wide estimate keeps a capture going, and a renewal while
+ * its frames flow narrows it.
  */
 const calibrator = (page: PageContext, bridge: Bridge) => {
   const { native, now, within } = page;
@@ -99,12 +102,26 @@ const calibrator = (page: PageContext, bridge: Bridge) => {
       return { hostStart, hostEnd, browserTime };
     });
 
-  return bridge.bareWorld("calibrate").pipe(
-    Effect.flatMap((contextId) =>
-      Effect.all([probe(contextId), probe(contextId), probe(contextId)]).pipe(
+  const answered = (contextId: number) =>
+    Effect.gen(function* () {
+      const probes: Array<BrowserClock.Probe> = [];
+
+      yield* Effect.forEach(
+        [1, 2, 3],
+        () => Effect.map(probe(contextId), (one) => probes.push(one)),
+        {
+          discard: true,
+        },
+      ).pipe(
         within("calibrate", Duration.seconds(2)),
-      ),
-    ),
+        Effect.catch((error) => (probes.length === 0 ? Effect.fail(error) : Effect.void)),
+      );
+
+      return probes;
+    });
+
+  return bridge.bareWorld("calibrate").pipe(
+    Effect.flatMap(answered),
     Effect.flatMap((probes) =>
       Option.match(BrowserClock.estimate(probes), {
         onNone: () =>
@@ -215,6 +232,8 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
       const rect = crop ?? { x: 0, y: 0, ...(known ?? (yield* viewport.viewportFor(operation))) };
       const { pageX, pageY, scale } = metrics.cssVisualViewport;
 
+      // A crop on this session draws its frames at the crop's own size, so only those leave the
+      // capture, and the page's own keep flowing.
       return yield* capture.excluding(
         jpeg(operation, quality, {
           x: pageX + rect.x,
@@ -223,6 +242,7 @@ const camera = (page: PageContext, viewport: Viewport, capture: Capture.Controll
           height: Math.floor(rect.height / scale + 1e-3),
           scale: scale / ratio,
         }),
+        crop !== undefined,
       );
     }).pipe(within(operation));
 };
@@ -232,10 +252,11 @@ const millisOf = (input: Duration.Input) =>
   Option.match(Duration.fromInput(input), { onNone: () => Number.NaN, onSome: Duration.toMillis });
 
 // The newest screencast frame, if it shows the page as the caller asked: painted at most `maxAge`
-// ago at the earliest its timing allows, and with `after: "input"` after the page's latest input
-// while no action is changing the page. It must have the viewport's size, as a new picture would.
-// A screencast sends only changes and can miss a final paint, so a frame is only ever as current
-// as its age.
+// ago at the earliest its timing allows, after the current document began, and with
+// `after: "input"` after the page's latest input while no action is changing the page. It must
+// have the viewport's size, as a new picture would. A screencast sends only changes and can miss a
+// final paint, so a frame is only ever as current as its age, and a page that keeps painting while
+// the next document loads leaves its own frames newest when the navigation returns.
 const reuse =
   (page: PageContext, viewport: Viewport, capture: Capture.Controller) =>
   (operation: string, options: FrameOptions) =>
@@ -256,6 +277,7 @@ const reuse =
 
         return (
           page.now() - earliest <= maxAge &&
+          earliest > activity.documentAt &&
           (options.after !== "input" || (activity.changing === 0 && earliest > activity.inputAt)) &&
           frame.width === known?.width &&
           frame.height === known.height
@@ -274,7 +296,6 @@ export const make = Effect.fnUntraced(function* (
   const { id, cdp, clock, playwright, settings, mapping, now, span, owned, lock, within } = page;
   const { send } = page.protocol;
   const calibrateClock = calibrator(page, bridge);
-  const pageScope = yield* Effect.scope;
 
   // Input and capture share the owner's monotonic clock; caller-provided clocks cannot move it.
   // Registration measures nothing: a page that is busy while it opens, such as a popup running
@@ -285,14 +306,17 @@ export const make = Effect.fnUntraced(function* (
     cdp,
     send,
     clock,
-    // A capture starts once the page's own session keeps it painting behind other tabs, and with
-    // the browser's clock mapped. Only a browser's first capture waits for a measurement; a later
-    // one starts with the estimate there is and, once it is ten seconds old, measures again
-    // alongside, for later captures. A failure there shows in its `Page.calibrateClock` span.
-    calibrate: page.focused.pipe(
-      Effect.andThen(mapping.current(calibrateClock)),
-      Effect.tap(() => Effect.forkIn(mapping.renew(calibrateClock), pageScope)),
-    ),
+    // A capture starts once the page's own session keeps it painting behind other tabs, which a
+    // renderer stuck in a script never confirms, and with the browser's clock mapped. Only a
+    // browser's first capture waits for a measurement; every frame takes the newest estimate.
+    calibrate: page.focused.pipe(within("focus"), Effect.andThen(mapping.current(calibrateClock))),
+    latest: mapping.latest,
+    // Once the estimate is ten seconds old, the page measures again while its frames flow. A
+    // failure there shows in its `Page.calibrateClock` span, and the estimate stays.
+    renew: mapping.renew(calibrateClock),
+    // Frames are reused only after the current document began, which the page's own session sees
+    // only with the Page domain on: a read turns it on, and so does a capture as it starts.
+    watch: bridge.currentDocument("screencast"),
     frameHistory: settings.frameHistory,
     viewport: Effect.suspend(() => viewport.viewportFor("screencast")),
     onClose: (listener) => {

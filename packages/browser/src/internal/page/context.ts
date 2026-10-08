@@ -217,8 +217,10 @@ export const make = (options: MakeOptions, lock: Semaphore.Semaphore) => {
   // Actions that have started changing the page and not yet ended, and the latest submitted input
   // or page change. While an action runs no cached paint is current; afterwards only paint from
   // after its latest input is. An action ends after its input was handled, so if that input changed
-  // the page, newer paint follows; a lost final paint is bounded by recency instead.
-  const activity = { changing: 0, inputAt: 0 };
+  // the page, newer paint follows; a lost final paint is bounded by recency instead. Paint from
+  // before the current document began, when the page's own session saw the main frame commit it,
+  // shows a page the tab has left, so no read reuses it, whatever it asks.
+  const activity = { changing: 0, inputAt: 0, documentAt: Number.NEGATIVE_INFINITY };
 
   const noteInput = () => {
     activity.inputAt = Math.max(activity.inputAt, now());
