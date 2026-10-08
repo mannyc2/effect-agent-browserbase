@@ -247,7 +247,7 @@ and each becoming the next beta.
   outline's links too, and replay goes to an address it withheld only where told; and a lost
   create's session is found by its own nonce and ended. Its beta, `0.3.0-beta.2`, is prepared in
   the changelog and the package versions, and is not tagged.
-- **Phase 3, concurrency and presentation, is under way.** Per-page admission has landed: the
+- **Phase 3, concurrency and presentation, is built.** Per-page admission has landed: the
   browser-wide input lock is gone, reads follow the action in flight and keep their work, a wait
   fails `Busy`, pages have a budget, and guarded typing approves its field once. So have the stage,
   the presenter and the wait after input: `humanize` and its fixed sleeps are gone. And so have
@@ -256,7 +256,13 @@ and each becoming the next beta.
   `stillness`, and `page.state`. The agent then moved onto Yielded Agent: `effect-browser-agent`
   implements its browser ports over pages, with the tab following and the receipts of what an
   action caused that the phase built for its own tools, and the bench's arms are Yielded agents.
-  The phase's own agent loop, its tools, their page operation contracts and RPC group went.
+  The phase's own agent loop, its tools, their page operation contracts and RPC group went. The
+  phase's simplify pass took out `Page.waitForText`, which `waitFor` replaced, with its page-side
+  wait, and killed the two of its fifteen planted bugs that the suite let through: a switch that
+  turned on the stage while input on the old page was still under way, and a failure after an
+  action's input went reported to a model as not dispatched. It had no adversarial review of its
+  own. Its beta, `0.3.0-beta.3`, is prepared in the changelog and the package versions, and is not
+  tagged.
 - **Phase 4, contexts and follow-ups, has begun.** Stored contexts are durable across processes:
   `ContextLease` replaces the process-wide record of writers, `verifyContext` reads a login back,
   `attach` resumes a session from another process, and `supervise({ keep })` leaves a session
@@ -281,8 +287,8 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 14,682                 | 11,064 → 15,409 | 129 → 159                 |
-| `effect-browser-agent`         | 921                            | 672             | 14                        |
+| `effect-browser`               | 8,871 → 14,616                 | 11,064 → 15,428 | 129 → 159                 |
+| `effect-browser-agent`         | 935                            | 725             | 14                        |
 | `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,376     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
@@ -301,12 +307,14 @@ state, 214 source lines, 393 test lines and 4 exports, which deleting `Moment`'s
 `latestFrame` and the browser's own listeners for loads paid for in part. Moving the agent onto
 Yielded took 949 source lines, 1,764 test lines and 30 exports out of the package, its loop and
 tools, against the reads Yielded's ports need: controls as values, a selector's scope, condition
-waits, a key on a ref and PNG pictures; the new `effect-browser-agent` is 921 source lines and 672
-test lines, so the two together are smaller than the package was. Phase 4's contexts,
+waits, a key on a ref and PNG pictures; the new `effect-browser-agent` is 935 source lines and 700
+test lines, so the two together are smaller than the package was. The phase's simplify pass took
+66 source lines out, `waitForText` and its page-side wait. Phase 4's contexts,
 resume and keep added 32 source lines and 73 test lines there, the supervisor's `keep`, and the
 rest to `effect-browserbase`: 294 source lines, 27 in `testing`, 557 test lines and 5 exports, the
 new `ContextLease` and `verifyContext`. Phase 4's release hygiene added 38 source lines and 119
-test lines, most of them `waitForText` as one call and tests of promises that planted bugs broke.
+test lines, most of them tests of promises that planted bugs broke, and `waitForText` as one call,
+which phase 3's simplify pass then took out with `waitForText` itself.
 Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
 11,000 through phase 4.
 

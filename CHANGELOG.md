@@ -8,6 +8,69 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ### Added
 
+- `ContextLease`, a new `effect-browserbase` module: who may write a stored context, as a service
+  the application provides. `hold(context)` holds a context for a scope, waiting while another
+  holds it, and passes on how the writer before left it, `unsettled` while a session that saves to
+  it may still run. `ContextLease.layer` holds contexts within the process that builds it, as
+  `Browserbase.open` did before; an application whose writers run in several processes provides
+  its own, such as an advisory lock in its database, which reads a holder that never said, as one
+  whose process was killed, as unsettled. `open`, `reconcile` and `verifyContext` hold contexts
+  through it, from before a persisting create until its save has settled.
+- `Browserbase.verifyContext(contextId, check)` reads a stored context back, as a login: a session
+  that loads the context and saves nothing runs `check` on its browser and is released. It holds
+  the context meanwhile, so it reads what the last writer saved, once that save settled, never
+  beside a writer, and ends first a session a writer before may have left saving to it.
+- Keeping a session past its scope: `Browserbase.supervise({ keep })`, a name, leaves the current
+  session running as the supervisor's scope closes, rather than releasing it, and the first
+  generation of the next `supervise` under that name adopts it, with its pages and their ids, so a
+  deploy or a restart keeps prepared pages and a signed-in state. Its sessions are created with
+  `keepAlive` and labelled `keptAs` in their user metadata; other sessions kept under the name are
+  ended as one is adopted. It is off by default, since a kept session bills until adopted and
+  released or until its timeout, and `retire` always releases. A kept session that saves to a
+  stored context leaves the context unsettled, so any writer but the adopting supervisor ends it
+  first. Underneath, `Supervisor.Options.keep` closes the serving generation's scope without
+  asking its provider to release it, published as the new state `Kept`.
+- `Browserbase.attach` is resume: from another process too, a page is found again by its id. It
+  refuses a session that has ended, failing `Closed` by the session before it connects.
+- `TestBrowserbase`'s sessions tell whether each was kept alive, and the stored context it loaded
+  and whether it saves to it.
+
+### Changed
+
+- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
+  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
+  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
+- A crop leaves the page's screen as it was. Chromium takes a clipped picture through the device
+  emulation of the session that asks for it, then restores what that session emulated, so a crop on
+  the page's own session, as over CDP and on Browserbase, cleared a screen another session
+  emulates: on Browserbase, `screen` went from the session's 1280×720 to Chromium's default
+  800×600, `device-width` media queries with it, until the page next navigated to another site. The
+  page's own session now holds a copy of the screen the page reads from the page's first clipped
+  picture on, which costs that picture two more calls, and every later picture restores it.
+- A page's pictures go one at a time. Each restores the view's size it found, so two crops asked
+  together left the page's view at the first one's size: in ten tries of two zooms at once,
+  another session's whole picture of each page then showed only the first region.
+
+### Breaking
+
+- `Browserbase.open`, `layer`, `supervise`, `reconcile` and `verifyContext` need a `ContextLease`:
+  provide `ContextLease.layer` for one writer per stored context in the process, as before. The
+  process-wide record of writers is gone, so no layer or test inherits a context another left
+  unsettled. `reconcile` can fail with `ContextHeld` when a lease cannot be taken.
+- `Browserbase.ContextHeld` is `ContextLease.ContextHeld`, beside the lease that can fail with it.
+- `Supervisor` asks a generation's `release` before it closes the generation's scope, so what the
+  scope holds, such as a stored context's lease, goes only once the release has reported.
+- `Supervisor.GenerationState` has `Kept`, so a program that switches over it has one more case.
+
+## 0.3.0-beta.3 (unreleased)
+
+Concurrency and presentation: each page admits its operations in a lane of its own, and reads
+keep their work; the stage, the presenter and the wait after input; windows over a page's three
+tracks, with moments as windows and `page.state`; and agents on Yielded Agent, through the new
+`effect-browser-agent`, which serves its browser ports over pages.
+
+### Added
+
 - Per-page admission. Each page admits its operations in one lane of its own: an action, which
   sends input or navigates, has the page to itself, in the order actions were asked, and reads
   share it, after the action in flight and every action asked before them, so a read describes the
@@ -83,38 +146,9 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Page.state`: what the library already knows of a page, at no call and with no wait for its turn:
   its address, its document and when it was committed, how far it has loaded, its newest frame,
   and the viewport's text and title as last read, each with when it was learned.
-- `ContextLease`, a new `effect-browserbase` module: who may write a stored context, as a service
-  the application provides. `hold(context)` holds a context for a scope, waiting while another
-  holds it, and passes on how the writer before left it, `unsettled` while a session that saves to
-  it may still run. `ContextLease.layer` holds contexts within the process that builds it, as
-  `Browserbase.open` did before; an application whose writers run in several processes provides
-  its own, such as an advisory lock in its database, which reads a holder that never said, as one
-  whose process was killed, as unsettled. `open`, `reconcile` and `verifyContext` hold contexts
-  through it, from before a persisting create until its save has settled.
-- `Browserbase.verifyContext(contextId, check)` reads a stored context back, as a login: a session
-  that loads the context and saves nothing runs `check` on its browser and is released. It holds
-  the context meanwhile, so it reads what the last writer saved, once that save settled, never
-  beside a writer, and ends first a session a writer before may have left saving to it.
-- Keeping a session past its scope: `Browserbase.supervise({ keep })`, a name, leaves the current
-  session running as the supervisor's scope closes, rather than releasing it, and the first
-  generation of the next `supervise` under that name adopts it, with its pages and their ids, so a
-  deploy or a restart keeps prepared pages and a signed-in state. Its sessions are created with
-  `keepAlive` and labelled `keptAs` in their user metadata; other sessions kept under the name are
-  ended as one is adopted. It is off by default, since a kept session bills until adopted and
-  released or until its timeout, and `retire` always releases. A kept session that saves to a
-  stored context leaves the context unsettled, so any writer but the adopting supervisor ends it
-  first. Underneath, `Supervisor.Options.keep` closes the serving generation's scope without
-  asking its provider to release it, published as the new state `Kept`.
-- `Browserbase.attach` is resume: from another process too, a page is found again by its id. It
-  refuses a session that has ended, failing `Closed` by the session before it connects.
-- `TestBrowserbase`'s sessions tell whether each was kept alive, and the stored context it loaded
-  and whether it saves to it.
 
 ### Changed
 
-- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
-  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
-  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
 - A page waits only for itself: the browser-wide input lock is gone. A click on one page no longer
   waits for typing at a person's pace on another, which held an on-air click for about 9.5 s in the
   release review, and failed it undispatched at 10 s with 100 characters.
@@ -144,20 +178,6 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   the caller that acted, is left out.
 - `PageLoaded` comes from the page's own session, as `Navigated` does, so a document's load always
   follows its commit.
-- A crop leaves the page's screen as it was. Chromium takes a clipped picture through the device
-  emulation of the session that asks for it, then restores what that session emulated, so a crop on
-  the page's own session, as over CDP and on Browserbase, cleared a screen another session
-  emulates: on Browserbase, `screen` went from the session's 1280×720 to Chromium's default
-  800×600, `device-width` media queries with it, until the page next navigated to another site. The
-  page's own session now holds a copy of the screen the page reads from the page's first clipped
-  picture on, which costs that picture two more calls, and every later picture restores it.
-- A page's pictures go one at a time. Each restores the view's size it found, so two crops asked
-  together left the page's view at the first one's size: in ten tries of two zooms at once,
-  another session's whole picture of each page then showed only the first region.
-- `Page.waitForText` is one call, which the page answers as the text comes, looking every 250 ms,
-  or at the deadline, where it was a `find` every 250 ms: a text that came 600 ms on took four
-  calls. It follows the action in flight but holds no later one back while it waits, and waits on
-  in a document that replaces the one it began in.
 
 ### Breaking
 
@@ -192,14 +212,8 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   milliseconds back, and a duration is a `Duration`. A moment whose picture could not be taken ends
   when it was read.
 - `Page.latestFrame` is gone: `page.state` has the newest frame.
-- `Browserbase.open`, `layer`, `supervise`, `reconcile` and `verifyContext` need a `ContextLease`:
-  provide `ContextLease.layer` for one writer per stored context in the process, as before. The
-  process-wide record of writers is gone, so no layer or test inherits a context another left
-  unsettled. `reconcile` can fail with `ContextHeld` when a lease cannot be taken.
-- `Browserbase.ContextHeld` is `ContextLease.ContextHeld`, beside the lease that can fail with it.
-- `Supervisor` asks a generation's `release` before it closes the generation's scope, so what the
-  scope holds, such as a stored context's lease, goes only once the release has reported.
-- `Supervisor.GenerationState` has `Kept`, so a program that switches over it has one more case.
+- `Page.waitForText` is gone: `Page.waitFor({ text })` waits for text, in one call the page
+  answers as the text comes, and fails `Timeout` rather than `NotFound` at its deadline.
 
 ## 0.3.0-beta.2 (unreleased)
 
