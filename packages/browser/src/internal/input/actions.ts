@@ -393,7 +393,7 @@ const typeText = (input: Parts) => {
 const press = (input: Parts) => {
   const { settings, now } = input.page;
   const { perform, preparePolicy, currentDocument, sameDocument, keyStroke, flush } = input;
-  const { mark, settle } = input;
+  const { mark, settle, targetFor, mutate } = input;
 
   return (keys: string, pressOptions: PressOptions = {}, style: Style = plain) =>
     perform(
@@ -415,7 +415,12 @@ const press = (input: Parts) => {
                 detail: `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`,
               }),
             )
-          : preparePolicy("press", { text: combination }, [null], { keys: combination });
+          : preparePolicy(
+              "press",
+              { target: pressOptions.on, text: combination },
+              [pressOptions.on ?? null],
+              { keys: combination },
+            );
       }),
       (marks, approval) =>
         Effect.gen(function* () {
@@ -437,6 +442,19 @@ const press = (input: Parts) => {
           const hold = pressOptions.holdMillis ?? 0;
           const activates = parts.at(-1) === "Enter" || parts.at(-1) === "Space";
           const since = yield* currentDocument("press");
+          const on = pressOptions.on;
+
+          // The keys go to the element asked for, which must hold focus before the first.
+          if (on !== undefined) {
+            yield* marks.on(yield* targetFor("press", on, approval, marks));
+
+            const focused = yield* mutate("press", scriptCall("focusOn", on), approval).pipe(
+              Effect.flatMap(decodeWith("press", Script.EditResultSchema)),
+            );
+
+            if ("error" in focused) return yield* Guard.editFailure("press", on, focused);
+            if (approval !== undefined) yield* approval.check({ focused: true });
+          }
           const before = mark();
           let due = now();
 

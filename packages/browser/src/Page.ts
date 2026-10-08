@@ -89,6 +89,11 @@ export interface TypeOptions {
 }
 
 export interface PressOptions {
+  /**
+   * Focus this element, by ref, before the first press: a link, a button or a field. The keys go to
+   * whatever has focus otherwise.
+   */
+  readonly on?: string | undefined;
   /** Press the keys this many times. */
   readonly times?: number | undefined;
   /** Hold the keys down this long before releasing them, as a game control might need. */
@@ -131,6 +136,8 @@ export interface ScreenshotOptions {
     | undefined;
   /** JPEG quality, 0 to 100. Defaults to 80. */
   readonly quality?: number | undefined;
+  /** `"jpeg"`, the default, or `"png"`, which is always a new picture. */
+  readonly format?: "jpeg" | "png" | undefined;
 }
 
 /**
@@ -204,6 +211,19 @@ export class Text extends Schema.Class<Text>("effect-browser/Text")({
   /** Host monotonic milliseconds from the browser's captured Effect Clock. */
   at: Schema.Finite,
 }) {}
+
+/** What `waitFor` waits for. */
+export interface WaitCondition {
+  /** A CSS selector for what to watch; the document's body without one. */
+  readonly selector?: string | undefined;
+  /**
+   * `"visible"` (the default): something it matches shows; `"hidden"`: nothing it matches shows;
+   * `"enabled"`: something it matches shows and is not disabled.
+   */
+  readonly state?: "visible" | "hidden" | "enabled" | undefined;
+  /** Only what shows this text counts, case and all, with runs of spaces read as one. */
+  readonly text?: string | undefined;
+}
 
 export interface ReadyOptions {
   /** How long the screen must also stay still, as for reels coming to rest. */
@@ -467,6 +487,15 @@ export interface Page {
    */
   readonly waitForText: (
     text: string,
+    timeout?: Duration.Input,
+  ) => Effect.Effect<void, BrowserError>;
+  /**
+   * Wait until a condition holds, in one call that the page answers as it comes, looking every
+   * 100 ms, or `Timeout` after `timeout`, 10 seconds by default. A selector that is not CSS is an
+   * `InvalidRequest`.
+   */
+  readonly waitFor: (
+    condition: WaitCondition,
     timeout?: Duration.Input,
   ) => Effect.Effect<void, BrowserError>;
   /**

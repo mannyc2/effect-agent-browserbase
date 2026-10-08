@@ -10,7 +10,6 @@ import { Browser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
 import type { Frame } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
-import * as Tools from "../src/Tools.ts";
 import { behindProxy } from "./protocol.ts";
 
 const freePort = Effect.callback<number>((resume) => {
@@ -69,9 +68,7 @@ it.live("measures the viewport of a page Playwright did not size", () =>
     assert.deepStrictEqual(yield* page.viewport, inner);
 
     // One page of scrolling is one viewport of this page, not of a 1280x720 default.
-    const tools = yield* Tools.make({ page });
-
-    yield* tools.handlers.browser_scroll({ direction: "down", pages: 1 });
+    yield* page.scroll({ dy: (yield* page.viewport).height });
     assert.strictEqual(
       yield* Effect.promise(() => page.playwright.evaluate(() => scrollY)),
       inner.height,

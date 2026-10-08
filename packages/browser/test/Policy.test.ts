@@ -5,11 +5,9 @@ import { Browser, make as makeBrowser, type Options as BrowserOptions } from "..
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
-import { toldFailure } from "../src/internal/agent/projection.ts";
 import { type InputRequest, type Page, redacted } from "../src/Page.ts";
 import * as Presentation from "../src/Presentation.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
-import * as Tools from "../src/Tools.ts";
 import { Site, SiteLayer, unpaused } from "./fixtures.ts";
 
 const refOf = (snapshot: Snapshot, role: string, name: string): string => {
@@ -700,19 +698,18 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("reports denial through tools and records an undispatched action", () =>
+  it.effect("reports denial and records an undispatched action", () =>
     Effect.gen(function* () {
       const { browser, page } = yield* setup({
         guard: () => Effect.fail(new PolicyDenied({ detail: "test policy refused" })),
       });
 
-      const tools = yield* Tools.make({ page });
       const submit = refOf(yield* page.snapshot(), "button", "Submit");
-      const refused = yield* tools.handlers.browser_click({ ref: submit }).pipe(Effect.flip);
+      const refused = yield* page.click(submit).pipe(Effect.flip);
 
       assert.strictEqual(refused.reason._tag, "PolicyDenied");
-      assert.include(toldFailure(refused), "test policy refused");
-      assert.notInclude(toldFailure(refused), "may have taken effect");
+      assert.include(refused.message, "test policy refused");
+      assert.isFalse(refused.dispatched);
       assert.strictEqual(yield* outcome(page), "Not ordered");
 
       const action = (yield* browser.recentEvents)

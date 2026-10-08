@@ -65,6 +65,7 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
       below: 0,
       viewport: { width: 800, height: 600 },
       scroll: { y: 0, height: 600 },
+      controls: [],
     }),
     events: [
       new Action({

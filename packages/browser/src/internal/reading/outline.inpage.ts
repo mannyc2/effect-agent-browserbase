@@ -4,7 +4,7 @@
  */
 import { Schema } from "effect";
 
-import type { Snapshot } from "../../Snapshot.ts";
+import type { Control, Snapshot } from "../../Snapshot.ts";
 import type { addresses } from "../page/url.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
@@ -14,22 +14,26 @@ import type { Walk } from "./walk.inpage.ts";
 export interface SnapshotRequest {
   readonly full: boolean;
   readonly query: string | null;
+  /** A CSS selector: only what is inside the elements it matches is read. */
+  readonly within: string | null;
   readonly maxChars: number;
   readonly firstRef: number;
 }
 
-/** The outline as a `Snapshot` reads it, and the next ref the page may give. */
-export interface SnapshotResult {
-  readonly snapshot: typeof Snapshot.Encoded;
-  readonly nextRef: number;
-}
+/**
+ * The outline as a `Snapshot` reads it, and the next ref the page may give, or why `within` is not
+ * a selector.
+ */
+export type SnapshotResult =
+  | { readonly snapshot: typeof Snapshot.Encoded; readonly nextRef: number }
+  | { readonly invalid: string };
 
 /** The rule every address the library reports goes by, which a link's address goes by too. */
 type Url = ReturnType<typeof addresses>;
 
 export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: Texts, url: Url) => {
-  const { clean, containers, isFrame, isInput, isSelect, isTextArea, nameOf, refFor, refs } = names;
-  const { roleOf, textOf } = names;
+  const { clean, containers, isFrame, isHtml, isInput, isSelect, isTextArea, nameOf } = names;
+  const { refFor, refs, roleOf, textOf } = names;
   const { visit } = walked;
   const { isControl, stateOf } = subjects;
   const { cut, shown } = texts;
@@ -77,6 +81,47 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
     return value === undefined || value === "" ? "" : ` value=${JSON.stringify(clean(value, 80))}`;
   };
 
+  // Inputs that take no typed text.
+  const untyped = ["button", "reset", "submit", "image", "checkbox", "radio", "file", "range"];
+
+  /** A control as a value, as its outline line shows it. */
+  const controlOf = (element: Element, role: string | null, kind: string, name: string) => {
+    const { disabled, checked } = stateOf(element, role);
+    const select = isSelect(element) ? element : undefined;
+
+    const value =
+      select !== undefined
+        ? Array.from(select.selectedOptions, (option) => clean(option.text, 80)).join(", ")
+        : isInput(element) || isTextArea(element)
+          ? clean(shown(element, true), 200)
+          : "";
+
+    const editable =
+      isTextArea(element) ||
+      (isInput(element) && !untyped.includes(element.type)) ||
+      (isHtml(element) && element.isContentEditable);
+
+    const control: typeof Control.Encoded = {
+      ref: refFor(element),
+      kind,
+      name,
+      value,
+      ...(select === undefined
+        ? {}
+        : {
+            options: Array.from(select.options)
+              .slice(0, 64)
+              .map((option) => clean(option.text, 80)),
+            optionCount: select.options.length,
+          }),
+      ...(disabled ? { disabled } : {}),
+      ...(checked === undefined ? {} : { checked }),
+      ...(editable ? { editable } : {}),
+    };
+
+    return control;
+  };
+
   const hrefOf = (element: Element): string => {
     if (element.tagName !== "A") return "";
     const raw = element.getAttribute("href") ?? "";
@@ -102,11 +147,25 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
   }
 
   const snapshot = (request: SnapshotRequest): SnapshotResult => {
+    let roots: Array<Element> | null = null;
+
+    if (request.within !== null) {
+      try {
+        roots = Array.from(document.querySelectorAll(request.within));
+      } catch {
+        return { invalid: `${JSON.stringify(request.within)} is not a CSS selector` };
+      }
+      // An element inside another that matched is read with it.
+      roots = roots.filter(
+        (root) => !roots?.some((other) => other !== root && other.contains(root)),
+      );
+    }
     if (refs.next < request.firstRef) refs.next = request.firstRef;
     const width = window.innerWidth;
     const height = window.innerHeight;
     const query = request.query === null ? null : request.query.toLowerCase();
     const lines: Array<string> = [];
+    const controls: Array<typeof Control.Encoded> = [];
     let above = 0;
     let below = 0;
 
@@ -150,7 +209,7 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
           ? `${kind}${name === "" ? "" : ` ${JSON.stringify(name)}`} [ref=${refFor(element)}]${states(element, role)}${valueOf(element)}${hrefOf(element)}${box}`
           : kind;
 
-      emit(depth, line, rect);
+      if (emit(depth, line, rect)) controls.push(controlOf(element, role, kind, name));
       if (isFrame(element)) {
         const body = element.contentDocument?.body;
 
@@ -228,22 +287,22 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
       };
     };
 
+    const visitor = {
+      enter,
+      admit: (child: Element, place: Place) =>
+        !place.controls || child.matches(nested) || child.querySelector(nested) !== null,
+      outside: count,
+    };
+
     // Inside the viewport, a subtree out of view is skipped whole and counted as one part.
-    visit(
-      null,
-      !request.full,
-      { depth: 0, insidePointer: false, controls: false },
-      {
-        enter,
-        admit: (child, place) =>
-          !place.controls || child.matches(nested) || child.querySelector(nested) !== null,
-        outside: count,
-      },
-    );
+    for (const root of roots ?? [null])
+      visit(root, !request.full, { depth: 0, insidePointer: false, controls: false }, visitor);
+
+    const outlined = cut(lines.join("\n"), request.maxChars);
 
     return {
       snapshot: {
-        ...cut(lines.join("\n"), request.maxChars),
+        ...outlined,
         url: location.href,
         title: document.title,
         above,
@@ -253,6 +312,8 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
           y: Math.round(window.scrollY),
           height: Math.round(document.documentElement.scrollHeight),
         },
+        // Only the controls whose lines were kept.
+        controls: controls.filter((control) => outlined.text.includes(`[ref=${control.ref}]`)),
       },
       nextRef: refs.next,
     };

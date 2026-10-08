@@ -5,19 +5,28 @@
  */
 import { Duration, Effect, Ref, Schema } from "effect";
 
-import { InvalidRequest, NotFound, StaleRef } from "../../BrowserError.ts";
-import { type FindQuery, Found, Text, type TextOptions } from "../../Page.ts";
+import { InvalidRequest, NotFound, StaleRef, Timeout } from "../../BrowserError.ts";
+import { type FindQuery, Found, Text, type TextOptions, type WaitCondition } from "../../Page.ts";
 import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import * as Url from "../page/url.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
 import type { SnapshotRequest } from "./outline.inpage.ts";
+import type { ConditionRequest } from "./subjects.inpage.ts";
 import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
 
 // What `snapshot` and `find` read back, each with the next ref the page may give.
-const SnapshotResult = Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite });
+const SnapshotResult = Schema.Union([
+  Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite }),
+  Schema.Struct({ invalid: Schema.String }),
+]);
 const FindResults = Schema.Struct({ found: Schema.Array(Found), nextRef: Schema.Finite });
+
+const ConditionResult = Schema.Union([
+  Schema.Struct({ met: Schema.Boolean }),
+  Schema.Struct({ invalid: Schema.String }),
+]);
 
 // A pattern crosses into the page as its source and flags.
 const wanted = (value: string | RegExp | undefined): Wanted | null =>
@@ -42,6 +51,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
     const asked = {
       full: snapshotOptions.full ?? false,
       query: snapshotOptions.query ?? null,
+      within: snapshotOptions.within ?? null,
       maxChars: snapshotOptions.maxChars ?? 12_000,
     };
 
@@ -54,6 +64,8 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
           Effect.flatMap(decodeWith("snapshot", SnapshotResult)),
         );
 
+        if ("invalid" in result)
+          return yield* failWith("snapshot", new InvalidRequest({ detail: result.invalid }));
         const { text, truncated, url } = result.snapshot;
 
         yield* counted(result.nextRef);
@@ -171,11 +183,45 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
       );
   };
 
+  // One call, as `waitForText` is, which the page answers once the condition holds or at the
+  // deadline.
+  const waitFor = (condition: WaitCondition, timeout: Duration.Input = Duration.seconds(10)) => {
+    const request: ConditionRequest = {
+      selector: condition.selector ?? null,
+      text: condition.text ?? null,
+      state: condition.state ?? "visible",
+    };
+
+    // JSON has no infinity; the deadline here ends a wait without one in any case.
+    const millis = Math.min(Duration.toMillis(timeout), Number.MAX_SAFE_INTEGER);
+    const unmet = () => failWith("waitFor", new Timeout({ millis }));
+
+    const look = evaluate("waitFor", scriptCall("waitUntil", request, millis)).pipe(
+      Effect.flatMap(decodeWith("waitFor", ConditionResult)),
+      Effect.flatMap((result) =>
+        "invalid" in result
+          ? failWith("waitFor", new InvalidRequest({ detail: result.invalid }))
+          : result.met
+            ? Effect.void
+            : unmet(),
+      ),
+    );
+
+    return lane
+      .read("waitFor")(Effect.void)
+      .pipe(
+        Effect.andThen(Effect.retry(look, { while: contextGone })),
+        Effect.timeoutOrElse({ duration: timeout, orElse: unmet }),
+        span("Page.waitFor", { state: request.state }),
+        owned,
+      );
+  };
+
   /** The viewport's text as it was last read, if after `since`, as a document began. */
   const viewedSince = (since: number) =>
     viewed !== undefined && viewed.at > since ? viewed : undefined;
 
-  return { snapshot, find, text, waitForText, viewedSince };
+  return { snapshot, find, text, waitForText, waitFor, viewedSince };
 });
 
 export type Reading = Effect.Success<ReturnType<typeof make>>;

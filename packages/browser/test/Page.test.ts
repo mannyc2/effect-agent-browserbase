@@ -120,6 +120,101 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("lists the controls it outlines as values, and reads inside a CSS selector", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const snapshot = yield* page.snapshot();
+
+      const byName = new Map(snapshot.controls.map((control) => [control.name, control]));
+
+      assert.deepInclude(byName.get("Amount"), {
+        ref: refOf(snapshot, "textbox", "Amount"),
+        kind: "textbox",
+        value: "10",
+        editable: true,
+      });
+      assert.deepInclude(byName.get("Coin"), {
+        kind: "combobox",
+        value: "Bitcoin",
+        options: ["Bitcoin", "Ethereum"],
+        optionCount: 2,
+      });
+      assert.deepInclude(byName.get("I agree"), { kind: "checkbox", checked: false });
+      assert.strictEqual(byName.get("Submit")?.ref, refOf(snapshot, "button", "Submit"));
+
+      // A cut outline lists only the controls whose lines it kept.
+      const cut = yield* page.snapshot({ maxChars: 80 });
+
+      assert.isTrue(cut.truncated);
+      for (const control of cut.controls) assert.include(cut.text, `[ref=${control.ref}]`);
+      assert.isBelow(cut.controls.length, snapshot.controls.length);
+
+      const nav = yield* page.snapshot({ within: "nav" });
+
+      assert.deepStrictEqual(
+        nav.controls.map((control) => control.name),
+        ["Next page", "Open in a new tab"],
+      );
+      assert.notInclude(nav.text, "Amount");
+      assert.strictEqual((yield* page.snapshot({ within: "#nothing" })).text, "");
+
+      const invalid = yield* Effect.flip(page.snapshot({ within: "nav[" }));
+
+      assert.strictEqual(invalid.reason._tag, "InvalidRequest");
+    }),
+  );
+
+  it.effect("waits for what a selector matches to show, hide or enable, with its text", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          setTimeout(() => {
+            document.querySelector("#outcome")!.textContent = "Ordered later";
+            document.querySelector<HTMLButtonElement>("#submit")!.disabled = true;
+          }, 300);
+        }),
+      );
+      yield* page.waitFor({ selector: "#outcome", text: "Ordered later" });
+      yield* page.waitFor({ selector: "#outcome", text: "ordered later", state: "hidden" });
+      yield* page.waitFor({ selector: "h1", state: "visible" });
+
+      const unmet = yield* Effect.flip(
+        page.waitFor({ selector: "#submit", state: "enabled" }, 300),
+      );
+
+      assert.strictEqual(unmet.reason._tag, "Timeout");
+      assert.isFalse(unmet.dispatched);
+      assert.strictEqual(
+        (yield* Effect.flip(page.waitFor({ selector: "#outcome[" }))).reason._tag,
+        "InvalidRequest",
+      );
+    }),
+  );
+
+  it.effect("presses a key on the element a ref names, focusing it first", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const snapshot = yield* page.snapshot();
+      const submit = refOf(snapshot, "button", "Submit");
+
+      yield* page.press("Enter", { on: submit });
+      assert.strictEqual(yield* text(page, "#outcome"), "Ordered 10 btc");
+
+      const pressed = (yield* page.recentEvents).findLast(
+        (event) => event._tag === "Action" && event.name === "press",
+      );
+
+      assert.strictEqual(pressed?._tag === "Action" ? pressed.subject?.name : undefined, "Submit");
+
+      const stale = yield* Effect.flip(page.press("Enter", { on: "e9999" }));
+
+      assert.strictEqual(stale.reason._tag, "StaleRef");
+      assert.isFalse(stale.dispatched);
+    }),
+  );
+
   it.effect("fills and submits a form by ref", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
@@ -589,7 +684,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("takes JPEG screenshots in viewport pixels", () =>
+  it.effect("takes JPEG and PNG screenshots in viewport pixels", () =>
     Effect.gen(function* () {
       const page = yield* open("/chart");
       const image = yield* page.screenshot();
@@ -601,6 +696,11 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       );
       assert.deepStrictEqual([image.data[0], image.data[1]], [0xff, 0xd8]);
       assert.deepStrictEqual([detail.width, detail.height], [200, 100]);
+
+      const png = yield* page.screenshot({ format: "png" });
+
+      assert.deepStrictEqual([png.mediaType, png.width, png.height], ["image/png", 1280, 720]);
+      assert.deepStrictEqual([png.data[0], png.data[1]], [0x89, 0x50]);
     }),
   );
 

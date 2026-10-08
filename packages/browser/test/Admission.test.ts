@@ -16,7 +16,6 @@ import {
 import { TestClock } from "effect/testing";
 import type { CDPSession } from "playwright-core";
 
-import * as Agent from "../src/Agent.ts";
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import { BrowserError, Closed, consequence } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
@@ -591,10 +590,9 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
   const createSession = context.newCDPSession.bind(context);
   const gate = Promise.withResolvers<void>();
   let stalled: unknown;
-  let blind: unknown;
 
   // Input replies for one page can be withheld after Chromium runs the input, as a stalled
-  // renderer or transport would, and another page can fail its pictures.
+  // renderer or transport would.
   context.newCDPSession = async (target) => {
     const cdp = await createSession(target);
     const send = cdp.send.bind(cdp);
@@ -602,9 +600,7 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
     const observed: CDPSession["send"] = (method, params) =>
       target === stalled && method.startsWith("Input.")
         ? send(method, params).then((value) => gate.promise.then(() => value))
-        : target === blind && method === "Page.captureScreenshot"
-          ? Promise.reject(new Error("this page takes no pictures"))
-          : send(method, params);
+        : send(method, params);
 
     cdp.send = observed;
 
@@ -618,9 +614,6 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
     browser,
     stall: (page: Page) => {
       stalled = page.playwright;
-    },
-    blind: (page: Page) => {
-      blind = page.playwright;
     },
   };
 });
@@ -801,27 +794,6 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* first.close;
         yield* Fiber.join(waiting);
         assert.strictEqual((yield* browser.pages).length, 2);
-      }),
-    );
-
-    it.effect("observes what it can, and says why the rest is missing", () =>
-      Effect.gen(function* () {
-        const { browser, blind } = yield* browserWith({});
-        const page = yield* browser.newPage(blank);
-
-        blind(page);
-        const parts = yield* Agent.observe()(page);
-        const said = parts.flatMap((part) => (part.type === "text" ? [part.text] : []));
-
-        assert.include(said.join("\n"), 'textbox "Text"');
-        assert.isFalse(parts.some((part) => part.type === "file"));
-        assert.isTrue(
-          said.some((line) => line.startsWith("(missing from this observation: screenshot")),
-        );
-        // Nothing asked for could be read, so the observation fails.
-        const error = yield* Effect.flip(Agent.observe("screenshot")(page));
-
-        assert.strictEqual(error.operation, "screenshot");
       }),
     );
 

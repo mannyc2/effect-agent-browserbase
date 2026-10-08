@@ -19,6 +19,7 @@
 import { Schema } from "effect";
 
 import { Subject } from "./BrowserEvent.ts";
+import * as Words from "./internal/timeline/words.ts";
 
 /**
  * `text` changed; `appeared` and `disappeared`, whether added or removed or shown or hidden;
@@ -82,3 +83,6 @@ export class Changes extends Schema.Class<Changes>("effect-browser/Changes")({
   /** Oldest first, by when each began to change. */
   changes: Schema.Array(Change),
 }) {}
+
+/** A change in words for a model, such as `"$61,240" became "$62,010" (row "Bitcoin", column "Price")`. */
+export const describe = (change: Change): string => Words.describe(change);

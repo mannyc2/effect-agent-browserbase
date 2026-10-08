@@ -38,6 +38,7 @@ export interface PageApi {
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
   waitForText: Subjects["waitFor"];
+  waitUntil: Subjects["waitUntil"];
   text: Texts["read"];
   record: Recorder["start"];
   changes: Changes["read"];
@@ -52,6 +53,7 @@ export interface PageApi {
   validateInput: Guard["validateInput"];
   typeable: Edit["typeable"];
   focus: Edit["focus"];
+  focusOn: Edit["focusOn"];
   select: Edit["select"];
 }
 
@@ -84,7 +86,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 15) return installed;
+  if (installed !== undefined && installed.version === 16) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
@@ -101,10 +103,11 @@ const install = (
   const readiness = makeReady(walked, texts, kept);
 
   const api: PageApi = {
-    version: 15,
+    version: 16,
     snapshot: read.snapshot,
     find: subjected.find,
     waitForText: subjected.waitFor,
+    waitUntil: subjected.waitUntil,
     text: texts.read,
     record: recorder.start,
     changes: makeChanges(named, placing, kept, seeing, marking, recorder).read,
@@ -118,6 +121,7 @@ const install = (
     validateInput: guarded.validateInput,
     typeable: edited.typeable,
     focus: edited.focus,
+    focusOn: edited.focusOn,
     select: edited.select,
   };
 
