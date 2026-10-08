@@ -5,6 +5,19 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ## Unreleased
 
+### Changed
+
+- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
+  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
+  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
+
+## 0.3.0-beta.2 (unreleased)
+
+Identity and lifetime: pages named by their target ids, with a typed life story, the browser's
+loss and its cause, `consequence` and redacted addresses; `Supervisor`, with Browserbase releases
+that confirm the end and `reconcile`; the capture connection; and the change record, which moments
+lead with.
+
 ### Added
 
 - `Supervisor`, a new module: a browser kept open across losses and session ends, as generations
@@ -87,12 +100,12 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 - `Page.ready({ quietMillis })` also waits, where the page's changes are recorded, until nothing in
   view has changed for the spell, so frames a browser holds back cannot pass for a still page.
-
 - Every address the library reports, in events, frames, reads, errors and a guard's request, loses
   its userinfo and the query and fragment parameters named for credentials, such as tokens, keys,
   signatures and authorization codes, and keeps the rest, such as a chart's `?ticker=ETH`.
 - A crashed page is closed, so its calls fail at once, `Closed` as crashed, instead of at their
-  deadline; and a lost browser fails the calls in flight on its pages at once.
+  deadline; and a lost browser fails the calls in flight on its pages, and its screencasts'
+  readers, at once, `Closed` by its loss's cause.
 - A page's registration sends its target id, focus emulation and the Page domain in one round trip,
   and the first read and the first capture no longer send the target id or the Page domain. Opening
   over CDP costs 33 calls: these two, and focus emulation, which the old count of 30 missed as it
@@ -104,9 +117,6 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - A Browserbase answer of 400 is the reason `InvalidRequest`, not `Status`, so a request Browserbase
   refuses as malformed, such as a session id that is not a UUID, reads the same as one this client
   refuses before sending.
-- `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
-  SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
-  `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
 
 ### Breaking
 
