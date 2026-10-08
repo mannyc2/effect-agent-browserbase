@@ -14,6 +14,7 @@ import { decodeWith, failWith, type PageContext, reasonOf } from "../page/contex
 import type { Viewport } from "../page/viewport.ts";
 import * as Capture from "./capture.ts";
 import * as BrowserClock from "./clock.ts";
+import * as Transport from "./transport.ts";
 
 interface Size {
   readonly width: number;
@@ -293,9 +294,18 @@ export const make = Effect.fnUntraced(function* (
   bridge: Bridge,
   viewport: Viewport,
 ) {
-  const { id, cdp, clock, playwright, settings, mapping, now, span, owned, lock, within } = page;
-  const { send } = page.protocol;
+  const { id, clock, playwright, settings, mapping, now, span, owned, lock, within } = page;
   const calibrateClock = calibrator(page, bridge);
+
+  // A failure from a capture connection is already the capture's own.
+  const error = (cause: unknown) =>
+    Schema.is(BrowserError)(cause)
+      ? cause
+      : new BrowserError({
+          operation: "screencast",
+          reason: reasonOf(cause, undefined, page.closedBy()),
+          dispatched: false,
+        });
 
   // Input and capture share the owner's monotonic clock; caller-provided clocks cannot move it.
   // Registration measures nothing: a page that is busy while it opens, such as a popup running
@@ -303,8 +313,10 @@ export const make = Effect.fnUntraced(function* (
   // only a browser with no estimate yet needs this page's renderer to answer.
   const capture = yield* Capture.make({
     id,
-    cdp,
-    send,
+    transport:
+      page.capture === undefined
+        ? Effect.succeed(Transport.own(page, bridge))
+        : Transport.apart(page, bridge, page.capture, error, yield* Effect.scope),
     clock,
     // A capture starts once the page's own session keeps it painting behind other tabs, which a
     // renderer stuck in a script never confirms, and with the browser's clock mapped. Only a
@@ -328,13 +340,7 @@ export const make = Effect.fnUntraced(function* (
       };
     },
     imageSize: jpegSize,
-    frameTag: bridge.frameTag,
-    error: (cause) =>
-      new BrowserError({
-        operation: "screencast",
-        reason: reasonOf(cause, undefined, page.closedBy()),
-        dispatched: false,
-      }),
+    error,
   });
 
   const picture = camera(page, viewport, capture);

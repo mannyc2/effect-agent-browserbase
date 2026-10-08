@@ -54,6 +54,18 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Browser.InitScript`: an init script runs only in documents whose address its `match` finds.
 - A Browserbase create whose answer named its session but did not decode is `Decode` with
   `released`, whether the client then released the session.
+- The capture connection: on Browserbase, pages' screencasts run on a second connection to the
+  session that carries nothing else, so a frame and its acknowledgement never wait behind a large
+  message, such as an upload or a read's answer, on the connection that drives the page. On a
+  hosted session, with another tab reading and uploading, the on-air page's longest wait between
+  frames was 352 ms, against 1,802 ms on the old path. `Browserbase.Options.captureConnection:
+  false` turns it off. It is read-only: a page's session on it sends only the screencast's
+  commands, the Page domain and the frame tree, and frames carry the document their own
+  connection saw commit, numbered as `Navigated` numbers them. A failure of the connection ends
+  the capture with `Failed`, leaving the page and its own session as they were, and the next
+  capture opens another.
+- `Browser.CaptureSource` and `Cdp.Options.capture`: the port a provider supplies its capture
+  connection through. Without one, a capture runs on the page's own session, as before.
 
 ### Changed
 

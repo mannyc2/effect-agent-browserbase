@@ -409,6 +409,11 @@ Each page's own session holds focus emulation, so a tab behind another keeps pai
 capture keeps delivering, whatever else is attached; a capture starts once the browser has
 confirmed it, and fails with `Timeout` at the action timeout if a renderer stuck in a script never
 does.
+A provider that reaches its browser over a network can run captures on a connection of their own,
+a `Browser.CaptureSource` given as `Cdp.Options.capture`, as `effect-browserbase` does: there a
+frame never waits behind a large message on the connection that drives the page. Frames then carry
+the document their own connection saw commit, numbered as `Navigated` numbers them, and a failure
+of that connection ends the capture with `Failed` and leaves the page as it was.
 Concurrent readers share one native screencast and its quality and size: a reader without options
 joins whatever is running, and one whose explicit options differ fails with `InvalidRequest` rather
 than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
