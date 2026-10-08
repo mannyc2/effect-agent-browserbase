@@ -1,12 +1,12 @@
 {
-  "name": "effect-browser-agent",
+  "name": "effect-agent-browser",
   "version": "0.3.0-beta.4",
   "description": "effect-browser pages as Yielded Agent's browser ports and tools.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
-    "directory": "packages/agent"
+    "directory": "packages/agent-browser"
   },
   "files": [
     "dist",
