@@ -82,6 +82,8 @@ session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `P
   newest screencast frame serves when it was painted at most `maxAge` ago (250 ms by default; 0
   always takes a new screenshot), and with `after: "input"` only when painted after the page's
   latest input. `Page.screenshot` takes `maxAge` and serves only a frame painted after that input.
+  No read serves a frame painted before the page's current document began, so a page that keeps
+  painting while the next one loads is not what a read shows once the navigation returns.
 - `CaptureStats.duringPictures`: frames left out because they may have been painted, or arrived,
   while the library took a clipped or scaled picture of the page.
 - `Page.captureStats({ window })` counts over a window of up to the latest minute, gap statistics
@@ -103,14 +105,23 @@ session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `P
   each new document runs it from its start: a document's first read is two calls, sending no
   script, and a warm read one. The clock probe runs in a world of its own.
 - The library's own clipped pictures, such as a zoom, keep their frames out of a running
-  screencast, crops with the viewport's own proportions included.
+  screencast, crops with the viewport's own proportions included. A crop on the page's own session,
+  as over CDP and on Browserbase, has frames of the crop's own size, so only those are left out and
+  the page's own keep flowing; where Playwright emulates the viewport, every frame from the
+  picture's call until 50 ms after its reply is.
 - Each page's own session holds focus emulation, so a tab behind another keeps painting whatever
-  else is attached. A capture starts once the browser has confirmed it.
+  else is attached. A capture starts once the browser has confirmed it, and fails with `Timeout` at
+  the action timeout if a renderer stuck in a script never does.
 - Opening a browser measures nothing, where a fresh one used to measure its clock and its paint
   delay on a private page first. The browser's first capture maps its clock and waits for that one
-  estimate; a later capture starts with the browser's estimate and, once it is ten seconds old,
-  measures again alongside, for later captures. At 72 ms a round trip, opening a browser went from
-  2.2 to 0.6 seconds, and a later capture's start to its first frame from 0.52 to 0.23 seconds.
+  estimate; a later capture starts with the browser's estimate. At 72 ms a round trip, opening a
+  browser went from 2.2 to 0.6 seconds, and a later capture's start to its first frame from 0.52 to
+  0.23 seconds.
+- A busy page answers the clock's probes late, behind its own work: the probes it answered within
+  two seconds serve, and the capture fails, undispatched, only if it answered none.
+- While frames flow, a capture measures the clock again once the estimate is ten seconds old, and
+  every frame is timed by the browser's newest estimate. A wide first estimate narrows once a probe
+  finds the page idle, and a capture on air for hours keeps reusable frames.
 - Input never waits for the clock: until a capture has mapped it, Chromium stamps input as it
   receives it.
 - An estimate of the clock says less as it ages, by up to 100 parts per million of its age. A frame
