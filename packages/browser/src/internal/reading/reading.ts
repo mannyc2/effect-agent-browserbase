@@ -11,16 +11,18 @@ import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import * as Url from "../page/url.ts";
+import type { ConditionRequest } from "./controls.inpage.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
 import type { SnapshotRequest } from "./outline.inpage.ts";
-import type { ConditionRequest } from "./subjects.inpage.ts";
 import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
 
-// What `snapshot` and `find` read back, each with the next ref the page may give.
+// What `snapshot` and `find` read back, each with the next ref the page may give, and why a
+// snapshot's selector is not CSS.
 const SnapshotResult = Schema.Union([
   Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite }),
   Schema.Struct({ invalid: Schema.String }),
 ]);
+
 const FindResults = Schema.Struct({ found: Schema.Array(Found), nextRef: Schema.Finite });
 
 const ConditionResult = Schema.Union([

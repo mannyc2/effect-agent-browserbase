@@ -1,0 +1,5 @@
+// The declarations' build reads the source alone.
+{
+  "extends": "./tsconfig.json",
+  "include": ["src"]
+}

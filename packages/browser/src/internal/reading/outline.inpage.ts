@@ -6,6 +6,7 @@ import { Schema } from "effect";
 
 import type { Control, Snapshot } from "../../Snapshot.ts";
 import type { addresses } from "../page/url.ts";
+import type { Controls } from "./controls.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
@@ -31,12 +32,18 @@ export type SnapshotResult =
 /** The rule every address the library reports goes by, which a link's address goes by too. */
 type Url = ReturnType<typeof addresses>;
 
-export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: Texts, url: Url) => {
-  const { clean, containers, isFrame, isHtml, isInput, isSelect, isTextArea, nameOf } = names;
-  const { refFor, refs, roleOf, textOf } = names;
+export const outline = (
+  names: Names,
+  walked: Walk,
+  subjects: Subjects,
+  texts: Texts,
+  controlling: Controls,
+  url: Url,
+) => {
+  const { clean, containers, isFrame, nameOf, refFor, refs, roleOf, textOf } = names;
   const { visit } = walked;
-  const { isControl, stateOf } = subjects;
-  const { cut, shown } = texts;
+  const { isControl } = subjects;
+  const { cut } = texts;
 
   const textBlocks =
     /^(?:P|LI|TD|TH|DT|DD|LABEL|SPAN|BLOCKQUOTE|FIGCAPTION|CAPTION|PRE|STRONG|EM|B|I|SMALL|TIME|CODE|LEGEND)$/;
@@ -51,75 +58,6 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
     const label = element.closest("label");
 
     return label !== null && label.control !== null;
-  };
-
-  // The states that hold, in the order `stateOf` gives them, after a heading's level.
-  const states = (element: Element, role: string | null): string => {
-    const { level, ...flags } = stateOf(element, role);
-    const held = Object.entries(flags).flatMap(([name, value]) => (value === true ? [name] : []));
-
-    return [...(level === undefined ? [] : [`level=${level}`]), ...held]
-      .map((name) => ` [${name}]`)
-      .join("");
-  };
-
-  const valueOf = (element: Element): string => {
-    if (isSelect(element)) {
-      const selected = Array.from(element.selectedOptions, (option) => clean(option.text, 40));
-
-      const options = Array.from(element.options)
-        .slice(0, 12)
-        .map((option) => clean(option.text, 40));
-
-      const more = element.options.length > 12 ? ` +${element.options.length - 12} more` : "";
-
-      return ` value=${JSON.stringify(selected.join(", "))} options=${JSON.stringify(options.join(" | ") + more)}`;
-    }
-    // The model sees what it typed, but never what a secret field holds.
-    const value = isInput(element) || isTextArea(element) ? shown(element, true) : undefined;
-
-    return value === undefined || value === "" ? "" : ` value=${JSON.stringify(clean(value, 80))}`;
-  };
-
-  // Inputs that take no typed text.
-  const untyped = ["button", "reset", "submit", "image", "checkbox", "radio", "file", "range"];
-
-  /** A control as a value, as its outline line shows it. */
-  const controlOf = (element: Element, role: string | null, kind: string, name: string) => {
-    const { disabled, checked } = stateOf(element, role);
-    const select = isSelect(element) ? element : undefined;
-
-    const value =
-      select !== undefined
-        ? Array.from(select.selectedOptions, (option) => clean(option.text, 80)).join(", ")
-        : isInput(element) || isTextArea(element)
-          ? clean(shown(element, true), 200)
-          : "";
-
-    const editable =
-      isTextArea(element) ||
-      (isInput(element) && !untyped.includes(element.type)) ||
-      (isHtml(element) && element.isContentEditable);
-
-    const control: typeof Control.Encoded = {
-      ref: refFor(element),
-      kind,
-      name,
-      value,
-      ...(select === undefined
-        ? {}
-        : {
-            options: Array.from(select.options)
-              .slice(0, 64)
-              .map((option) => clean(option.text, 80)),
-            optionCount: select.options.length,
-          }),
-      ...(disabled ? { disabled } : {}),
-      ...(checked === undefined ? {} : { checked }),
-      ...(editable ? { editable } : {}),
-    };
-
-    return control;
   };
 
   const hrefOf = (element: Element): string => {
@@ -147,19 +85,9 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
   }
 
   const snapshot = (request: SnapshotRequest): SnapshotResult => {
-    let roots: Array<Element> | null = null;
+    const roots = request.within === null ? [null] : controlling.rootsOf(request.within);
 
-    if (request.within !== null) {
-      try {
-        roots = Array.from(document.querySelectorAll(request.within));
-      } catch {
-        return { invalid: `${JSON.stringify(request.within)} is not a CSS selector` };
-      }
-      // An element inside another that matched is read with it.
-      roots = roots.filter(
-        (root) => !roots?.some((other) => other !== root && other.contains(root)),
-      );
-    }
+    if ("invalid" in roots) return roots;
     if (refs.next < request.firstRef) refs.next = request.firstRef;
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -206,10 +134,10 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
 
       const line =
         placement(rect) === "in"
-          ? `${kind}${name === "" ? "" : ` ${JSON.stringify(name)}`} [ref=${refFor(element)}]${states(element, role)}${valueOf(element)}${hrefOf(element)}${box}`
+          ? `${kind}${name === "" ? "" : ` ${JSON.stringify(name)}`} [ref=${refFor(element)}]${controlling.states(element, role)}${controlling.valueOf(element)}${hrefOf(element)}${box}`
           : kind;
 
-      if (emit(depth, line, rect)) controls.push(controlOf(element, role, kind, name));
+      if (emit(depth, line, rect)) controls.push(controlling.controlOf(element, role, kind, name));
       if (isFrame(element)) {
         const body = element.contentDocument?.body;
 
@@ -239,7 +167,7 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
       if (role === "heading") {
         emit(
           depth,
-          `heading ${JSON.stringify(nameOf(element, role))}${states(element, role)}`,
+          `heading ${JSON.stringify(nameOf(element, role))}${controlling.states(element, role)}`,
           rect,
         );
 
@@ -295,7 +223,7 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
     };
 
     // Inside the viewport, a subtree out of view is skipped whole and counted as one part.
-    for (const root of roots ?? [null])
+    for (const root of roots)
       visit(root, !request.full, { depth: 0, insidePointer: false, controls: false }, visitor);
 
     const outlined = cut(lines.join("\n"), request.maxChars);

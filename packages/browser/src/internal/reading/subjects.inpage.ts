@@ -9,19 +9,9 @@ import type { FindRequest, Match } from "./match.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Walk } from "./walk.inpage.ts";
 
-/** What `waitUntil` waits for, as `Page.waitFor` asks it. */
-export interface ConditionRequest {
-  readonly selector: string | null;
-  readonly text: string | null;
-  readonly state: "visible" | "hidden" | "enabled";
-}
-
-/** Whether the condition held by the deadline, or why the selector is not CSS. */
-export type ConditionResult = { readonly met: boolean } | { readonly invalid: string };
-
 export const subjects = (names: Names, walked: Walk, matching: Match, placing: ContextReader) => {
-  const { isDisabled, isHtml, isInput, nameOf, refFor, refs, roleOf, textOf } = names;
-  const { acts, boxOf, controlOf, hitAt, inView, visible } = walked;
+  const { isDisabled, isInput, nameOf, refFor, refs, roleOf, textOf } = names;
+  const { acts, boxOf, controlOf, hitAt, inView } = walked;
   const { contextOf, known } = placing;
 
   /** What the outline lists as a control, with a ref: something a person would act on. */
@@ -200,56 +190,7 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     }
   };
 
-  const spaced = (value: string) => value.replace(/\s+/g, " ").trim();
-
-  // Whether the condition holds now: what the selector matches, or the body, and shows, with the
-  // text when one is asked, case and all.
-  const holds = (request: ConditionRequest): ConditionResult => {
-    let roots: ReadonlyArray<Element>;
-
-    try {
-      roots =
-        request.selector === null
-          ? [document.body]
-          : Array.from(document.querySelectorAll(request.selector));
-    } catch {
-      return { invalid: `${JSON.stringify(request.selector)} is not a CSS selector` };
-    }
-    const text = request.text === null ? null : spaced(request.text);
-
-    const shown = roots.filter(
-      (element) =>
-        visible(element) &&
-        (text === null ||
-          spaced(isHtml(element) ? element.innerText : (element.textContent ?? "")).includes(text)),
-    );
-
-    return {
-      met:
-        request.state === "hidden"
-          ? shown.length === 0
-          : request.state === "enabled"
-            ? shown.some((element) => !isDisabled(element))
-            : shown.length > 0,
-    };
-  };
-
-  const waitUntil = async (request: ConditionRequest, millis: number) => {
-    const until = performance.now() + millis;
-
-    for (;;) {
-      const result = holds(request);
-      const left = until - performance.now();
-
-      if ("invalid" in result || result.met || left <= 0) return result;
-      const { promise, resolve } = Promise.withResolvers<void>();
-
-      setTimeout(resolve, Math.min(100, left));
-      await promise;
-    }
-  };
-
-  return { find, waitFor, waitUntil, isControl, stateOf };
+  return { find, waitFor, isControl, stateOf };
 };
 
 export type Subjects = ReturnType<typeof subjects>;

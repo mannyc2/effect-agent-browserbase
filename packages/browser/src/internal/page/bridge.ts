@@ -16,6 +16,7 @@ import { evidence } from "../input/evidence.inpage.ts";
 import { guard, type Guard } from "../input/guard.inpage.ts";
 import { targets, type Targets } from "../input/targets.inpage.ts";
 import { context } from "../reading/context.inpage.ts";
+import { controls, type Controls } from "../reading/controls.inpage.ts";
 import { match } from "../reading/match.inpage.ts";
 import { names } from "../reading/names.inpage.ts";
 import { outline, type Outline } from "../reading/outline.inpage.ts";
@@ -38,7 +39,7 @@ export interface PageApi {
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
   waitForText: Subjects["waitFor"];
-  waitUntil: Subjects["waitUntil"];
+  waitUntil: Controls["waitUntil"];
   text: Texts["read"];
   record: Recorder["start"];
   changes: Changes["read"];
@@ -70,6 +71,7 @@ const install = (
   makeContext: typeof context,
   makeSubjects: typeof subjects,
   makeText: typeof text,
+  makeControls: typeof controls,
   makeFold: typeof fold,
   makeHistory: typeof history,
   makeSight: typeof sight,
@@ -92,11 +94,12 @@ const install = (
   const placing = makeContext(named, walked);
   const subjected = makeSubjects(named, walked, makeMatch(), placing);
   const texts = makeText(named, walked);
+  const controlled = makeControls(named, walked, subjected, texts);
   const kept = makeHistory(makeFold());
   const seeing = makeSight(named, walked, texts, kept);
   const marking = makeMarks(named, kept, seeing);
   const recorder = makeRecord(named, texts, kept, seeing, marking);
-  const read = makeOutline(named, walked, subjected, texts, makeAddresses());
+  const read = makeOutline(named, walked, subjected, texts, controlled, makeAddresses());
   const located = makeTargets(named, walked, placing);
   const guarded = makeGuard(named, located, makeEvidence(named, placing));
   const edited = makeEdit(named, guarded, placing);
@@ -107,7 +110,7 @@ const install = (
     snapshot: read.snapshot,
     find: subjected.find,
     waitForText: subjected.waitFor,
-    waitUntil: subjected.waitUntil,
+    waitUntil: controlled.waitUntil,
     text: texts.read,
     record: recorder.start,
     changes: makeChanges(named, placing, kept, seeing, marking, recorder).read,
@@ -131,7 +134,7 @@ const install = (
 };
 
 /** The expression that installs the script and evaluates to its API. */
-export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit, Url.addresses].join(", ")})`;
+export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, controls, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit, Url.addresses].join(", ")})`;
 
 const worldName = "effect-browser";
 
