@@ -2,8 +2,8 @@
 
 Browser automation for [Effect](https://effect.website) agents, over Playwright: page control, a
 compact page outline for models, screencast frames, `effect/ai` browser tools, an agent loop, a
-record of what visibly changed on a page, and moments, an account in pictures and words of what a
-page showed and what changed on it over a window.
+record of what visibly changed on a page, windows over a page's events, changes and frames, and
+moments, an account in pictures and words of what a page showed and what changed on it.
 
 ```sh
 npm install effect-browser@beta effect playwright-core
@@ -38,7 +38,7 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
 | `Change`       | What visibly changed on a page over a window, element by element                     |
-| `Moment`       | What a page showed and what changed on it over a window, laid out as a model prompt  |
+| `Moment`       | A page's events, changes and frames over a window; a moment, laid out as a prompt    |
 | `Plan`         | A walk recorded from a page's events, replayed on a fresh page by subject            |
 | `Supervisor`   | A browser kept open across losses and session ends, as generations                   |
 
@@ -182,16 +182,32 @@ are. The record does not see pictures, a canvas, frames, shadow roots or SVG, a 
 sets, or a class that reveals an element it has not seen before, such as a toast already on the
 page, though its later changes it does.
 
-`Moment.capture` reads what changed up to its last frame's paint, from where the previous moment's
-changes ended, and `Moment.toPrompt` leads with it: news first, then what keeps changing, with the
-cells of a column that changed together on one line. It names an action as what a change followed,
-or as a step: where changes followed it but none names it, as when its effect landed out of its
-reach on a busy page; where its effect is drawn, such as a click on a canvas, which only the
-screenshots show; or where it came before the record began. Hovers, scrolls and attempts that
-nothing followed are left out. A moment whose record saw none of its window, as a page's first,
-whose read starts the record, or whose changes could not be read, as while it navigated, says that
-what changed was not recorded and lists every step instead; one whose record began within the
-window says nothing changed only after that.
+A page's timeline has three tracks on the browser's host clock: its events, what changed on it,
+and its frames. `page.window({ since, until })` reads them over a window, a `Moment.Window`: the
+events and frames the page keeps, at no call, and its changes, in one call, the first starting its
+record as any read of changes does. `since` is a previous window, to go on exactly where it ended, a
+frame, a host time, or a `Duration` back from `until`; `until` is a frame or a host time, now by
+default. A consumer that airs a frame seconds after it was painted reads the window that ends at
+that frame, so that a line it writes now tells what its viewers will see. A part that cannot be
+read is in `missing`, with why: a window fails only for bounds that are not finite.
+`Moment.stillness(window)` says how long the page had been still at the window's end, by the last
+change in view its record shows or its last frame. Frames show paint only while a capture runs,
+and the record does not see a canvas, so a canvas that draws with no capture running reads as still.
+
+`Moment.capture` is a window that ends at a picture of the page now. It takes the picture first,
+then the window up to its paint, from where a previous window or moment ended, so the changes hold
+nothing the picture does not show. A picture, a read of changes or an outline that cannot be had is
+missing from the moment, with why, and the moment is still made. `Moment.toPrompt` leads with what
+changed: news first, then what keeps changing, with the cells of a column that changed together on
+one line. It names an action as what a change followed, or as a step: where changes followed it but
+none names it, as when its effect landed out of its reach on a busy page; where its effect is drawn,
+such as a click on a canvas, which only the screenshots show; or where it came before the record
+began. Hovers, scrolls and attempts that nothing followed are left out, and a failed action is told
+only as failed: its error is advice to the caller that acted, and may name a ref. A moment whose
+record saw none of its window, as a page's first, whose read starts the record, says that what
+changed was not recorded and lists every step instead; one whose record began within the window
+says nothing changed only after that. What it could not read, it names, with why, and a last frame
+that is not the picture is not shown as the moment.
 
 `Plan` rehearses a walk once and replays it later, near live, with no model call.
 `Plan.fromEvents(page.recentEvents)` keeps one page's completed actions with their subjects and
@@ -422,7 +438,7 @@ page and its browser stand. A still page sends no frames until it changes, so a 
 can be older than the frames before it. A delay line, a liveness rule, redaction and repeating a
 held frame stay the application's.
 
-`Browser.now`, event stamps, frame `receivedAt` and `Moment.at` share host monotonic milliseconds
+`Browser.now`, event stamps, frame `receivedAt` and a window's bounds share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.
 Page operations also pace input and measure their deadlines on that clock, so a caller running
 under another `Clock`, such as a `TestClock`, cannot stall an action or a page's turns.
@@ -430,7 +446,7 @@ Compare these stamps only within that clock: they are not epoch dates or compara
 `Frame.timing` distinguishes `BrowserPaint` from `Screenshot`. Native frames retain browser epoch
 milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
 Screenshot fallbacks have only a host capture interval; their `timestamp` getter is undefined.
-Moment windows and frame captions use `hostTime`, so delayed delivery cannot make old paint current.
+Windows and a moment's frame captions use `hostTime`, so delayed delivery cannot make old paint current.
 A picture states how old it may be. `Page.frame({ maxAge, after })` serves the newest screencast
 frame when it has the viewport's size and was painted at most `maxAge` ago, at the earliest its
 timing allows: 250 ms by default, while 0 always takes a new screenshot. With `after: "input"` the
@@ -444,7 +460,7 @@ before the page's current document began, when the page's own session saw its ma
 it: a page that keeps painting while the next document loads would otherwise leave its own frames
 the newest when the navigation returns. Otherwise a new screenshot is
 taken, which `frame` returns as a `Screenshot`-timed frame. `observe` takes a screenshot and a
-`Moment`'s last frame uses `after: "input"`, so a stopped capture, a lost final paint or later input
+`Moment`'s picture uses `after: "input"`, so a stopped capture, a lost final paint or later input
 never presents older paint as the page an action left.
 
 A new picture goes on the page's own protocol session. Where a device pixel is a CSS pixel and
@@ -540,7 +556,8 @@ tracking them, and `browser.firstPage` gives the first, opening one when there i
 A page's life is told on the browser's timeline. `PageOpened`; `Navigated` for every move of its
 main frame, `sameDocument` for one within the document, such as `pushState`, with `document`
 counting the page's documents from 0, the one it had when the browser began tracking it;
-`PageLoaded` as a document finishes parsing and loading; `DialogShown`; and `PageClosed`, by the
+`PageLoaded` as a document finishes parsing and loading, as the page's own session hears it, so
+after the `Navigated` that began the document; `DialogShown`; and `PageClosed`, by the
 page or because it crashed. A document count belongs to the page within one `Browser`, and starts
 again on a new connection. Each frame carries the document it followed and the page's address. A
 tab the site opened that the library could not track is `PageUntracked`. Chromium announces a
@@ -589,8 +606,8 @@ not claim that the browser acknowledged or painted them.
 `PointerPressed`, `PointerReleased`, `WheelScrolled`, `KeyChanged`, `TextInserted` and
 `CursorChanged` describe the remaining input. Button, key and text events are published at
 submission, including cleanup releases. Cursor shape comes from resolved target metadata.
-`TrackEvent` is the schema union for these presentation events; `Moment` excludes them from its
-narrative timeline. Compositing remains the consumer’s job.
+`TrackEvent` is the schema union for these presentation events; a window leaves them out of its
+events. Compositing remains the consumer’s job.
 
 A page waits only for itself. Its operations take turns in one lane of its own: an action, which
 sends input or navigates, has the page to itself, in the order actions were asked; reads (the
@@ -610,6 +627,13 @@ ends after all its callers gave up serves the next caller to ask the same within
 unless an action or a new document came first. An action stops the reads nobody awaits rather than
 wait for them. Pictures and `changes` only join: a picture's caller says how old it may be, and a
 window of changes ends as it is read.
+
+`page.state` is what the library already knows of a page, at no call and with no wait for its
+turn: where its main frame is, its document and when it was committed, how far that document has
+loaded, its newest screencast frame, and the viewport's text and title as last read in that
+document, each with when it was learned, so a caller reads their ages. A caller that must never
+wait, such as one reading the screen on air, reads it rather than polling the page. Chromium
+announces no title change, so the title is as a read of the text last found it.
 
 `Browser.Options.maxPages` bounds the pages a browser keeps open, those a site opened included,
 which are never refused: at the limit, `newPage` waits within the action timeout for one to close,

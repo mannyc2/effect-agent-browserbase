@@ -88,12 +88,17 @@
   news over what keeps changing, counts what it lets go and never claims to be whole where it is
   not, and a window can continue exactly where the last read ended or end at a frame's paint.
   `Page.ready({ quietMillis })` also waits for nothing in view to change where a page records.
-- Moments: `Moment.capture` gathers a page's frames, events and changes over a window that can
-  start where the previous moment ended, so consecutive moments neither repeat nor miss an event
-  or a change, and needs only the page. `Moment.toPrompt` lays a moment out as one message for any
+- Windows and moments: `page.window({ since, until })` reads a page's three tracks, its events, what
+  changed and its frames, over one window of the host clock, which can end in the past, at a frame
+  a delayed consumer airs late, and go on exactly where the last window ended; its events and
+  frames cost no call and its changes one. A part that cannot be read is missing, with why, and
+  the window is still made; `Moment.stillness` says how long its page had been still at its end. A
+  moment is a window that ends at a picture of the page now, and never fails because its picture,
+  its changes or its outline did. `Moment.toPrompt` lays a moment out as one message for any
   `effect/ai` call, leading with what changed, news first, and naming an action only as what a
-  change followed or where its effect is drawn, as on a canvas; describing it is the caller's own
-  `generateObject`, `generateText` or `Chat` turn. Whether a model describes a page better from
+  change followed or where its effect is drawn, as on a canvas, a failed one only as failed; it
+  says what it could not read, and why. Describing it is the caller's own `generateObject`,
+  `generateText` or `Chat` turn. Whether a model describes a page better from
   changes than from steps is not yet measured: the paid narration run is phase 4's. The outline is
   opt-in (`snapshot: true`): in the first paired run, moments with and without it scored 61/80
   each on every task but `navigated`, where the outline's reused refs misled the model, and it
@@ -109,7 +114,9 @@
   click for about 9.5 s in the release review. Identical reads in flight share one call, a read whose
   callers gave up serves the next caller to ask the same until the page's next action, and
   `observe` returns what it could read, with why the rest is missing. `Browser.Options.maxPages`
-  bounds the open pages, failing `Limit`.
+  bounds the open pages, failing `Limit`. `page.state` says what the library already knows of a
+  page at no call and with no wait: its address, document and load, its newest frame, and the
+  viewport's text and title as last read, each with when it was learned.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
   events; a pointer per page, a presenter's one drawn pointer across its views, and bounded event
   replay with explicit expiration.
@@ -216,7 +223,9 @@ and each becoming the next beta.
 - **Phase 3, concurrency and presentation, has begun.** Per-page admission is in: the browser-wide
   input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
   pages have a budget, and guarded typing approves its field once. So are the stage, the presenter
-  and the wait after input: `humanize` and its fixed sleeps are gone.
+  and the wait after input: `humanize` and its fixed sleeps are gone. And so are windows: a page's
+  events, changes and frames over a window that can end in the past, moments as windows that end at
+  a picture and record what they could not read rather than fail, `stillness`, and `page.state`.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
