@@ -37,6 +37,8 @@ export interface Proxy {
   readonly attached: Set<string>;
   /** Answer a command with an empty result instead of sending it on. */
   swallow: (command: Command) => boolean;
+  /** Keep an event of this method from the client, as a browser that holds it back would. */
+  withhold: (method: string) => boolean;
   /**
    * Hold everything one way for a while, then send it on in order, as a stalled connection does:
    * toward the client, frames and answers alike; toward the browser, acknowledgements and commands.
@@ -189,11 +191,13 @@ const relay = (browser: URL, proxy: Proxy, stalled: { client: number; browser: n
         ),
       );
       socket.addEventListener("message", ({ data }: MessageEvent<string>) => {
-        const { id, result } = JSON.parse(data) as {
+        const { id, method, result } = JSON.parse(data) as {
           readonly id?: number;
+          readonly method?: string;
           readonly result?: { readonly sessionId?: string };
         };
 
+        if (method !== undefined && proxy.withhold(method)) return;
         if (id !== undefined) {
           proxy.answers.set(id, Buffer.byteLength(data));
           awaiting.delete(id);
@@ -280,6 +284,7 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
     answers: new Map(),
     attached: new Set(),
     swallow: () => false,
+    withhold: () => false,
     stall: (toward, millis) => {
       stalled[toward] = Math.max(stalled[toward], performance.now() + millis);
     },

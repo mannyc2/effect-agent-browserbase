@@ -17,6 +17,7 @@ import type { Page as PlaywrightPage } from "playwright-core";
 
 import type { BrowserError, PolicyDenied } from "./BrowserError.ts";
 import { Box, type BrowserEvent, Subject, SubjectContext } from "./BrowserEvent.ts";
+import type { Changes } from "./Change.ts";
 import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
@@ -206,6 +207,24 @@ export interface ReadyOptions {
   readonly timeout?: Duration.Input | undefined;
 }
 
+/** The window `changes` reads, and whether to show what fields hold. */
+export interface ChangesOptions {
+  /**
+   * Where the window starts: the changes a previous read returned, to continue exactly where they
+   * ended; a frame, at its paint; or host monotonic milliseconds, which mapped to the page's clock
+   * may miss or repeat changes near the start if the browser's clock mapping changed since. Defaults
+   * to the start of the record.
+   */
+  readonly since?: Changes | Frame | number | undefined;
+  /**
+   * Where it ends: a frame, at its paint, so a delayed frame's window holds nothing it does not
+   * show; or host monotonic milliseconds. Defaults to now, and is never later.
+   */
+  readonly until?: Frame | number | undefined;
+  /** Show what fields hold; a secret field still reads `••••`. Defaults to false. */
+  readonly unmask?: boolean | undefined;
+}
+
 /** What to include in an observation of the current viewport. */
 export type ObservationMode = "outline" | "screenshot" | "both";
 
@@ -364,6 +383,12 @@ export interface Page {
    * library saw it.
    */
   readonly text: (options?: TextOptions) => Effect.Effect<Text, BrowserError>;
+  /**
+   * What visibly changed over a window, in one call to the page. The first read starts the page's
+   * record, so it finds none; from then the page records, and from the start of each later
+   * document, until nobody has read it for two minutes. See `Change`.
+   */
+  readonly changes: (options?: ChangesOptions) => Effect.Effect<Changes, BrowserError>;
 
   readonly click: (
     target: Target,
@@ -397,8 +422,9 @@ export interface Page {
    * Wait until the page is ready to be shown, asking the page every 100 ms: its document is parsed
    * and has painted since, nothing that ends is animating in view, its fonts and the images in
    * view have loaded, and the viewport shows something. With `quietMillis`, the screen must then
-   * also stay still that long: no frame comes, counted from the first frame of a capture the wait
-   * starts itself. A canvas that keeps drawing, such as a live chart, is never still, and a page
+   * also stay still that long: nothing in view changed, where the page's changes are recorded, and
+   * no frame comes, counted from the first frame of a capture the wait starts itself. A canvas
+   * that keeps drawing, such as a live chart, is never still, and a page
    * is never ready without a painted frame, as a hidden tab may be. `Timeout` after `timeout`,
    * 15 seconds by default.
    */

@@ -3,8 +3,10 @@
  * the library's first read of a page, its own protocol session registers the script, so every
  * later document runs it in an isolated world from its start; calls go to the current document's
  * world. The script is composed from the domains' page-side parts, the `*.inpage.ts` modules, in
- * the order they depend on one another: names, the walk, matching, context, subjects, text and
- * readiness, then the outline and the input parts.
+ * the order they depend on one another: names, the walk, matching, context, subjects and text;
+ * the change record (its history, sight, recorder and reads) and readiness, which asks it; then
+ * the outline and the input parts. At the first read of a page's changes, its session registers
+ * the recorder too, so every later document records from its start.
  */
 import { Effect, Semaphore } from "effect";
 
@@ -22,6 +24,12 @@ import { ready } from "../reading/ready.inpage.ts";
 import { subjects, type Subjects } from "../reading/subjects.inpage.ts";
 import { text, type Texts } from "../reading/text.inpage.ts";
 import { walk } from "../reading/walk.inpage.ts";
+import { changes, type Changes } from "../timeline/changes.inpage.ts";
+import { fold } from "../timeline/fold.inpage.ts";
+import { history } from "../timeline/history.inpage.ts";
+import { marks } from "../timeline/marks.inpage.ts";
+import { record, type Recorder } from "../timeline/record.inpage.ts";
+import { sight } from "../timeline/sight.inpage.ts";
 import { contextGone, type PageContext } from "./context.ts";
 import * as Url from "./url.ts";
 
@@ -31,6 +39,8 @@ export interface PageApi {
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
   text: Texts["read"];
+  record: Recorder["start"];
+  changes: Changes["read"];
   ready: ReturnType<typeof ready>["wait"];
   point: Targets["point"];
   scrollPlan: Targets["scrollPlan"];
@@ -56,6 +66,12 @@ const install = (
   makeContext: typeof context,
   makeSubjects: typeof subjects,
   makeText: typeof text,
+  makeFold: typeof fold,
+  makeHistory: typeof history,
+  makeSight: typeof sight,
+  makeMarks: typeof marks,
+  makeRecord: typeof record,
+  makeChanges: typeof changes,
   makeReady: typeof ready,
   makeOutline: typeof outline,
   makeTargets: typeof targets,
@@ -65,23 +81,29 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 9) return installed;
+  if (installed !== undefined && installed.version === 10) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
   const subjected = makeSubjects(named, walked, makeMatch(), placing);
   const texts = makeText(named, walked);
+  const kept = makeHistory(makeFold());
+  const seeing = makeSight(named, walked, texts, kept);
+  const marking = makeMarks(named, kept, seeing);
+  const recorder = makeRecord(named, texts, kept, seeing, marking);
   const read = makeOutline(named, walked, subjected, texts);
   const located = makeTargets(named, walked, placing);
   const guarded = makeGuard(named, located, makeEvidence(named, placing));
   const edited = makeEdit(named, guarded, placing);
 
   const api: PageApi = {
-    version: 9,
+    version: 10,
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
-    ready: makeReady(walked, texts).wait,
+    record: recorder.start,
+    changes: makeChanges(named, placing, kept, seeing, marking, recorder).read,
+    ready: makeReady(walked, texts, kept).wait,
     point: located.point,
     scrollPlan: located.scrollPlan,
     viewport: read.viewport,
@@ -99,9 +121,12 @@ const install = (
 };
 
 /** The expression that installs the script and evaluates to its API. */
-export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, ready, outline, targets, evidence, guard, edit].join(", ")})`;
+export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit].join(", ")})`;
 
 const worldName = "effect-browser";
+
+// What starts the recorder in each new document, after the script installed itself there.
+const recorderSource = `if (globalThis === globalThis.top) globalThis.__effectBrowser?.record();`;
 
 // What a call reads in a world without the script's API. A context id can name another world once
 // the page has moved to a new process, so a cached id that reads this is not the library's world.
@@ -157,27 +182,48 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
 
   // The registration belongs to this session and the world to the page, so a session that attaches
   // later, as after a reconnect, registers again and finds the script already installed. With the
-  // Page domain enabled, the script runs in each new document; `runImmediately` installs it now.
+  // Page domain enabled, a source runs in each new document, in the order registered;
+  // `runImmediately` runs it now.
+  const addScript = (operation: string, source: string) =>
+    native(operation, () =>
+      send("Page.addScriptToEvaluateOnNewDocument", { source, worldName, runImmediately: true }),
+    );
+
   const register = (operation: string) =>
     Effect.all(
       [
         page.paging(operation),
-        native(operation, () =>
-          send("Page.addScriptToEvaluateOnNewDocument", {
-            source: `if (globalThis === globalThis.top) ${installSource};`,
-            worldName,
-            runImmediately: true,
-          }),
-        ),
+        addScript(operation, `if (globalThis === globalThis.top) ${installSource};`),
       ],
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.tap(() =>
+      Effect.andThen(
         Effect.sync(() => {
           registered = true;
         }),
       ),
       span("Page.register", {}, "Debug"),
+    );
+
+  // Whether this session has registered the recorder, which the first read of changes asks for.
+  let recording = false;
+
+  /** Register the recorder after the script, once, so every later document records from its start. */
+  const registerRecorder = (operation: string) =>
+    registering.withPermits(1)(
+      Effect.suspend(() =>
+        recording
+          ? Effect.void
+          : Effect.andThen(registered ? Effect.void : register(operation), () =>
+              addScript(operation, recorderSource).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    recording = true;
+                  }),
+                ),
+              ),
+            ),
+      ),
     );
 
   const createWorld = (operation: string) =>
@@ -282,6 +328,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     evaluateWithContext,
     currentDocument,
     frameTag,
+    registerRecorder,
   };
 });
 

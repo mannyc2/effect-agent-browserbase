@@ -149,7 +149,34 @@ const spinning = `<!doctype html><title>Spinning</title>
 
 const late = `<!doctype html><title>Late</title><body style="margin:0;height:100vh;background:rgb(0,0,255)">`;
 
+// A trading desk whose changes the tests make: prices in a table, an order form whose answer comes
+// 600 ms after its button, a corner for alerts, and a Menu button that does nothing.
+const desk = `<!doctype html><title>Desk</title>
+<body style="margin:0;font-family:sans-serif">
+<h1>Desk</h1>
+<button id="menu" type="button">Menu</button>
+<table aria-label="Markets">
+  <thead><tr><th>Coin</th><th>Price</th><th>1h</th></tr></thead>
+  <tbody>
+    <tr><td>BTC</td><td id="btc">$61,240</td><td id="btc1h">+0.4%</td></tr>
+    <tr><td>ETH</td><td id="eth">$3,105</td><td id="eth1h">-0.8%</td></tr>
+  </tbody>
+</table>
+<form id="order" onsubmit="return false">
+  <h2>Order</h2>
+  <label>Amount <input id="amount" value="1"></label>
+  <button id="place" type="button">Place order</button>
+  <p id="answer"></p>
+</form>
+<div id="alerts" style="position:fixed;top:10px;right:10px"></div>
+<p id="notice" role="alert" class="closed">Market closes early today</p>
+<style>.closed { display: none }</style>
+<div style="height:2000px"></div>
+<p id="below">Below the fold</p>
+<script>place.onclick = () => setTimeout(() => (answer.textContent = "Order placed"), 600);</script>`;
+
 const pages: Record<string, string> = {
+  "/desk": desk,
   "/spinning": spinning,
   "/late": late,
   "/ticker": ticker,
