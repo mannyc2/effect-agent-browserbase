@@ -60,7 +60,7 @@ const slots = `<!doctype html><title>Reels</title>
 const pages: Record<string, string> = { "/form": form, "/next": next, "/slots": slots };
 
 export class Site extends Context.Service<Site, { readonly url: (path: string) => string }>()(
-  "effect-browser-agent/test/Site",
+  "effect-agent-browser/test/Site",
 ) {}
 
 export const SiteLayer = Layer.effect(

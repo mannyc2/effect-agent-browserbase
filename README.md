@@ -3,13 +3,13 @@
 Browser automation for [Effect](https://effect.website) agents: page control, a compact page
 outline for models, screencast frames, a record of what visibly changed on a page, and moments:
 what a page showed, and what changed on it, over a window of time, ready for a model. Agents run on
-[Yielded Agent](https://github.com/yielded-dev/agent), whose browser ports `effect-browser-agent`
+[Yielded Agent](https://github.com/yielded-dev/agent), whose browser ports `effect-agent-browser`
 implements over these pages.
 
 | Package                                                  | What it is                                                         |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
 | [`effect-browser`](packages/browser)                     | The browser, its pages and moments, over Playwright                |
-| [`effect-browser-agent`](packages/agent)                 | Its pages as Yielded Agent's browser ports, with the agent's tools |
+| [`effect-agent-browser`](packages/agent-browser)                 | Its pages as Yielded Agent's browser ports, with the agent's tools |
 | [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
 | [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, supplied as one layer            |
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
@@ -27,7 +27,7 @@ import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
 import { Model } from "effect/ai";
 import { Browser, Chromium } from "effect-browser";
-import { BrowserTools } from "effect-browser-agent";
+import { BrowserTools } from "effect-agent-browser";
 import { FetchHttpClient } from "effect/http";
 
 const tools = BrowserTools.make();

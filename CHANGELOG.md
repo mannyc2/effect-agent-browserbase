@@ -2,7 +2,7 @@
 
 Each release lists what changed since the release before it. From 0.3 on, `effect-browser`,
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
-`effect-browser-agent` joins them from its first release.
+`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
 ## Unreleased
 
@@ -19,7 +19,7 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   the action timeout whoever gives up, and one that ends after all its callers gave up serves the
   next caller to ask the same within an action timeout, until the page's next action or document.
   An action stops the reads nobody awaits rather than wait for them.
-- `effect-browser-agent`, a new package: `effect-browser` pages as Yielded Agent's browser ports,
+- `effect-agent-browser` returns, rebuilt: `effect-browser` pages as Yielded Agent's browser ports,
   and the tools an agent drives them by. `PageControl` implements `BrowserActions` and
   `BrowserControl` over a page, pinned to it, or over a browser's tabs, which it follows as `follow`
   says: `"select"`, the default, makes a tab an action opened current without bringing it to front,
@@ -167,10 +167,10 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   picture or a zoom no longer runs while an action is changing the page, and an action waits for
   the reads before it.
 - `Agent` and `Tools` leave `effect-browser`, and with them `effect/ai`'s `Chat` as the agent loop:
-  an agent runs on Yielded Agent, with `effect-browser-agent`'s tools. `effect-browser` itself has
+  an agent runs on Yielded Agent, with `effect-agent-browser`'s tools. `effect-browser` itself has
   no agent code and no Yielded dependency.
 - `Page.observe`, `Page.Observation` and `Page.ObservationMode` are gone: what an agent sees of a
-  page is `effect-browser-agent`'s.
+  page is `effect-agent-browser`'s.
 - `DialogShown` has `answer`, which a program that builds one must give, and `Snapshot` has
   `controls`.
 - Under a guard, plain typing sends no key events: the text arrives in one insertion once its field
