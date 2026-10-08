@@ -1,53 +1,87 @@
 /**
- * Waiting until a page is ready to be shown. The page's own evidence leads: one page-script call,
- * repeated until the page has nothing left to wait for. A caller that also needs the screen still,
- * such as after spinning a canvas game's reels, gives a quiet spell, and frames must then stay
- * away that long. Once the change record runs (phase 2), nothing in view changing for the spell
- * joins the frames here, which a DOM page's changes show better than its paint.
+ * Waiting until a page is ready to be shown. The page's own evidence leads: one page-script call
+ * that checks in the page until nothing is left to wait for, or the time is up. A caller that also
+ * needs the screen still, such as after spinning a canvas game's reels, gives a quiet spell, and
+ * the capture must then show no frame that long. A capture's silence cannot prove the last paint
+ * arrived: a frame can be held on its way by a stalled connection, and Chromium sends frames only
+ * while few acknowledgements are unanswered. So the spell counts only while every acknowledgement
+ * is answered, and it ends with the page's evidence once more, whose answer comes behind every
+ * frame sent before it: a frame that arrives first starts the spell again. Once the change record
+ * runs (phase 2), nothing in view changing for the spell joins the frames here, which a DOM page's
+ * changes show better than its paint.
  */
-import { Duration, Effect, Schedule, Sink, Stream } from "effect";
+import { Duration, Effect, Schedule, Stream } from "effect";
 
-import type { Frame } from "../../Frame.ts";
+import { Timeout } from "../../BrowserError.ts";
 import type { ReadyOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { decodeWith, type PageContext } from "../page/context.ts";
+import { decodeWith, failWith, type PageContext } from "../page/context.ts";
 import type * as Capture from "../pictures/capture.ts";
 import { ReadinessSchema } from "./ready.inpage.ts";
 
 export const make =
   (page: PageContext, bridge: Bridge, capture: Capture.Controller) =>
   (options: ReadyOptions = {}) => {
-    const evidence = bridge.evaluate("ready", scriptCall("ready")).pipe(
-      Effect.flatMap(decodeWith("ready", ReadinessSchema)),
-      Effect.tap((waiting) => Effect.annotateCurrentSpan({ waiting: waiting.join(",") })),
-    );
+    const timeout = options.timeout ?? Duration.seconds(15);
 
-    const still = <E>(frames: Stream.Stream<Frame, E>, quiet: number) =>
-      frames.pipe(Stream.timeout(Duration.millis(quiet)), Stream.runDrain);
-
-    // A running capture's silence means nothing was painted for the spell. A capture the wait
-    // starts sends its first frame late, over half a second from a hosted browser, so the spell
-    // counts from that frame (#202); Chrome sends one as a capture starts, even of a still page.
-    const quiet = (millis: number) =>
-      capture.active.pipe(
-        Effect.flatMap((running) =>
-          running
-            ? still(capture.stream(), millis)
-            : Stream.peel(capture.stream(), Sink.take(1)).pipe(
-                Effect.flatMap(([, rest]) => still(rest, millis)),
-                Effect.scoped,
-              ),
+    // The page's own evidence, checked in the page until nothing is left or `until` has come.
+    const settled = (until: number) =>
+      Effect.suspend(() =>
+        bridge.evaluate("ready", scriptCall("ready", Math.max(0, Math.round(until - page.now())))),
+      ).pipe(
+        Effect.flatMap(decodeWith("ready", ReadinessSchema)),
+        Effect.tap((waiting) => Effect.annotateCurrentSpan({ waiting: waiting.join(",") })),
+        Effect.filterOrElse(
+          (waiting) => waiting.length === 0,
+          () => failWith("ready", new Timeout({ millis: Duration.toMillis(timeout) })),
         ),
       );
 
-    return evidence.pipe(
-      Effect.repeat({
-        schedule: Schedule.spaced(Duration.millis(100)),
-        until: (waiting) => waiting.length === 0,
-      }),
-      Effect.andThen(options.quietMillis === undefined ? Effect.void : quiet(options.quietMillis)),
-      page.within("ready", options.timeout ?? Duration.seconds(15)),
-      page.span("Page.ready"),
-      page.owned,
-    );
+    // A capture the wait starts sends its first frame late, over half a second from a hosted
+    // browser, so the spell counts from that frame (#202); Chrome sends one as a capture starts,
+    // even of a still page.
+    const quiet = (millis: number, until: number) =>
+      Effect.gen(function* () {
+        const running = yield* capture.active;
+        let { received } = yield* capture.stats();
+        let stirred = running ? page.now() : Number.POSITIVE_INFINITY;
+
+        // How long the screen has been still: since a frame, or an unanswered acknowledgement.
+        const look = Effect.map(capture.stats(), (stats) => {
+          if (stats.received !== received || stats.ackBacklog > 0) {
+            received = stats.received;
+            stirred = page.now();
+          }
+
+          return page.now() - stirred;
+        });
+
+        const spell = Effect.repeat(look, {
+          schedule: Schedule.spaced(Duration.millis(25)),
+          until: (still) => still >= millis,
+        });
+
+        const capturing = running
+          ? Effect.never
+          : capture.stream().pipe(Stream.runDrain, Effect.andThen(Effect.never));
+
+        const still = Effect.gen(function* () {
+          for (;;) {
+            yield* spell;
+            const before = received;
+
+            yield* settled(until);
+            if ((yield* look) >= millis && received === before) return;
+          }
+        });
+
+        return yield* Effect.raceFirst(capturing, still);
+      });
+
+    return Effect.gen(function* () {
+      const until = page.now() + Duration.toMillis(timeout);
+
+      yield* settled(until);
+      if (options.quietMillis !== undefined) yield* quiet(options.quietMillis, until);
+    }).pipe(page.within("ready", timeout), page.span("Page.ready"), page.owned);
   };

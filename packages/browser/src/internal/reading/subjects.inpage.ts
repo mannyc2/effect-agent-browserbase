@@ -11,7 +11,7 @@ import type { Walk } from "./walk.inpage.ts";
 
 export const subjects = (names: Names, walked: Walk, matching: Match, placing: ContextReader) => {
   const { isDisabled, isInput, nameOf, refFor, refs, roleOf, textOf } = names;
-  const { acts, boxOf, controlOf, hitAt } = walked;
+  const { acts, boxOf, controlOf, hitAt, inView } = walked;
   const { contextOf, known } = placing;
 
   /** What the outline lists as a control, with a ref: something a person would act on. */
@@ -68,8 +68,6 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     const matches = matching.compile(request);
     const byText = request.text !== null;
     const viewport = request.scope === "viewport";
-    const width = window.innerWidth;
-    const height = window.innerHeight;
     const read = known();
 
     interface Entry {
@@ -92,9 +90,6 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
 
     const entries: Array<Entry> = [];
     const open: Array<Open> = [];
-
-    const inView = (rect: DOMRect) =>
-      rect.right > 0 && rect.bottom > 0 && rect.left < width && rect.top < height;
 
     const named = (entry: Entry) => (entry.name ??= nameOf(entry.element, entry.role));
     const placed = (entry: Entry) => (entry.context ??= contextOf(entry.element, read));

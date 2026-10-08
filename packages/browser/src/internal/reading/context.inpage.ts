@@ -11,6 +11,7 @@
  */
 import type { SubjectContext } from "../../BrowserEvent.ts";
 import type { Names } from "./names.inpage.ts";
+import type { Walk } from "./walk.inpage.ts";
 
 /** What one read has learnt of the page: each table's header row and each tree's headings. */
 export interface Known {
@@ -18,14 +19,12 @@ export interface Known {
   readonly headings: Map<Node, ReadonlyArray<Element>>;
 }
 
-export const context = (names: Names) => {
+export const context = (names: Names, walked: Walk) => {
   const { clean, isButton, isDocument, isHtml, isInput, isRoot } = names;
   const { isSelect, isTextArea, roleOf, textOf } = names;
+  const { visible } = walked;
 
   const known = (): Known => ({ headers: new Map(), headings: new Map() });
-
-  const shown = (element: Element): boolean =>
-    element.checkVisibility({ opacityProperty: true, visibilityProperty: true });
 
   // Text in these says what a control is called, not what the page says around it.
   const unspoken =
@@ -59,7 +58,7 @@ export const context = (names: Names) => {
         parent.closest(unspoken) !== null ||
         (isHtml(parent) && parent.isContentEditable) ||
         labels.some((label) => label.contains(parent)) ||
-        !shown(parent)
+        !visible(parent)
       )
         continue;
       text = backwards ? `${node.textContent ?? ""} ${text}` : `${text} ${node.textContent ?? ""}`;
@@ -91,7 +90,7 @@ export const context = (names: Names) => {
     for (const heading of headings.toReversed()) {
       if ((heading.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING) === 0)
         continue;
-      const text = shown(heading) ? clean(textOf(heading), 120) : "";
+      const text = visible(heading) ? clean(textOf(heading), 120) : "";
 
       if (text !== "") return text;
     }

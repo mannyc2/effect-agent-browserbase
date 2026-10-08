@@ -110,9 +110,18 @@ const pinned = `<!doctype html><title>Pinned</title>
   <p>Notes <span popover id="saved" style="inset:auto;top:300px;left:100px;margin:0">Saved</span></p>
   <script>saved.showPopover()</script>
   <button>At the bottom</button>
+  <section><p>Shipping</p><div style="position:fixed;top:140px;left:120px;pointer-events:none">A toast that ignores the pointer</div></section>
+  <section><p>Returns</p><span style="position:fixed;top:200px;left:130px">A badge between the points</span></section>
+  <section><p>Help</p><p class="bar">A bar pinned by an adopted stylesheet</p></section>
+  <script>
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(".bar { position: fixed; bottom: 40px; left: 0; right: 0; height: 30px; margin: 0 }");
+    document.adoptedStyleSheets = [sheet];
+  </script>
 </main>
 <footer><div style="position:fixed;bottom:0;left:0;right:0;height:40px;background:#eee">Cookies help <button>Accept</button></div></footer>
-<div><div role="dialog" aria-label="Offer" style="position:fixed;top:200px;left:300px;width:300px;height:100px;background:#fff">Half price today</div></div>`;
+<div><div role="dialog" aria-label="Offer" style="position:fixed;top:200px;left:300px;width:300px;height:100px;background:#fff">Half price today</div></div>
+<div style="position:fixed;inset:0;z-index:5"></div>`;
 
 const account = `<!doctype html><title>Account</title>
 <body style="margin:0;font-family:sans-serif">
@@ -121,6 +130,7 @@ const account = `<!doctype html><title>Account</title>
   <label>Email <input id="email" value="ada@example.com"></label>
   <label>Password <input id="password" type="password"></label>
   <label>Code <input id="code" autocomplete="one-time-code" value="424242"></label>
+  <label>PIN <input id="pin" style="-webkit-text-security:disc" value="4321"></label>
   <label>Note <textarea id="note">Ring twice</textarea></label>
   <label>Country <select id="country"><option>Norway</option><option selected>Chile</option></select></label>
   <div id="bio" contenteditable="true">Likes chess</div>

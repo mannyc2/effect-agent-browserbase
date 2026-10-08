@@ -4,7 +4,7 @@
  */
 import { Schema } from "effect";
 
-import { Subject, type SubjectContext } from "../../BrowserEvent.ts";
+import { Subject } from "../../BrowserEvent.ts";
 import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Guard } from "./guard.inpage.ts";
@@ -31,16 +31,7 @@ export type FocusResult =
  * focused field, when it is one, so the action records what it typed into.
  */
 export type TypeableResult =
-  | {
-      readonly ok: true;
-      readonly secret: boolean;
-      readonly subject?: {
-        readonly role: string | null;
-        readonly name: string;
-        readonly tag: string;
-        readonly context: SubjectContext;
-      };
-    }
+  | { readonly ok: true; readonly secret: boolean; readonly subject?: typeof Subject.Encoded }
   | { readonly error: "stale" | "untypeable"; readonly detail: string };
 
 export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
@@ -93,14 +84,15 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
 
     const refusal =
       element === null
-        ? undefined
+        ? secret
+          ? "nothing has focus to type a secret into"
+          : undefined
         : (typingRefusal(element, ref !== null) ??
           (secret && !isSecret(element)
             ? `${describe(element)} is not a secret field`
             : undefined));
 
-    if (refusal !== undefined || (secret && element === null))
-      return { error: "untypeable", detail: refusal ?? "nothing has focus to type a secret into" };
+    if (refusal !== undefined) return { error: "untypeable", detail: refusal };
     if (element === null || ref !== null || !textEntry(element))
       return { ok: true, secret: element !== null && isSecret(element) };
     const role = roleOf(element);

@@ -3,7 +3,7 @@
 // A refactor or a Playwright upgrade that adds a call or a round trip to one of these operations
 // fails here; the counts, not the timings, are the contract.
 import { assert, it } from "@effect/vitest";
-import { Effect, Option, Schedule, Stream, Tracer } from "effect";
+import { Deferred, Effect, Option, Schedule, Stream, Tracer } from "effect";
 
 import * as Cdp from "../src/Cdp.ts";
 import type { Page } from "../src/Page.ts";
@@ -180,9 +180,21 @@ it.live("a read costs two calls on a new document, and one warm", () =>
     holds(yield* sentBy(proxy, page.find({ role: "heading" })), 1, 1);
     holds(yield* sentBy(proxy, page.find({ at: { x: 20, y: 20 } })), 1, 1);
     holds(yield* sentBy(proxy, page.text()), 1, 1);
-    // A still page is ready at its first check.
+    // A still page is ready at its first check, and one that shows something only later is
+    // checked in the page until it does.
     holds(yield* sentBy(proxy, page.ready()), 1, 1);
     assert.include((yield* page.text()).text, "two");
+    yield* Effect.promise(() =>
+      page.playwright.evaluate(() => {
+        const shown = document.body.innerHTML;
+
+        document.body.replaceChildren();
+        setTimeout(() => {
+          document.body.innerHTML = shown;
+        }, 300);
+      }),
+    );
+    holds(yield* sentBy(proxy, page.ready()), 1, 1);
     // However long the page is, a read is one call.
     yield* Effect.promise(() =>
       page.playwright.evaluate(() =>
@@ -190,6 +202,31 @@ it.live("a read costs two calls on a new document, and one warm", () =>
       ),
     );
     holds(yield* sentBy(proxy, page.find({ role: "button", scope: "document" })), 1, 1);
+  }).pipe(Effect.scoped),
+);
+
+// A wait for a still screen asks the page before its quiet spell and once more to end it, whose
+// answer comes behind any frame still on its way. With no capture running, it starts one, reading
+// the viewport first, and stops it.
+it.live("a wait for a still screen costs two calls, and three more without a running capture", () =>
+  Effect.gen(function* () {
+    const { proxy, browser } = yield* opened();
+    const page = yield* browser.newPage(still("quiet"));
+
+    yield* page.snapshot();
+    // The browser's first capture maps its clock.
+    yield* toFirstFrame(proxy, page);
+    holds(yield* sentBy(proxy, page.ready({ quietMillis: 100 })), 5, 5);
+    // A capture on air, once its first frame has come.
+    const onAir = yield* Deferred.make<void>();
+
+    yield* page.screencast().pipe(
+      Stream.tap(() => Deferred.succeed(onAir, undefined)),
+      Stream.runDrain,
+      Effect.forkScoped,
+    );
+    yield* Deferred.await(onAir);
+    holds(yield* sentBy(proxy, page.ready({ quietMillis: 100 })), 2, 2);
   }).pipe(Effect.scoped),
 );
 

@@ -28,7 +28,7 @@ export interface PageApi {
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
   text: Texts["read"];
-  ready: ReturnType<typeof ready>["check"];
+  ready: ReturnType<typeof ready>["wait"];
   point: Targets["point"];
   scrollPlan: Targets["scrollPlan"];
   viewport: Outline["viewport"];
@@ -65,7 +65,7 @@ const install = (
   if (installed !== undefined && installed.version === 9) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
-  const placing = makeContext(named);
+  const placing = makeContext(named, walked);
   const subjected = makeSubjects(named, walked, makeMatch(), placing);
   const texts = makeText(named, walked);
   const read = makeOutline(named, walked, subjected, texts);
@@ -78,7 +78,7 @@ const install = (
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
-    ready: makeReady(texts).check,
+    ready: makeReady(walked, texts).wait,
     point: located.point,
     scrollPlan: located.scrollPlan,
     viewport: read.viewport,
