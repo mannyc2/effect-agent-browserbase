@@ -1,10 +1,9 @@
 /**
  * The page implementation behind `Page.Page`. `Browser` constructs pages and owns the state they
- * share (the browser-wide input lock, clock mapping, pointer and event publication), so
- * construction stays internal. A page is assembled here from its domains: the script bridge,
- * pictures, reading, input and navigation.
+ * share (the clock mapping and event publication), so construction stays internal. A page is
+ * assembled here from its domains: the script bridge, pictures, reading, input and navigation.
  */
-import { Effect, Semaphore } from "effect";
+import { Effect } from "effect";
 
 import type { Page } from "../../Page.ts";
 import * as Actions from "../input/actions.ts";
@@ -18,8 +17,8 @@ import * as Url from "./url.ts";
 import * as Viewport from "./viewport.ts";
 
 export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
-  const page = Context.make(options, yield* Semaphore.make(1));
-  const { id, playwright, native, owned, within } = page;
+  const page = Context.make(options, yield* Effect.scope);
+  const { id, playwright, native, owned, within, lane, span } = page;
   const bridge = yield* Bridge.make(page);
   const viewport = Viewport.make(page, bridge);
   const input = Actions.make(page, bridge, viewport);
@@ -27,12 +26,21 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const reading = yield* Reading.make(page, bridge, () => pictures.screenshot());
   const navigation = Navigation.make(page, input.perform, input.preparePolicy);
   const { capture } = pictures;
+  const titles = lane.shared<string>("title", true);
+
+  const viewports = lane.shared<{ readonly width: number; readonly height: number }>(
+    "viewport",
+    true,
+  );
 
   const assembled: Page = {
     id,
     playwright,
     url: Effect.sync(() => Url.redact(playwright.url())),
-    title: native("title", () => playwright.title()),
+    title: titles("", native("title", () => playwright.title()).pipe(within("title"))).pipe(
+      span("Page.title"),
+      owned,
+    ),
     goto: navigation.goto,
     back: navigation.back,
     reload: navigation.reload,
@@ -43,7 +51,10 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     screenshot: pictures.screenshot,
     frame: pictures.frame,
     zoom: pictures.zoom,
-    viewport: viewport.viewportFor("viewport").pipe(within("viewport"), owned),
+    viewport: viewports("", viewport.viewportFor("viewport").pipe(within("viewport"))).pipe(
+      span("Page.viewport"),
+      owned,
+    ),
     observe: reading.observe,
     find: reading.find,
     text: reading.text,

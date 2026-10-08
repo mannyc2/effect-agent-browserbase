@@ -1,25 +1,29 @@
 /**
  * One browser tab: navigation, snapshots, pictures and input.
  *
- * Input dispatch is serialized across the browser's pages; navigation is serialized only with
- * its own page. An action waits for its own page (other operations, unresolved input replies)
- * before joining the browser-wide queue, and its timeout bounds those waits before a full timeout
- * bounds the action itself. A policy holds outside the input locks while other actions continue;
- * its target is revalidated before dispatch. Element targets are refs from a snapshot; point
- * targets are viewport coordinates in CSS pixels, the same coordinates as a screenshot's pixels.
- * Mouse and keyboard input share a bounded pipeline, so pacing does not wait for each protocol
- * reply. Target lookup happens before the input is sent.
+ * A page waits only for itself: its operations take turns in one lane of its own. An action, which
+ * sends input or navigates, has the page to itself, in the order actions were asked; reads share
+ * it, after the action in flight and every action asked before them, so a read describes the page
+ * an action left. A wait for a turn ends at the operation's deadline as `Busy`, never `Timeout`,
+ * and a full deadline then bounds the operation itself; `failFast` fails it at once instead.
+ * Identical reads asked between the same actions share one call to the page, and one whose
+ * callers gave up finishes for the next caller to ask it. A policy holds outside the lane while
+ * other operations continue; its target is revalidated before dispatch. Element targets are refs
+ * from a snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
+ * screenshot's pixels. Mouse and keyboard input share a bounded pipeline, so pacing does not wait
+ * for each protocol reply. Target lookup happens before the input is sent.
  *
  * @since 0.3.0
  */
-import { type Duration, type Effect, type Option, Schema, type Stream } from "effect";
+import { type Duration, Effect, type Option, Schema, type Stream } from "effect";
 import type { Page as PlaywrightPage } from "playwright-core";
 
-import type { BrowserError, PolicyDenied } from "./BrowserError.ts";
+import { BrowserError, type PolicyDenied } from "./BrowserError.ts";
 import { Box, type BrowserEvent, Subject, SubjectContext } from "./BrowserEvent.ts";
 import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
+import { FailFast } from "./internal/page/lane.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
 export interface Point {
@@ -213,6 +217,8 @@ export type ObservationMode = "outline" | "screenshot" | "both";
 export class Observation extends Schema.Class<Observation>("effect-browser/Observation")({
   snapshot: Schema.optional(Snapshot),
   image: Schema.optional(Image),
+  /** Why each part asked for and left out could not be read. */
+  missing: Schema.Array(BrowserError),
   /** Host monotonic milliseconds from the browser's captured Effect Clock. */
   at: Schema.Finite,
 }) {}
@@ -293,6 +299,13 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Inp
 /** What replaces text typed into a `secret` field, in requests and in the recorded `Action`. */
 export const redacted = "••••••••";
 
+/**
+ * Run page operations without waiting their turn: on a page busy with other operations, each fails
+ * `Busy` at once, and `Browser.newPage` on a browser with `maxPages` open fails `Limit` at once.
+ */
+export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+  Effect.provideService(effect, FailFast, true);
+
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
@@ -346,7 +359,10 @@ export interface Page {
     { readonly width: number; readonly height: number },
     BrowserError
   >;
-  /** An outline, a picture, or both (the default), taken together. */
+  /**
+   * An outline, a picture, or both (the default), taken together: what could be read, with
+   * `missing` saying why the rest could not, failing only when nothing could.
+   */
   readonly observe: (options?: {
     readonly mode?: ObservationMode;
     readonly full?: boolean;

@@ -78,10 +78,20 @@ export const make =
         return yield* Effect.raceFirst(capturing, still);
       });
 
-    return Effect.gen(function* () {
-      const until = page.now() + Duration.toMillis(timeout);
+    // The wait follows the action in flight, as a read does, but holds no later one back while it
+    // watches the page settle, which can take its whole timeout.
+    return page.lane
+      .read("ready")(Effect.void)
+      .pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            const until = page.now() + Duration.toMillis(timeout);
 
-      yield* settled(until);
-      if (options.quietMillis !== undefined) yield* quiet(options.quietMillis, until);
-    }).pipe(page.within("ready", timeout), page.span("Page.ready"), page.owned);
+            yield* settled(until);
+            if (options.quietMillis !== undefined) yield* quiet(options.quietMillis, until);
+          }).pipe(page.within("ready", timeout)),
+        ),
+        page.span("Page.ready"),
+        page.owned,
+      );
   };

@@ -134,8 +134,10 @@ const replay = Effect.fnUntraced(function* (browser: BrowserService) {
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Track",
   (it) => {
+    // Each page has its own pointer, which its input moves in turn: a page's glide starts where its
+    // last one ended, whatever another page does meanwhile.
     it.effect(
-      "replays one shared pointer track across pages with the input that actually ran",
+      "replays each page's pointer track, with pages at once, and the input that actually ran",
       () =>
         Effect.gen(function* () {
           const fixture = yield* setup();
@@ -148,6 +150,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           const firstPlanned = yield* Deferred.make<void>();
           const livePlans: Array<{ readonly sequence: number; readonly submitted: number }> = [];
 
+          // The moves a page's input had submitted.
+          const movesOn = (page: string) =>
+            fixture.dispatches.filter(
+              (dispatch) =>
+                dispatch.input.type === "mouseMoved" &&
+                dispatch.target === (page === first.id ? first : second).playwright,
+            );
+
           const watching = yield* fixture.browser.events({ after: 0 }).pipe(
             Stream.runForEach((record) =>
               Effect.gen(function* () {
@@ -156,9 +166,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
                 if (record.event._tag === "TrackPlanned") {
                   livePlans.push({
                     sequence: record.sequence,
-                    submitted: fixture.dispatches.filter(
-                      (dispatch) => dispatch.input.type === "mouseMoved",
-                    ).length,
+                    submitted: movesOn(record.event.page).length,
                   });
                   yield* Deferred.succeed(firstPlanned, undefined);
                 }
@@ -205,27 +213,26 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(plans.length, 4);
           assert.strictEqual(terminals.length, plans.length);
           assert.strictEqual(livePlans.length, plans.length);
-          assert.isBelow(terminals[0]?.sequence ?? Infinity, plans[1]?.sequence ?? 0);
-          const firstPlan = plans[0]?.event;
-
-          assert.isDefined(firstPlan);
-          if (firstPlan === undefined || firstPlan._tag !== "TrackPlanned") return;
-          assert.closeTo(firstPlan.from.x, 400, 80);
-          assert.closeTo(firstPlan.from.y, 300, 60);
+          // Each page's first glide starts mid-viewport, and its next where its last ended.
+          for (const record of plans.slice(0, 2))
+            if (record.event._tag === "TrackPlanned") {
+              assert.closeTo(record.event.from.x, 400, 80);
+              assert.closeTo(record.event.from.y, 300, 60);
+            }
           assert.deepStrictEqual(
             plans
-              .slice(1)
+              .slice(2)
               .map((record) =>
                 record.event._tag === "TrackPlanned" ? record.event.from : undefined,
               ),
-            [button, field, button],
+            [button, button],
           );
           assert.deepStrictEqual(
             plans.map(({ event }) => ("page" in event ? event.page : undefined)),
             [first.id, second.id, first.id, first.id],
           );
 
-          let expectedMoves = 0;
+          const expectedMoves = new Map<string, number>();
 
           for (const [index, record] of plans.entries()) {
             const plan = record.event;
@@ -262,15 +269,18 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
               continue;
             assert.deepStrictEqual(livePlans[index], {
               sequence: record.sequence,
-              submitted: expectedMoves,
+              submitted: expectedMoves.get(plan.page) ?? 0,
             });
             assert.isTrue(terminal.complete);
             assert.strictEqual(terminal.dispatched, plan.samples.length);
             assert.deepStrictEqual({ x: terminal.x, y: terminal.y }, { x: last.x, y: last.y });
             assert.isAtLeast(terminal.at, plan.at);
-            expectedMoves += terminal.dispatched;
+            expectedMoves.set(plan.page, (expectedMoves.get(plan.page) ?? 0) + terminal.dispatched);
           }
-          assert.strictEqual(moves.length, expectedMoves);
+          assert.strictEqual(
+            moves.length,
+            [...expectedMoves.values()].reduce((sum, count) => sum + count, 0),
+          );
           const cursors = events.filter((event) => event._tag === "CursorChanged");
 
           // Humanized scroll now inspects the wheel origin, so it can report the actual

@@ -270,10 +270,11 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         inserted: events.flatMap((event) => (event._tag === "TextInserted" ? [event.text] : [])),
       });
 
+      // Under a guard, plain text goes in one insertion, a secret's recorded as one mark.
       assert.deepStrictEqual(recorded(yield* guarded.browser.recentEvents), {
         actions: ["alex@example.com", redacted],
-        keys: [..."alex@example.com", ...Array.from("hunter2", () => "Unidentified")],
-        inserted: [],
+        keys: [],
+        inserted: ["alex@example.com", "•"],
       });
       assert.deepStrictEqual(recorded(yield* open.browser.recentEvents), {
         actions: [redacted],
@@ -498,7 +499,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   for (const humanize of [false, true]) {
     const mode = humanize ? "humanized" : "plain";
 
-    it.effect("stops typing before a newly focused control receives keys, " + mode, () =>
+    // Humanized keys check focus before each space, which could press a button; plain text goes in
+    // one insertion that no key handler can split, so no key reaches another control either way.
+    it.effect("sends no key to a control focused while typing, " + mode, () =>
       Effect.gen(function* () {
         const { page } = yield* setup({
           humanize,
@@ -537,8 +540,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.deepStrictEqual(
           { result, typed: yield* valueOf(page, "#query"), ...effects },
           {
-            result: { tag: "NotActionable", dispatched: true },
-            typed: "a",
+            result: humanize ? { tag: "NotActionable", dispatched: true } : undefined,
+            typed: humanize ? "a" : "a b",
             submitted: undefined,
             activated: undefined,
           },
@@ -595,6 +598,43 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       }),
     );
   }
+
+  // #180 put a guarded 2,000-character paste at about 8 minutes: each key waited for the keys
+  // before it and a focus check. The field is approved once, and the text goes in at once.
+  it.effect("approves a field once, and puts a guarded paste in one insertion", () =>
+    Effect.gen(function* () {
+      let asked = 0;
+
+      const { browser, page } = yield* setup({
+        guard: () =>
+          Effect.sync(() => {
+            asked += 1;
+          }),
+      });
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent('<textarea id="notes" aria-label="Notes"></textarea>'),
+      );
+      const into = refOf(yield* page.snapshot(), "textbox", "Notes");
+      const text = "a guarded paste ".repeat(125);
+      const started = performance.now();
+
+      yield* page.type(text, { into });
+      const millis = performance.now() - started;
+
+      const input = (yield* browser.recentEvents).filter(
+        (event) => event._tag === "TextInserted" || event._tag === "KeyChanged",
+      );
+
+      assert.strictEqual(yield* valueOf(page, "#notes"), text);
+      assert.deepStrictEqual(
+        input.map((event) => event._tag),
+        ["TextInserted"],
+      );
+      assert.strictEqual(asked, 1);
+      assert.isBelow(millis, 2000);
+    }),
+  );
 
   it.effect("consults one policy for every supported input and navigation", () =>
     Effect.gen(function* () {

@@ -122,6 +122,7 @@ const pointless = [
   "NotFound",
   "NotActionable",
   "InvalidRequest",
+  "Limit",
   "PolicyDenied",
   "PolicyTimeout",
 ];

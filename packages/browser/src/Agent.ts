@@ -218,6 +218,9 @@ const observationMessage = Effect.fnUntraced(function* (
           ? `(the page could not be observed: ${observed})`
           : (observed.snapshot?.rendered ?? "Observation of the current viewport."),
     }),
+    ...(typeof observed === "string" ? [] : observed.missing).map((error) =>
+      Prompt.makePart("text", { text: `(missing from this observation: ${error.message})` }),
+    ),
   ];
 
   if (image !== undefined) {

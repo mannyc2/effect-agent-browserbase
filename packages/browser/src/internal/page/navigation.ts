@@ -1,7 +1,7 @@
 /**
  * Moving a page between documents: going to an address, back through its history, or reloading.
- * Each move is an action, so it goes through the input guard and is recorded, but it sends no
- * input and leaves the browser-wide input lock free.
+ * Each move is an action, so it takes the page's turn, goes through the input guard and is
+ * recorded, but it sends no input.
  */
 import { Deferred, Duration, Effect, Schedule } from "effect";
 
