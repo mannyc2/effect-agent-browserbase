@@ -1,15 +1,9 @@
-// The agent and its tools, driven by scripted models: no model is called.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-
+// The agent, driven by scripted models: no model is called.
 import { assert, expectTypeOf, layer } from "@effect/vitest";
-import { Context, Duration, Effect, Exit, Layer, Schedule, Schema, Stream, Tracer } from "effect";
+import { Context, Duration, Effect, Layer, Schema, Stream, Tracer } from "effect";
 import { AiError, LanguageModel, Prompt, type Response, Tool, Toolkit } from "effect/ai";
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput";
 import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput";
-import type { BrowserContext } from "playwright-core";
 
 import * as Agent from "../src/Agent.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
@@ -28,9 +22,10 @@ class Ledger extends Context.Service<
   { readonly record: (step: number) => Effect.Effect<void> }
 >()("test/Ledger") {}
 
-/** A model that answers each call with the next turn, and keeps the prompts it was given. */
+/** A model that answers each call with the next turn, and keeps the prompts and tools it was given. */
 const scripted = (turns: ReadonlyArray<Turn>) => {
   const prompts: Array<Prompt.Prompt> = [];
+  const offered: Array<ReadonlyArray<Tool.Any>> = [];
   let index = 0;
 
   const model = LanguageModel.make({
@@ -40,6 +35,7 @@ const scripted = (turns: ReadonlyArray<Turn>) => {
 
         index += 1;
         prompts.push(options.prompt);
+        offered.push(options.tools);
 
         return turn === undefined
           ? Effect.die(`no turn ${index} in the script`)
@@ -48,26 +44,8 @@ const scripted = (turns: ReadonlyArray<Turn>) => {
     streamText: () => Stream.empty,
   });
 
-  return { layer: Layer.effect(LanguageModel.LanguageModel, model), prompts };
+  return { layer: Layer.effect(LanguageModel.LanguageModel, model), prompts, offered };
 };
-
-/** Pages of this context take `delay` more milliseconds to register, as over a remote CDP link. */
-const slowRegistration = (context: BrowserContext, delay: number): BrowserContext =>
-  new Proxy(context, {
-    get(target, property) {
-      if (property === "newCDPSession")
-        return async (page: Parameters<BrowserContext["newCDPSession"]>[0]) => {
-          await new Promise((resolve) => {
-            setTimeout(resolve, delay);
-          });
-
-          return target.newCDPSession(page);
-        };
-      const value: unknown = Reflect.get(target, property, target);
-
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
 
 /** A model that answers each call with the next reply, failures included. */
 const replies = (
@@ -134,32 +112,38 @@ const resultsIn = (prompt: Prompt.Prompt) =>
 const valueOf = (page: Page, selector: string) =>
   Effect.promise(() => page.playwright.locator(selector).inputValue());
 
-/** Count observations while preserving the real Chromium page and every operation on it. */
-const trackObservations = Effect.fnUntraced(function* (page: Page) {
-  const browser = yield* Browser;
-  const observations: Array<Parameters<Page["observe"]>[0]> = [];
-
-  const observed: Page = {
-    ...page,
-    observe: (options) =>
-      Effect.suspend(() => {
-        observations.push(options);
-
-        return page.observe(options);
-      }),
-  };
+/** The default observation, counting each look. */
+const counting = (observe: Agent.Observe = Agent.observe()) => {
+  let looks = 0;
 
   return {
-    observations,
-    browser: Browser.of({
-      ...browser,
-      firstPage: Effect.succeed(observed),
-      pages: browser.pages.pipe(
-        Effect.map((pages) => pages.map((open) => (open === page ? observed : open))),
-      ),
-    }),
+    observe: (page: Page) =>
+      Effect.suspend(() => {
+        looks += 1;
+
+        return observe(page);
+      }),
+    looks: () => looks,
   };
-});
+};
+
+/** An observation that fails on its `nth` look, as a page the agent cannot see would. */
+const failingOn = (nth: number) =>
+  counting((page) =>
+    Effect.suspend(() => {
+      nth -= 1;
+
+      return nth === 0
+        ? Effect.fail(
+            new BrowserError({
+              operation: "observe",
+              reason: new Failed({ detail: "fixture observation failed" }),
+              dispatched: false,
+            }),
+          )
+        : Agent.observe()(page);
+    }),
+  );
 
 /** The newest ref for this role and name in the prompt. */
 const refIn = (prompt: Prompt.Prompt, role: string, name: string): string => {
@@ -188,14 +172,16 @@ const read = (page: Page, selector: string) =>
     page.playwright.evaluate((s) => document.querySelector(s)?.textContent ?? null, selector),
   );
 
+const isReceipt = Schema.is(Tools.Receipt);
+
 layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
 })("Agent", (it) => {
-  it.effect("runs a batch in order with one observation per turn, including done", () =>
+  it.effect("runs a batch in order, observing after every turn but the one that ends the run", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
-      const tracked = yield* trackObservations(page);
+      const looks = counting();
 
       const model = scripted([
         (prompt) => [
@@ -209,8 +195,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const steps: Array<Agent.Step> = [];
 
       const result = yield* Agent.run("Submit the order and report the outcome.", {
+        page,
+        observe: looks.observe,
         onStep: (step) => Effect.sync(() => steps.push(step)),
-      }).pipe(Effect.provide(model.layer), Effect.provideService(Browser, tracked.browser));
+      }).pipe(Effect.provide(model.layer));
 
       assert.strictEqual(result.answer, "Ordered 25 btc");
       assert.strictEqual(result.steps, 2);
@@ -220,12 +208,22 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         cachedInputTokens: 80,
       });
       assert.strictEqual(yield* read(page, "#outcome"), "Ordered 25 btc");
-      assert.include(String(steps[0]?.results[0]?.result), 'Typed "25"');
-      assert.match(String(steps[0]?.results[1]?.result), /^Clicked .*"Submit" at \(\d+, \d+\)\.$/);
+
+      // Each call answers with a receipt, whose action carries the model's call id.
+      const [typed, clicked] = steps[0]?.results.map(({ result }) => result) ?? [];
+
+      assert.isTrue(isReceipt(typed) && typed.did.includes('Typed "25"'));
+      assert.isTrue(
+        isReceipt(clicked) &&
+          /^Clicked .*"Submit" at \(\d+, \d+\)\.$/.test(clicked.did) &&
+          clicked.action?.correlation !== undefined &&
+          textOf(result.history).includes(clicked.did),
+      );
       assert.include(textOf(model.prompts[1]!), "text: Ordered 25 btc");
+      // The turn that answered was not observed: no picture and no look follow it.
       assert.deepStrictEqual(model.prompts.map(pictures), [1, 2]);
-      assert.strictEqual(pictures(result.history), 3);
-      assert.strictEqual(tracked.observations.length, 3);
+      assert.strictEqual(pictures(result.history), 2);
+      assert.strictEqual(looks.looks(), 2);
       assert.deepStrictEqual(
         resultsIn(result.history).map((part) => part.name),
         ["browser_type", "browser_click", "done"],
@@ -249,7 +247,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
             text: "25",
             append: null,
             submit: null,
-            prose: null,
           }),
           call("browser_click", {
             ref: refIn(prompt, "textbox", "Amount"),
@@ -267,7 +264,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         },
       ]);
 
-      yield* Agent.run("Submit the order.").pipe(Effect.provide(model.layer));
+      yield* Agent.run("Submit the order.", { page }).pipe(Effect.provide(model.layer));
 
       assert.strictEqual(yield* read(page, "#outcome"), "Ordered 25 btc");
     }),
@@ -300,7 +297,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         },
       ]);
 
-      const result = yield* Agent.run("Try the action.").pipe(Effect.provide(model.layer));
+      const result = yield* Agent.run("Try the action.", { page }).pipe(
+        Effect.provide(model.layer),
+      );
 
       assert.strictEqual(yield* valueOf(page, "#amount"), "10");
       assert.strictEqual(result.answer, "recovered");
@@ -322,7 +321,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ],
       ]);
 
-      const result = yield* Agent.run("Set the amount.").pipe(Effect.provide(model.layer));
+      const result = yield* Agent.run("Set the amount.", { page }).pipe(
+        Effect.provide(model.layer),
+      );
+
       const results = resultsIn(result.history);
 
       assert.strictEqual(result.answer, "finished");
@@ -332,14 +334,14 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         [false, false, true],
       );
       assert.match(JSON.stringify(results[2]?.result), /not executed/i);
-      assert.strictEqual(pictures(result.history), 2);
+      assert.strictEqual(pictures(result.history), 1);
     }),
   );
 
-  it.effect("ends a batch at give_up and preserves the reason", () =>
+  it.effect("gives up at give_up, keeping the run's usage and conversation in its error", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
-      const tracked = yield* trackObservations(page);
+      const looks = counting();
 
       const model = scripted([
         (prompt) => [
@@ -353,14 +355,13 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const steps: Array<Agent.Step> = [];
 
       const failure = yield* Agent.run("Finish the order.", {
+        page,
+        observe: looks.observe,
         onStep: (step) => Effect.sync(() => steps.push(step)),
-      }).pipe(
-        Effect.provide(model.layer),
-        Effect.provideService(Browser, tracked.browser),
-        Effect.flip,
-      );
+      }).pipe(Effect.provide(model.layer), Effect.flip);
 
       assert.instanceOf(failure, Agent.AgentError);
+      if (!Schema.is(Agent.AgentError)(failure)) return;
       assert.strictEqual(failure.message, "the agent gave up: cannot finish the order");
       assert.strictEqual(yield* valueOf(page, "#amount"), "20");
       assert.deepStrictEqual(
@@ -368,7 +369,18 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         [false, false, true],
       );
       assert.match(JSON.stringify(steps[0]?.results[2]?.result), /not executed/i);
-      assert.strictEqual(tracked.observations.length, 2);
+      assert.strictEqual(looks.looks(), 1);
+      // The failed run is the one worth reading: it keeps what it spent and said.
+      assert.deepStrictEqual(failure.usage, {
+        inputTokens: 100,
+        outputTokens: 10,
+        cachedInputTokens: 40,
+      });
+      assert.include(textOf(failure.history), "Finish the order.");
+      assert.deepStrictEqual(
+        resultsIn(failure.history).map((part) => part.name),
+        ["browser_type", "give_up", "browser_type"],
+      );
     }),
   );
 
@@ -376,7 +388,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     "asks again after unreadable arguments, but ends on a provider's unreadable reply",
     () =>
       Effect.gen(function* () {
-        yield* start("/next");
+        const page = yield* start("/next");
 
         // The failures an adapter raises: its parse of a call's arguments, which is model output,
         // and its client's decoding of the service's reply, which is not.
@@ -400,7 +412,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           Effect.succeed([call("done", { answer: "read" }), finish]),
         ]);
 
-        const result = yield* Agent.run("Read the page.").pipe(
+        const result = yield* Agent.run("Read the page.", { page }).pipe(
           Effect.provideServiceEffect(LanguageModel.LanguageModel, corrected.model),
         );
 
@@ -412,7 +424,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
         const ended = replies([Effect.fail(undecodable)]);
 
-        const failure = yield* Agent.run("Read the page.").pipe(
+        const failure = yield* Agent.run("Read the page.", { page }).pipe(
           Effect.provideServiceEffect(LanguageModel.LanguageModel, ended.model),
           Effect.flip,
         );
@@ -425,7 +437,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   it.effect("asks again after a call to an unknown tool, without running any call", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
-      const tracked = yield* trackObservations(page);
+      const looks = counting();
 
       yield* Effect.promise(() => page.playwright.locator("#amount").focus());
       yield* Effect.promise(() => page.playwright.locator("#amount").press("End"));
@@ -457,8 +469,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const steps: Array<Agent.Step> = [];
 
       const result = yield* Agent.run("Append a digit.", {
+        page,
+        observe: looks.observe,
         onStep: (step) => Effect.sync(() => steps.push(step)),
-      }).pipe(Effect.provide(model.layer), Effect.provideService(Browser, tracked.browser));
+      }).pipe(Effect.provide(model.layer));
 
       assert.strictEqual(yield* valueOf(page, "#amount"), "10");
       assert.strictEqual(result.answer, "unchanged");
@@ -466,9 +480,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.isString(steps[0]?.rejected);
       assert.deepStrictEqual(steps[0]?.calls, []);
       assert.isUndefined(steps[1]?.rejected);
-      assert.strictEqual(tracked.observations.length, 3);
+      assert.strictEqual(looks.looks(), 2);
 
-      const limited = yield* Agent.run("Append a digit.", { maxSteps: 1 }).pipe(
+      const limited = yield* Agent.run("Append a digit.", { page, maxSteps: 1 }).pipe(
         Effect.provide(scripted([() => [call("browser_screenshot", {}), finish]]).layer),
         Effect.flip,
       );
@@ -502,6 +516,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       ]);
 
       const result = yield* Agent.run("Read the amount.", {
+        page,
         answer: Schema.Struct({ amount: Schema.Finite }),
       }).pipe(Effect.provide(model.layer));
 
@@ -514,7 +529,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   it.effect("does not execute calls from a turn truncated for length", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
-      const tracked = yield* trackObservations(page);
+      const looks = counting();
 
       const model = scripted([
         (prompt) => [
@@ -535,119 +550,125 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         },
       ]);
 
-      const result = yield* Agent.run("Read the amount.").pipe(
+      const result = yield* Agent.run("Read the amount.", { page, observe: looks.observe }).pipe(
         Effect.provide(model.layer),
-        Effect.provideService(Browser, tracked.browser),
       );
 
       assert.strictEqual(yield* valueOf(page, "#amount"), "10");
       assert.strictEqual(result.answer, "retried");
-      assert.strictEqual(tracked.observations.length, 3);
+      assert.strictEqual(looks.looks(), 2);
     }),
   );
 
-  for (const observation of ["outline", "screenshot", "both"] as const) {
-    it.effect(`observes only the requested ${observation} content`, () =>
+  for (const mode of ["outline", "screenshot", "both"] as const) {
+    it.effect(`observes only the requested ${mode} content`, () =>
       Effect.gen(function* () {
         const page = yield* start("/form");
-        const tracked = yield* trackObservations(page);
 
         const model = scripted([
           () => [call("browser_wait", { seconds: 0 }), finish],
           () => [call("done", { answer: "seen" }), finish],
         ]);
 
-        const result = yield* Agent.run("Look at the page.", { observation }).pipe(
-          Effect.provide(model.layer),
-          Effect.provideService(Browser, tracked.browser),
-        );
+        const result = yield* Agent.run("Look at the page.", {
+          page,
+          observe: Agent.observe(mode),
+        }).pipe(Effect.provide(model.layer));
 
-        assert.deepStrictEqual(
-          model.prompts.map(pictures),
-          observation === "outline" ? [0, 0] : [1, 2],
-        );
-        assert.strictEqual(
-          textOf(model.prompts[0]!).includes('heading "Place an order"'),
-          observation !== "screenshot",
-        );
+        assert.deepStrictEqual(model.prompts.map(pictures), mode === "outline" ? [0, 0] : [1, 2]);
         assert.strictEqual(
           textOf(result.history).includes('heading "Place an order"'),
-          observation !== "screenshot",
+          mode !== "screenshot",
         );
-        assert.strictEqual(tracked.observations.length, 3);
-        assert.isTrue(tracked.observations.every((options) => options?.mode === observation));
       }),
     );
   }
 
-  it.effect("keeps built-in handlers unless the caller explicitly adds their tools", () =>
+  it.effect("replaces what the model sees, its system prompt, and its tools", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
-      const Ambient = Toolkit.make(Tools.Type);
-      let ambientCalled = false;
+      let looked = 0;
 
-      const model = scripted([
-        (prompt) => [
-          call("browser_type", { ref: refIn(prompt, "textbox", "Amount"), text: "25" }),
-          finish,
-        ],
-        () => [call("done", { answer: "typed" }), finish],
-      ]);
+      // A preparation agent's tools: the browser's renamed, without zoom or select, and one more.
+      const Note = Tool.make("prep_note", {
+        parameters: Schema.Struct({ note: Schema.String }),
+        success: Schema.String,
+      });
 
-      const result = yield* Agent.run("Set the amount.").pipe(
-        Effect.provide([
-          Ambient.toLayer({
-            browser_type: () =>
-              Effect.sync(() => {
-                ambientCalled = true;
+      const notes: Array<string> = [];
 
-                return "ambient handler";
-              }),
-          }),
-          model.layer,
-        ]),
+      const prep = <T extends Tool.Any, const Name extends string>(tool: T, name: Name) =>
+        Tool.make(name, {
+          description: tool.description,
+          parameters: tool.parametersSchema as T["parametersSchema"],
+          success: tool.successSchema as T["successSchema"],
+          failure: tool.failureSchema as T["failureSchema"],
+          failureMode: "return",
+        });
+
+      const Prep = Toolkit.make(
+        prep(Tools.PageToolkit.tools.browser_type, "prep_type"),
+        prep(Tools.PageToolkit.tools.browser_snapshot, "prep_snapshot"),
+        Note,
       );
 
-      assert.isFalse(ambientCalled);
-      assert.strictEqual(yield* valueOf(page, "#amount"), "25");
-      assert.include(String(resultsIn(result.history)[0]?.result), 'Typed "25"');
+      // The model sees no outline here, so it knows the field's ref from elsewhere.
+      const outline = Prompt.make([{ role: "user", content: (yield* page.snapshot()).rendered }]);
+
+      const model = scripted([
+        () => [
+          call("prep_note", { note: "the amount field" }),
+          call("prep_type", { ref: refIn(outline, "textbox", "Amount"), text: "42" }),
+          finish,
+        ],
+        () => [call("done", { answer: "noted" }), finish],
+      ]);
+
+      const result = yield* Agent.run("Prepare the order.", {
+        page,
+        system: (standard) => `${standard}\n\nYou prepare orders for a person to check.`,
+        observe: (seen) =>
+          Effect.map(seen.text(), ({ text }) => {
+            looked += 1;
+
+            return [Prompt.makePart("text", { text: `What the page says: ${text}` })];
+          }),
+        tools: (defaults) => ({
+          toolkit: Prep,
+          handlers: Prep.of({
+            prep_type: defaults.handlers.browser_type,
+            prep_snapshot: defaults.handlers.browser_snapshot,
+            prep_note: ({ note }) => Effect.sync(() => notes.push(note)).pipe(Effect.as("Noted.")),
+          }),
+        }),
+      }).pipe(Effect.provide(model.layer));
+
+      const [opening] = model.prompts;
+      const [offered] = model.offered;
+
+      assert.strictEqual(result.answer, "noted");
+      assert.strictEqual(yield* valueOf(page, "#amount"), "42");
+      assert.deepStrictEqual(notes, ["the amount field"]);
+      assert.include(textOf(opening!), "You prepare orders for a person to check.");
+      assert.include(textOf(opening!), "What the page says:");
+      assert.strictEqual(pictures(result.history), 0);
+      assert.strictEqual(looked, 2);
+      assert.sameMembers(
+        (offered ?? []).map((tool) => tool.name),
+        ["prep_type", "prep_snapshot", "prep_note", "done", "give_up"],
+      );
     }),
   );
 
   it.effect("keeps a performed action when its following observation fails", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
+      const looks = failingOn(2);
 
       yield* Effect.promise(() => page.playwright.locator("#amount").press("End"));
-      const browser = yield* Browser;
-      let observations = 0;
-
-      const observed: Page = {
-        ...page,
-        observe: (options) =>
-          Effect.suspend(() => {
-            observations += 1;
-
-            return observations === 2
-              ? Effect.fail(
-                  new BrowserError({
-                    operation: "observe",
-                    reason: new Failed({ detail: "fixture observation failed" }),
-                    dispatched: false,
-                  }),
-                )
-              : page.observe(options);
-          }),
-      };
 
       const model = scripted([
-        () => [
-          call("browser_type", {
-            text: "1",
-            append: true,
-          }),
-          finish,
-        ],
+        () => [call("browser_type", { text: "1", append: true }), finish],
         (prompt) => {
           const results = resultsIn(prompt);
 
@@ -663,28 +684,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         },
       ]);
 
-      const result = yield* Agent.run("Append one digit.").pipe(
-        Effect.provide(model.layer),
-        Effect.provideService(
-          Browser,
-          Browser.of({
-            ...browser,
-            firstPage: Effect.succeed(observed),
-            pages: browser.pages.pipe(
-              Effect.map((pages) => pages.map((open) => (open === page ? observed : open))),
-            ),
-          }),
-        ),
-      );
+      const result = yield* Agent.run("Append one digit.", {
+        page,
+        observe: looks.observe,
+      }).pipe(Effect.provide(model.layer));
 
       assert.strictEqual(yield* valueOf(page, "#amount"), "101");
       assert.strictEqual(result.answer, "typed once");
       assert.strictEqual(result.steps, 2);
-      assert.strictEqual(observations, 3);
-      assert.deepStrictEqual(
-        resultsIn(result.history).map((part) => part.name),
-        ["browser_type", "done"],
-      );
+      assert.strictEqual(looks.looks(), 2);
     }),
   );
 
@@ -703,21 +711,20 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         Tool.make("close_browser", { parameters: Schema.Struct({}), success: Schema.String }),
       );
 
-      const closing = Closing.toLayer({
-        close_browser: () => Effect.promise(() => context.close()).pipe(Effect.as("Closed.")),
-      });
-
       const model = scripted([() => [call("close_browser", {}), finish]]);
       const reported: Array<number> = [];
 
       const failure = yield* Agent.run("Close the browser.", {
-        additionalTools: Closing,
+        browser,
+        tools: (defaults) => ({
+          toolkit: Toolkit.merge(defaults.toolkit, Closing),
+          handlers: {
+            ...defaults.handlers,
+            close_browser: () => Effect.promise(() => context.close()).pipe(Effect.as("Closed.")),
+          },
+        }),
         onStep: (step) => Effect.sync(() => reported.push(step.usage.inputTokens)),
-      }).pipe(
-        Effect.provide([closing, model.layer]),
-        Effect.provideService(Browser, browser),
-        Effect.flip,
-      );
+      }).pipe(Effect.provide(model.layer), Effect.flip);
 
       assert.strictEqual(failure._tag, "BrowserError");
       assert.strictEqual(model.prompts.length, 1);
@@ -726,9 +733,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       const unused = scripted([]);
 
-      const again = yield* Agent.run("Look again.").pipe(
+      const again = yield* Agent.run("Look again.", { browser }).pipe(
         Effect.provide(unused.layer),
-        Effect.provideService(Browser, browser),
         Effect.flip,
       );
 
@@ -737,83 +743,41 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("keeps the answer of the turn in which the browser went away", () =>
+  it.effect("ends the run once its pinned page is gone, and keeps an answer given as it went", () =>
     Effect.gen(function* () {
-      const native = (yield* Browser).context.browser();
+      const browser = yield* Browser;
+      const page = yield* browser.newPage("data:text/html,<title>Task</title>The answer is 42");
 
-      assert.isNotNull(native);
-      if (native === null) return;
-      const context = yield* Effect.promise(() => native.newContext());
-      const browser = yield* makeBrowser(context, { id: "expiring", provider: "test" });
-
-      yield* (yield* browser.firstPage).goto("data:text/html,<title>Task</title>The answer is 42");
-      const reported: Array<number> = [];
-
-      // The model answers while the hosted session expires.
-      const model = replies([
-        Effect.promise(() => context.close()).pipe(
-          Effect.as([call("done", { answer: "42" }), finish]),
-        ),
+      // The model answers while the tab closes.
+      const answered = replies([
+        page.close.pipe(Effect.orDie, Effect.as([call("done", { answer: "42" }), finish])),
       ]);
 
-      const result = yield* Agent.run("Read the answer.", {
-        onStep: (step) => Effect.sync(() => reported.push(step.usage.inputTokens)),
-      }).pipe(
-        Effect.provideServiceEffect(LanguageModel.LanguageModel, model.model),
-        Effect.provideService(Browser, browser),
+      const result = yield* Agent.run("Read the answer.", { page }).pipe(
+        Effect.provideServiceEffect(LanguageModel.LanguageModel, answered.model),
       );
 
       assert.strictEqual(result.answer, "42");
-      assert.deepStrictEqual(reported, [100]);
-    }),
-  );
 
-  it.effect("uses additional tool definitions and handlers on a name clash", () =>
-    Effect.gen(function* () {
-      yield* start("/next");
+      const closing = yield* browser.newPage("data:text/html,<title>Task</title>Wait");
 
-      const Additional = Toolkit.make(
-        Tool.make("browser_wait", {
-          parameters: Schema.Struct({ label: Schema.String }),
-          success: Schema.String,
-        }),
-      );
-
-      const labels: Array<string> = [];
-
-      const model = scripted([
-        () => [call("browser_wait", { label: "custom" }), finish],
-        () => [call("done", { answer: "seen" }), finish],
+      const waited = replies([
+        closing.close.pipe(Effect.orDie, Effect.as([call("browser_wait", { seconds: 0 }), finish])),
       ]);
 
-      const program = Agent.run("Use the extra tool.", { additionalTools: Additional });
-
-      expectTypeOf<Effect.Services<typeof program>>().toEqualTypeOf<
-        Browser | LanguageModel.LanguageModel | Tool.Handler<"browser_wait">
-      >();
-
-      const result = yield* program.pipe(
-        Effect.provide([
-          Additional.toLayer({
-            browser_wait: ({ label }) =>
-              Effect.sync(() => {
-                labels.push(label);
-
-                return "custom wait: " + label;
-              }),
-          }),
-          model.layer,
-        ]),
+      const failure = yield* Agent.run("Wait.", { page: closing }).pipe(
+        Effect.provideServiceEffect(LanguageModel.LanguageModel, waited.model),
+        Effect.flip,
       );
 
-      assert.deepStrictEqual(labels, ["custom"]);
-      assert.strictEqual(resultsIn(result.history)[0]?.result, "custom wait: custom");
+      assert.strictEqual(failure._tag, "BrowserError");
+      assert.strictEqual(waited.prompts.length, 1);
     }),
   );
 
-  it.effect("keeps done the agent's own even when an added tool takes its name", () =>
+  it.effect("keeps done the agent's own even when a caller's tool takes its name", () =>
     Effect.gen(function* () {
-      yield* start("/next");
+      const page = yield* start("/next");
       let replaced = 0;
 
       const Clashing = Toolkit.make(
@@ -826,21 +790,20 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const model = scripted([() => [call("done", { answer: "finished" }), finish]]);
 
       const result = yield* Agent.run("Finish.", {
-        // @ts-expect-error -- `done` ends the run, so an added tool cannot take its name
-        additionalTools: Clashing,
-      }).pipe(
-        Effect.provide([
-          Clashing.toLayer({
+        page,
+        // @ts-expect-error -- `done` ends the run, so a caller's tool cannot take its name
+        tools: () => ({
+          toolkit: Clashing,
+          handlers: {
             done: () =>
               Effect.sync(() => {
                 replaced += 1;
 
                 return "replaced";
               }),
-          }),
-          model.layer,
-        ]),
-      );
+          },
+        }),
+      }).pipe(Effect.provide(model.layer));
 
       assert.strictEqual(result.answer, "finished");
       assert.strictEqual(replaced, 0);
@@ -848,7 +811,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   );
 
   for (const failureMode of ["return", "error"] as const) {
-    it.effect("halts on an additional tool with failure mode " + failureMode, () =>
+    it.effect("halts on a caller's tool with failure mode " + failureMode, () =>
       Effect.gen(function* () {
         const page = yield* start("/form");
 
@@ -886,15 +849,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ]);
 
         const result = yield* Agent.run("Use the extra tool.", {
-          additionalTools: Additional,
-        }).pipe(
-          Effect.provide([
-            Additional.toLayer({
+          page,
+          tools: (defaults) => ({
+            toolkit: Toolkit.merge(defaults.toolkit, Additional),
+            handlers: {
+              ...defaults.handlers,
               fixture_failure: () => Effect.fail("fixture denied"),
-            }),
-            model.layer,
-          ]),
-        );
+            },
+          }),
+        }).pipe(Effect.provide(model.layer));
 
         assert.strictEqual(yield* valueOf(page, "#amount"), "20");
         assert.strictEqual(result.answer, "recovered");
@@ -907,7 +870,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   it.effect("observes turns without calls before stopping an idle model", () =>
     Effect.gen(function* () {
       const page = yield* start("/next");
-      const tracked = yield* trackObservations(page);
+      const looks = counting();
 
       const idle = () => [
         { type: "text" as const, text: "Still thinking." },
@@ -916,37 +879,29 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       const model = scripted([idle, idle, idle]);
 
-      const failure = yield* Agent.run("Continue.").pipe(
+      const failure = yield* Agent.run("Continue.", { page, observe: looks.observe }).pipe(
         Effect.provide(model.layer),
-        Effect.provideService(Browser, tracked.browser),
         Effect.flip,
       );
 
       assert.instanceOf(failure, Agent.AgentError);
       assert.include(failure.message, "stopped calling tools");
       assert.strictEqual(model.prompts.length, 3);
-      assert.strictEqual(tracked.observations.length, 4);
+      assert.strictEqual(looks.looks(), 4);
     }),
   );
 
   it.effect("offers every tool with an object schema under each provider's codec", () =>
     Effect.gen(function* () {
       yield* start("/next");
-      const offered: Array<Tool.Any> = [];
-
-      const model = LanguageModel.make({
-        generateText: (options) =>
-          Effect.sync(() => {
-            offered.push(...options.tools);
-
-            return [call("done", { answer: { credits: 1 } }), finish];
-          }),
-        streamText: () => Stream.empty,
-      });
+      const model = scripted([() => [call("done", { answer: { credits: 1 } }), finish]]);
 
       yield* Agent.run("Count the credits.", {
+        browser: yield* Browser,
         answer: Schema.Struct({ credits: Schema.Finite }),
-      }).pipe(Effect.provideServiceEffect(LanguageModel.LanguageModel, model));
+      }).pipe(Effect.provide(model.layer));
+
+      const offered = model.offered[0] ?? [];
 
       assert.sameMembers(
         offered.map((tool) => tool.name),
@@ -965,13 +920,14 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
   it.effect("returns an answer in the shape it was asked for", () =>
     Effect.gen(function* () {
-      yield* start("/chart");
+      const page = yield* start("/chart");
 
       const model = scripted([
         () => [call("done", { answer: { price: 64210, trend: "up" } }), finish],
       ]);
 
       const result = yield* Agent.run("Read the chart.", {
+        page,
         answer: Schema.Struct({ price: Schema.Finite, trend: Schema.Literals(["up", "down"]) }),
       }).pipe(Effect.provide(model.layer));
 
@@ -982,7 +938,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
   it.effect("keeps only the latest pictures in the conversation", () =>
     Effect.gen(function* () {
-      yield* start("/slots");
+      const page = yield* start("/slots");
       const look = () => [call("browser_wait", { seconds: 0 }), finish];
 
       const model = scripted([
@@ -993,7 +949,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         () => [call("done", { answer: "seen" }), finish],
       ]);
 
-      const result = yield* Agent.run("Look at the game.", { keepPictures: 1 }).pipe(
+      const result = yield* Agent.run("Look at the game.", { page, keepPictures: 1 }).pipe(
         Effect.provide(model.layer),
       );
 
@@ -1006,18 +962,11 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("fails with the reason when the model gives up, and at the step limit", () =>
+  it.effect("fails at the step limit, with what the run spent", () =>
     Effect.gen(function* () {
-      yield* start("/next");
+      const page = yield* start("/next");
 
-      const gaveUp = yield* Agent.run("Buy a house.", {}).pipe(
-        Effect.provide(
-          scripted([() => [call("give_up", { reason: "there is no shop" }), finish]]).layer,
-        ),
-        Effect.flip,
-      );
-
-      const limited = yield* Agent.run("Wait.", { maxSteps: 2 }).pipe(
+      const limited = yield* Agent.run("Wait.", { page, maxSteps: 2 }).pipe(
         Effect.provide(
           scripted([
             () => [call("browser_wait", { seconds: 0 }), finish],
@@ -1027,21 +976,23 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         Effect.flip,
       );
 
-      assert.strictEqual(gaveUp._tag === "AgentError" ? gaveUp.reason._tag : gaveUp._tag, "GaveUp");
-      assert.strictEqual(
-        limited._tag === "AgentError" ? limited.reason._tag : limited._tag,
-        "StepLimit",
-      );
+      assert.instanceOf(limited, Agent.AgentError);
+      if (!Schema.is(Agent.AgentError)(limited)) return;
+      assert.strictEqual(limited.reason._tag, "StepLimit");
+      assert.strictEqual(limited.steps, 2);
+      assert.strictEqual(limited.usage.inputTokens, 200);
+      assert.strictEqual(resultsIn(limited.history).length, 2);
     }),
   );
 
   it.effect("requires the services onStep uses", () =>
     Effect.gen(function* () {
-      yield* start("/next");
+      const page = yield* start("/next");
       const recorded: Array<number> = [];
       const model = scripted([() => [call("done", { answer: "seen" }), finish]]);
 
       const program = Agent.run("Answer.", {
+        page,
         onStep: (step) =>
           Effect.gen(function* () {
             yield* (yield* Ledger).record(step.step);
@@ -1049,7 +1000,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       });
 
       expectTypeOf<Effect.Services<typeof program>>().toEqualTypeOf<
-        Browser | LanguageModel.LanguageModel | Ledger
+        LanguageModel.LanguageModel | Ledger
       >();
       expectTypeOf<Effect.Error<typeof program>>().toEqualTypeOf<
         Agent.AgentError | AiError.AiError | BrowserError
@@ -1070,11 +1021,12 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
   it.effect("stops with the error onStep fails with, before calling the model again", () =>
     Effect.gen(function* () {
-      yield* start("/next");
+      const page = yield* start("/next");
       const wait = () => [call("browser_wait", { seconds: 0 }), finish];
       const model = scripted([wait, wait, wait]);
 
       const stopped = yield* Agent.run("Wait.", {
+        page,
         onStep: (step) => (step.step === 2 ? Effect.fail(new Spent()) : Effect.void),
       }).pipe(Effect.provide(model.layer), Effect.flip);
 
@@ -1083,118 +1035,85 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  for (const observationMode of ["both", "outline"] as const) {
-    it.effect(
-      "delivers every new zoom crop once with the " + observationMode + " turn observation",
-      () =>
-        Effect.gen(function* () {
-          const page = yield* start("/chart");
-          const tracked = yield* trackObservations(page);
+  for (const mode of ["both", "outline"] as const) {
+    it.effect(`shows the crops a turn took once, after it, observing ${mode}`, () =>
+      Effect.gen(function* () {
+        const page = yield* start("/chart");
 
-          const model = scripted([
-            (prompt) => {
-              // Crops are not magnified, and the model must not be told they are.
-              assert.notInclude(textOf(prompt), "full resolution");
-              assert.include(textOf(prompt), "the viewport's own CSS pixel scale");
+        const zooms = (count: number) => [
+          ...Array.from({ length: count }, (_, index) =>
+            call("browser_zoom", { x: index * 10, y: 0, width: 100, height: 60 }),
+          ),
+          finish,
+        ];
 
-              return [
-                ...Array.from({ length: 8 }, (_, index) =>
-                  call("browser_zoom", {
-                    x: index * 10,
-                    y: 0,
-                    width: 100,
-                    height: 60,
-                  }),
-                ),
-                finish,
-              ];
-            },
-            (prompt) => {
-              const observation = prompt.content
-                .filter((message) => message.role === "user")
-                .at(-1);
+        const lastObservation = (prompt: Prompt.Prompt) => {
+          const observation = prompt.content.filter((message) => message.role === "user").at(-1);
 
-              const text =
-                observation?.content
-                  .filter((part) => part.type === "text")
-                  .map((part) => part.text)
-                  .join("\n") ?? "";
+          return {
+            pictures: observation?.content.filter((part) => part.type === "file").length,
+            text:
+              observation?.content
+                .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                .join("\n") ?? "",
+          };
+        };
 
-              assert.strictEqual(
-                observation?.content.filter((part) => part.type === "file").length,
-                observationMode === "both" ? 9 : 8,
-              );
-              assert.strictEqual(resultsIn(prompt).length, 8);
-              assert.isTrue(resultsIn(prompt).every((part) => !part.isFailure));
-              for (let index = 0; index < 8; index++) {
-                assert.include(text, "viewport origin (" + index * 10 + ", 0)");
-              }
-              assert.include(text, "Add this origin to image coordinates");
+        const model = scripted([
+          (prompt) => {
+            // Crops are not magnified, and the model must not be told they are.
+            assert.notInclude(textOf(prompt), "full resolution");
+            assert.include(textOf(prompt), "the viewport's own CSS pixel scale");
 
-              return [call("browser_wait", { seconds: 0 }), finish];
-            },
-            (prompt) => {
-              const observation = prompt.content
-                .filter((message) => message.role === "user")
-                .at(-1);
+            return zooms(9);
+          },
+          (prompt) => {
+            const { pictures: shown, text } = lastObservation(prompt);
 
-              const text =
-                observation?.content
-                  .filter((part) => part.type === "text")
-                  .map((part) => part.text)
-                  .join("\n") ?? "";
+            // At most eight follow a batch; the model is told of the rest.
+            assert.strictEqual(shown, mode === "both" ? 9 : 8);
+            assert.strictEqual(resultsIn(prompt).length, 9);
+            for (let index = 0; index < 8; index++)
+              assert.include(text, "viewport origin (" + index * 10 + ", 0)");
+            assert.include(text, "Add this origin to image coordinates");
+            assert.include(text, "1 more crops are not shown");
 
-              assert.strictEqual(
-                observation?.content.filter((part) => part.type === "file").length,
-                observationMode === "both" ? 1 : 0,
-              );
-              assert.notInclude(text, "Zoom from tab");
-              assert.strictEqual(pictures(prompt), 1);
+            return [call("browser_wait", { seconds: 0 }), finish];
+          },
+          (prompt) => {
+            const { pictures: shown, text } = lastObservation(prompt);
 
-              return [call("done", { answer: "seen" }), finish];
-            },
-          ]);
+            assert.strictEqual(shown, mode === "both" ? 1 : 0);
+            assert.notInclude(text, "Captured when browser_zoom ran");
 
-          const result = yield* Agent.run("Inspect small details.", {
-            keepPictures: 1,
-            observation: observationMode,
-          }).pipe(Effect.provide(model.layer), Effect.provideService(Browser, tracked.browser));
+            return [call("done", { answer: "seen" }), finish];
+          },
+        ]);
 
-          assert.strictEqual(result.answer, "seen");
-          assert.strictEqual(tracked.observations.length, 4);
-          assert.strictEqual(textOf(result.history).split("Zoom from tab").length - 1, 8);
-        }),
+        const result = yield* Agent.run("Inspect small details.", {
+          page,
+          keepPictures: 1,
+          observe: Agent.observe(mode),
+        }).pipe(Effect.provide(model.layer));
+
+        assert.strictEqual(result.answer, "seen");
+        assert.strictEqual(
+          textOf(result.history).split("Captured when browser_zoom ran").length - 1,
+          8,
+        );
+      }),
     );
   }
 
-  it.effect("delivers requested crops in outline mode even when the observation fails", () =>
+  it.effect("shows the crops a turn took even when its observation fails", () =>
     Effect.gen(function* () {
       const page = yield* start("/chart");
-      const browser = yield* Browser;
-      let observations = 0;
-
-      const observed: Page = {
-        ...page,
-        observe: (options) =>
-          Effect.suspend(() => {
-            observations += 1;
-
-            return observations === 2
-              ? Effect.fail(
-                  new BrowserError({
-                    operation: "observe",
-                    reason: new Failed({ detail: "fixture observation failed" }),
-                    dispatched: false,
-                  }),
-                )
-              : page.observe(options);
-          }),
-      };
+      const looks = failingOn(2);
 
       const model = scripted([
         () => [call("browser_zoom", { x: 10, y: 20, width: 100, height: 60 }), finish],
         (prompt) => {
-          assert.strictEqual(pictures(prompt), 1);
+          assert.strictEqual(pictures(prompt), 2);
           assert.include(textOf(prompt), "could not be observed");
           assert.include(textOf(prompt), "viewport origin (10, 20)");
           assert.isFalse(resultsIn(prompt)[0]?.isFailure);
@@ -1203,31 +1122,19 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         },
       ]);
 
-      const result = yield* Agent.run("Inspect a detail.", { observation: "outline" }).pipe(
+      const result = yield* Agent.run("Inspect a detail.", { page, observe: looks.observe }).pipe(
         Effect.provide(model.layer),
-        Effect.provideService(
-          Browser,
-          Browser.of({
-            ...browser,
-            firstPage: Effect.succeed(observed),
-            pages: browser.pages.pipe(
-              Effect.map((pages) => pages.map((open) => (open === page ? observed : open))),
-            ),
-          }),
-        ),
       );
 
-      assert.strictEqual(pictures(model.prompts[0]!), 0);
-      assert.strictEqual(pictures(result.history), 1);
-      assert.strictEqual(textOf(result.history).split("Zoom from tab").length - 1, 1);
-      assert.strictEqual(observations, 3);
+      assert.strictEqual(result.answer, "seen");
+      assert.strictEqual(looks.looks(), 2);
     }),
   );
 
   it.effect("runs a caller's own turn in order and halts it at the first failure", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
-      const tools = yield* Tools.make();
+      const tools = yield* Tools.make({ page });
 
       yield* Effect.promise(() => page.playwright.locator("#amount").focus());
       yield* Effect.promise(() => page.playwright.locator("#amount").press("End"));
@@ -1318,319 +1225,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("bounds concurrent pending zooms before capture and drains them once", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/chart");
-      const tools = yield* Tools.make();
-      const screenshot = page.playwright.screenshot.bind(page.playwright);
-      let captures = 0;
-
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          page.playwright.screenshot = (...args: Parameters<typeof screenshot>) => {
-            captures += 1;
-
-            return screenshot(...args);
-          };
-        }),
-        () =>
-          Effect.sync(() => {
-            page.playwright.screenshot = screenshot;
-          }),
-      );
-
-      const attempts = yield* Effect.forEach(
-        Array.from({ length: 9 }, (_, index) => ({ x: index, y: 0, width: 100, height: 60 })),
-        (region) => tools.handlers.browser_zoom(region).pipe(Effect.exit),
-        { concurrency: 9 },
-      );
-
-      assert.strictEqual(attempts.filter(Exit.isSuccess).length, 8);
-      assert.strictEqual(attempts.filter(Exit.isFailure).length, 1);
-      assert.strictEqual(captures, 8);
-      assert.strictEqual((yield* tools.takeZooms).length, 8);
-      assert.strictEqual((yield* tools.takeZooms).length, 0);
-      yield* tools.handlers.browser_zoom({ x: 10, y: 0, width: 100, height: 60 });
-      assert.strictEqual(captures, 9);
-      assert.strictEqual((yield* tools.takeZooms).length, 1);
-      assert.strictEqual((yield* tools.takeZooms).length, 0);
-    }),
-  );
-
-  it.effect("follows a tab that registers after its click's receipt, before acting again", () =>
-    Effect.gen(function* () {
-      const native = (yield* Browser).context.browser();
-
-      assert.isNotNull(native);
-      if (native === null) return;
-
-      const context = yield* Effect.acquireRelease(
-        Effect.promise(() => native.newContext({ viewport: { width: 1280, height: 720 } })),
-        (owned) => Effect.promise(() => owned.close()),
-      );
-
-      // A remote browser's round trips make a new tab register well after a click settles.
-      const browser = yield* makeBrowser(slowRegistration(context, 1000), {
-        id: "slow-registration",
-        provider: "test",
-      });
-
-      yield* Effect.gen(function* () {
-        const page = yield* browser.firstPage;
-
-        yield* page.goto((yield* Site).url("/form"));
-        const tools = yield* Tools.make();
-        const snapshot = yield* tools.handlers.browser_snapshot({});
-        const link = /link "Open in a new tab" \[ref=(e\d+)\]/.exec(snapshot)?.[1] ?? "";
-
-        yield* tools.handlers.browser_click({ ref: link });
-        yield* browser.pages.pipe(
-          Effect.repeat({
-            schedule: Schedule.spaced(Duration.millis(25)),
-            until: (open) => open.length === 2,
-          }),
-          Effect.timeout(Duration.seconds(10)),
-        );
-        yield* Effect.promise(() => page.playwright.locator("#amount").focus());
-
-        const refused = yield* tools.handlers
-          .browser_type({ text: "7", append: true })
-          .pipe(Effect.flip);
-
-        assert.include(refused, "A new tab opened and is now the current tab");
-        assert.notInclude(refused, "may have taken effect");
-        assert.strictEqual(yield* valueOf(page, "#amount"), "10");
-
-        const current = yield* tools.page;
-
-        assert.notStrictEqual(current.id, page.id);
-        assert.include(yield* current.url, "/next");
-        const outline = yield* tools.handlers.browser_snapshot({});
-        const proceed = /button "Continue" \[ref=(e\d+)\]/.exec(outline)?.[1] ?? "";
-
-        assert.include(outline, "The next page");
-        assert.include(yield* tools.handlers.browser_click({ ref: proceed }), "Clicked");
-      }).pipe(Effect.provideService(Browser, browser));
-    }),
-  );
-
-  it.effect("acts only on the observed tab, however another became current", () =>
-    Effect.gen(function* () {
-      const opener = yield* start("/form");
-      const browser = yield* Browser;
-      const tools = yield* Tools.make();
-
-      // The page opens a tab, which an observation then shows.
-      const popup = Effect.gen(function* () {
-        const before = (yield* browser.pages).length;
-
-        yield* Effect.promise(() => opener.playwright.evaluate(() => void window.open("/next")));
-        yield* browser.pages.pipe(
-          Effect.repeat({
-            schedule: Schedule.spaced(Duration.millis(50)),
-            until: (open) => open.length > before,
-          }),
-          Effect.timeout(Duration.seconds(5)),
-        );
-      });
-
-      yield* Effect.promise(() => opener.playwright.locator("#amount").focus());
-      yield* popup;
-      const shown = yield* tools.page;
-
-      assert.notStrictEqual(shown.id, opener.id);
-      // The tab closes after the click's release has been answered. Closing inside the handler
-      // can end the tab before that answer, and the click then rightly fails as possibly done.
-      yield* Effect.promise(() =>
-        shown.playwright.evaluate(() => {
-          const button = document.querySelector("button");
-
-          if (button !== null) button.onclick = () => setTimeout(() => window.close());
-        }),
-      );
-
-      // One batch planned on the popup: its button closes it, then typing would follow.
-      const outline = yield* tools.handlers.browser_snapshot({});
-      const close = /button "Continue" \[ref=(e\d+)\]/.exec(outline)?.[1] ?? "";
-
-      yield* tools.handlers.browser_click({ ref: close });
-      yield* Effect.sleep(Duration.millis(300));
-
-      const refused = yield* tools.handlers
-        .browser_type({ text: "9", append: true })
-        .pipe(Effect.flip);
-
-      assert.include(refused, "Not done: The tab in use closed, and another is now the current");
-      assert.include(refused, "Order — ");
-      assert.strictEqual(yield* valueOf(opener, "#amount"), "10");
-
-      // Choosing a tab is the model's own move: back to the observed tab, actions run there.
-      assert.strictEqual((yield* tools.page).id, opener.id);
-      yield* popup;
-      yield* tools.handlers.browser_snapshot({});
-      yield* tools.handlers.browser_tabs({ action: "select", index: 1 });
-      yield* tools.handlers.browser_type({ text: "5", append: true });
-      assert.include(yield* valueOf(opener, "#amount"), "5");
-
-      // On another tab they wait for it to be observed, without calling it new.
-      yield* tools.handlers.browser_tabs({ action: "select", index: 2 });
-
-      const elsewhere = yield* tools.handlers
-        .browser_type({ text: "7", append: true })
-        .pipe(Effect.flip);
-
-      assert.include(elsewhere, "Not done: browser_tabs made another tab current.");
-      assert.notInclude(elsewhere, "new tab");
-      yield* (yield* tools.page).close;
-    }),
-  );
-
-  it.effect("refuses the rest of a batch on a tab that opened in it, until it is observed", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/form");
-      const browser = yield* Browser;
-      const tools = yield* Tools.make();
-      const snapshot = yield* tools.handlers.browser_snapshot({});
-      const submit = /button "Submit" \[ref=(e\d+)\]/.exec(snapshot)?.[1] ?? "";
-      const before = (yield* browser.pages).length;
-
-      // The page opens a tab after the model last looked. Waiting for its registration makes
-      // the batch meet it at its first call, as a tab opened by an earlier call would be met.
-      yield* Effect.promise(() => page.playwright.evaluate(() => void window.open("/next")));
-      yield* browser.pages.pipe(
-        Effect.repeat({
-          schedule: Schedule.spaced(Duration.millis(50)),
-          until: (open) => open.length > before,
-        }),
-        Effect.timeout(Duration.seconds(5)),
-      );
-
-      const model = scripted([
-        () => [call("browser_snapshot", {}), call("browser_click", { ref: submit }), finish],
-      ]);
-
-      const response = yield* LanguageModel.generateText({
-        prompt: "Submit the order.",
-        ...(yield* tools.batch),
-      }).pipe(Effect.provide(model.layer));
-
-      const [outline, refused] = response.toolResults;
-
-      // Reading the tab within the batch does not count: the model sees it only afterwards.
-      assert.include(
-        JSON.stringify(outline?.result),
-        "A new tab opened and is now the current tab.",
-      );
-      assert.include(JSON.stringify(outline?.result), "The next page");
-      assert.isTrue(refused?.isFailure);
-      assert.match(JSON.stringify(refused?.result), /^"Not done: A new tab opened/);
-      assert.strictEqual(yield* read(page, "#outcome"), "Not ordered");
-
-      const observed = yield* tools.page;
-      const fresh = yield* tools.handlers.browser_snapshot({});
-      const proceed = /button "Continue" \[ref=(e\d+)\]/.exec(fresh)?.[1] ?? "";
-
-      assert.include(yield* observed.url, "/next");
-      assert.include(yield* tools.handlers.browser_click({ ref: proceed }), "Clicked");
-      yield* observed.close;
-    }),
-  );
-
-  it.effect("opens typed addresses, but never a local file, from the navigation tools", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/form");
-      const browser = yield* Browser;
-      const tools = yield* Tools.make();
-      const { host } = new URL((yield* Site).url("/next"));
-
-      // A host and port is an address, not a `localhost:` scheme; loopback is plain HTTP.
-      assert.strictEqual(
-        yield* tools.handlers.browser_navigate({ url: `localhost:${host.split(":")[1]}/next` }),
-        `Opened http://localhost:${host.split(":")[1]}/next.`,
-      );
-      assert.include(yield* page.url, "/next");
-
-      const directory = yield* Effect.acquireRelease(
-        Effect.promise(() => mkdtemp(join(tmpdir(), "effect-browser-"))),
-        (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
-      );
-
-      const file = pathToFileURL(join(directory, "secret.html")).href;
-
-      yield* Effect.promise(() => writeFile(new URL(file), "<title>Secret</title>secret"));
-
-      for (const url of [file, "javascript:alert(1)", "chrome://settings"]) {
-        const refused = yield* tools.handlers.browser_navigate({ url }).pipe(Effect.flip);
-
-        assert.include(refused, "was not opened");
-        assert.notInclude(refused, "may have taken effect");
-      }
-      const tabs = (yield* browser.pages).length;
-
-      assert.include(
-        yield* tools.handlers.browser_tabs({ action: "new", url: file }).pipe(Effect.flip),
-        "was not opened",
-      );
-      assert.strictEqual((yield* browser.pages).length, tabs);
-      assert.include(yield* page.url, "/next");
-
-      // The consumer's own navigation is not the model's, and still opens what it is given.
-      yield* page.goto(file);
-      assert.strictEqual(yield* page.title, "Secret");
-      yield* page.goto(host + "/form");
-      assert.strictEqual(yield* page.url, `http://${host}/form`);
-    }),
-  );
-
-  it.effect("plays a canvas game by point and follows tabs", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/slots");
-      const tools = yield* Tools.make();
-
-      const spin = yield* tools.handlers.browser_click({ x: 300, y: 320 });
-
-      const still = yield* tools.handlers.browser_wait({ still: true });
-
-      const state = yield* Effect.promise(() =>
-        page.playwright.evaluate(
-          () => (window as unknown as { state: { spins: number } }).state.spins,
-        ),
-      );
-
-      assert.include(spin, "<canvas#game>");
-      assert.include(spin, "at (300, 320).");
-      assert.include(still, "The screen is still.");
-      assert.strictEqual(state, 1);
-
-      yield* page.goto((yield* Site).url("/form"));
-
-      const snapshot = yield* tools.handlers.browser_snapshot({});
-
-      const ref = /link "Open in a new tab" \[ref=(e\d+)\]/.exec(snapshot)?.[1] ?? "";
-
-      const browser = yield* Browser;
-
-      assert.include(yield* tools.handlers.browser_click({ ref }), "Clicked");
-      // The receipt names the tab only if it registered within the click; the next look follows
-      // it either way.
-      yield* browser.pages.pipe(
-        Effect.repeat({
-          schedule: Schedule.spaced(Duration.millis(50)),
-          until: (open) => open.length > 1,
-        }),
-        Effect.timeout(Duration.seconds(5)),
-      );
-      assert.notStrictEqual((yield* tools.page).id, page.id);
-      assert.include(yield* tools.handlers.browser_tabs({ action: "list" }), "2. [current] Next");
-      yield* tools.handlers.browser_tabs({ action: "close", index: 2 });
-      assert.strictEqual((yield* tools.page).id, page.id);
-      assert.match(
-        yield* tools.handlers.browser_click({ ref: "e99999" }).pipe(Effect.flip),
-        /take a new snapshot/i,
-      );
-    }),
-  );
-
   // effect/ai annotates the span around a tool call with its raw parameters, so a password typed
   // by the last call of a turn reached the model call's span, and any exporter, in plain text.
   it.effect("keeps typed text out of every span it records", () =>
@@ -1663,7 +1257,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         () => [call("done", { answer: "Signed in" }), finish],
       ]);
 
-      yield* Agent.run("Sign in.").pipe(
+      yield* Agent.run("Sign in.", { page }).pipe(
         Effect.provide(model.layer),
         Effect.provideService(Tracer.Tracer, tracer),
       );

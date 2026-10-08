@@ -30,7 +30,6 @@ import { BenchError, efforts, modelRunner, noCalls, noTiming, optedIn, refuse } 
 import { tasks } from "./Catalog.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import * as Latency from "./Latency.ts";
-import * as Presented from "./Presented.ts";
 import * as Recorder from "./Recorder.ts";
 import * as Relay from "./Relay.ts";
 import * as Report from "./Report.ts";
@@ -208,22 +207,19 @@ export const command = Command.make(
       Layer.provide(FetchHttpClient.layer),
     );
 
-    // A trial's browser, its input performed for viewers with `--humanize`. A latency or hosted
-    // run's records the DevTools commands the trial sends, and a hosted run's session carries the
-    // trial's `metadata`.
+    // A trial's browser. A latency or hosted run's records the DevTools commands the trial sends,
+    // and a hosted run's session carries the trial's `metadata`.
     const browser = (trial: {
       readonly record: (command: Latency.Command) => void;
       readonly metadata: Readonly<Record<string, string>>;
     }) => {
-      const plain = hosted
+      return hosted
         ? hostedBrowser(trial.metadata).pipe(
             Layer.provide(Relay.client(trial.record).pipe(Layer.provide(browserbaseClient))),
           )
         : latency !== undefined
           ? Latency.layer(latency, { frameHistory }, trial.record)
           : Chromium.layer({ frameHistory });
-
-      return options.humanize ? Presented.layer(plain) : plain;
     };
 
     // After a create whose outcome is unknown, no further hosted session is requested.
@@ -395,6 +391,7 @@ export const command = Command.make(
               ? runner.withModel(
                   task.withModel({
                     seed,
+                    humanize: options.humanize,
                     arm: arm ?? undefined,
                     onUsage: () => Effect.void,
                     trace,
@@ -407,7 +404,7 @@ export const command = Command.make(
                   effectiveReasoning,
                   account,
                 )
-              : task.scripted({ seed, trace });
+              : task.scripted({ seed, trace, humanize: options.humanize });
 
           const work = recorder === undefined ? unrecorded : recorder.around(unrecorded);
           const traced = yield* Trace.collect;

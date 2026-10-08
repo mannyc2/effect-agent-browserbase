@@ -410,7 +410,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         () => [call("done", { answer: "ordered" }), finish],
       ]);
 
-      const result = yield* Agent.run("Order 10 coins", {}).pipe(
+      const result = yield* Agent.run("Order 10 coins", { page }).pipe(
         Effect.provide(model),
         Effect.provideService(Browser, browser),
       );
@@ -433,7 +433,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         finish,
       ];
 
-      const persistent = yield* Agent.run("Order 10 coins", {}).pipe(
+      const persistent = yield* Agent.run("Order 10 coins", { page }).pipe(
         Effect.provide(acting([submit, submit, submit, submit])),
         Effect.provideService(Browser, browser),
         Effect.exit,
@@ -456,7 +456,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         finish,
       ];
 
-      const recovered = yield* Agent.run("Order 5 coins", {}).pipe(
+      const recovered = yield* Agent.run("Order 5 coins", { page }).pipe(
         Effect.provide(
           acting([
             submit,

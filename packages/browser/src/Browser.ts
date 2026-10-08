@@ -265,12 +265,11 @@ const listen = (
 ) => {
   const dialog = (shown: Dialog) => {
     const kind = shown.type();
+    const answer = kind === "alert" || kind === "beforeunload" ? "accepted" : "dismissed";
+    const message = shown.message().slice(0, 500);
 
-    publish(new DialogShown({ at: now(), page, kind, message: shown.message().slice(0, 500) }));
-
-    const answer = kind === "alert" || kind === "beforeunload" ? shown.accept() : shown.dismiss();
-
-    answer.catch(() => undefined);
+    publish(new DialogShown({ at: now(), page, kind, message, answer }));
+    (answer === "accepted" ? shown.accept() : shown.dismiss()).catch(() => undefined);
   };
 
   return Effect.acquireRelease(
@@ -330,10 +329,15 @@ const releaseNative = (clock: Clock.Clock) => (run: () => Promise<unknown>) =>
     Effect.ignore,
   );
 
-/** A page's own events among the browser's retained ones, oldest first. */
+/** A page's own events among the browser's retained ones, and the openings of tabs it opened. */
 const eventsOf = (recent: Effect.Effect<ReadonlyArray<RecordedEvent>>, page: string) =>
   Effect.map(recent, (records) =>
-    records.flatMap(({ event }) => ("page" in event && event.page === page ? [event] : [])),
+    records.flatMap(({ event }) =>
+      ("page" in event && event.page === page) ||
+      (event._tag === "PageOpened" && event.opener === page)
+        ? [event]
+        : [],
+    ),
   );
 
 /** A script as its documents run it: everywhere, or as a block where its `match` allows. */
@@ -536,7 +540,14 @@ export const make = Effect.fn("Browser.make")(function* (
           };
 
           registry.set(playwright, page);
-          publish(new PageOpened({ at: now(), page: id, url: Url.redact(targetInfo.url) }));
+          publish(
+            new PageOpened({
+              at: now(),
+              page: id,
+              url: Url.redact(targetInfo.url),
+              opener: targetInfo.openerId,
+            }),
+          );
           yield* listen(playwright, id, publish, now, { close, crash });
           if (playwright.isClosed()) close();
 

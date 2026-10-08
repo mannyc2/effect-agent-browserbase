@@ -14,10 +14,12 @@ import { Schema } from "effect";
 
 import * as Motion from "./Motion.ts";
 
+/** A page opened, and the page that opened it, as a link or `window.open` does, if one did. */
 export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
   at: Schema.Finite,
   page: Schema.String,
   url: Schema.String,
+  opener: Schema.optional(Schema.String),
 }) {}
 
 /**
@@ -149,13 +151,15 @@ export type ActionOptions = typeof ActionOptions.Type;
  * `target` is what the caller asked for: a ref, a point, a URL or keys, and `options` the rest.
  * `subject` is what an element or point action found there, and `to` where a drag ended; an
  * action that failed before finding its target has neither. Point actions carry the viewport
- * point they used.
+ * point they used. `correlation` is the id its caller gave it with `Page.correlate`, such as a
+ * model's tool call id.
  */
 export class Action extends Schema.TaggedClass<Action>()("Action", {
   at: Schema.Finite,
   startedAt: Schema.Finite,
   page: Schema.String,
   name: Schema.String,
+  correlation: Schema.optional(Schema.String),
   target: Schema.optional(Schema.String),
   options: Schema.optional(ActionOptions),
   subject: Schema.optional(Subject),
@@ -256,12 +260,16 @@ export const TrackEvent = Schema.Union([
 
 export type TrackEvent = typeof TrackEvent.Type;
 
-/** A JavaScript dialog appeared and was answered (alerts accepted, others dismissed). */
+/**
+ * A JavaScript dialog appeared and was answered: an alert or a leave-page prompt accepted, a
+ * confirm or a prompt dismissed, as if its Cancel were pressed.
+ */
 export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown", {
   at: Schema.Finite,
   page: Schema.String,
   kind: Schema.String,
   message: Schema.String,
+  answer: Schema.Literals(["accepted", "dismissed"]),
 }) {}
 
 export const BrowserEvent = Schema.Union([

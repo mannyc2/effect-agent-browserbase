@@ -5,6 +5,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { Arbitrary, Deferred, Duration, Effect, Exit, Fiber, Schedule, Schema } from "effect";
 import type { CDPSession } from "playwright-core";
 
+import * as Agent from "../src/Agent.ts";
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import { BrowserError, Closed, consequence } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
@@ -786,25 +787,25 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const page = yield* browser.newPage(blank);
 
         blind(page);
-        const observed = yield* page.observe();
+        const parts = yield* Agent.observe()(page);
+        const said = parts.flatMap((part) => (part.type === "text" ? [part.text] : []));
 
-        assert.include(observed.snapshot?.text ?? "", "Text");
-        assert.isUndefined(observed.image);
-        assert.deepStrictEqual(
-          observed.missing.map((error) => error.operation),
-          ["screenshot"],
+        assert.include(said.join("\n"), 'textbox "Text"');
+        assert.isFalse(parts.some((part) => part.type === "file"));
+        assert.isTrue(
+          said.some((line) => line.startsWith("(missing from this observation: screenshot")),
         );
         // Nothing asked for could be read, so the observation fails.
-        const error = yield* Effect.flip(page.observe({ mode: "screenshot" }));
+        const error = yield* Effect.flip(Agent.observe("screenshot")(page));
 
         assert.strictEqual(error.operation, "screenshot");
       }),
     );
 
-    // A renderer busy with its own script answers nothing; `title` waited for it, without bound.
-    it.effect("bounds a title read by the action timeout", () =>
+    // A renderer busy with its own script answers nothing; the browser answers for its title.
+    it.effect("reads a title that a busy page cannot hold up", () =>
       Effect.gen(function* () {
-        const { browser } = yield* browserWith({ actionTimeout: "500 millis" });
+        const { browser } = yield* browserWith({ actionTimeout: "5 seconds" });
         const page = yield* browser.newPage(blank);
 
         yield* Effect.promise(() =>
@@ -816,10 +817,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             }, 0);
           }),
         );
-        const { exit, millis } = yield* elapsed(Effect.flip(page.title));
+        const { exit, millis } = yield* elapsed(page.title);
 
-        assert.isTrue(Exit.isSuccess(exit) && exit.value.reason._tag === "Timeout");
-        assert.isBelow(millis, 2000);
+        assert.isTrue(Exit.isSuccess(exit) && exit.value === "Blank");
+        assert.isBelow(millis, 1000);
       }),
     );
   },

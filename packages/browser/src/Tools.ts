@@ -1,235 +1,58 @@
 /**
- * Browser tools for any `effect/ai` language model.
+ * Browser tools for any `effect/ai` language model, bound to one page or following a browser's
+ * tabs.
  *
  * The model reads a page two ways. A snapshot is a text outline whose controls carry refs such as
  * `e12`. A screenshot is a picture whose pixel coordinates are viewport coordinates. It acts by
- * ref when a control has one, and by point when it does not, as on a canvas game or a chart.
- * Actions answer with short receipts. A turn's calls run as a `batch`: in order, stopping at the
- * first failure. `Agent` does that and appends one observation of the current tab after each
- * turn; a caller composing its own loop spreads a fresh `batch` into each model call, then
- * observes `page` and drains `takeZooms`.
+ * ref when a control has one, and by point when it does not, as on a canvas game or a chart. Each
+ * call answers with a `Receipt`: what it did and, for an action, what followed on its page while
+ * it ran: a dialog and how it was answered, a navigation, a tab it opened and what visibly
+ * changed. The model is told it as text; the caller reads it as a value.
+ *
+ * `make({ page })` pins the tools to one page. `make({ browser, follow })` offers `browser_tabs`
+ * too, and acts on the tab the model last saw: when a tab opens, the next look shows it as
+ * `follow` says. `"select"`, the default, makes it current without bringing it to front, so the
+ * page on air and an operator's view stay where they are; `"front"` also brings it to front;
+ * `"never"` keeps the current tab.
+ *
+ * A turn's calls run as a `batch`: in order, stopping at the first failure. `Agent` does that and
+ * observes the page after each turn; a caller composing its own loop spreads a fresh `batch` into
+ * each model call, then observes `page`, with the crops the receipts of `browser_zoom` hold.
+ *
+ * Each page operation is one contract: its parameters, its receipt and `BrowserError` as schemas,
+ * and one handler. The tools, `on(page)`'s methods and the RPC group `PageRpcs` are projections of
+ * it, so a consumer serves a page's operations to another process with
+ * `PageRpcs.toLayer(Tools.on(page))`, and they answer there with the same receipts.
  *
  * @since 0.3.0
  */
-import {
-  Cause,
-  Context,
-  Duration,
-  Effect,
-  Option,
-  Predicate,
-  Ref,
-  Result,
-  Schema,
-  SchemaTransformation,
-  Semaphore,
-  Stream,
-} from "effect";
+import { Cause, Context, Effect, Option, Ref, Result, Schema, Stream } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
-import { Browser } from "./Browser.ts";
-import { type BrowserError, consequence } from "./BrowserError.ts";
-import * as Url from "./internal/page/url.ts";
+import type * as Browser from "./Browser.ts";
+import { type BrowserError, InvalidRequest } from "./BrowserError.ts";
+import * as Operations from "./internal/agent/operations.ts";
+import { BrowserToolkit, PageToolkit } from "./internal/agent/projection.ts";
+import { undispatched } from "./internal/page/context.ts";
 import * as Page from "./Page.ts";
 
-// A parameter a model may leave out. Its JSON Schema allows null, as an optional one's does, and
-// models send null for one they mean to leave out, so null reads as absent rather than refused.
-const absent = <S extends Schema.Top>(
-  schema: S,
-  annotations: { readonly description?: string } = {},
-) =>
-  Schema.optionalKey(Schema.NullOr(schema).annotate(annotations)).pipe(
-    Schema.decodeTo(
-      Schema.optional(Schema.toType(schema)),
-      SchemaTransformation.transformOptional<S["Type"] | undefined, S["Type"] | null>({
-        decode: (input) => Option.filter(input, Predicate.isNotNullish),
-        encode: (output) => Option.filter(output, Predicate.isNotUndefined),
-      }),
-    ),
-  );
+export { Receipt } from "./internal/agent/operations.ts";
+export { BrowserToolkit, PageRpcs, PageToolkit } from "./internal/agent/projection.ts";
 
-const ref = absent(Schema.String, {
-  description: "A ref from the latest snapshot, such as e12",
-});
+/** The tools of one page. */
+export type PageTools = typeof PageToolkit.tools;
 
-const x = absent(Schema.Finite, {
-  description: "Viewport x in screenshot pixels; with y, used instead of a ref",
-});
-
-const y = absent(Schema.Finite, {
-  description: "Viewport y in screenshot pixels; with x, used instead of a ref",
-});
-
-const tool = <const Name extends string, Parameters extends Schema.Struct.Fields>(
-  name: Name,
-  description: string,
-  parameters: Parameters,
-) =>
-  Tool.make(name, {
-    description,
-    parameters: Schema.Struct(parameters),
-    success: Schema.String,
-    failure: Schema.String,
-    failureMode: "return",
-  });
-
-export const Navigate = tool("browser_navigate", "Open a URL in the current tab.", {
-  url: Schema.String,
-});
-
-// Without parameters, not with `Schema.Struct({})`: an empty struct's JSON Schema has no object
-// root, which OpenAI's structured outputs reject for the whole request.
-export const Back = Tool.make("browser_back", {
-  description: "Go back to the previous page in the current tab.",
-  success: Schema.String,
-  failure: Schema.String,
-  failureMode: "return",
-});
-
-export const Snapshot = tool(
-  "browser_snapshot",
-  "Read the page as a text outline in which controls carry refs for the other tools. Covers the viewport unless full is set.",
-  {
-    full: absent(Schema.Boolean, {
-      description: "Read the whole page, not just the viewport",
-    }),
-    query: absent(Schema.String, {
-      description: "Keep only lines containing this text",
-    }),
-  },
-);
-
-export const Zoom = tool(
-  "browser_zoom",
-  "Crop a small viewport region at the viewport's own CSS pixel scale, without magnification. Its image follows the batch; click coordinates stay in viewport space. At most 8 crops per observation.",
-  Page.Region.fields,
-);
-
-export const Click = tool("browser_click", "Click an element by ref, or a point by x and y.", {
-  ref,
-  x,
-  y,
-  double: absent(Schema.Boolean),
-  button: absent(Schema.Literals(["left", "right", "middle"])),
-});
-
-export const Hover = tool(
-  "browser_hover",
-  "Move the pointer over an element by ref, or to a point by x and y.",
-  {
-    ref,
-    x,
-    y,
-  },
-);
-
-export const Type = tool(
-  "browser_type",
-  "Type text. With a ref, that field is focused and its content replaced first; without one, the text goes to the focused element.",
-  {
-    text: Schema.String,
-    ref,
-    append: absent(Schema.Boolean, {
-      description: "Keep the field's content and add to it",
-    }),
-    submit: absent(Schema.Boolean, { description: "Press Enter afterwards" }),
-  },
-);
-
-export const Press = tool(
-  "browser_press",
-  "Press a key or chord, such as Enter, Escape, Space, ArrowDown or Control+A.",
-  {
-    keys: Schema.String,
-    times: absent(Schema.Int, {
-      description: "Press it this many times; defaults to 1",
-    }),
-    holdMillis: absent(Schema.Finite, {
-      description: "Hold the keys down this long",
-    }),
-  },
-);
-
-export const Scroll = tool(
-  "browser_scroll",
-  "Scroll the page, or whatever is under a ref or point, such as a list or a chart.",
-  {
-    direction: Schema.Literals(["down", "up", "right", "left"]),
-    pages: absent(Schema.Finite, {
-      description: "How far, in viewports; defaults to 0.8",
-    }),
-    ref,
-    x,
-    y,
-  },
-);
-
-export const Drag = tool(
-  "browser_drag",
-  "Drag from one element or point to another, such as a slider or a chart range.",
-  {
-    fromRef: ref,
-    fromX: x,
-    fromY: y,
-    toRef: ref,
-    toX: x,
-    toY: y,
-  },
-);
-
-export const Select = tool(
-  "browser_select",
-  "Choose options of a select element by value or label.",
-  {
-    ref: Schema.String,
-    values: Schema.Array(Schema.String),
-  },
-);
-
-export const Wait = tool(
-  "browser_wait",
-  "Wait for text to appear, for the screen to stop moving (reels, animations, loading), or for some seconds.",
-  {
-    text: absent(Schema.String),
-    still: absent(Schema.Boolean),
-    seconds: absent(Schema.Finite, { description: "At most 30" }),
-  },
-);
-
-export const Tabs = tool(
-  "browser_tabs",
-  "List the tabs, switch to one, open a new one or close one.",
-  {
-    action: Schema.Literals(["list", "select", "new", "close"]),
-    index: absent(Schema.Int, {
-      description: "The tab's number in the list, for select and close",
-    }),
-    url: absent(Schema.String, { description: "For new" }),
-  },
-);
-
-export const BrowserToolkit = Toolkit.make(
-  Navigate,
-  Back,
-  Snapshot,
-  Zoom,
-  Click,
-  Hover,
-  Type,
-  Press,
-  Scroll,
-  Drag,
-  Select,
-  Wait,
-  Tabs,
-);
-
+/** The tools of a browser's tabs: a page's, and `browser_tabs`. */
 export type BrowserTools = typeof BrowserToolkit.tools;
 
-export interface Options {
-  /** Bound on each snapshot. Defaults to 8,000 characters. */
-  readonly snapshotChars?: number | undefined;
-}
+/** What tools that follow a browser do when a tab opens: see the module's comment. */
+export type Follow = "select" | "front" | "never";
+
+/**
+ * The page operations bound to `page`, each answering with its receipt: to call one directly, or
+ * to serve them to another process as `PageRpcs`' handlers.
+ */
+export const on = (page: Page.Page) => Operations.bind((_, run) => run(page));
 
 /**
  * Options for one `generateText` call, from `LanguageModel` or `Chat`: spread them into the call.
@@ -248,7 +71,8 @@ export interface Batch<T extends Record<string, Tool.Any>> {
  *
  * Each call, run or not, is a span of its own, `Tools.<name>`, with OpenTelemetry's GenAI tool
  * attributes. It keeps a browser tool's parameters without the text it types, and only the names
- * of another tool's parameters, which may hold anything.
+ * of another tool's parameters, which may hold anything. The actions a call performs record its
+ * call id as their `correlation`.
  */
 export function batch<T extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<T>,
@@ -280,6 +104,8 @@ export function batch<T extends Record<string, Tool.Any>>(
                 Stream.tap(() => Effect.annotateCurrentSpan("executed", false)),
               )
             : toolkit.handle(name, params, id).pipe(
+                // The handler runs in a fiber this forks, so its actions carry the call's id.
+                id === undefined ? (handled) => handled : Page.correlate(id),
                 // effect/ai puts the raw parameters on the span around the call, which is this one.
                 Effect.ensuring(Effect.annotateCurrentSpan("parameters", kept)),
                 Stream.unwrap,
@@ -361,142 +187,102 @@ const failedCall = <Called extends Tool.Any, E>(tool: Called, cause: Cause.Cause
   );
 };
 
-export interface Tools {
-  readonly handlers: Toolkit.HandlersFrom<BrowserTools>;
-  /** A fresh `batch` of the browser tools for one turn, to spread into a `generateText` call. */
-  readonly batch: Effect.Effect<Batch<BrowserTools>>;
+/** Each tool's handler, as the tools call it: from its parameters to its receipt or failure. */
+export type Handlers<T extends Record<string, Tool.Any>> = {
+  readonly [Name in keyof T]: (
+    params: Tool.Parameters<T[Name]>,
+  ) => Effect.Effect<Tool.Success<T[Name]>, Tool.Failure<T[Name]>>;
+};
+
+export interface Tools<T extends Record<string, Tool.Any>> {
+  /** The tools, to give a model or to build a caller's own from. */
+  readonly toolkit: Toolkit.Toolkit<T>;
+  /** Each tool's handler, to wrap or rename in a caller's own tools. */
+  readonly handlers: Handlers<T>;
+  /** A fresh `batch` of the tools for one turn, to spread into a `generateText` call. */
+  readonly batch: Effect.Effect<Batch<T>>;
   /**
-   * The tab the tools act on, after following any tab that opened since they last looked. Observe
-   * it after each batch: actions run only on the tab this last returned, so after a tab opens,
-   * the current one closes or `browser_tabs` switches, they refuse until it is returned here.
+   * The page to show the model after each batch: the tools' own, or the tab their calls act on
+   * from then, following a tab opened since they last looked as `follow` says.
    */
   readonly page: Effect.Effect<Page.Page, BrowserError>;
-  /** Drain the requested crops, once per batch, to include beside the observation. */
-  readonly takeZooms: Effect.Effect<ReadonlyArray<Page.Zoom>>;
-  /**
-   * Why the input policy refused each action since the last action it allowed, oldest first.
-   * Hovering, scrolling and waiting count as neither.
-   */
-  readonly refusals: Effect.Effect<ReadonlyArray<string>>;
 }
 
-const target = (op: {
-  readonly ref?: string | undefined;
-  readonly x?: number | undefined;
-  readonly y?: number | undefined;
-}) =>
-  // A point is the more specific of the two, such as a spot on a canvas a ref names.
-  op.x !== undefined && op.y !== undefined
-    ? Effect.succeed<Page.Target>({ x: op.x, y: op.y })
-    : op.ref !== undefined
-      ? Effect.succeed<Page.Target>(op.ref)
-      : Effect.fail("give a ref from the snapshot, or x and y from a screenshot");
+/** Tools pinned to `page`: no `browser_tabs`, and a tab the page opens stays where it is. */
+export function make(options: { readonly page: Page.Page }): Effect.Effect<Tools<PageTools>>;
 
-/** Where a model may go: web addresses, inline data and a blank page, never local files. */
-const destination = (input: string) => {
-  const url = Url.parse(input);
+/** Tools on `browser`'s current tab, beginning with its first, following tabs as `follow` says. */
+export function make(options: {
+  readonly browser: Browser.Service;
+  readonly follow?: Follow | undefined;
+}): Effect.Effect<Tools<BrowserTools>>;
 
-  return url !== null &&
-    (url.protocol === "http:" ||
-      url.protocol === "https:" ||
-      url.protocol === "data:" ||
-      url.href === "about:blank")
-    ? Effect.succeed(url.href)
-    : Effect.fail(
-        `${JSON.stringify(input)} was not opened: the browser tools open http and https addresses, data: URLs and about:blank.`,
-      );
-};
+export function make(
+  options:
+    | { readonly page: Page.Page }
+    | { readonly browser: Browser.Service; readonly follow?: Follow | undefined },
+): Effect.Effect<Tools<PageTools> | Tools<BrowserTools>> {
+  if (!("page" in options)) return following(options.browser, options.follow);
+  const handlers = on(options.page);
 
-const named = (op: {
-  readonly ref?: string | undefined;
-  readonly x?: number | undefined;
-  readonly y?: number | undefined;
-}) => op.ref ?? `(${op.x}, ${op.y})`;
+  return Effect.map(PageToolkit.pipe(Effect.provide(PageToolkit.toLayer(handlers))), (toolkit) => ({
+    toolkit: PageToolkit,
+    handlers,
+    batch: batch(toolkit),
+    page: Effect.succeed(options.page),
+  }));
+}
 
-/** A failure as the model is told it: what happened, then what to do about it. */
-const told = (error: BrowserError | string) => {
-  if (typeof error === "string") return error;
-  const { lost, repeat } = consequence(error);
+const refused = (name: string, detail: string) =>
+  Effect.fail(undispatched(name.replace(/^browser_/, ""), new InvalidRequest({ detail })));
 
-  const advice = [
-    lost === "session" ? "The browser is gone." : lost === "page" ? "The tab is gone." : "",
-    error.reason._tag === "StaleRef" ? "Take a new snapshot." : "",
-    repeat === "check" ? "It may have taken effect: look at the page before you repeat it." : "",
-  ].filter((sentence) => sentence !== "");
-
-  return [`${error.message}.`, ...advice].join(" ");
-};
-
-/** Build the tools over the `Browser` in context, acting on its first tab to begin with. */
-export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
-  const browser = yield* Browser;
-  const snapshotChars = options.snapshotChars ?? 8000;
-  let current = Option.none<Page.Page>();
-  // Tabs the tools have looked at. Any other open tab opened since, perhaps after the receipt of
-  // the action that opened it.
+const following = Effect.fnUntraced(function* (
+  browser: Browser.Service,
+  follow: Follow = "select",
+) {
+  // The tab the model last saw, which calls act on; the tabs the tools had seen by then; and
+  // whether `browser_tabs` switched tabs since, which actions wait to be seen.
+  let shown: Page.Page | undefined;
   const seen = new Set((yield* browser.pages).map((tab) => tab.id));
-  // The tab `page`, which observations use, last returned. The model plans a batch on what it
-  // saw there, so actions run only on that tab; another current tab must be observed first.
-  let observed: string | undefined;
-  // Why the current tab last changed, for that refusal.
-  let changed = "";
-  let zooms: Array<Page.Zoom> = [];
-  let refusals: ReadonlyArray<string> = [];
-  const zoomLock = yield* Semaphore.make(1);
+  let switched = false;
 
-  const takeZooms = zoomLock.withPermits(1)(
-    Effect.sync(() => {
-      const captured = zooms;
+  const become = (tab: Page.Page) =>
+    Effect.gen(function* () {
+      // Bringing a tab to front is for whoever watches it; the tools act on it either way.
+      if (follow === "front" && shown !== undefined && tab.id !== shown.id)
+        yield* tab.bringToFront.pipe(Effect.ignore);
+      shown = tab;
 
-      zooms = [];
+      return tab;
+    });
 
-      return captured;
-    }),
-  );
-
-  const opened = "A new tab opened and is now the current tab.";
-  const closed = "The tab in use closed, and another is now the current tab.";
-
-  const become = (tab: Page.Page, why: string) => {
-    current = Option.some(tab);
-    changed = why;
-  };
-
-  /** Make the newest tab opened since the tools last looked the current one; true if one did. */
-  const follow = Effect.gen(function* () {
+  // A look follows the newest tab opened since the last, unless told never to; a tab that has
+  // gone gives way to the first one open.
+  const page = Effect.gen(function* () {
     const open = yield* browser.pages;
     const newest = open.filter((tab) => !seen.has(tab.id)).at(-1);
 
     for (const tab of open) seen.add(tab.id);
-    if (newest === undefined) return false;
-    become(newest, opened);
-    yield* newest.bringToFront.pipe(Effect.ignore);
+    switched = false;
 
-    return true;
+    return yield* become(
+      follow !== "never" && newest !== undefined
+        ? newest
+        : (open.find((tab) => tab.id === shown?.id) ?? (yield* browser.firstPage)),
+    );
   });
 
-  /** The current tab, after following a newly opened one, and what this look changed. */
-  const resolve = Effect.gen(function* () {
-    const followed = yield* follow;
-    const open = yield* browser.pages;
-    const kept = Option.filter(current, (tab) => open.includes(tab));
-    const lost = Option.isSome(current) && Option.isNone(kept);
-    const tab = Option.isSome(kept) ? kept.value : yield* browser.firstPage;
+  // Refs restart on every tab and coordinates belong to its picture, so a call acts on the tab
+  // the model last saw, and a tab that opens meanwhile waits for the next look. After
+  // `browser_tabs` switches, reads see the new tab and actions wait until it is seen.
+  const handlers = Operations.bind((operation, run) =>
+    Effect.gen(function* () {
+      if (switched && operation.kind !== "read")
+        return yield* refused(operation.name, "browser_tabs switched tabs: look at the tab first");
 
-    seen.add(tab.id);
-    if (lost) become(tab, closed);
-    current = Option.some(tab);
-    // Before the first look nothing was planned on any tab.
-    observed ??= tab.id;
-
-    return { tab, note: lost ? closed : followed ? opened : undefined };
-  });
-
-  const page: Effect.Effect<Page.Page, BrowserError> = Effect.map(resolve, ({ tab }) => {
-    observed = tab.id;
-
-    return tab;
-  });
+      return yield* run(shown ?? (yield* page));
+    }),
+  );
 
   const describeTab = (tab: Page.Page) =>
     tab.title.pipe(
@@ -505,204 +291,53 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       Effect.flatMap((title) => Effect.map(tab.url, (url) => `${title} — ${url}`)),
     );
 
-  /** Note a refusal, and forget them all once the policy allows an action it decides on. */
-  const tally = <A>(action: Effect.Effect<A, BrowserError | string>, judged: boolean) =>
-    action.pipe(
-      Effect.tapError((error) =>
-        Effect.sync(() => {
-          if (
-            typeof error !== "string" &&
-            (error.reason._tag === "PolicyDenied" || error.reason._tag === "PolicyTimeout")
-          )
-            refusals = [...refusals, error.reason.message];
-        }),
-      ),
-      Effect.tap(() =>
-        Effect.sync(() => {
-          if (judged) refusals = [];
-        }),
-      ),
-    );
-
-  /**
-   * Run an action on the current tab, follow a tab it opens, then answer with a receipt. A
-   * `judged` action, one the input policy decides on, ends a run of refusals when it goes through.
-   */
-  const act = <A>(
-    done: string | ((result: A) => string),
-    run: (tab: Page.Page) => Effect.Effect<A, BrowserError | string>,
-    judged = true,
-  ) =>
+  const tabs = ({ action, index, url }: typeof Operations.TabsInput.Type) =>
     Effect.gen(function* () {
-      const { tab } = yield* resolve;
+      const chosen = index === undefined ? undefined : (yield* browser.pages)[index - 1];
 
-      // The call was planned on the tab the model last saw: refs restart on every tab, and
-      // coordinates belong to its picture, so it must not run on another one.
-      if (tab.id !== observed)
-        return yield* Effect.fail(
-          `Not done: ${changed} It is ${yield* describeTab(tab)}. Look at it first.`,
-        );
-      const result = yield* tally(run(tab), judged);
-      const receipt = typeof done === "string" ? done : done(result);
+      if (action === "new") {
+        const tab = yield* url === undefined
+          ? browser.newPage()
+          : Effect.flatMap(Operations.destination("tabs", url), browser.newPage);
 
-      // A tab that registers later is followed when the tools next look; either way, later
-      // actions wait until it is observed.
-      return (yield* follow) ? `${receipt}\n${opened}` : receipt;
-    }).pipe(Effect.mapError(told));
+        seen.add(tab.id);
+        yield* become(tab);
+        switched = true;
+      } else if (action === "select" || action === "close") {
+        if (chosen === undefined)
+          return yield* refused("browser_tabs", `there is no tab ${index ?? "(no index given)"}`);
+        if (action === "close") {
+          yield* chosen.close;
+          if (chosen.id === shown?.id) shown = undefined;
+        } else if (chosen.id !== shown?.id) {
+          yield* become(chosen);
+          switched = true;
+        }
+      }
 
-  const tabList = Effect.gen(function* () {
-    const open = yield* browser.pages;
-    const { tab: active } = yield* resolve;
-
-    const lines = yield* Effect.forEach(open, (tab, index) =>
-      Effect.map(
-        describeTab(tab),
-        (where) => `${index + 1}. ${tab === active ? "[current] " : ""}${where}`,
-      ),
-    );
-
-    return lines.join("\n");
-  });
-
-  const handlers = BrowserToolkit.of({
-    browser_navigate: ({ url }) =>
-      Effect.flatMap(destination(url), (address) =>
-        act(`Opened ${address}.`, (tab) => tab.goto(address)),
-      ),
-    browser_back: () => act("Went back.", (tab) => tab.back),
-    browser_snapshot: ({ full, query }) =>
-      Effect.gen(function* () {
-        const { tab, note } = yield* resolve;
-        const snapshot = yield* tab.snapshot({ full, query, maxChars: snapshotChars });
-
-        return note === undefined ? snapshot.rendered : `${note}\n${snapshot.rendered}`;
-      }).pipe(Effect.mapError(told)),
-    browser_zoom: (region) =>
-      zoomLock.withPermits(1)(
-        Effect.gen(function* () {
-          if (zooms.length >= 8)
-            return yield* Effect.fail(
-              "At most 8 zoom crops can await an observation; finish the batch first.",
-            );
-          const { tab, note } = yield* resolve;
-          const zoom = yield* tab.zoom(region);
-          const number = (yield* browser.pages).indexOf(tab) + 1;
-
-          zooms.push(zoom);
-
-          return `${note === undefined ? "" : note + "\n"}Captured a zoom from tab ${number} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
-        }).pipe(Effect.mapError(told)),
-      ),
-    browser_click: (op) =>
-      act(
-        (resolved: Page.ResolvedTarget) =>
-          `Clicked ${resolved.element} at (${resolved.point.x}, ${resolved.point.y}).`,
-        (tab) =>
-          Effect.flatMap(target(op), (to) =>
-            tab.click(to, { button: op.button, clickCount: op.double === true ? 2 : 1 }),
-          ),
-      ),
-    browser_hover: (op) =>
-      act(`Hovered over ${named(op)}.`, (tab) => Effect.flatMap(target(op), tab.hover), false),
-    browser_type: ({ text, ref, append, submit }) =>
-      act(`Typed ${JSON.stringify(text)}${ref === undefined ? "" : ` into ${ref}`}.`, (tab) =>
-        tab.type(text, { into: ref, replace: append !== true, submit }),
-      ),
-    browser_press: ({ keys, times, holdMillis }) =>
-      act(`Pressed ${keys}${times === undefined || times === 1 ? "" : ` ${times} times`}.`, (tab) =>
-        tab.press(keys, { times, holdMillis }),
-      ),
-    browser_scroll: (op) =>
-      act(
-        `Scrolled ${op.direction}.`,
-        (tab) =>
-          Effect.gen(function* () {
-            const at = op.ref === undefined && op.x === undefined ? undefined : yield* target(op);
-            const viewport = yield* tab.viewport;
-            const pages = op.pages ?? 0.8;
-            const vertical = op.direction === "down" ? 1 : op.direction === "up" ? -1 : 0;
-            const horizontal = op.direction === "right" ? 1 : op.direction === "left" ? -1 : 0;
-
-            yield* tab.scroll({
-              at,
-              dy: Math.round(vertical * pages * viewport.height),
-              dx: Math.round(horizontal * pages * viewport.width),
-            });
-          }),
-        false,
-      ),
-    browser_drag: (op) => {
-      const from = { ref: op.fromRef, x: op.fromX, y: op.fromY };
-      const to = { ref: op.toRef, x: op.toX, y: op.toY };
-
-      return act(`Dragged from ${named(from)} to ${named(to)}.`, (tab) =>
-        Effect.all([target(from), target(to)]).pipe(
-          Effect.flatMap(([start, end]) => tab.drag(start, end)),
+      const lines = yield* Effect.forEach(yield* browser.pages, (tab, number) =>
+        Effect.map(
+          describeTab(tab),
+          (where) => `${number + 1}. ${tab.id === shown?.id ? "[current] " : ""}${where}`,
         ),
       );
-    },
-    browser_select: ({ ref, values }) =>
-      Effect.gen(function* () {
-        let chosen = "";
 
-        const result = yield* act(`Chose options in ${ref}.`, (tab) =>
-          Effect.map(tab.select(ref, values), (labels) => {
-            chosen = labels;
-          }),
-        );
+      return new Operations.Receipt({
+        page: shown?.id ?? "",
+        did: lines.join("\n"),
+        dialogs: [],
+        opened: [],
+        missing: [],
+      });
+    });
 
-        return result.replace(`Chose options in ${ref}.`, `Chose ${chosen} in ${ref}.`);
-      }),
-    browser_wait: ({ text, still, seconds }) =>
-      act(
-        text !== undefined
-          ? `Saw ${JSON.stringify(text)}.`
-          : still === true
-            ? "The screen is still."
-            : "Waited.",
-        (tab) =>
-          text !== undefined
-            ? tab.waitForText(text)
-            : still === true
-              ? tab.ready({ quietMillis: 600 })
-              : Effect.sleep(Duration.seconds(Math.min(Math.max(seconds ?? 1, 0), 30))),
-        false,
-      ),
-    browser_tabs: ({ action, index, url }) =>
-      Effect.gen(function* () {
-        // Take in tabs opened since the last look first, so a selection is not overridden later.
-        yield* follow;
-        const open = yield* browser.pages;
-        const chosen = index === undefined ? undefined : open[index - 1];
-
-        if (action === "new") {
-          const tab = yield* url === undefined
-            ? browser.newPage()
-            : Effect.flatMap(destination(url), (address) => tally(browser.newPage(address), true));
-
-          seen.add(tab.id);
-          become(tab, "browser_tabs opened a new tab and made it current.");
-          yield* tab.bringToFront;
-        } else if (action === "select" || action === "close") {
-          if (chosen === undefined)
-            return yield* Effect.fail(`there is no tab ${index ?? "(no index given)"}`);
-          if (action === "select") {
-            become(chosen, "browser_tabs made another tab current.");
-            yield* chosen.bringToFront;
-          } else yield* chosen.close;
-        }
-
-        return yield* tabList;
-      }).pipe(Effect.mapError(told)),
-  });
-
-  const toolkit = yield* BrowserToolkit.pipe(Effect.provide(BrowserToolkit.toLayer(handlers)));
+  const all = { ...handlers, browser_tabs: tabs };
+  const toolkit = yield* BrowserToolkit.pipe(Effect.provide(BrowserToolkit.toLayer(all)));
 
   return {
-    handlers,
+    toolkit: BrowserToolkit,
+    handlers: all,
     batch: batch(toolkit),
     page,
-    takeZooms,
-    refusals: Effect.sync(() => refusals),
-  } satisfies Tools;
+  } satisfies Tools<BrowserTools>;
 });

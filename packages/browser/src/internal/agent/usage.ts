@@ -1,12 +1,15 @@
+import { Schema } from "effect";
 import type { Response } from "effect/ai";
 
 /** Token counts summed over one or more model calls. */
-export interface Usage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
+export const Usage = Schema.Struct({
+  inputTokens: Schema.Finite,
+  outputTokens: Schema.Finite,
   /** Input tokens the provider read from its prompt cache, included in `inputTokens`. */
-  readonly cachedInputTokens: number;
-}
+  cachedInputTokens: Schema.Finite,
+});
+
+export type Usage = typeof Usage.Type;
 
 export const empty: Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
 

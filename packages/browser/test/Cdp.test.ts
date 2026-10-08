@@ -69,7 +69,7 @@ it.live("measures the viewport of a page Playwright did not size", () =>
     assert.deepStrictEqual(yield* page.viewport, inner);
 
     // One page of scrolling is one viewport of this page, not of a 1280x720 default.
-    const tools = yield* Tools.make();
+    const tools = yield* Tools.make({ page });
 
     yield* tools.handlers.browser_scroll({ direction: "down", pages: 1 });
     assert.strictEqual(

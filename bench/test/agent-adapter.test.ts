@@ -58,9 +58,11 @@ const run = (bodies: ReadonlyArray<unknown>) =>
       Effect.provideService(OpenRouterClient.OpenRouterClient, client),
     );
 
-    yield* (yield* (yield* Browser).firstPage).goto("data:text/html,<title>Task</title>42");
+    const page = yield* (yield* Browser).firstPage;
 
-    const exit = yield* Agent.run("Read the number.", { maxSteps: 5 }).pipe(
+    yield* page.goto("data:text/html,<title>Task</title>42");
+
+    const exit = yield* Agent.run("Read the number.", { page, maxSteps: 5 }).pipe(
       Effect.provideService(LanguageModel.LanguageModel, model),
       Effect.exit,
     );

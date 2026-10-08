@@ -9,6 +9,7 @@ import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
+import * as Presentation from "effect-browser/Presentation";
 import type { Snapshot } from "effect-browser/Snapshot";
 import { type AiError, LanguageModel, Prompt, type Response } from "effect/ai";
 
@@ -58,6 +59,8 @@ export interface Outcome extends Grade {
 export interface TrialOptions {
   /** The fixture seed, recorded by the runner so a failed trial can be reproduced. */
   readonly seed?: number;
+  /** Perform the input for viewers, through a presenter's view of the page, as `--humanize` asks. */
+  readonly humanize?: boolean | undefined;
   /** Receives the agent's turns and the moments shown to a model, such as for a recording. */
   readonly trace?: ((entry: Trace) => Effect.Effect<void>) | undefined;
 }
@@ -176,17 +179,20 @@ const usageOf = (usage: Response.Usage): Agent.Usage => ({
   cachedInputTokens: usage.inputTokens.cacheRead ?? 0,
 });
 
-/** Serve the bench pages for the rest of the scope, and open `path` in the first tab. */
-const open = (path: string, seed = 0, pages: Readonly<Record<string, string>> = {}) =>
+/**
+ * Serve the bench pages for the rest of the scope, and open `path` in the first tab: the page
+ * itself, or a presenter's view of it, whose input glides, types and scrolls at a person's pace.
+ */
+const open = (path: string, options: TrialOptions, pages: Readonly<Record<string, string>> = {}) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
 
-    yield* serve(browser, seed, pages);
+    yield* serve(browser, options.seed ?? 0, pages);
     const page = yield* browser.firstPage;
 
     yield* page.goto(`${origin}${path}`);
 
-    return page;
+    return options.humanize === true ? (yield* Presentation.make()).view(page) : page;
   });
 
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -267,7 +273,7 @@ export const operate = <A, I>(spec: {
   prompt: spec.prompt,
   withModel: (options) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed, spec.pages);
+      const page = yield* open(spec.start, options, spec.pages);
       let actions = 0;
 
       const stopNarrating = yield* Deferred.make<void>();
@@ -277,7 +283,7 @@ export const operate = <A, I>(spec: {
           ? undefined
           : yield* Effect.forkScoped(narrate(page, options.narrate, stopNarrating, options));
 
-      const result = yield* Arms.operate(options.arm ?? 5, spec.prompt, {
+      const result = yield* Arms.operate(options.arm ?? 5, page, spec.prompt, {
         answer: spec.answer,
         maxSteps: spec.maxSteps,
         onStep: (step) => {
@@ -307,7 +313,7 @@ export const operate = <A, I>(spec: {
     }).pipe(Effect.scoped),
   scripted: (options = {}) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed, spec.pages);
+      const page = yield* open(spec.start, options, spec.pages);
       const answer = yield* spec.solve(page);
 
       const grade = yield* spec
@@ -349,7 +355,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
 }): Task => {
   const prepare = (options: TrialOptions & { readonly arm?: Arm | undefined }) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed);
+      const page = yield* open(spec.start, options);
 
       if (spec.beforeCapture !== undefined) yield* spec.beforeCapture(page);
 

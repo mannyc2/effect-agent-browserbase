@@ -18,7 +18,6 @@ import * as Window from "../timeline/window.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
-import * as Url from "./url.ts";
 import * as Viewport from "./viewport.ts";
 
 export interface Internals {
@@ -53,7 +52,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const viewport = Viewport.make(page, bridge);
   const input = Actions.make(page, bridge, viewport);
   const pictures = yield* Pictures.make(page, bridge, viewport);
-  const reading = yield* Reading.make(page, bridge, () => pictures.screenshot());
+  const reading = yield* Reading.make(page, bridge);
   const navigation = Navigation.make(page, input.perform, input.preparePolicy);
   const { capture } = pictures;
   const changes = Changes.make(page, bridge, pictures.estimate);
@@ -85,11 +84,8 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const assembled: Page = {
     id,
     playwright,
-    url: Effect.sync(() => Url.redact(playwright.url())),
-    title: titles("", native("title", () => playwright.title()).pipe(within("title"))).pipe(
-      span("Page.title"),
-      owned,
-    ),
+    url: Effect.sync(() => bridge.frameTag().url),
+    title: titles("", navigation.title.pipe(within("title"))).pipe(span("Page.title"), owned),
     goto: navigation.goto,
     back: navigation.back,
     reload: navigation.reload,
@@ -104,7 +100,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       span("Page.viewport"),
       owned,
     ),
-    observe: reading.observe,
     find: reading.find,
     text: reading.text,
     changes,

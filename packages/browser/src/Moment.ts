@@ -26,10 +26,11 @@ import { Duration, Effect, Option, Result, Schema } from "effect";
 import { Prompt } from "effect/ai";
 
 import { BrowserError, InvalidRequest } from "./BrowserError.ts";
-import { type Action, BrowserEvent, type Subject, type SubjectContext } from "./BrowserEvent.ts";
+import { type Action, BrowserEvent } from "./BrowserEvent.ts";
 import { type Change, Changes } from "./Change.ts";
 import { Frame } from "./Frame.ts";
 import { undispatched } from "./internal/page/context.ts";
+import { describe, named, quoted, where } from "./internal/timeline/words.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
@@ -183,19 +184,8 @@ export const stillness = (window: Window): number | undefined => {
 
 const seconds = (moment: Moment, at: number) => `${((at - moment.until) / 1000).toFixed(1)}s`;
 
-const quoted = (value: string | undefined) => JSON.stringify(value ?? "");
-
 const pointOf = (x: number | undefined, y: number | undefined) =>
   x === undefined || y === undefined ? undefined : `(${Math.round(x)}, ${Math.round(y)})`;
-
-/** A subject in words, such as `button "Play"`; one without a name says where it was. */
-const named = (subject: Subject, point: string | undefined) => {
-  const kind = subject.role ?? subject.tag;
-
-  if (subject.name !== "") return `${kind} ${JSON.stringify(subject.name)}`;
-
-  return point === undefined ? kind : `${kind} at ${point}`;
-};
 
 /**
  * What an action acted on. Without a subject the action failed before finding it, and a ref it was
@@ -238,54 +228,6 @@ const drawn = new Set(["canvas", "iframe", "video", "embed", "object", "svg"]);
 
 const onDrawn = (event: Action) =>
   event.ok && event.subject !== undefined && drawn.has(event.subject.role ?? event.subject.tag);
-
-/** A change's context in words: `row "Ether", column "1h"` or `beside "Price", under "Bitcoin"`. */
-const where = ({ row, column, label, heading }: SubjectContext, grouped = false) => {
-  const parts = [
-    row === undefined ? "" : `row ${quoted(row)}`,
-    column === undefined || grouped ? "" : `column ${quoted(column)}`,
-    label === undefined ? "" : `beside ${quoted(label)}`,
-    heading === undefined || grouped ? "" : `under ${quoted(heading)}`,
-  ].filter((part) => part !== "");
-
-  return parts.length === 0 ? "" : ` (${parts.join(", ")})`;
-};
-
-/** A change in words, such as `"$61,240" became "$62,010" (row "Bitcoin", column "Price")`. */
-const describe = (change: Change, grouped = false): string => {
-  const { subject, before, after, count, lowest, highest } = change;
-  const context = where(subject.context, grouped);
-
-  const range =
-    lowest === undefined || highest === undefined ? "" : `, from ${lowest} to ${highest}`;
-
-  const times = count > 1 ? ` (it changed ${count} times${range})` : "";
-
-  switch (change.kind) {
-    case "title":
-      return `the title ${before === undefined ? "now reads" : `${quoted(before)} became`} ${quoted(after)}`;
-    case "value": {
-      const field = named(subject, undefined);
-
-      if (after === "checked" || after === "not checked") return `${field} is now ${after}`;
-      if (after === undefined || after === "") return `${field} was cleared`;
-
-      return after === "••••" || before === undefined || before === ""
-        ? `${field} was ${after === "••••" ? "edited" : `set to ${quoted(after)}`}`
-        : `${field} changed from ${quoted(before)} to ${quoted(after)}`;
-    }
-    case "appeared":
-      return `${quoted(after)} appeared${context}`;
-    case "disappeared":
-      return `${quoted(before)} disappeared${context}`;
-    case "brief":
-      return `${quoted(after)} appeared and went away again${context}`;
-    case "text":
-      return before === undefined
-        ? `now reads ${quoted(after)}${context}${times}`
-        : `${quoted(before)} became ${quoted(after)}${context}${times}`;
-  }
-};
 
 interface Line {
   readonly at: number;

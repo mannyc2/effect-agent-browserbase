@@ -5,6 +5,7 @@ import { Browser, make as makeBrowser, type Options as BrowserOptions } from "..
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
+import { toldFailure } from "../src/internal/agent/projection.ts";
 import { type InputRequest, type Page, redacted } from "../src/Page.ts";
 import * as Presentation from "../src/Presentation.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
@@ -705,12 +706,13 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         guard: () => Effect.fail(new PolicyDenied({ detail: "test policy refused" })),
       });
 
-      const tools = yield* Tools.make().pipe(Effect.provideService(Browser, browser));
+      const tools = yield* Tools.make({ page });
       const submit = refOf(yield* page.snapshot(), "button", "Submit");
       const refused = yield* tools.handlers.browser_click({ ref: submit }).pipe(Effect.flip);
 
-      assert.include(refused, "test policy refused");
-      assert.notInclude(refused, "may have taken effect");
+      assert.strictEqual(refused.reason._tag, "PolicyDenied");
+      assert.include(toldFailure(refused), "test policy refused");
+      assert.notInclude(toldFailure(refused), "may have taken effect");
       assert.strictEqual(yield* outcome(page), "Not ordered");
 
       const action = (yield* browser.recentEvents)

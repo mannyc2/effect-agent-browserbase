@@ -154,14 +154,12 @@ const failure = (result: unknown): { readonly why: string; readonly technical: s
 
     return _tag === "ToolParameterValidationError"
       ? { why: "rejected: the request was malformed", technical }
-      : { why: "failed", technical };
+      : _tag === "StaleRef"
+        ? { why: "failed: the element it aimed for was gone", technical }
+        : { why: "failed", technical };
   }
-  const text = typeof result === "string" ? result : JSON.stringify(result);
 
-  if (/not on the page any more/.test(text))
-    return { why: "failed: the element it aimed for was gone", technical: text };
-
-  return { why: "failed", technical: text };
+  return { why: "failed", technical: typeof result === "string" ? result : JSON.stringify(result) };
 };
 
 const elementWords: Readonly<Record<string, string>> = {
@@ -172,16 +170,18 @@ const elementWords: Readonly<Record<string, string>> = {
   a: "a link",
 };
 
-/** What a successful click reported hitting: its visible name, or the kind of element. */
-const clicked = (result: unknown) => {
-  if (typeof result !== "string") return "the page";
-  const named = /"([^"]+)"/.exec(result)?.[1];
+/** A browser tool's receipt, as far as a click's subject. */
+const Clicked = Schema.Struct({
+  action: Schema.Struct({ subject: Schema.Struct({ name: Schema.String, tag: Schema.String }) }),
+});
 
-  if (named !== undefined) return `“${named}”`;
-  const tag = /<([a-z]+)/.exec(result)?.[1];
-
-  return (tag === undefined ? undefined : elementWords[tag]) ?? "the page";
-};
+/** What a successful click acted on, from its receipt: its visible name, or the kind of element. */
+const clicked = (result: unknown) =>
+  Option.match(Schema.decodeUnknownOption(Clicked)(result), {
+    onNone: () => "the page",
+    onSome: ({ action: { subject } }) =>
+      subject.name === "" ? (elementWords[subject.tag] ?? "the page") : `“${subject.name}”`,
+  });
 
 export interface CallWords {
   /** What the call did, or tried to do. */

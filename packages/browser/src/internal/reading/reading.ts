@@ -1,21 +1,12 @@
 /**
- * Reading a page: its outline with refs, the elements a query finds, the text it shows, and an
- * observation that pairs the outline with a picture. Each read takes its turn on the page and
- * shares its work with identical reads, as `lane.ts` describes. The viewport's text as it was last
- * read is kept, for `Page.state`.
+ * Reading a page: its outline with refs, the elements a query finds and the text it shows. Each
+ * read takes its turn on the page and shares its work with identical reads, as `lane.ts`
+ * describes. The viewport's text as it was last read is kept, for `Page.state`.
  */
-import { Duration, Effect, Option, Ref, Result, Schedule, Schema } from "effect";
+import { Duration, Effect, Ref, Schedule, Schema } from "effect";
 
-import { type BrowserError, InvalidRequest, NotFound, StaleRef } from "../../BrowserError.ts";
-import type { Image } from "../../Frame.ts";
-import {
-  type FindQuery,
-  Found,
-  Observation,
-  type ObservationMode,
-  Text,
-  type TextOptions,
-} from "../../Page.ts";
+import { InvalidRequest, NotFound, StaleRef } from "../../BrowserError.ts";
+import { type FindQuery, Found, Text, type TextOptions } from "../../Page.ts";
 import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext } from "../page/context.ts";
@@ -36,21 +27,7 @@ const wanted = (value: string | RegExp | undefined): Wanted | null =>
       ? value
       : { source: value.source, flags: value.flags };
 
-// One part of an observation: how its read went, or nothing when it was not asked for.
-const part = <A>(asked: boolean, read: () => Effect.Effect<A, BrowserError>) =>
-  asked ? Effect.asSome(Effect.result(read())) : Effect.succeedNone;
-
-const succeeded = <A>(part: Option.Option<Result.Result<A, BrowserError>>) =>
-  Option.getOrUndefined(Option.flatMap(part, Result.getSuccess));
-
-const failed = <A>(part: Option.Option<Result.Result<A, BrowserError>>) =>
-  Option.toArray(Option.flatMap(part, Result.getFailure));
-
-export const make = Effect.fnUntraced(function* (
-  page: PageContext,
-  bridge: Bridge,
-  screenshot: () => Effect.Effect<Image, BrowserError>,
-) {
+export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Bridge) {
   const { now, span, owned, within, lane } = page;
   const { evaluate } = bridge;
   // Refs count up across the page's documents, so one never names two elements.
@@ -155,37 +132,6 @@ export const make = Effect.fnUntraced(function* (
     ).pipe(span("Page.text", { scope: scope === "viewport" ? "viewport" : "ref" }), owned);
   };
 
-  // What could be read, each part apart, and why the rest could not; a failure only when nothing
-  // asked for could be read.
-  const observe = (
-    observeOptions: {
-      readonly mode?: ObservationMode;
-      readonly full?: boolean;
-      readonly maxChars?: number;
-    } = {},
-  ) =>
-    Effect.all(
-      [
-        part(observeOptions.mode !== "screenshot", () =>
-          snapshot({ full: observeOptions.full, maxChars: observeOptions.maxChars }),
-        ),
-        part(observeOptions.mode !== "outline", () => screenshot()),
-      ],
-      { concurrency: 2 },
-    ).pipe(
-      Effect.flatMap(([outline, picture]) => {
-        const read = { snapshot: succeeded(outline), image: succeeded(picture) };
-        const missing = [...failed(outline), ...failed(picture)];
-        const [first] = missing;
-
-        return read.snapshot === undefined && read.image === undefined && first !== undefined
-          ? Effect.fail(first)
-          : Effect.succeed(new Observation({ ...read, missing, at: now() }));
-      }),
-      span("Page.observe", { mode: observeOptions.mode ?? "both" }),
-      owned,
-    );
-
   const waitForText = (text: string, timeout: Duration.Input = Duration.seconds(10)) =>
     find({ text, scope: "document" }).pipe(
       Effect.repeat({
@@ -205,7 +151,7 @@ export const make = Effect.fnUntraced(function* (
   const viewedSince = (since: number) =>
     viewed !== undefined && viewed.at > since ? viewed : undefined;
 
-  return { snapshot, find, text, observe, waitForText, viewedSince };
+  return { snapshot, find, text, waitForText, viewedSince };
 });
 
 export type Reading = Effect.Success<ReturnType<typeof make>>;

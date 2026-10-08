@@ -18,16 +18,16 @@
 import { type Duration, Effect, Schema, type Stream } from "effect";
 import type { Page as PlaywrightPage } from "playwright-core";
 
-import { BrowserError, type PolicyDenied } from "./BrowserError.ts";
+import { type BrowserError, type PolicyDenied } from "./BrowserError.ts";
 import { Box, type BrowserEvent, PageLoaded, Subject, SubjectContext } from "./BrowserEvent.ts";
 import type { Changes } from "./Change.ts";
 import { type CaptureStats, Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
-import { FailFast } from "./internal/page/lane.ts";
+import { Correlation, FailFast } from "./internal/page/lane.ts";
 import * as Url from "./internal/page/url.ts";
 import type { Window } from "./Moment.ts";
-import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
+import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
 export interface Point {
   readonly x: number;
@@ -269,19 +269,6 @@ export class State extends Schema.Class<State>("effect-browser/PageState")({
   text: Schema.optional(Text),
 }) {}
 
-/** What to include in an observation of the current viewport. */
-export type ObservationMode = "outline" | "screenshot" | "both";
-
-/** One observation, suitable for passing between an agent and its consumer. */
-export class Observation extends Schema.Class<Observation>("effect-browser/Observation")({
-  snapshot: Schema.optional(Snapshot),
-  image: Schema.optional(Image),
-  /** Why each part asked for and left out could not be read. */
-  missing: Schema.Array(BrowserError),
-  /** Host monotonic milliseconds from the browser's captured Effect Clock. */
-  at: Schema.Finite,
-}) {}
-
 /**
  * What the page's structure establishes about an input, or says it cannot establish:
  *
@@ -368,6 +355,15 @@ export const redacted = Url.withheld;
 export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
   Effect.provideService(effect, FailFast, true);
 
+/**
+ * Give every action `effect` performs a caller's id, such as a model's tool call id, which its
+ * recorded `Action` carries as `correlation`.
+ */
+export const correlate =
+  (id: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    Effect.provideService(effect, Correlation, id);
+
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
@@ -376,8 +372,15 @@ export interface Page {
   readonly id: string;
   /** The Playwright page, for anything this API does not cover. Never give it to a model. */
   readonly playwright: PlaywrightPage;
-  /** The page's address, without its userinfo or known secret parameters. */
+  /**
+   * The page's address, as `state.url` holds it: where its main frame last committed or moved,
+   * without its userinfo or known secret parameters.
+   */
   readonly url: Effect.Effect<string>;
+  /**
+   * The document's title as the page last set it, empty for an untitled page. The browser answers
+   * it, in one call, so a page busy with a script cannot hold it up.
+   */
   readonly title: Effect.Effect<string, BrowserError>;
 
   readonly goto: (url: string) => Effect.Effect<void, BrowserError>;
@@ -410,15 +413,6 @@ export interface Page {
     { readonly width: number; readonly height: number },
     BrowserError
   >;
-  /**
-   * An outline, a picture, or both (the default), taken together: what could be read, with
-   * `missing` saying why the rest could not, failing only when nothing could.
-   */
-  readonly observe: (options?: {
-    readonly mode?: ObservationMode;
-    readonly full?: boolean;
-    readonly maxChars?: number;
-  }) => Effect.Effect<Observation, BrowserError>;
   /**
    * The elements that match a query, in tree order, with refs the actions take, in one call to the
    * page. All that match are returned, so a caller tells them apart by their context; none is an
