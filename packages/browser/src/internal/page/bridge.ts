@@ -37,6 +37,7 @@ export interface PageApi {
   readonly version: number;
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
+  waitForText: Subjects["waitFor"];
   text: Texts["read"];
   record: Recorder["start"];
   changes: Changes["read"];
@@ -83,7 +84,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 14) return installed;
+  if (installed !== undefined && installed.version === 15) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
@@ -100,9 +101,10 @@ const install = (
   const readiness = makeReady(walked, texts, kept);
 
   const api: PageApi = {
-    version: 14,
+    version: 15,
     snapshot: read.snapshot,
     find: subjected.find,
+    waitForText: subjected.waitFor,
     text: texts.read,
     record: recorder.start,
     changes: makeChanges(named, placing, kept, seeing, marking, recorder).read,

@@ -470,8 +470,9 @@ export interface Page {
   ) => Effect.Effect<string, BrowserError>;
 
   /**
-   * Wait until the page shows some text, as `find({ text, scope: "document" })` matches it,
-   * looking every 250 ms; `NotFound` after `timeout`, 10 seconds by default.
+   * Wait until the page shows some text, as `find({ text, scope: "document" })` matches it, in one
+   * call that the page answers as the text comes, looking every 250 ms, or `NotFound` after
+   * `timeout`, 10 seconds by default.
    */
   readonly waitForText: (
     text: string,

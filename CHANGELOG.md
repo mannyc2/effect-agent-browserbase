@@ -127,6 +127,10 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - A page's pictures go one at a time. Each restores the view's size it found, so two crops asked
   together left the page's view at the first one's size: in ten tries of two zooms at once,
   another session's whole picture of each page then showed only the first region.
+- `Page.waitForText` is one call, which the page answers as the text comes, looking every 250 ms,
+  or at the deadline, where it was a `find` every 250 ms: a text that came 600 ms on took four
+  calls. It follows the action in flight but holds no later one back while it waits, and waits on
+  in a document that replaces the one it began in.
 
 ### Breaking
 
