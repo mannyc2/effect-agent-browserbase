@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Redacted, Schedule, Stream } from "effect";
+import { Effect, Fiber, Layer, Redacted, Schedule, Schema, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type * as Supervisor from "effect-browser/Supervisor";
 import { FetchHttpClient, HttpClient } from "effect/http";
@@ -13,6 +13,7 @@ import { chromium } from "playwright-core";
 
 import * as Browserbase from "../src/Browserbase.ts";
 import { BrowserbaseClient, layer as clientLayer } from "../src/BrowserbaseClient.ts";
+import { BrowserbaseError } from "../src/BrowserbaseError.ts";
 import * as TestBrowserbase from "../src/testing/TestBrowserbase.ts";
 
 interface Received {
@@ -158,6 +159,8 @@ describe("BrowserbaseClient", () => {
       const api = yield* fakeApi((request) => {
         if (request.url === "/v1/sessions/missing")
           return { status: 404, body: { message: "Session not found" } };
+        if (request.url === "/v1/sessions/malformed")
+          return { status: 400, body: { message: "Invalid Session ID" } };
         if (request.url === "/v1/sessions/flaky") {
           attempts += 1;
 
@@ -180,6 +183,8 @@ describe("BrowserbaseClient", () => {
           missing.message,
           "Browserbase getSession failed: not found: Session not found",
         );
+        // Browserbase refuses an id of the wrong shape with 400, as it does a malformed request.
+        assert.strictEqual(yield* reasonOf(client.getSession("malformed")), "InvalidRequest");
         assert.strictEqual(yield* reasonOf(client.createSession()), "RateLimited");
         assert.strictEqual(yield* reasonOf(client.releaseSession("other")), "Status");
         assert.strictEqual((yield* client.getSession("flaky")).id, "flaky");
@@ -404,6 +409,17 @@ const nowhere = listen(() => undefined).pipe(
 const kept = Effect.flatMap(TestBrowserbase.TestBrowserbase, (fake) => fake.sessions);
 const asked = Effect.flatMap(TestBrowserbase.TestBrowserbase, (fake) => fake.requests);
 
+/** The fake's sessions' ids, oldest first; it hands out UUIDs, as Browserbase does. */
+const ids = Effect.map(kept, (sessions) => sessions.map(({ id }) => id));
+
+/** What an open failed at: the Browserbase operation, or the error's own tag. */
+const step = (error: { readonly _tag: string; readonly operation?: string | undefined }) =>
+  error.operation ?? error._tag;
+
+/** Why a Browserbase call failed, or the error's own tag for any other. */
+const reason = (error: { readonly _tag: string; readonly reason?: { readonly _tag: string } }) =>
+  error.reason?._tag ?? error._tag;
+
 const persisting = (id: string) => ({
   timeout: 3600,
   browserSettings: { context: { id, persist: true } },
@@ -457,7 +473,7 @@ describe("Browserbase", () => {
       const error = yield* Fiber.join(alone);
 
       assert.deepStrictEqual(
-        [error.operation, error.reason._tag, error.message],
+        [step(error), reason(error), error.message],
         ["createSession", "Transport", "Browserbase createSession failed: no answer within 1m"],
       );
 
@@ -474,9 +490,10 @@ describe("Browserbase", () => {
   it.effect("releases a created session whose answer does not decode", () =>
     Effect.gen(function* () {
       const error = yield* Browserbase.open().pipe(Effect.scoped, Effect.flip);
+      const [session] = yield* kept;
 
-      assert.deepStrictEqual([error.operation, error.reason._tag], ["createSession", "Decode"]);
-      assert.include(error.message, "session session-1 was released");
+      assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Decode"]);
+      assert.include(error.message, `session ${session?.id} was released`);
       assert.deepStrictEqual(
         (yield* kept).map(({ status, releases }) => [status, releases]),
         [["COMPLETED", 1]],
@@ -520,14 +537,15 @@ describe("Browserbase", () => {
           const page = yield* browser.page;
 
           yield* page.goto("data:text/html,<title>Hosted</title><button>Go</button>");
-          assert.deepStrictEqual([browser.id, browser.provider], ["session-1", "browserbase"]);
+          assert.deepStrictEqual([browser.id, browser.provider], [...(yield* ids), "browserbase"]);
           assert.include((yield* page.snapshot()).text, 'button "Go"');
         }).pipe(Effect.provide(Browserbase.layer({ session: { timeout: 300 } })));
+        const [id] = yield* ids;
 
         assert.deepStrictEqual(yield* asked, [
           "POST /v1/sessions",
-          "POST /v1/sessions/session-1",
-          "GET /v1/sessions/session-1",
+          `POST /v1/sessions/${id}`,
+          `GET /v1/sessions/${id}`,
         ]);
         assert.deepStrictEqual(
           (yield* kept).map(({ status }) => status),
@@ -560,31 +578,37 @@ describe("Browserbase", () => {
     }),
   );
 
-  it.effect("keeps a context held while a release is unconfirmed, until reconcile ends it", () =>
+  it.effect("has the next writer end a session its release left running before it writes", () =>
     Effect.gen(function* () {
       const connectUrl = yield* nowhere;
 
       yield* Effect.gen(function* () {
         const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
         const open = Browserbase.open({ session: persisting(id) }).pipe(Effect.scoped, Effect.flip);
-        const first = yield* finish(yield* Effect.forkChild(open));
 
-        assert.strictEqual(first.operation, "connect");
+        // The first session's release stays pending past its deadline, so it may still save.
+        assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
 
-        // The session may still save to the context, so another writer waits.
-        const second = yield* Effect.forkChild(open);
+        // The next writer asks it to end again, and while it runs on, writes nothing.
+        const held = yield* finish(yield* Effect.forkChild(open));
 
-        yield* pass(120);
-        assert.isUndefined(second.pollUnsafe());
         assert.deepStrictEqual(
-          (yield* kept).map(({ status }) => status),
-          ["RUNNING"],
+          [held._tag, held._tag === "ContextHeld" && held.context],
+          ["ContextHeld", id],
+        );
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status, releases }) => [status, releases]),
+          [["RUNNING", 2]],
         );
 
-        const reconciled = yield* finish(yield* Effect.forkChild(Browserbase.reconcile(id)));
+        // Once it has ended, the writer after it goes on, so the hold has a way out.
+        assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
+        const [first, second] = yield* ids;
 
-        assert.strictEqual(reconciled._tag, "Settled");
-        assert.strictEqual((yield* finish(second)).operation, "connect");
+        assert.isBelow(
+          (yield* asked).lastIndexOf(`GET /v1/sessions/${first}`),
+          (yield* asked).lastIndexOf("POST /v1/sessions"),
+        );
         assert.deepStrictEqual(
           (yield* kept).map(({ id, status, userMetadata }) => [
             id,
@@ -592,12 +616,17 @@ describe("Browserbase", () => {
             userMetadata?.["persistsContext"],
           ]),
           [
-            ["session-1", "COMPLETED", id],
-            ["session-2", "COMPLETED", id],
+            [first, "COMPLETED", id],
+            [second, "COMPLETED", id],
           ],
         );
       }).pipe(
-        Effect.provide(TestBrowserbase.layer({ connectUrl, releases: [{ _tag: "Pending" }] })),
+        Effect.provide(
+          TestBrowserbase.layer({
+            connectUrl,
+            releases: [{ _tag: "Pending" }, { _tag: "Pending" }],
+          }),
+        ),
       );
     }),
   );
@@ -622,8 +651,10 @@ describe("Browserbase", () => {
         yield* finish(yield* Effect.forkChild(open));
         // The release was confirmed, so the next writer takes the context at once.
         yield* finish(yield* Effect.forkChild(open));
+        const [first] = yield* ids;
+
         assert.deepStrictEqual(
-          (yield* asked).filter((request) => request === "GET /v1/sessions/session-1").length,
+          (yield* asked).filter((request) => request === `GET /v1/sessions/${first}`).length,
           reads.length + 1,
         );
         assert.deepStrictEqual(
@@ -634,29 +665,89 @@ describe("Browserbase", () => {
     }),
   );
 
-  it.effect("finds and ends a persisting session whose create answer was lost", () =>
+  it.effect("ends the session a lost persisting create made, and the next writer goes on", () =>
     Effect.gen(function* () {
-      const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
+      const connectUrl = yield* nowhere;
 
-      const error = yield* Browserbase.open({ session: persisting(id) }).pipe(
-        Effect.scoped,
-        Effect.flip,
-      );
+      yield* Effect.gen(function* () {
+        const open = Browserbase.open({ session: persisting("context-lost") }).pipe(
+          Effect.scoped,
+          Effect.flip,
+        );
 
-      assert.deepStrictEqual([error.operation, error.reason._tag], ["createSession", "Transport"]);
-      assert.deepStrictEqual(
-        (yield* kept).map(({ status }) => status),
-        ["RUNNING"],
-      );
-      assert.strictEqual(
-        (yield* finish(yield* Effect.forkChild(Browserbase.reconcile(id))))._tag,
-        "Settled",
-      );
-      assert.deepStrictEqual(
-        (yield* kept).map(({ status }) => status),
-        ["COMPLETED"],
-      );
-    }).pipe(Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Lost" }] }))),
+        const error = yield* finish(yield* Effect.forkChild(open));
+
+        // The create's own error stands: ending the unseen session is not a failure of its own.
+        assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Transport"]);
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED"],
+        );
+        // That session was confirmed ended, so the next writer looks for no other first.
+        assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
+        assert.strictEqual(
+          (yield* asked).filter((request) => request.startsWith("GET /v1/sessions?")).length,
+          2,
+        );
+      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl, creates: [{ _tag: "Lost" }] })));
+    }),
+  );
+
+  it.effect(
+    "holds the context while a lost create's session runs on, until reconcile ends it",
+    () =>
+      Effect.gen(function* () {
+        const connectUrl = yield* nowhere;
+
+        yield* Effect.gen(function* () {
+          const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) =>
+            client.createContext(),
+          );
+
+          const open = Browserbase.open({ session: persisting(id) }).pipe(
+            Effect.scoped,
+            Effect.flip,
+          );
+
+          const error = yield* finish(yield* Effect.forkChild(open));
+
+          assert.deepStrictEqual(
+            [error._tag, error._tag === "ContextHeld" && error.context],
+            ["ContextHeld", id],
+          );
+          assert.deepStrictEqual(
+            (yield* kept).map(({ status }) => status),
+            ["RUNNING"],
+          );
+          assert.strictEqual(
+            (yield* finish(yield* Effect.forkChild(Browserbase.reconcile(id))))._tag,
+            "Settled",
+          );
+
+          // Reconciled, the context is let go: the next writer looks for no other session first.
+          const listed = (yield* asked).filter((request) =>
+            request.startsWith("GET /v1/sessions?"),
+          );
+
+          assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
+          assert.deepStrictEqual(
+            (yield* asked).filter((request) => request.startsWith("GET /v1/sessions?")),
+            listed,
+          );
+          assert.deepStrictEqual(
+            (yield* kept).map(({ status }) => status),
+            ["COMPLETED", "COMPLETED"],
+          );
+        }).pipe(
+          Effect.provide(
+            TestBrowserbase.layer({
+              connectUrl,
+              creates: [{ _tag: "Lost" }],
+              releases: [{ _tag: "Pending" }],
+            }),
+          ),
+        );
+      }),
   );
 });
 
@@ -667,6 +758,61 @@ const line = ({ number, state }: Supervisor.Generation) =>
     : `${number} ${state._tag}`;
 
 describe("Browserbase.supervise", () => {
+  it.effect("goes down at once, without trying again, when Browserbase refuses the key", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Browserbase.supervise();
+
+      // Trying again would have asked twice within these seconds.
+      yield* pass(5);
+      assert.deepStrictEqual(yield* asked, ["POST /v1/sessions"]);
+      const unavailable = yield* Effect.flip(sessions.browser);
+      const cause = unavailable.cause;
+
+      assert.deepStrictEqual(
+        [unavailable.reason, Schema.is(BrowserbaseError)(cause) && cause.reason._tag],
+        ["down", "Unauthorized"],
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Reject", status: 401 }] })),
+    ),
+  );
+
+  it.effect("tries a held context again on its schedule, asking its session to end each time", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Browserbase.supervise({
+        session: persisting("context-held"),
+        reopen: Schedule.spaced("1 second"),
+      });
+
+      const down = yield* Effect.forkChild(
+        sessions.states.pipe(
+          Stream.filter(({ state }) => state._tag === "Down"),
+          Stream.runHead,
+        ),
+      );
+
+      // The first try's release of the lost create's session runs a minute; the second begins.
+      yield* pass(65);
+      assert.deepStrictEqual(
+        (yield* kept).map(({ status, releases }) => [status, releases]),
+        [["RUNNING", 2]],
+      );
+      // A context held is not definite: each try ends its sessions again, so it is not `Down`.
+      assert.isUndefined(down.pollUnsafe());
+      // Retiring waits for the release under way to finish.
+      yield* finish(yield* Effect.forkChild(sessions.retire));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        TestBrowserbase.layer({
+          creates: [{ _tag: "Lost" }],
+          releases: [{ _tag: "Pending" }, { _tag: "Pending" }],
+        }),
+      ),
+    ),
+  );
+
   it.live("reopens a lost session, and releases each one it opened", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;
@@ -686,7 +832,7 @@ describe("Browserbase.supervise", () => {
           Stream.filter((generation) => line(generation) === "2 Open"),
           Stream.runHead,
         );
-        assert.strictEqual((yield* sessions.browser).id, "session-2");
+        assert.strictEqual((yield* sessions.browser).id, (yield* ids)[1]);
         yield* sessions.retire;
 
         const lines = yield* Fiber.join(states);
@@ -724,7 +870,7 @@ describe("Browserbase.supervise", () => {
         const first = yield* sessions.browser;
         const second = yield* sessions.rotate;
 
-        assert.deepStrictEqual([first.id, second.id], ["session-1", "session-2"]);
+        assert.deepStrictEqual([first.id, second.id], [...(yield* ids)]);
         yield* sessions.retire;
 
         const lines = yield* Fiber.join(states);
@@ -735,7 +881,7 @@ describe("Browserbase.supervise", () => {
           lines.join(", "),
         );
         assert.isBelow(
-          (yield* asked).indexOf("GET /v1/sessions/session-1"),
+          (yield* asked).indexOf(`GET /v1/sessions/${first.id}`),
           (yield* asked).lastIndexOf("POST /v1/sessions"),
         );
       }).pipe(Effect.scoped, Effect.provide(TestBrowserbase.layer({ connectUrl })));

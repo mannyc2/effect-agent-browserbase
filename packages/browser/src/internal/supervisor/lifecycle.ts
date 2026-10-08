@@ -29,8 +29,14 @@ export class Open extends Schema.TaggedClass<Open>()("Open", {}) {}
 /** Lost: its connection dropped, or its browser was closed from the other side. */
 export class Lost extends Schema.TaggedClass<Lost>()("Lost", {}) {}
 
-/** It never opened: its last try failed and the reopen schedule gave up. */
-export class Down extends Schema.TaggedClass<Down>()("Down", { detail: Schema.String }) {}
+/**
+ * It never opened: its last try failed with `cause`, which the provider deems definite, or after
+ * which the reopen schedule gave up.
+ */
+export class Down extends Schema.TaggedClass<Down>()("Down", {
+  detail: Schema.String,
+  cause: Schema.Defect(),
+}) {}
 
 /** It ended. `released` says how its release went; one retired while opening has none. */
 export class Closed extends Schema.TaggedClass<Closed>()("Closed", {
@@ -58,6 +64,7 @@ export type State<A> =
       readonly _tag: "Down";
       readonly number: number;
       readonly detail: string;
+      readonly cause: unknown;
       readonly serving: Live<A> | undefined;
     }
   | { readonly _tag: "Retired" };
@@ -65,7 +72,12 @@ export type State<A> =
 export type Input<A> =
   | { readonly _tag: "Opened"; readonly live: Live<A> }
   /** The open of `number` failed for good. */
-  | { readonly _tag: "Failed"; readonly number: number; readonly detail: string }
+  | {
+      readonly _tag: "Failed";
+      readonly number: number;
+      readonly detail: string;
+      readonly cause: unknown;
+    }
   /** The open of `number` was stopped, as on retiring, before it opened. */
   | { readonly _tag: "Abandoned"; readonly number: number }
   | { readonly _tag: "Lost"; readonly number: number }
@@ -137,12 +149,13 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
       };
     }
     case "Failed": {
-      const events = [[input.number, new Down({ detail: input.detail })] as const];
+      const { number, detail, cause } = input;
+      const events = [[number, new Down({ detail, cause })] as const];
 
       if (state._tag !== "Opening" || state.number !== input.number) return { ...stay, events };
 
       return {
-        state: { _tag: "Down", number: state.number, detail: input.detail, serving: state.serving },
+        state: { _tag: "Down", number, detail, cause, serving: state.serving },
         events,
         commands: [],
       };
@@ -210,6 +223,7 @@ export type Resolution<A> =
       readonly _tag: "Unavailable";
       readonly reason: "down" | "retired";
       readonly detail: string;
+      readonly cause?: unknown;
     };
 
 /**
@@ -235,7 +249,7 @@ export const resolve = <A>(
       if (target === undefined && state.serving !== undefined) return serve(state.serving);
 
       return target === undefined || state.number >= target
-        ? { _tag: "Unavailable", reason: "down", detail: state.detail }
+        ? { _tag: "Unavailable", reason: "down", detail: state.detail, cause: state.cause }
         : undefined;
   }
 };

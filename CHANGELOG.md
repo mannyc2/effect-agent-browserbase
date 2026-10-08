@@ -10,26 +10,39 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Supervisor`, a new module: a browser kept open across losses and session ends, as generations
   from a provider's `open`. `browser` waits, bounded by `waitTimeout`, for the current generation,
   and every caller shares one open, which runs in the supervisor's scope. A loss is published at
-  once and the next generation opens on the `reopen` schedule; `rotate`, or the time `rotateBefore`
+  once and the next generation opens on the `reopen` schedule, which also retries a failed open
+  unless the provider deems that failure `definite`: such a generation is `Down` at once, carrying
+  its cause, which `Unavailable` also gives anyone waiting. `rotate`, or the time `rotateBefore`
   ahead of a generation's `expiresAt`, makes the next generation before it breaks the current one,
   or breaks first when generations are `exclusive`; `retire` stops at once and releases what is
   open. `states` streams each generation's `Opening`, `Reopening`, `Open`, `Lost`, `Down` and
   `Closed`, the last with the release outcome, `Settled` or `Unconfirmed`, as `Generation` values.
   Pages don't carry over between generations.
 - `Browserbase.supervise`: Browserbase sessions as `Supervisor` generations. Sessions that persist
-  to a stored context are exclusive.
+  to a stored context are exclusive. An open that Browserbase refused, as for a bad key or an
+  invalid request, is `Down` at once, rather than reopening on a schedule for five minutes; a
+  context held is not refused, since each try ends its sessions again.
 - `Browserbase.reconcile(contextId)` ends a stored context's running sessions, found by the
   `persistsContext` label `open` puts in their user metadata, confirms they ended, and lets the
-  context go after `contextSettle`: the way out of an `Unconfirmed` release, and of a persisting
-  create whose answer was lost.
+  context go after `contextSettle`: the way to end sessions another process left running, without
+  opening one.
+- `Browserbase.ContextHeld`, its own error beside `BrowserbaseError`: a session that saves to the
+  stored context may still run, so `open` did not write to it. A context whose writer's release was
+  left `Unconfirmed`, or whose create's answer was lost, is no longer held with no way out: the
+  next `open` on it ends the context's sessions first and goes on, or fails `ContextHeld` while
+  they cannot be confirmed ended, so each try is a way out and two writers are never let in.
 - `effect-browserbase/testing`: `TestBrowserbase`, the Browserbase API in memory as an `HttpClient`,
   whose sessions run until released or until their timeout on the Effect `Clock`, with a `Script`
   of lost creates, pending or refused releases and failed status reads; and
   `BrowserbaseContract.checks`, what the package relies on Browserbase to do, which the fake
-  passes.
+  passes. Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase
+  does: a malformed session id is refused, where an unknown well-formed one is not found.
 
 ### Changed
 
+- A Browserbase answer of 400 is the reason `InvalidRequest`, not `Status`, so a request Browserbase
+  refuses as malformed, such as a session id that is not a UUID, reads the same as one this client
+  refuses before sending.
 - `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
   SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
   `NodeRuntime.runMain`, an interrupt closes the browser with its scope.
@@ -41,9 +54,10 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   scope's close runs it too, once.
 - A Browserbase release confirms the session ended: it reads the session, trying again a second
   apart for up to a minute, including after a failed read. A session still running then is
-  `Unconfirmed`, and a persisting session's context stays held until `reconcile`. Before, a failed
-  release was a logged warning, and the context was let go after a minute whatever the session
-  did.
+  `Unconfirmed`, and its context is left for the next writer to clear. Before, a failed release was
+  a logged warning, and the context was let go after a minute whatever the session did.
+- `Browserbase.open`, `layer` and `supervise` can fail with `ContextHeld`, so a caller that handles
+  their errors by tag has one more to handle.
 - A persisting session carries `persistsContext: <context id>` in its user metadata, beside the
   caller's own.
 

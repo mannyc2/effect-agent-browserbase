@@ -63,7 +63,10 @@ export class Decode extends Schema.TaggedError<Decode>()("Decode", {
   }
 }
 
-/** The request was refused before sending, such as an id that is not an id. */
+/**
+ * Not a request Browserbase takes, such as an id that is not one: Browserbase refused it (400), or
+ * it was refused before sending.
+ */
 export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("InvalidRequest", {
   detail: Schema.String,
 }) {
