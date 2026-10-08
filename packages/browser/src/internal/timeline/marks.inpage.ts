@@ -120,7 +120,12 @@ export const marks = (names: Names, kept: History, seeing: Sight) => {
       }
     });
     for (const node of added)
-      if (isElement(node) && isHtml(node) && !unwritten.has(node.tagName))
+      if (
+        isElement(node) &&
+        isHtml(node) &&
+        !unwritten.has(node.tagName) &&
+        !node.isContentEditable
+      )
         if (kept.has(node) || (!text && !batch.left.has(node))) {
           batch.arrived.add(node);
           content(node, batch.at, undefined, () => null);
@@ -164,7 +169,8 @@ export const marks = (names: Names, kept: History, seeing: Sight) => {
       // What the record let go is counted, with no word of it read.
       if (kept.refuses(owner)) kept.lose(at, 1);
       if (kept.refuses(owner) || !isHtml(owner) || unwritten.has(owner.tagName)) continue;
-      if (owner === document.body) continue;
+      // What is typed into an editable region is a field's value, told masked as one.
+      if (owner === document.body || owner.isContentEditable) continue;
       if (batch.arrived.has(owner) || inside(owner, batch.arrived)) continue;
       content(owner, at, leaf ? words(owner.textContent) : undefined, () => {
         byOwner ??= Map.groupBy(records, ownerOf);

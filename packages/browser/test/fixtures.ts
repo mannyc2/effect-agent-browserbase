@@ -149,8 +149,9 @@ const spinning = `<!doctype html><title>Spinning</title>
 
 const late = `<!doctype html><title>Late</title><body style="margin:0;height:100vh;background:rgb(0,0,255)">`;
 
-// A trading desk whose changes the tests make: prices in a table, an order form whose answer comes
-// 600 ms after its button, a corner for alerts, and a Menu button that does nothing.
+// A trading desk whose changes the tests make: prices in a table, an order form with a memo that is
+// an editable region and an answer that comes 600 ms after its button, a corner for alerts, an
+// alert a class hides, and a Menu button that does nothing.
 const desk = `<!doctype html><title>Desk</title>
 <body style="margin:0;font-family:sans-serif">
 <h1>Desk</h1>
@@ -165,6 +166,7 @@ const desk = `<!doctype html><title>Desk</title>
 <form id="order" onsubmit="return false">
   <h2>Order</h2>
   <label>Amount <input id="amount" value="1"></label>
+  <div id="memo" contenteditable="true" aria-label="Memo"><p>Note</p></div>
   <button id="place" type="button">Place order</button>
   <p id="answer"></p>
 </form>

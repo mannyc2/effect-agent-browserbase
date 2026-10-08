@@ -492,12 +492,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   it.effect("masks what a field holds unless asked, and ends a window at a frame's paint", () =>
     Effect.gen(function* () {
       const page = yield* start("/desk");
-      const amount = (yield* page.find({ role: "textbox", name: "Amount" }))[0]?.ref ?? "";
+      const field = (name: string) => page.find({ role: "textbox", name });
+      const amount = (yield* field("Amount"))[0]?.ref ?? "";
+      const memo = (yield* field("Memo"))[0]?.ref ?? "";
 
       yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
       const first = yield* page.changes();
 
       yield* page.type("25", { into: amount });
+      yield* page.type("sell at 70k", { into: memo });
       yield* Effect.sleep(Duration.millis(300));
       const frame = yield* page.frame({ maxAge: 0 });
 
@@ -507,10 +510,17 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* Effect.sleep(Duration.millis(300));
 
       const typed = (changes: Changes) =>
-        changes.changes.find((change) => change.kind === "value")?.after;
+        changes.changes.flatMap((change) => (change.kind === "value" ? [change.after] : []));
 
-      assert.strictEqual(typed(yield* page.changes({ since: first })), "••••");
-      assert.strictEqual(typed(yield* page.changes({ since: first, unmask: true })), "25");
+      const masked = yield* page.changes({ since: first });
+
+      // What was typed shows only as a field's value, masked, in an editable region too.
+      assert.deepStrictEqual(typed(masked), ["••••", "••••"]);
+      assert.notInclude(JSON.stringify(masked), "sell");
+      assert.deepStrictEqual(typed(yield* page.changes({ since: first, unmask: true })), [
+        "25",
+        "sell at 70k",
+      ]);
       // A window that ends at the frame holds nothing painted after it.
       assert.isFalse(
         (yield* page.changes({ since: first, until: frame })).changes.some(
