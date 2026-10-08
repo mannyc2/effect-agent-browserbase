@@ -45,6 +45,8 @@ export interface PageApi {
   point: Targets["point"];
   scrollPlan: Targets["scrollPlan"];
   viewport: Outline["viewport"];
+  /** The screen as the page reads it, which another session may emulate. */
+  screenSize: () => { readonly width: number; readonly height: number };
   prepareInput: Guard["prepareInput"];
   validateInput: Guard["validateInput"];
   typeable: Edit["typeable"];
@@ -81,7 +83,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 13) return installed;
+  if (installed !== undefined && installed.version === 14) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
@@ -98,7 +100,7 @@ const install = (
   const readiness = makeReady(walked, texts, kept);
 
   const api: PageApi = {
-    version: 13,
+    version: 14,
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
@@ -109,6 +111,7 @@ const install = (
     point: located.point,
     scrollPlan: located.scrollPlan,
     viewport: read.viewport,
+    screenSize: () => ({ width: screen.width, height: screen.height }),
     prepareInput: guarded.prepareInput,
     validateInput: guarded.validateInput,
     typeable: edited.typeable,
