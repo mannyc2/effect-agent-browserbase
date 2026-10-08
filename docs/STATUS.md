@@ -65,7 +65,10 @@
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
   holds and validation before held actions resume: the press point is hit-tested after the
   pointer arrives, typing refuses to start on a control a key could activate, and a multi-key
-  action stops at a new document. Guards receive structural facts, never keyword categories, and
+  action stops at a new document. Typing approves its field once: plain text goes into it in one
+  insertion, so a guarded 2,000-character paste takes half a second at a 70 ms round trip, where
+  each key used to wait for the keys before it and a focus check, and humanized keys check focus
+  before each space and after the last key. Guards receive structural facts, never keyword categories, and
   page evidence around the target without field values; text typed into secret fields is redacted
   from requests and recorded events. A 77-control labelled corpus grades the facts in `ready`.
   `Policy` adds judges over `effect/ai` (`reviewer` on a `LanguageModel`, `decider` on a
@@ -84,8 +87,17 @@
   frames of the last 5 seconds (`frameHistory`), a moment's default window.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
+- Per-page admission: a page waits only for itself. Its operations take turns in one lane, where an
+  action has the page to itself, in the order actions were asked, and reads share it after the
+  action in flight and every action asked before them, so a read describes the page an action
+  left. A wait for a turn fails `Busy`, never `Timeout`, and `Page.failFast` fails it at once. A
+  click on one page no longer waits for humanized typing on another, which held an on-air click
+  for about 9.5 s in the release review. Identical reads in flight share one call, a read whose
+  callers gave up serves the next caller to ask the same until the page's next action, and
+  `observe` returns what it could read, with why the rest is missing. `Browser.Options.maxPages`
+  bounds the open pages, failing `Limit`.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
-  events; browser-wide pointer ownership and bounded event replay with explicit expiration.
+  events; a pointer per page, and bounded event replay with explicit expiration.
 - Humanized scrolling to off-screen targets, bounded fallback and approval revalidation; typing
   near 75 WPM with overlapping holds, slower word starts and opt-in corrected prose slips.
   Sampled presentation pauses retain the functional navigation wait.
@@ -159,21 +171,26 @@ and each becoming the next beta.
   connection: on Browserbase, pages' screencasts run on a second, read-only connection to the
   session, and on a hosted session the on-air page's longest wait between frames, while another
   tab read and uploaded, fell from 1,802 ms to 352 ms.
+- **Phase 3, concurrency and presentation, has begun.** Per-page admission is in: the browser-wide
+  input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
+  pages have a budget, and guarded typing approves its field once.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 12,755                 | 11,064 → 14,779 | 129 → 168                 |
+| `effect-browser`               | 8,871 → 13,247                 | 11,064 → 15,185 | 129 → 171                 |
 | `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,593     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
 `effect-browser`'s figures include phase 2 so far: the supervisor, 602 source lines, 506 test lines
 and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports; and
-the capture connection's port and transport, 324 source lines, 43 test lines and 1 export.
-Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
-11,000 through phase 4.
+the capture connection's port and transport, 324 source lines, 43 test lines and 1 export. They
+include phase 3's per-page admission too, 492 source lines, 406 test lines and 3 exports, most of
+it the lane, which deleting the browser-wide input lock paid for only in part. Without them, phase
+1 leaves the package at 11,431 source lines, against a soft ceiling of about 11,000 through phase
+4.
 
 ## Not rebuilt yet
 
