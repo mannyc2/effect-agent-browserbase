@@ -129,8 +129,6 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   of the document's title, in one call that a page busy with a script cannot hold up, and empty for
   an untitled page; it used to wait for a busy page without bound, and a connection that dropped
   meanwhile made it empty rather than fail.
-- `page.url` is where the page's own session saw its main frame commit or move, as `page.state.url`,
-  rather than Playwright's view, so the two never differ around a navigation.
 - `Agent.run` does not observe the turn that ends the run, so an answer costs no picture after it.
 - The agent shows at most 8 crops after a batch, and says how many it left out; `browser_zoom` no
   longer refuses a ninth.

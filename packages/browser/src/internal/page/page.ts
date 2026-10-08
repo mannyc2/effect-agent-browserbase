@@ -18,6 +18,7 @@ import * as Window from "../timeline/window.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
+import * as Url from "./url.ts";
 import * as Viewport from "./viewport.ts";
 
 export interface Internals {
@@ -84,7 +85,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const assembled: Page = {
     id,
     playwright,
-    url: Effect.sync(() => bridge.frameTag().url),
+    url: Effect.sync(() => Url.redact(playwright.url())),
     title: titles("", navigation.title.pipe(within("title"))).pipe(span("Page.title"), owned),
     goto: navigation.goto,
     back: navigation.back,

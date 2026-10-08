@@ -372,10 +372,7 @@ export interface Page {
   readonly id: string;
   /** The Playwright page, for anything this API does not cover. Never give it to a model. */
   readonly playwright: PlaywrightPage;
-  /**
-   * The page's address, as `state.url` holds it: where its main frame last committed or moved,
-   * without its userinfo or known secret parameters.
-   */
+  /** The page's address, without its userinfo or known secret parameters. */
   readonly url: Effect.Effect<string>;
   /**
    * The document's title as the page last set it, empty for an untitled page. The browser answers

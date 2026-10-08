@@ -595,8 +595,7 @@ tab the site opened that the library could not track is `PageUntracked`. A tab a
 it as its `opener`, and the opener's events hold its opening. Chromium announces a title change
 only with the next change of address, so there is no title event: read `page.title` when
 `Navigated` or `PageLoaded` says the page moved. The browser answers it, in one call that a busy
-page cannot hold up, and an untitled page's is empty. `page.url` is where the page's own session
-saw its main frame commit or move, as `page.state.url`.
+page cannot hold up, and an untitled page's is empty.
 
 The browser's own end is one `Disconnected`, and `browser.disconnected` completes with its cause:
 `connection`, `session`, at or after the provider's `expiresAt`, which `SessionEnding` announces,
