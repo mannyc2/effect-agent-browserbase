@@ -4,7 +4,18 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit, Fiber, Layer, Redacted, Schedule, Schema, Scope, Stream } from "effect";
+import {
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Redacted,
+  Schedule,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { Browser } from "effect-browser/Browser";
 import type * as Supervisor from "effect-browser/Supervisor";
 import { FetchHttpClient, HttpClient } from "effect/http";
@@ -14,6 +25,7 @@ import { chromium } from "playwright-core";
 import * as Browserbase from "../src/Browserbase.ts";
 import { BrowserbaseClient, layer as clientLayer } from "../src/BrowserbaseClient.ts";
 import { BrowserbaseError } from "../src/BrowserbaseError.ts";
+import * as ContextLease from "../src/ContextLease.ts";
 import * as TestBrowserbase from "../src/testing/TestBrowserbase.ts";
 
 interface Received {
@@ -402,6 +414,10 @@ const nowhere = listen(() => undefined).pipe(
   Effect.scoped,
 );
 
+/** The in-memory API, and the lease within this process, as one process would have them. */
+const hostedFake = (script?: TestBrowserbase.Script) =>
+  Layer.merge(TestBrowserbase.layer(script), ContextLease.layer);
+
 const kept = Effect.flatMap(TestBrowserbase.TestBrowserbase, (fake) => fake.sessions);
 const asked = Effect.flatMap(TestBrowserbase.TestBrowserbase, (fake) => fake.requests);
 
@@ -460,7 +476,10 @@ describe("Browserbase", () => {
         baseUrl: "http://127.0.0.1:9",
       }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, silent)));
 
-      const open = Browserbase.open().pipe(Effect.scoped, Effect.provide(client));
+      const open = Browserbase.open().pipe(
+        Effect.scoped,
+        Effect.provide(Layer.merge(client, ContextLease.layer)),
+      );
 
       // Alone, the create fails at its deadline with the reason that says it may exist, once the
       // search for the session it may have made has given up on an answer.
@@ -494,9 +513,7 @@ describe("Browserbase", () => {
         );
       }).pipe(
         Effect.scoped,
-        Effect.provide(
-          TestBrowserbase.layer({ connectUrl, creates: [{ _tag: "Accept" }, { _tag: "Lost" }] }),
-        ),
+        Effect.provide(hostedFake({ connectUrl, creates: [{ _tag: "Accept" }, { _tag: "Lost" }] })),
       );
     }),
   );
@@ -512,9 +529,7 @@ describe("Browserbase", () => {
         (yield* kept).map(({ status }) => status),
         ["COMPLETED"],
       );
-    }).pipe(
-      Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Lost", listedAfter: 5000 }] })),
-    ),
+    }).pipe(Effect.provide(hostedFake({ creates: [{ _tag: "Lost", listedAfter: 5000 }] }))),
   );
 
   it.effect("releases a created session whose answer does not decode", () =>
@@ -533,7 +548,7 @@ describe("Browserbase", () => {
         (yield* kept).map(({ status, releases }) => [status, releases]),
         [["COMPLETED", 1]],
       );
-    }).pipe(Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Malformed" }] }))),
+    }).pipe(Effect.provide(hostedFake({ creates: [{ _tag: "Malformed" }] }))),
   );
 
   it.live("keeps the session's connect URL out of a failed connect", () =>
@@ -549,11 +564,7 @@ describe("Browserbase", () => {
         const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createSession());
 
         return yield* Effect.flip(Browserbase.attach(id).pipe(Effect.scoped));
-      }).pipe(
-        Effect.provide(
-          TestBrowserbase.layer({ connectUrl: `${origin}/?signingKey=${signingKey}` }),
-        ),
-      );
+      }).pipe(Effect.provide(hostedFake({ connectUrl: `${origin}/?signingKey=${signingKey}` })));
 
       assert.strictEqual(error._tag, "BrowserError");
       assert.notInclude(error.message, signingKey);
@@ -586,7 +597,7 @@ describe("Browserbase", () => {
           (yield* kept).map(({ status }) => status),
           ["COMPLETED"],
         );
-      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl })));
+      }).pipe(Effect.provide(hostedFake({ connectUrl })));
     }),
   );
 
@@ -609,7 +620,7 @@ describe("Browserbase", () => {
           (yield* kept).map(({ releases }) => releases),
           [1],
         );
-      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl })));
+      }).pipe(Effect.provide(hostedFake({ connectUrl })));
     }),
   );
 
@@ -657,7 +668,7 @@ describe("Browserbase", () => {
         );
       }).pipe(
         Effect.provide(
-          TestBrowserbase.layer({
+          hostedFake({
             connectUrl,
             releases: [{ _tag: "Pending" }, { _tag: "Pending" }],
           }),
@@ -696,7 +707,7 @@ describe("Browserbase", () => {
           (yield* kept).map(({ status }) => status),
           ["COMPLETED", "COMPLETED"],
         );
-      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl, reads })));
+      }).pipe(Effect.provide(hostedFake({ connectUrl, reads })));
     }),
   );
 
@@ -730,7 +741,7 @@ describe("Browserbase", () => {
 
         assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
         assert.strictEqual(yield* searches, before);
-      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl, creates: [{ _tag: "Lost" }] })));
+      }).pipe(Effect.provide(hostedFake({ connectUrl, creates: [{ _tag: "Lost" }] })));
     }),
   );
 
@@ -781,7 +792,7 @@ describe("Browserbase", () => {
           );
         }).pipe(
           Effect.provide(
-            TestBrowserbase.layer({
+            hostedFake({
               connectUrl,
               creates: [{ _tag: "Lost" }],
               releases: [{ _tag: "Pending" }],
@@ -814,7 +825,261 @@ describe("Browserbase", () => {
         assert.isUndefined(reconciling.pollUnsafe());
         yield* Scope.close(writing, Exit.void);
         assert.strictEqual((yield* Fiber.join(reconciling))._tag, "Settled");
-      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl })));
+      }).pipe(Effect.provide(hostedFake({ connectUrl })));
+    }),
+  );
+});
+
+const still = (title: string) =>
+  `data:text/html,${encodeURIComponent(`<title>${title}</title><h1>${title}</h1>`)}`;
+
+const createContext = Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
+
+/**
+ * The in-memory API, and a lease that writes down what each writer was told and said: the lease
+ * within this process, or, with `unsettled`, one that reads each context unsettled the first time,
+ * as a lease shared with another process does once that process ended without saying.
+ */
+const leased = (steps: Array<string>, script: TestBrowserbase.Script, unsettled = false) =>
+  Layer.merge(
+    TestBrowserbase.layer(script),
+    Layer.effect(
+      ContextLease.ContextLease,
+      Effect.map(ContextLease.ContextLease, (inner) => {
+        const seen = new Set<string>();
+
+        return ContextLease.ContextLease.of({
+          hold: (context) =>
+            Effect.map(inner.hold(context), (hold) => {
+              const told = hold.unsettled || (unsettled && !seen.has(context));
+
+              seen.add(context);
+              steps.push(`held ${told ? "unsettled" : "settled"}`);
+
+              return {
+                unsettled: told,
+                leave: (now: boolean) =>
+                  Effect.sync(() => steps.push(`left ${now ? "unsettled" : "settled"}`)).pipe(
+                    Effect.andThen(hold.leave(now)),
+                  ),
+              };
+            }),
+        });
+      }),
+    ).pipe(Layer.provide(ContextLease.layer)),
+  );
+
+describe("Browserbase's stored contexts", () => {
+  it.live("holds a context through the lease from before a create until its save settles", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+      const steps: Array<string> = [];
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* createContext;
+
+        const write = Browserbase.open({
+          session: persisting(id),
+          contextSettle: "20 millis",
+        }).pipe(Effect.scoped);
+
+        // Two writers at once, as from two processes that share the lease.
+        yield* Effect.all([write, write], { concurrency: 2, discard: true });
+        const [first, second] = yield* ids;
+        const requests = yield* asked;
+
+        // The second was created only once the first had been confirmed ended.
+        assert.isBelow(
+          requests.lastIndexOf(`GET /v1/sessions/${first}`),
+          requests.lastIndexOf("POST /v1/sessions"),
+        );
+        assert.isDefined(second);
+        assert.deepStrictEqual(steps, [
+          "held settled",
+          "left settled",
+          "held settled",
+          "left settled",
+        ]);
+      }).pipe(Effect.provide(leased(steps, { connectUrl })));
+    }),
+  );
+
+  it.live("has a writer end first the sessions a lease says another process may have left", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+      const steps: Array<string> = [];
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* createContext;
+
+        // A session another process left saving to the context, labelled as `open` labels it.
+        const left = yield* Effect.flatMap(BrowserbaseClient, (client) =>
+          client.createSession({ ...persisting(id), userMetadata: { persistsContext: id } }),
+        );
+
+        yield* Browserbase.open({ session: persisting(id), contextSettle: "10 millis" }).pipe(
+          Effect.scoped,
+        );
+        const requests = yield* asked;
+
+        assert.isBelow(
+          requests.indexOf(`GET /v1/sessions/${left.id}`),
+          requests.lastIndexOf("POST /v1/sessions"),
+        );
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED", "COMPLETED"],
+        );
+        assert.deepStrictEqual(steps, ["held unsettled", "left settled"]);
+      }).pipe(Effect.provide(leased(steps, { connectUrl }, true)));
+    }),
+  );
+
+  it.live("reads a context back from a session that saves nothing, never beside a writer", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* createContext;
+        const writing = yield* Scope.make();
+        const settle = { contextSettle: "10 millis" } as const;
+
+        const signedIn = (browser: Browser["Service"]) =>
+          browser.firstPage.pipe(
+            Effect.flatMap((page) => page.goto(still("Signed in"))),
+            Effect.as(browser.id),
+          );
+
+        yield* Browserbase.open({ session: persisting(id), ...settle }).pipe(
+          Scope.provide(writing),
+        );
+        const reading = yield* Effect.forkChild(Browserbase.verifyContext(id, signedIn, settle));
+
+        // It waits for the writer's whole session, and makes none of its own meanwhile.
+        yield* Effect.sleep("300 millis");
+        assert.isUndefined(reading.pollUnsafe());
+        assert.strictEqual((yield* kept).length, 1);
+        yield* Scope.close(writing, Exit.void);
+        const reader = yield* Fiber.join(reading);
+
+        assert.deepStrictEqual(
+          (yield* kept).map(({ id, status, context }) => [id, status, context?.persist]),
+          [
+            [(yield* ids)[0], "COMPLETED", true],
+            [reader, "COMPLETED", false],
+          ],
+        );
+
+        // A check that fails still releases its session and lets the context go.
+        assert.strictEqual(
+          yield* Effect.flip(
+            Browserbase.verifyContext(id, () => Effect.fail("signed out"), settle),
+          ),
+          "signed out",
+        );
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED", "COMPLETED", "COMPLETED"],
+        );
+
+        const searches = (yield* asked).filter((request) =>
+          request.startsWith("GET /v1/sessions?"),
+        );
+
+        yield* Browserbase.open({ session: persisting(id), ...settle }).pipe(Effect.scoped);
+        assert.deepStrictEqual(
+          (yield* asked).filter((request) => request.startsWith("GET /v1/sessions?")),
+          searches,
+        );
+      }).pipe(Effect.provide(hostedFake({ connectUrl })));
+    }),
+  );
+
+  it.live("ends a session a writer elsewhere may have left before it reads a context back", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+      const steps: Array<string> = [];
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* createContext;
+
+        const left = yield* Effect.flatMap(BrowserbaseClient, (client) =>
+          client.createSession({ ...persisting(id), userMetadata: { persistsContext: id } }),
+        );
+
+        yield* Browserbase.verifyContext(id, (browser) => Effect.succeed(browser.id), {
+          contextSettle: "10 millis",
+        });
+        const requests = yield* asked;
+
+        assert.isBelow(
+          requests.indexOf(`GET /v1/sessions/${left.id}`),
+          requests.lastIndexOf("POST /v1/sessions"),
+        );
+        assert.deepStrictEqual(steps, ["held unsettled", "left settled"]);
+      }).pipe(Effect.provide(leased(steps, { connectUrl }, true)));
+    }),
+  );
+});
+
+describe("Browserbase.attach", () => {
+  it.live("resumes a running session from a new connection, finding its pages by their ids", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) =>
+          client.createSession({ keepAlive: true }),
+        );
+
+        // One connection opens a page and goes, as a process that ends does.
+        const page = yield* Browserbase.attach(id).pipe(
+          Effect.flatMap(({ browser }) => browser.newPage(still("Resumed"))),
+          Effect.map(({ id }) => id),
+          Effect.scoped,
+        );
+
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["RUNNING"],
+        );
+
+        // Another finds it under the same id, and its release ends the session.
+        const hosted = yield* Browserbase.attach(id);
+        const found = yield* hosted.browser.page(page);
+
+        assert.deepStrictEqual(
+          Option.map(found, (resumed) => resumed.playwright.url()),
+          Option.some(still("Resumed")),
+        );
+        assert.strictEqual((yield* hosted.release)._tag, "Settled");
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED"],
+        );
+      }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
+    }),
+  );
+
+  it.effect("refuses a session that has ended, without connecting to it", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* nowhere;
+
+      yield* Effect.gen(function* () {
+        const client = yield* BrowserbaseClient;
+        const { id } = yield* client.createSession();
+
+        yield* client.releaseSession(id);
+        const error = yield* Effect.flip(Browserbase.attach(id).pipe(Effect.scoped));
+
+        assert.deepStrictEqual(
+          [
+            error._tag,
+            error._tag === "BrowserError" && error.reason._tag === "Closed" && error.reason.cause,
+          ],
+          ["BrowserError", "session"],
+        );
+      }).pipe(Effect.provide(hostedFake({ connectUrl })));
     }),
   );
 });
@@ -842,7 +1107,7 @@ describe("Browserbase.supervise", () => {
       );
     }).pipe(
       Effect.scoped,
-      Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Reject", status: 401 }] })),
+      Effect.provide(hostedFake({ creates: [{ _tag: "Reject", status: 401 }] })),
     ),
   );
 
@@ -873,7 +1138,7 @@ describe("Browserbase.supervise", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        TestBrowserbase.layer({
+        hostedFake({
           creates: [{ _tag: "Lost" }],
           releases: [{ _tag: "Pending" }, { _tag: "Pending" }],
         }),
@@ -917,7 +1182,7 @@ describe("Browserbase.supervise", () => {
           (yield* kept).map(({ status }) => status),
           ["COMPLETED", "COMPLETED"],
         );
-      }).pipe(Effect.scoped, Effect.provide(TestBrowserbase.layer({ connectUrl })));
+      }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
     }),
   );
 
@@ -941,7 +1206,201 @@ describe("Browserbase.supervise", () => {
           (yield* asked).indexOf(`GET /v1/sessions/${first.id}`),
           (yield* asked).lastIndexOf("POST /v1/sessions"),
         );
-      }).pipe(Effect.scoped, Effect.provide(TestBrowserbase.layer({ connectUrl })));
+      }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
     }),
+  );
+
+  it.live(
+    "keeps its session past its scope, for the next under its name to adopt, pages and all",
+    () =>
+      Effect.gen(function* () {
+        const connectUrl = yield* chromiumEndpoint;
+
+        /** Each session as the fake has it: its status, releases asked and what it is kept as. */
+        const rows = Effect.map(kept, (sessions) =>
+          sessions.map(({ status, releases, keepAlive, userMetadata }) => [
+            status,
+            releases,
+            keepAlive,
+            userMetadata?.["keptAs"],
+          ]),
+        );
+
+        /** Run `use` on a supervisor keeping under "air", and give its states as lines too. */
+        const keeping = <A, E>(
+          use: (sessions: Supervisor.Supervisor) => Effect.Effect<A, E, BrowserbaseClient>,
+        ) =>
+          Effect.gen(function* () {
+            const sessions = yield* Browserbase.supervise({ keep: "air" });
+
+            const states = yield* Effect.forkChild(
+              Stream.runCollect(Stream.map(sessions.states, line)),
+            );
+
+            return [yield* use(sessions), states] as const;
+          }).pipe(
+            Effect.scoped,
+            Effect.flatMap(([value, states]) =>
+              Effect.map(Fiber.join(states), (lines) => [value, lines] as const),
+            ),
+          );
+
+        yield* Effect.gen(function* () {
+          const client = yield* BrowserbaseClient;
+
+          // With nothing kept under its name, it makes a session, kept alive and labelled.
+          yield* keeping((sessions) => Effect.andThen(sessions.browser, sessions.retire));
+          assert.deepStrictEqual(yield* rows, [["COMPLETED", 1, true, "air"]]);
+
+          // Two that earlier processes kept: the newer is adopted, and the older ended.
+          const keptAsAir = { keepAlive: true, userMetadata: { keptAs: "air" } };
+          const older = yield* client.createSession(keptAsAir);
+
+          yield* Effect.sleep("5 millis");
+          const newer = yield* client.createSession(keptAsAir);
+
+          const [page, lines] = yield* keeping((sessions) =>
+            Effect.gen(function* () {
+              const browser = yield* sessions.browser;
+
+              assert.strictEqual(browser.id, newer.id);
+
+              return (yield* browser.newPage(still("Kept"))).id;
+            }),
+          );
+
+          assert.deepStrictEqual(lines, ["1 Opening", "1 Open", "1 Kept"]);
+          assert.deepStrictEqual((yield* rows).slice(1), [
+            ["COMPLETED", 1, true, "air"],
+            ["RUNNING", 0, true, "air"],
+          ]);
+          assert.strictEqual((yield* ids)[1], older.id);
+
+          // The next adopts it again, its page still there, and retiring releases it.
+          yield* keeping((sessions) =>
+            Effect.gen(function* () {
+              const browser = yield* sessions.browser;
+
+              assert.strictEqual(browser.id, newer.id);
+              assert.isTrue(Option.isSome(yield* browser.page(page)));
+              yield* sessions.retire;
+            }),
+          );
+          assert.deepStrictEqual((yield* rows).slice(2), [["COMPLETED", 1, true, "air"]]);
+        }).pipe(Effect.provide(hostedFake({ connectUrl })));
+      }),
+  );
+
+  it.live("keeps a writer's session running, which only a writer that adopts it does not end", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* createContext;
+
+        const options: Browserbase.SuperviseOptions = {
+          keep: "air",
+          session: persisting(id),
+          contextSettle: "10 millis",
+        };
+
+        const statuses = Effect.map(kept, (sessions) => sessions.map(({ status }) => status));
+
+        // Kept, it may still save to the context, so the context is left unsettled.
+        const first = yield* Effect.flatMap(Browserbase.supervise(options), (sessions) =>
+          Effect.map(sessions.browser, ({ id }) => id),
+        ).pipe(Effect.scoped);
+
+        // A supervisor under its name adopts it, and ends nothing.
+        const adopted = yield* Effect.flatMap(Browserbase.supervise(options), (sessions) =>
+          Effect.map(sessions.browser, ({ id }) => id),
+        ).pipe(Effect.scoped);
+
+        assert.strictEqual(adopted, first);
+        assert.deepStrictEqual(yield* statuses, ["RUNNING"]);
+
+        // Any other writer ends it before it writes.
+        yield* Browserbase.open({ session: persisting(id), contextSettle: "10 millis" }).pipe(
+          Effect.scoped,
+        );
+        assert.deepStrictEqual(yield* statuses, ["COMPLETED", "COMPLETED"]);
+        const requests = yield* asked;
+
+        assert.isBelow(
+          requests.indexOf(`POST /v1/sessions/${first}`),
+          requests.lastIndexOf("POST /v1/sessions"),
+        );
+
+        // Retiring releases what it keeps and leaves the context settled: the next writer looks
+        // for none of the context's sessions.
+        yield* Effect.flatMap(Browserbase.supervise(options), (sessions) =>
+          Effect.andThen(sessions.browser, sessions.retire),
+        ).pipe(Effect.scoped);
+        const searched = (yield* asked).filter((request) => request.includes("persistsContext"));
+
+        yield* Browserbase.open({ session: persisting(id), contextSettle: "10 millis" }).pipe(
+          Effect.scoped,
+        );
+        assert.deepStrictEqual(
+          (yield* asked).filter((request) => request.includes("persistsContext")),
+          searched,
+        );
+      }).pipe(Effect.provide(hostedFake({ connectUrl })));
+    }),
+  );
+
+  it.live("ends a writer kept beside the one it adopts, as it would any writer of the context", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const client = yield* BrowserbaseClient;
+        const { id } = yield* createContext;
+
+        // Two writers kept under the name, as a process that ended mid-rotation leaves them.
+        const writer = {
+          ...persisting(id),
+          keepAlive: true,
+          userMetadata: { keptAs: "air", persistsContext: id },
+        };
+
+        const older = yield* client.createSession(writer);
+
+        yield* Effect.sleep("5 millis");
+        const newer = yield* client.createSession(writer);
+
+        const adopted = yield* Effect.flatMap(
+          Browserbase.supervise({ keep: "air", session: persisting(id), contextSettle: "10 millis" }),
+          (sessions) => Effect.map(sessions.browser, (browser) => browser.id),
+        ).pipe(Effect.scoped);
+
+        const requests = yield* asked;
+
+        assert.strictEqual(adopted, newer.id);
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED", "RUNNING"],
+        );
+        // The older was confirmed ended before the newer was taken on.
+        assert.isBelow(
+          requests.lastIndexOf(`GET /v1/sessions/${older.id}`),
+          requests.indexOf(`GET /v1/sessions/${newer.id}`),
+        );
+      }).pipe(Effect.provide(hostedFake({ connectUrl })));
+    }),
+  );
+
+  it.effect("goes down at once on a name it cannot keep sessions under", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Browserbase.supervise({ keep: "on air" });
+      const unavailable = yield* Effect.flip(sessions.browser);
+      const cause = unavailable.cause;
+
+      assert.deepStrictEqual(
+        [unavailable.reason, Schema.is(BrowserbaseError)(cause) && cause.reason._tag],
+        ["down", "InvalidRequest"],
+      );
+      assert.deepStrictEqual(yield* asked, []);
+    }).pipe(Effect.scoped, Effect.provide(hostedFake())),
   );
 });

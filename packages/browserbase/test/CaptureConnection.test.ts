@@ -3,13 +3,14 @@
 // in the order they open: Playwright's control connection is 0, and the capture connection opens
 // as the first capture starts.
 import { assert, it } from "@effect/vitest";
-import { Effect, Fiber, Option, Schedule, Stream } from "effect";
+import { Effect, Fiber, Layer, Option, Schedule, Stream } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 
 import { behindProxy, type Command, type Proxy } from "../../browser/test/protocol.ts";
 import * as Browserbase from "../src/Browserbase.ts";
+import * as ContextLease from "../src/ContextLease.ts";
 import * as TestBrowserbase from "../src/testing/TestBrowserbase.ts";
 
 const control = 0;
@@ -31,7 +32,9 @@ const hosted = <A, E, R>(
   Browserbase.open(options).pipe(
     Effect.flatMap(use),
     Effect.scoped,
-    Effect.provide(TestBrowserbase.layer({ connectUrl: proxy.endpoint })),
+    Effect.provide(
+      Layer.merge(TestBrowserbase.layer({ connectUrl: proxy.endpoint }), ContextLease.layer),
+    ),
   );
 
 /** The commands sent on `connection` since `from`, a screencast's acknowledgements and stop aside. */

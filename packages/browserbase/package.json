@@ -35,6 +35,11 @@
       "types": "./dist/BrowserbaseError.d.mts",
       "default": "./dist/BrowserbaseError.mjs"
     },
+    "./ContextLease": {
+      "@effect-browser/source": "./src/ContextLease.ts",
+      "types": "./dist/ContextLease.d.mts",
+      "default": "./dist/ContextLease.mjs"
+    },
     "./testing": {
       "@effect-browser/source": "./src/testing/index.ts",
       "types": "./dist/testing/index.d.mts",

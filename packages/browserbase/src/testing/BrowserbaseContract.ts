@@ -117,6 +117,8 @@ export const checks: ReadonlyArray<Check> = [
       yield* client.releaseSession(session.id);
       yield* ended(client, session.id);
       const gone = yield* running(label);
+      // With no status, a search finds sessions in every state, as a lost create's search needs.
+      const any = yield* client.listSessions({ query: query(label) });
 
       yield* expect(
         found.size === 1 && found.has(session.id),
@@ -124,6 +126,18 @@ export const checks: ReadonlyArray<Check> = [
       );
       yield* expect(other.size === 0, `${other.size} sessions had another label`);
       yield* expect(gone.size === 0, `${gone.size} still ran once it had ended`);
+      yield* expect(
+        any.some(({ id, status }) => id === session.id && status === "COMPLETED"),
+        `with no status, a search found ${any.length} sessions, not it ended`,
+      );
+    }),
+  ),
+  check("a context id of another shape is refused as invalid", (expect) =>
+    Effect.gen(function* () {
+      const client = yield* BrowserbaseClient;
+      const read = yield* failure(client.getContext("not-a-context-of-this-project"));
+
+      yield* expect(read === "InvalidRequest", `reading it failed with ${read}`);
     }),
   ),
   check("a stored context reads back, and is gone once deleted", (expect) =>
