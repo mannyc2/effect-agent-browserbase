@@ -343,6 +343,7 @@ it.live("numbers frames as the page's own session does, once it hears a commit l
 
         yield* Fiber.join(going);
         yield* Effect.sleep("300 millis");
+
         const [latest] = (yield* page.recentEvents)
           .flatMap((event) =>
             event._tag === "Navigated" && !event.sameDocument ? [event.document] : [],
