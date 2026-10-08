@@ -65,8 +65,9 @@ EOF
 
 # Yielded Agent's own declarations do not pass `skipLibCheck: false`: its memory modules, as
 # published in 0.1.0-beta.167 too, name types they never declare. Only an error in another file
-# fails the check.
-if ! checked="$("$consumer/node_modules/.bin/tsc" -p "$consumer/tsconfig.json")"; then
+# fails the check. TypeScript 7 colours its errors even into a pipe, which would hide every
+# `error TS` line from the filter, so they come plain.
+if ! checked="$("$consumer/node_modules/.bin/tsc" -p "$consumer/tsconfig.json" --pretty false)"; then
   ours="$(printf '%s\n' "$checked" | grep 'error TS' | grep -v 'node_modules/@yielded/' || true)"
   if [ -n "$ours" ]; then printf '%s\n' "$checked" >&2; exit 1; fi
   echo "Yielded Agent's own declarations have $(printf '%s\n' "$checked" | grep -c 'error TS') errors; none is in these packages."
