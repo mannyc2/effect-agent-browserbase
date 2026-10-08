@@ -1,6 +1,6 @@
 {
   "name": "effect-browser-agent",
-  "version": "0.3.0-beta.3",
+  "version": "0.3.0-beta.4",
   "description": "effect-browser pages as Yielded Agent's browser ports and tools.",
   "license": "MIT",
   "repository": {

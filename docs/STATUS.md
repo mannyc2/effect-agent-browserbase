@@ -267,7 +267,8 @@ and each becoming the next beta.
   action's input went reported to a model as not dispatched. It had no adversarial review of its
   own. Its beta, `0.3.0-beta.3`, is prepared in the changelog and the package versions, and is not
   tagged.
-- **Phase 4, contexts and follow-ups, has begun.** Stored contexts are durable across processes:
+- **Phase 4, contexts and follow-ups, is built, but for `Moment.account`,** which waits for the
+  paid narration run, not yet authorized. Stored contexts are durable across processes:
   `ContextLease` replaces the process-wide record of writers, `verifyContext` reads a login back,
   `attach` resumes a session from another process, and `supervise({ keep })` leaves a session
   running past its scope for the next supervisor to adopt. Its hosted checks, on 8 October, used 3
@@ -297,14 +298,21 @@ and each becoming the next beta.
   - The model is told when a confirm dialog was dismissed; `effect-browser-agent`'s tests hold it.
   - Running the packed check on every PR, not only before a release, is the owner's call.
 
+  The phase's simplify pass found nothing its parts had made redundant to delete. It planted nine
+  bugs in the lease, `verifyContext`, `attach`, `keep` and a crop's screen. Eight failed the suite
+  at once. The ninth, every generation of a keeping supervisor adopting the session it kept, which
+  made a rotation reopen the session it meant to leave, now fails a new test. Expectations had
+  their own eleven, all failing. No adversarial review of the phase was run. Its beta,
+  `0.3.0-beta.4`, is prepared in the changelog and the package versions, and is not tagged.
+
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 14,616                 | 11,064 → 15,428 | 129 → 159                 |
+| `effect-browser`               | 8,871 → 14,926                 | 11,064 → 15,686 | 129 → 168                 |
 | `effect-browser-agent`         | 935                            | 725             | 14                        |
-| `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,376     | 32 → 41, and 14 `testing` |
+| `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,391     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
 `effect-browser`'s figures include phase 2, as each part landed: the supervisor, 602 source lines,
@@ -329,7 +337,8 @@ resume and keep added 32 source lines and 73 test lines there, the supervisor's 
 rest to `effect-browserbase`: 294 source lines, 27 in `testing`, 557 test lines and 5 exports, the
 new `ContextLease` and `verifyContext`. Phase 4's release hygiene added 38 source lines and 119
 test lines, most of them tests of promises that planted bugs broke, and `waitForText` as one call,
-which phase 3's simplify pass then took out with `waitForText` itself.
+which phase 3's simplify pass then took out with `waitForText` itself. Expectations added 310
+source lines, 258 test lines and 9 exports: `Expect`, and the wait it asks the page for.
 Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
 11,000 through phase 4.
 
