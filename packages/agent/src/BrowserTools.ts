@@ -8,7 +8,8 @@
  * With `vision`, the default, the model sees a screenshot of the current tab before each turn, and
  * the crops `zoom` took since its last, as context the run never keeps, so only the current picture
  * is ever in a request. Its pixel coordinates are viewport coordinates, which the pointer tools
- * take.
+ * take. The pictures are `RunContextPreparation`'s transient context, which a run's own
+ * `transientContext` option replaces.
  *
  * `make` gives the toolkit to put in an agent, and `layer`, which provides every tool's handler,
  * the ports and the pictures for one run, on a page or a browser's tabs.
@@ -184,7 +185,8 @@ const pictures = (controller: PageControl.Controller, zooms: Ref.Ref<Array<Page.
         ? [text(`${crops.length - shown.length} earlier crops were left out.`)]
         : [];
 
-    const screen = yield* Effect.flatMap(controller.current, (page) => page.screenshot()).pipe(
+    // A look before a turn shows a tab an action opened, as `follow` says.
+    const screen = yield* Effect.flatMap(controller.look, (page) => page.screenshot()).pipe(
       Effect.map((image) => [
         text(
           `The current tab's viewport, ${image.width}x${image.height}. Its pixel coordinates are viewport coordinates.`,
@@ -346,10 +348,12 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
           Pointer.toLayer(pointing(controller, zooms, vision)),
         ).pipe(Layer.provide(ports));
 
-        const preparation = Layer.succeed(
-          RunContextPreparation,
-          vision ? { transientContext: { load: () => pictures(controller, zooms) } } : {},
-        );
+        // Without pictures, an application's own context preparation stays as it is.
+        const preparation = vision
+          ? Layer.succeed(RunContextPreparation, {
+              transientContext: { load: () => pictures(controller, zooms) },
+            })
+          : Layer.empty;
 
         return Layer.mergeAll(handlers, ports, preparation);
       }),

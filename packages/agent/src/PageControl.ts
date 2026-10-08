@@ -59,6 +59,8 @@ export interface Controller {
   readonly control: BrowserUse.BrowserControl["Service"];
   /** The tab calls act on now: the pinned page, or the one the model last saw. */
   readonly current: Effect.Effect<Page.Page, BrowserError>;
+  /** The current tab as a look finds it, following a tab an action opened. */
+  readonly look: Effect.Effect<Page.Page, BrowserError>;
   /** Run `run` on the current tab with the task, and say what followed it there. */
   readonly perform: <A>(
     run: (page: Page.Page) => Effect.Effect<A, BrowserError>,
@@ -211,23 +213,30 @@ const session = Effect.fnUntraced(function* (target: Target, options: Options) {
         }));
 
   // The pages whose changes are recorded, from their first look, so the receipt of the first
-  // action on one can say what it changed. Starting a record is a convenience: a page that could
-  // not start one says so in the receipt that reads it.
+  // action on one can say what it changed. A page whose record could not start says so, and the
+  // next look tries again.
   const recording = new Set<string>();
 
   const record = (page: Page.Page) =>
     recording.has(page.id)
-      ? Effect.void
-      : page
-          .changes()
-          .pipe(Effect.andThen(Effect.sync(() => recording.add(page.id))), Effect.ignore);
+      ? Effect.succeed([])
+      : page.changes().pipe(
+          Effect.andThen(Effect.sync(() => recording.add(page.id))),
+          Effect.as([]),
+          Effect.catch((error) =>
+            Effect.succeed([`What changes on this page cannot be recorded yet: ${error.message}.`]),
+          ),
+        );
 
   const read = (page: Page.Page, within?: string, lines: ReadonlyArray<string> = []) =>
     Effect.all([page.snapshot({ maxChars, within }), tabs?.tabs ?? Effect.void, record(page)], {
       concurrency: "unbounded",
     }).pipe(
-      Effect.map(([snapshot, open]) =>
-        observation(snapshot, { followed: lines, tabs: open === undefined ? undefined : open }),
+      Effect.map(([snapshot, open, unrecorded]) =>
+        observation(snapshot, {
+          followed: [...lines, ...unrecorded],
+          tabs: open === undefined ? undefined : open,
+        }),
       ),
     );
 
@@ -407,6 +416,7 @@ export const make = Effect.fnUntraced(function* (target: Target, options: Option
     actions,
     control: controlling(context),
     current,
+    look,
     perform,
     withTask,
   } satisfies Controller;
