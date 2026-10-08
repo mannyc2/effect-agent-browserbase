@@ -442,9 +442,9 @@ describe("a window", () => {
               ),
             });
 
-      const still = Moment.stillness(
+      const still = Moment.account(
         new Moment.Window({ page: "p1", since, until, events: [], frames, changes, missing: [] }),
-      );
+      ).stillFor;
 
       // A record that saw none of the window, or none at all, and no painted frame cannot tell.
       const recorded = from !== undefined && from < until;
@@ -453,6 +453,72 @@ describe("a window", () => {
       const last = Math.max(recorded ? seen : since, ...(recorded ? stirs : []), ...paints);
 
       assert.strictEqual(still, until - last);
+    },
+  );
+
+  const Millis = (minimum: number, maximum: number) =>
+    Arbitrary.schema(Schema.Int.check(Schema.isBetween({ minimum, maximum })));
+
+  it.prop(
+    "accounts a ticker still ticking at its end as under way, and one stopped twice its pace before as settled",
+    {
+      pace: Millis(20, 400),
+      start: Millis(0, 3000),
+      stop: Arbitrary.schema(
+        Schema.UndefinedOr(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 4000 }))),
+      ),
+      since: Millis(0, 3500),
+    },
+    ({ pace, start, stop, since }) => {
+      const until = 4000;
+
+      // A ticker that changes every `pace` from `start`, until `stop` where it stops, as the
+      // record tells it: its changes in the window, and the last one before it.
+      const ticks = Array.from(
+        { length: Math.floor((until - start) / pace) },
+        (_, index) => start + (index + 1) * pace,
+      ).filter((at) => stop === undefined || at <= stop);
+
+      const inside = ticks.filter((at) => at > since);
+      const [first] = inside;
+      const last = inside.at(-1);
+
+      if (first === undefined || last === undefined) return;
+
+      const change = new Change({
+        kind: "text",
+        subject: new Subject({ role: null, name: "", tag: "span", context: {} }),
+        startedAt: first,
+        at: last,
+        before: "$1",
+        after: "$2",
+        count: inside.length,
+        earlier: ticks.filter((at) => at <= since).at(-1),
+      });
+
+      const { changing, settled } = Moment.account(
+        new Moment.Window({
+          page: "p1",
+          since,
+          until,
+          events: [],
+          frames: [],
+          changes: new Changes({
+            document: 0,
+            from: 0,
+            until,
+            cursor: 0,
+            dropped: 0,
+            changes: [change],
+          }),
+          missing: [],
+        }),
+      );
+
+      assert.deepStrictEqual([...changing, ...settled], [change]);
+      // One change alone shows no pace, so it is under way only where it was seen to keep changing.
+      if (stop === undefined && ticks.length > 1) assert.deepStrictEqual(changing, [change]);
+      if (stop !== undefined && until - stop >= 2 * pace) assert.deepStrictEqual(settled, [change]);
     },
   );
 });
@@ -695,6 +761,45 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.isTrue(window.events.every((event) => event.at <= until));
       assert.isFalse(clicked(window.events));
       assert.isTrue(clicked(kept.events));
+    }),
+  );
+
+  it.effect("accounts a price that still ticks as under way, and one that stopped as settled", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/ticker");
+
+      yield* page.changes();
+      // Both prices tick every 250 ms; ETH's stops after its fourth tick, two seconds before the
+      // window ends.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const [btc, eth] = document.querySelectorAll("tbody tr td:nth-child(2)");
+          let ticks = 0;
+
+          setInterval(() => {
+            ticks += 1;
+            if (btc !== undefined) btc.textContent = `$64,${210 + ticks}`;
+            if (eth !== undefined && ticks <= 4) eth.textContent = `$3,${105 + ticks}`;
+          }, 250);
+        }),
+      );
+      yield* Effect.sleep(Duration.seconds(3));
+      const window = yield* page.window({ since: Duration.millis(2500) });
+      const { changing, settled } = Moment.account(window);
+
+      const rows = (changes: ReadonlyArray<Change>) =>
+        changes.map(({ subject }) => subject.context.row);
+
+      assert.deepStrictEqual(rows(changing), ["BTC"]);
+      assert.deepStrictEqual(rows(settled), ["ETH"]);
+
+      // The prompt tells each as it was at the end, the settled one first.
+      const [text = ""] = texts(Moment.toPrompt(new Moment.Moment(window)));
+      const [eth = "", btc = ""] = text.split("\n").filter((line) => line.includes('row "'));
+
+      assert.include(eth, '"ETH"');
+      assert.include(eth, "settled");
+      assert.include(btc, "still changing");
     }),
   );
 

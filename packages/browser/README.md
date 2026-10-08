@@ -175,21 +175,27 @@ default. A consumer that airs a frame seconds after it was painted reads the win
 that frame, so that a line it writes now tells what its viewers will see. A part that cannot be
 read is in `missing`, with why: a window fails only for bounds that are not finite, or a negative
 reach back.
-`Moment.stillness(window)` says how long the page had been still at the window's end, by the last
-change in view its record shows or the last paint among its screencast frames; a screenshot shows
-the page, not when it changed. Frames show paint only while a capture runs, and the record does
-not see a canvas, so a canvas that draws with no capture running reads as still. A wait for a still
-screen is `Page.ready({ quietMillis })`, which also holds through a stalled connection.
+`Moment.account(window)` says what was so at the window's end. Its `changing` are the changes still
+under way: what kept changing, more than once in the window or already before it, and changed
+again within twice its own pace before the end, as a ticking price does. Its `settled` are the
+rest, each showing what it settled at, as a price that ticked and stopped does. Its `stillFor` is
+how long the page had been still, by the last change in view its record shows or the last paint
+among its screencast frames; a screenshot shows the page, not when it changed. Frames show paint
+only while a capture runs, and the record does not see a canvas, so a canvas that draws with no
+capture running reads as still. A wait for a still screen is `Page.ready({ quietMillis })`, which
+also holds through a stalled connection.
 
 `Moment.capture` is a window that ends at a picture of the page now. It takes the picture first,
 then the window up to its paint, from where a previous window or moment ended, so the changes hold
 nothing the picture does not show. A picture, a read of changes or an outline that cannot be had is
 missing from the moment, with why, and the moment is still made. `Moment.toPrompt` leads with what
-changed: news first, then what keeps changing, with the cells of a column that changed together on
-one line. It names an action as what a change followed, or as a step: where changes followed it but
-none names it, as when its effect landed out of its reach on a busy page; where its effect is drawn,
-such as a click on a canvas, which only the screenshots show; or where it came before the record
-began. Hovers, scrolls and attempts that nothing followed are left out, and a failed action is told
+changed: news and what settled first, then what was still changing, by the moment's account, with
+the cells of a column that changed together on one line; a change that kept changing says whether
+it still was at the moment or since when it had settled, so a narrator need not assert a value that
+is still moving. It names an action as what a change followed, or as a step: where changes followed
+it but none names it, as when its effect landed out of its reach on a busy page; where its effect is
+drawn, such as a click on a canvas, which only the screenshots show; or where it came before the
+record began. Hovers, scrolls and attempts that nothing followed are left out, and a failed action is told
 only as failed: its error is advice to the caller that acted, and may name a ref. A moment whose
 record saw none of its window, as a page's first, whose read starts the record, says that what
 changed was not recorded and lists every step instead; one whose record began within the window

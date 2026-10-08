@@ -9,8 +9,9 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 Contexts and follow-ups: stored contexts held through a `ContextLease` across processes, read back
 with `verifyContext`, and sessions resumed with `attach` or kept past their supervisor's scope;
 `Expect`, which checks what an action is for before it is sent again; a crop that leaves the
-page's screen as it was; and the release hygiene left from earlier phases, the `effect` peer range
-among it. `Moment.account` is not in it: it waits for the paid narration run.
+page's screen as it was; the release hygiene left from earlier phases, the `effect` peer range
+among it; and `Moment.account`, which tells what was still changing at a moment's end from what had
+settled, as the paid narration run found moments did not.
 
 ### Added
 
@@ -49,6 +50,17 @@ among it. `Moment.account` is not in it: it waits for the paid narration run.
   refuses a session that has ended, failing `Closed` by the session before it connects.
 - `TestBrowserbase`'s sessions tell whether each was kept alive, and the stored context it loaded
   and whether it saves to it.
+- `Moment.account(window)`: what a window says of its page at its end. `changing` holds the changes
+  still under way, those that kept changing, more than once in the window or already before it,
+  and changed again within twice their own pace before the end; `settled` holds the rest, each
+  showing what it settled at; and `stillFor` says how long the page had been still, as
+  `Moment.stillness` did. `Moment.toPrompt` tells each change that kept changing as still changing
+  at the moment or settled since when, and what settled before what was still changing. In the
+  paid narration run, on two prices ticking on a market board, one of which stopped 3 s before the
+  moment, `openai/gpt-6-luna` told which was which for both prices in 18 of 32 moments without the
+  account and 29 of 32 with it, and a narrator's caption told a still-moving price as moving for 1
+  of 39 prices without it and 15 of 39 with it. The bench's `board-flux` and `board-caption`
+  measure it.
 
 ### Changed
 
@@ -83,6 +95,9 @@ among it. `Moment.account` is not in it: it waits for the paid narration run.
 - `Supervisor` asks a generation's `release` before it closes the generation's scope, so what the
   scope holds, such as a stored context's lease, goes only once the release has reported.
 - `Supervisor.GenerationState` has `Kept`, so a program that switches over it has one more case.
+- `Moment.stillness(window)` is `Moment.account(window).stillFor`.
+- `Moment.toPrompt`'s text changed: a change that kept changing ends with whether it still was, and
+  one that settled is told among the news, before what is still changing.
 
 ## 0.3.0-beta.3 (unreleased)
 
