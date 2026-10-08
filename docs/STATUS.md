@@ -280,7 +280,15 @@ and each becoming the next beta.
   leaves the screen as it was, in a local repro of that finding: from a page's first clipped
   picture on, the page's own session holds a copy of the screen the page reads, which every later
   picture restores. A page's pictures also go one at a time, since two crops at once left the
-  page's view at the first one's size.
+  page's view at the first one's size. The release hygiene left from earlier is done too:
+  - `effect` is now a `~4.0.0` peer, while the packages rely on modules that Effect marks unstable;
+    [RELEASING.md](RELEASING.md) has the policy.
+  - The docs now say that `attach` resumes only a session created with `keepAlive`, and that closing
+    `open`'s scope waits for its release.
+  - They also say that an action reads its subject when it resolves its target, not as its input is
+    sent.
+  - The model is told when a confirm dialog was dismissed; `effect-browser-agent`'s tests hold it.
+  - Running the packed check on every PR, not only before a release, is the owner's call.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.

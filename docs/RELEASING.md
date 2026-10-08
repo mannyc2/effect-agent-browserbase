@@ -45,12 +45,28 @@ The owner does this once, in npm and GitHub settings.
    any npm automation tokens. The repository variable `NPM_PUBLISH_ENABLED` is no longer read and
    can be deleted.
 
+## Peer ranges
+
+- **`effect` is `~4.0.0` in every package:** 4.0's patch releases, and never 4.1. The packages are
+  built on modules that Effect 4 marks `@stability unstable`: `effect/ai`, `effect/http` and
+  `effect/observability`. Semver does not hold those, and a minor release may change them. A caret
+  range would let a consumer install an Effect the packages were never checked against.
+  - Widen the range to the next minor in the release that is checked against it.
+  - Widen it to `^4.0.0` once those modules are stable.
+- **`effect-browser`** is a caret range in the other three packages, from the version each needs.
+  Move it in the release that needs a newer one.
+- **`@yielded/agent`** is one exact version in `effect-browser-agent`, because each Yielded beta may
+  change the ports that `effect-browser-agent` implements. Its README's install line names that
+  version.
+- **`playwright-core`** is `^1.63.0`.
+
 ## Cut a release
 
 1. In one PR, set the same `version` in all four `packages/*/package.json`, add the release's
    section to `CHANGELOG.md`, move the `effect-browser` peer ranges in `effect-browserbase`,
    `effect-browser-human-strokes` and `effect-browser-agent` if the release needs the new version, and run
-   `bun install --ignore-scripts` so `bun.lock` agrees.
+   `bun install --ignore-scripts` so `bun.lock` agrees. 0.3's first release also deletes the root
+   README's note that 0.3 is not on npm.
 2. Once it is merged, tag the merge commit and push the tag:
 
    ```sh

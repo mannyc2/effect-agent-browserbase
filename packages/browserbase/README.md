@@ -8,8 +8,9 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 ```
 
 - `Browserbase`: `open` and `layer` create a session and release it when their scope closes, so
-  billing stops then rather than at the session's timeout. `attach` connects to a running session
-  without taking ownership of it, as from another process: that is resume. `supervise` keeps
+  billing stops then rather than at the session's timeout, and closing it waits for the release.
+  `attach` connects to a running session without taking ownership of it, as from another process:
+  that is resume, of a session created with `keepAlive`. `supervise` keeps
   sessions open across losses and session ends, and with `keep`, past its own scope. `reconcile`
   ends a stored context's sessions, and `verifyContext` reads a stored context back.
 - `ContextLease`: who may write a stored context. `ContextLease.layer` lets one writer at a time
@@ -67,9 +68,13 @@ lost. It asks Browserbase to end the session and then reads it until Browserbase
 trying both again a second apart for up to a minute, and says how it went: `Settled`, or
 `Unconfirmed` when the session still ran, or Browserbase could not be asked, at the deadline. An
 unconfirmed session may still bill until its timeout. `open`'s scope releases its session as it
-closes; `release` does it sooner and gives the outcome as a value, and the scope then asks
+closes, so closing the scope waits for the release: up to a minute while Browserbase confirms the
+end, and for a session that saves to a stored context `contextSettle` longer, 10 seconds by
+default. `release` does it sooner and gives the outcome as a value, and the scope then asks
 Browserbase nothing more. Closing `attach`'s scope only disconnects; its `release` ends the
-session.
+session. Browserbase ends a session whose last connection closes unless it was created with
+`keepAlive`, which `supervise({ keep })` sets and `session.keepAlive` asks for, so only such a
+session outlives the process that opened it, for another to attach to.
 
 ## Supervised sessions
 

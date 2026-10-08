@@ -120,7 +120,7 @@
     "vitest": "5.0.3"
   },
   "peerDependencies": {
-    "effect": "^4.0.0",
+    "effect": "~4.0.0",
     "playwright-core": "^1.63.0"
   },
   "engines": {
