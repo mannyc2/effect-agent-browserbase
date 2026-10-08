@@ -174,7 +174,23 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     return { found, nextRef: refs.next };
   };
 
-  return { find, isControl, stateOf };
+  /** `find` until something matches, looking every 250 ms, or until `millis` have passed. */
+  const waitFor = async (request: FindRequest, millis: number) => {
+    const until = performance.now() + millis;
+
+    for (;;) {
+      const result = find(request);
+      const left = until - performance.now();
+
+      if (result.found.length > 0 || left <= 0) return result;
+      const { promise, resolve } = Promise.withResolvers<void>();
+
+      setTimeout(resolve, Math.min(250, left));
+      await promise;
+    }
+  };
+
+  return { find, waitFor, isControl, stateOf };
 };
 
 export type Subjects = ReturnType<typeof subjects>;

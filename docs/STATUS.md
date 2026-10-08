@@ -270,7 +270,7 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 15,588                 | 11,064 → 17,040 | 129 → 190                 |
+| `effect-browser`               | 8,871 → 15,626                 | 11,064 → 17,159 | 129 → 190                 |
 | `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,376     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
@@ -289,8 +289,10 @@ state, 214 source lines, 393 test lines and 4 exports, which deleting `Moment`'s
 `latestFrame` and the browser's own listeners for loads paid for in part. Phase 4's contexts,
 resume and keep added 32 source lines and 73 test lines there, the supervisor's `keep`, and the
 rest to `effect-browserbase`: 294 source lines, 27 in `testing`, 557 test lines and 5 exports, the
-new `ContextLease` and `verifyContext`. Without them, phase 1 leaves the package at 11,431 source
-lines, against a soft ceiling of about 11,000 through phase 4.
+new `ContextLease` and `verifyContext`. Phase 4's release hygiene added 38 source lines and 119
+test lines, most of them `waitForText` as one call and tests of promises that planted bugs broke.
+Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
+11,000 through phase 4.
 
 ## Not rebuilt yet
 
@@ -311,7 +313,9 @@ The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` a
 `beta` dist-tag. 0.3 is not released. It will be released by plain npm trusted publishing from
 `.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase` and
 `effect-browser-human-strokes`; [RELEASING.md](RELEASING.md) has the steps, and
-[CHANGELOG.md](../CHANGELOG.md) lists what each release changes.
+[CHANGELOG.md](../CHANGELOG.md) lists what each release changes. Before it publishes, the workflow
+installs the packed archives in a clean consumer, typechecks every entry point's declarations with
+`skipLibCheck: false` and imports each one, with `tools/check-packed.sh`, which runs locally too.
 
 ## History
 
