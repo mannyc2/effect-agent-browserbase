@@ -8,7 +8,15 @@ import * as Moment from "effect-browser/Moment";
 
 import { tasks } from "../Catalog.ts";
 import { BoardTruth, origin, routes, serve, truth } from "../Sites.ts";
-import { assetsIn, type BoardAnswer, feed, frameHistory, gradeBoard } from "../Tasks.ts";
+import {
+  assetsIn,
+  type BoardAnswer,
+  feed,
+  frameHistory,
+  gradeBoard,
+  gradeCaption,
+  gradeFlux,
+} from "../Tasks.ts";
 import { modelOf } from "./scripted.ts";
 
 const tick: BoardAnswer = {
@@ -86,6 +94,53 @@ describe("board grading", () => {
     assert.isTrue(gradeBoard(nothing, nothing).pass);
     assert.isFalse(gradeBoard(tick, nothing).pass);
     assert.isFalse(gradeBoard(alert, nothing).pass);
+  });
+
+  // SOL-USD stopped ticking at $147.10; ETH-USD still ticks.
+  const churns = [
+    { ticker: "SOL-USD", table: "Spot markets", settles: true, stoppedAt: 1 },
+    { ticker: "ETH-USD", table: "Perpetual futures", settles: false, stoppedAt: null },
+  ].map((churn) => ({ ...churn, first: 146.2, price: 147.1, ticks: 4 }));
+
+  it("holds a list of what still changes and what settled to which is which, and at what", () => {
+    const settled = { asset: "Solana", state: "settled", price: 147.1 } as const;
+    const changing = { asset: "ETH-USD", state: "still changing", price: null } as const;
+
+    assert.isTrue(gradeFlux({ changes: [changing, settled] }, churns).pass);
+    assert.isFalse(gradeFlux({ changes: [settled] }, churns).pass);
+    assert.isFalse(
+      gradeFlux({ changes: [{ ...changing, state: "settled" }, settled] }, churns).pass,
+    );
+    assert.isFalse(gradeFlux({ changes: [changing, { ...settled, price: 146.2 }] }, churns).pass);
+    assert.isFalse(
+      gradeFlux({ changes: [changing, settled, { ...settled, asset: "BTC" }] }, churns).pass,
+    );
+  });
+
+  it("finds a caption misstating what moves or rests, by what it says of each price", () => {
+    const verdicts = (caption: string) =>
+      gradeCaption({ caption }, churns).detail.split("; answered")[0];
+
+    for (const [caption, verdict] of [
+      [
+        "SOL-USD settles at $147.10 while ETH-USD continues fluctuating, now at $3,152.61.",
+        "SOL-USD settled: told, ETH-USD moving: told",
+      ],
+      [
+        "SOL-USD rises to $147.10 and ETH-USD rises to $3,152.61.",
+        "SOL-USD settled: told, ETH-USD moving: misstated",
+      ],
+      [
+        "Live quotes: SOL-USD rises to $147.10 and ETH-USD holds at $3,152.61.",
+        "SOL-USD settled: told, ETH-USD moving: misstated",
+      ],
+      [
+        "ETH-USD is $3,152.61 and Solana is $147.10, both fluctuating.",
+        "SOL-USD settled: misstated, ETH-USD moving: told",
+      ],
+      ["The market board shows prices.", "SOL-USD settled: missed, ETH-USD moving: missed"],
+    ] as const)
+      assert.strictEqual(verdicts(caption), verdict, caption);
   });
 });
 

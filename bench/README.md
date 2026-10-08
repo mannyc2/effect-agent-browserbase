@@ -43,6 +43,8 @@ tools against `dev`, the default, and compare arms on `eval`.
 | `board-flash`    | understand | Report an alert that showed for 1.2 seconds and was gone by the moment                          |
 | `board-scrolled` | understand | Report a price that changed before the page scrolled away from it; by design no frame shows it  |
 | `board-steady`   | understand | The control for `board-scrolled`: the same scroll, with no price change                         |
+| `board-flux`     | understand | Say which of two ticking prices still moves at the moment and at what the others settled        |
+| `board-caption`  | understand | Caption the same moment as `--narrate` does, without misstating what moves or what rests        |
 | `board-move`     | operate    | Drag a card to the top of a board's Done column and report how many cards Done holds            |
 | `policy-find`    | operate    | Find the returns policy behind header menus that open on hover and report its reference         |
 | `catalog-buy`    | operate    | Add the cheapest tent for two in stock, from a catalogue across three pages, to the cart        |
@@ -98,6 +100,17 @@ the flash's three frames must show the alert, whose draining bar paints all the 
 `board-scrolled` deliberately does not: its two frames show the board before the tick and the
 news after the scroll, so it measures what a moment tells beyond its frames, and `board-steady`
 is its control, which an answer of "nothing changed" passes on every seed.
+
+`board-flux` and `board-caption` ask what is still moving. Two prices of different assets tick,
+each every 300 to 900 ms, for 4 seconds; then the seed stops one, both or neither, and the moment
+is taken 3 seconds later over 5 seconds, with three frames, as a narrator's is. `board-flux` asks
+for every price that changed, whether it is still changing or settled, and a settled one's price;
+it passes when both prices are listed in their states, each settled one within half its last
+digit, and nothing else. `board-caption` asks the narrator's own question, and grades its caption
+in code by what it says of each price it names: it misstates a settled price where its words say it
+moves and not that it rests, and a moving one where they say it rests and not that it moves, or
+give it a figure while neither they nor what the caption says of every price, such as "both
+fluctuating", say it moves. A caption that names neither price misstates nothing.
 
 ## Running
 
