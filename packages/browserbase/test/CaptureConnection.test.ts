@@ -315,6 +315,47 @@ it.live("tags frames with the documents their own connection saw commit", () =>
   }).pipe(Effect.scoped),
 );
 
+// The capture connection can attach after a new document has committed and before the page's own
+// session hears it, when it cannot number that document yet. Its frames take the number the page's
+// own session gives the document once it hears it, as `Navigated` does.
+it.live("numbers frames as the page's own session does, once it hears a commit late", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+
+    proxy.lag = (connection) => (connection === control ? 300 : 0);
+
+    yield* hosted(proxy, ({ browser }) =>
+      Effect.gen(function* () {
+        const page = yield* browser.newPage();
+        const from = proxy.commands.length;
+        const going = yield* Effect.forkChild(page.goto(animated));
+
+        // The browser commits soon after it is asked to navigate; the control connection hears it
+        // 300 ms later.
+        yield* Effect.sync(() =>
+          proxy.commands.slice(from).some((command) => command.method === "Page.navigate"),
+        ).pipe(
+          Effect.repeat({ schedule: Schedule.spaced("5 millis"), until: (sent) => sent }),
+          Effect.timeout("10 seconds"),
+        );
+        yield* Effect.sleep("100 millis");
+        const frames = yield* recorded(page);
+
+        yield* Fiber.join(going);
+        yield* Effect.sleep("300 millis");
+        const [latest] = (yield* page.recentEvents)
+          .flatMap((event) =>
+            event._tag === "Navigated" && !event.sameDocument ? [event.document] : [],
+          )
+          .slice(-1);
+
+        assert.isNotEmpty(frames);
+        assert.deepStrictEqual([...new Set(frames.map((frame) => frame.document))], [latest]);
+      }),
+    );
+  }).pipe(Effect.scoped),
+);
+
 // A tab behind another paints only while some session holds focus emulation on it. The page's own
 // session does, so its capture keeps coming over the capture connection, which sends none.
 // Planting its absence too, the page behind stops: the measurement can see a page not painting.

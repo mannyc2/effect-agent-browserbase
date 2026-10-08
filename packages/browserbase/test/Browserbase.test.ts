@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Redacted, Schedule, Schema, Stream } from "effect";
+import { Effect, Exit, Fiber, Layer, Redacted, Schedule, Schema, Scope, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type * as Supervisor from "effect-browser/Supervisor";
 import { FetchHttpClient, HttpClient } from "effect/http";
@@ -746,6 +746,33 @@ describe("Browserbase", () => {
           ),
         );
       }),
+  );
+
+  it.live("has reconcile wait while a writer in this process holds the context", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
+        const writing = yield* Scope.make();
+        const settle = { contextSettle: "10 millis" } as const;
+
+        yield* Browserbase.open({ session: persisting(id), ...settle }).pipe(
+          Scope.provide(writing),
+        );
+        const reconciling = yield* Effect.forkChild(Browserbase.reconcile(id, settle));
+
+        // The writer's session runs on, unended, until the writer lets the context go.
+        yield* Effect.sleep("300 millis");
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["RUNNING"],
+        );
+        assert.isUndefined(reconciling.pollUnsafe());
+        yield* Scope.close(writing, Exit.void);
+        assert.strictEqual((yield* Fiber.join(reconciling))._tag, "Settled");
+      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl })));
+    }),
   );
 });
 

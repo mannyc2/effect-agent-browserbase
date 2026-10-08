@@ -166,6 +166,7 @@ const desk = `<!doctype html><title>Desk</title>
 <form id="order" onsubmit="return false">
   <h2>Order</h2>
   <label>Amount <input id="amount" value="1"></label>
+  <label>PIN <input id="pin" type="password"></label>
   <div id="memo" contenteditable="true" aria-label="Memo"><p>Note</p></div>
   <button id="place" type="button">Place order</button>
   <p id="answer"></p>
