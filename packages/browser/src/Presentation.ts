@@ -127,6 +127,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
     if (internals === undefined)
       throw new TypeError("only a page that a Browser opened can be presented");
     const { input } = internals;
+
     let aiming:
       | { readonly target: Target; readonly fiber: Fiber.Fiber<void, BrowserError> }
       | undefined;

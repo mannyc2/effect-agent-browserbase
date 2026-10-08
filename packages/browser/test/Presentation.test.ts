@@ -115,6 +115,7 @@ describe("Presentation's style", () => {
   it.effect("turns the wheel in 100 px notches, in bursts of at most nine", () =>
     Effect.gen(function* () {
       const steps = yield* performed.wheel(0, 2050).pipe(Random.withSeed("wheel"));
+
       const gaps = steps
         .slice(1)
         .map((step, index) => step.afterMillis - (steps[index]?.afterMillis ?? 0));
@@ -210,6 +211,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       yield* page.click(submit);
       yield* presenter.view(page).click(submit);
+
       const plans = (yield* eventsOf(browser, page)).filter(
         (event) => event._tag === "TrackPlanned",
       );
@@ -284,7 +286,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* view.click(still).pipe(medians);
       yield* view.click(refOf(snapshot, "link", "Link")).pipe(medians);
       yield* view.click(refOf(yield* page.snapshot(), "button", "Continue")).pipe(medians);
-      yield* presenter.view(other).click({ x: 20, y: 300 }).pipe(medians);
+      yield* presenter.view(other).click({ x: 20, y: 340 }).pipe(medians);
 
       const actions = (yield* browser.recentEvents).filter(
         (event): event is Action =>
@@ -319,6 +321,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         { id: "budget", provider: "test" },
         { actionTimeout: "1 second" },
       );
+
       const page = yield* browser.newPage((yield* Site).url("/form"));
       const presenter = yield* Presentation.make({ motion: straight(1500), pacing: unpaused });
       const asked = yield* browser.now;

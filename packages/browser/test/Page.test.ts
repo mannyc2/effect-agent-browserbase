@@ -800,8 +800,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   );
 
   // After input a page gets a task and a frame, and a document only if the input asked for one:
-  // a link and a handler's timer do; a fetch's answer comes too late to tell; `pushState` and a
-  // link the server answers with no content ask for none.
+  // a link and a handler's timer do, whether the server answers at once or 300 ms later; a
+  // fetch's answer comes too late to tell; `pushState` and a link the server answers with no
+  // content ask for none.
   it.effect("waits after a click for the document it asked for, and for nothing else", () =>
     Effect.gen(function* () {
       for (const [role, name] of [
@@ -813,6 +814,21 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         yield* page.click(refOf(yield* page.snapshot(), role, name));
         assert.include(yield* shows(page), "The next page", name);
       }
+      for (const [role, name] of [
+        ["link", "Later"],
+        ["button", "Delayed"],
+      ] as const) {
+        const page = yield* open("/navigating");
+
+        yield* page.click(refOf(yield* page.snapshot(), role, name));
+        assert.match((yield* page.text()).url, /\/late$/, name);
+      }
+
+      // A document whose end comes 300 ms after its start is parsed as the click returns.
+      const streaming = yield* open("/navigating");
+
+      yield* streaming.click(refOf(yield* streaming.snapshot(), "link", "Streaming"));
+      assert.include(yield* shows(streaming), "The bottom");
 
       const fetching = yield* open("/navigating");
 

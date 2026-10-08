@@ -189,14 +189,19 @@ const desk = `<!doctype html><title>Desk</title>
 <p id="below">Below the fold</p>
 <script>place.onclick = () => setTimeout(() => (answer.textContent = "Order placed"), 600);</script>`;
 
-// Each control in a row of its own, 40 px tall from the top: a link, a handler that navigates in a
-// timer, one that navigates once a fetch answers half a second later, `pushState`, a link the
-// server answers with no content, and a button that does nothing.
+// Each control in a row of its own, 40 px tall from the top: a link, one to a page the server
+// answers 300 ms later and one to a page whose end it sends 300 ms after its start; a handler that
+// navigates in a timer, and one to the late page; one that navigates once a fetch answers half a
+// second later; `pushState`; a link the server answers with no content; and a button that only
+// changes its own text.
 const navigating = `<!doctype html><title>Navigating</title>
 <body style="margin:0;font:16px sans-serif">
 <style>a, button { display: block; height: 40px; width: 200px; margin: 0; padding: 0 }</style>
 <a id="link" href="/next">Link</a>
+<a id="later" href="/late">Later</a>
+<a id="streaming" href="/streaming">Streaming</a>
 <button id="timer" onclick="setTimeout(() => (location.href = '/next'), 0)">Timer</button>
+<button id="delayed" onclick="setTimeout(() => (location.href = '/late'), 0)">Delayed</button>
 <button id="fetch" onclick="fetch('/slow').then(() => (location.href = '/next'))">Fetch</button>
 <button id="push" onclick="history.pushState({}, '', '/pushed')">Push</button>
 <a id="empty" href="/empty">Empty</a>
@@ -238,6 +243,13 @@ export const SiteLayer = Layer.effect(
           }
           if (request.url === "/slow") {
             setTimeout(() => response.end("ok"), 500);
+
+            return;
+          }
+          if (request.url === "/streaming") {
+            response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+            response.write("<!doctype html><title>Streaming</title><h1>The top</h1>");
+            setTimeout(() => response.end("<p>The bottom</p>"), 300);
 
             return;
           }

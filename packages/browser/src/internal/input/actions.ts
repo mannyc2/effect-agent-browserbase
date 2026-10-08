@@ -354,8 +354,10 @@ const typeText = (input: Parts) => {
           } else {
             const events = yield* marks.style.typing(text, approval !== undefined);
             const keyed = events.some((event) => event.phase === "down");
+
             const checks =
               approval !== undefined && keyed ? (text.match(/\s/gu)?.length ?? 0) + 1 : 0;
+
             // Each check is about two round trips, which only keys typed one at a time need.
             const started = now();
 
