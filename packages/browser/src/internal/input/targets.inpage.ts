@@ -6,34 +6,12 @@
 import { Schema } from "effect";
 
 import { Box, SubjectContext } from "../../BrowserEvent.ts";
-import type { Context, ContextReader } from "../reading/context.inpage.ts";
+import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Walk } from "../reading/walk.inpage.ts";
 
-export interface ResolvedPoint {
-  readonly x: number;
-  readonly y: number;
-  readonly element: string;
-  readonly tag: string;
-  readonly role: string | null;
-  readonly name: string;
-  readonly context: Context;
-  readonly box?: {
-    readonly x: number;
-    readonly y: number;
-    readonly width: number;
-    readonly height: number;
-  };
-  readonly cursor: string;
-  readonly href?: string | undefined;
-}
-
-export type PointResult =
-  | ResolvedPoint
-  | {
-      readonly error: "stale" | "hidden" | "offscreen" | "disabled" | "covered" | "outside";
-      readonly detail: string;
-    };
+export type ResolvedPoint = typeof ResolvedPointSchema.Type;
+export type PointResult = typeof PointResultSchema.Type;
 
 export const targets = (names: Names, walked: Walk, placing: ContextReader) => {
   const { describe, isDisabled, lookup, nameOf, parentOf, roleOf } = names;

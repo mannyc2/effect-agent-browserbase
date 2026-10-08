@@ -4,6 +4,7 @@
  */
 import { Schema } from "effect";
 
+import type { Snapshot } from "../../Snapshot.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
@@ -16,18 +17,10 @@ export interface SnapshotRequest {
   readonly firstRef: number;
 }
 
+/** The outline as a `Snapshot` reads it, and the next ref the page may give. */
 export interface SnapshotResult {
-  readonly text: string;
-  readonly url: string;
-  readonly title: string;
+  readonly snapshot: typeof Snapshot.Encoded;
   readonly nextRef: number;
-  readonly truncated: boolean;
-  readonly above: number;
-  readonly below: number;
-  readonly width: number;
-  readonly height: number;
-  readonly scrollY: number;
-  readonly scrollHeight: number;
 }
 
 export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: Texts) => {
@@ -35,6 +28,7 @@ export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: 
   const { roleOf, textOf } = names;
   const { visit } = walked;
   const { isControl, stateOf } = subjected;
+  const { cut, shown } = texts;
 
   const textBlocks =
     /^(?:P|LI|TD|TH|DT|DD|LABEL|SPAN|BLOCKQUOTE|FIGCAPTION|CAPTION|PRE|STRONG|EM|B|I|SMALL|TIME|CODE|LEGEND)$/;
@@ -74,7 +68,7 @@ export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: 
       return ` value=${JSON.stringify(selected.join(", "))} options=${JSON.stringify(options.join(" | ") + more)}`;
     }
     // The model sees what it typed, but never what a secret field holds.
-    const value = isInput(element) || isTextArea(element) ? texts.shown(element, true) : undefined;
+    const value = isInput(element) || isTextArea(element) ? shown(element, true) : undefined;
 
     return value === undefined || value === "" ? "" : ` value=${JSON.stringify(clean(value, 80))}`;
   };
@@ -243,28 +237,20 @@ export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: 
       },
     );
 
-    let text = lines.join("\n");
-    let truncated = false;
-
-    if (text.length > request.maxChars) {
-      const cut = text.lastIndexOf("\n", request.maxChars);
-
-      text = text.slice(0, cut > 0 ? cut : request.maxChars);
-      truncated = true;
-    }
-
     return {
-      text,
-      url: location.href,
-      title: document.title,
+      snapshot: {
+        ...cut(lines.join("\n"), request.maxChars),
+        url: location.href,
+        title: document.title,
+        above,
+        below,
+        viewport: { width, height },
+        scroll: {
+          y: Math.round(window.scrollY),
+          height: Math.round(document.documentElement.scrollHeight),
+        },
+      },
       nextRef: refs.next,
-      truncated,
-      above,
-      below,
-      width,
-      height,
-      scrollY: Math.round(window.scrollY),
-      scrollHeight: Math.round(document.documentElement.scrollHeight),
     };
   };
 
@@ -274,20 +260,6 @@ export const outline = (names: Names, walked: Walk, subjected: Subjects, texts: 
 };
 
 export type Outline = ReturnType<typeof outline>;
-
-export const SnapshotResultSchema = Schema.Struct({
-  text: Schema.String,
-  url: Schema.String,
-  title: Schema.String,
-  nextRef: Schema.Finite,
-  truncated: Schema.Boolean,
-  above: Schema.Finite,
-  below: Schema.Finite,
-  width: Schema.Finite,
-  height: Schema.Finite,
-  scrollY: Schema.Finite,
-  scrollHeight: Schema.Finite,
-});
 
 export const ViewportResultSchema = Schema.Struct({
   width: Schema.Finite,

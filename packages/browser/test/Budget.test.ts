@@ -81,13 +81,18 @@ const framesArrive = (page: Page) =>
 
 // Playwright's own connection to the browser and its tab, and the library's session on that tab.
 // Nothing is measured: no page of the library's own opens. How many round trips Playwright's
-// commands share depends on how soon Chromium answers each, so only the calls are held.
-it.live("opening a browser over CDP costs 33 calls", () =>
+// commands share depends on how soon Chromium answers each, so only the calls are held. Playwright
+// detaches from the three targets it does not track whenever it gets to them, before `open`
+// returns or, on a loaded machine, after, so those detaches are not counted.
+it.live("opening a browser over CDP costs 30 calls", () =>
   Effect.gen(function* () {
     const proxy = yield* behindProxy();
-    const sent = yield* sentBy(proxy, Cdp.open({ endpoint: proxy.endpoint }));
 
-    assert.strictEqual(sent.length, 33, sent.map((command) => command.method).join(", "));
+    const sent = (yield* sentBy(proxy, Cdp.open({ endpoint: proxy.endpoint }))).filter(
+      (command) => command.method !== "Target.detachFromTarget",
+    );
+
+    assert.strictEqual(sent.length, 30, sent.map((command) => command.method).join(", "));
   }).pipe(Effect.scoped),
 );
 
@@ -178,6 +183,13 @@ it.live("a read costs two calls on a new document, and one warm", () =>
     // A still page is ready at its first check.
     holds(yield* sentBy(proxy, page.ready()), 1, 1);
     assert.include((yield* page.text()).text, "two");
+    // However long the page is, a read is one call.
+    yield* Effect.promise(() =>
+      page.playwright.evaluate(() =>
+        document.body.insertAdjacentHTML("beforeend", "<p><button>Buy</button></p>".repeat(2000)),
+      ),
+    );
+    holds(yield* sentBy(proxy, page.find({ role: "button", scope: "document" })), 1, 1);
   }).pipe(Effect.scoped),
 );
 
