@@ -2,10 +2,11 @@
  * Reading a page's record of what changed, in one call to the page. The first read also registers
  * the recorder with the page's own session, in the same round trip, so that every later document
  * records from its start. The page's times map to the owner's clock through the browser's one
- * clock mapping, as frames' do, and a window can begin on the page's own clock where the previous
- * one ended, so consecutive reads neither miss nor repeat a change. A read takes its turn on the
- * page as other reads do, and identical ones in flight share it; none is kept for a later caller,
- * since its window ends when it was read.
+ * clock mapping, as frames' do, which a browser's first read measures, once, where no capture has;
+ * and a window can begin on the page's own clock where the previous one ended, so consecutive
+ * reads neither miss nor repeat a change. A read takes its turn on the page as other reads do, and
+ * identical ones in flight share it; none is kept for a later caller, since its window ends when
+ * it was read.
  */
 import { Effect, Schema } from "effect";
 
