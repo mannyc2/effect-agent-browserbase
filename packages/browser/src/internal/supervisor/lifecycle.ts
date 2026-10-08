@@ -126,12 +126,17 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
    * Open `number`, ending `current` now if it `ends`; exclusive generations open only once its
    * release has finished. Otherwise `current` serves until the next one opens.
    */
-  const next = (number: number, reopen: boolean, current: Live<A> | undefined, ends: boolean) => ({
-    state: { _tag: "Opening" as const, number, serving: ends ? undefined : current },
-    event: [number, reopen ? new Reopening() : new Opening()] as const,
+  const next = (
+    number: number,
+    reopen: boolean,
+    current: Live<A> | undefined,
+    ends: boolean,
+  ): Step<A> => ({
+    state: { _tag: "Opening", number, serving: ends ? undefined : current },
+    events: [[number, reopen ? new Reopening() : new Opening()]],
     commands: [
       ...(ends && current !== undefined ? [release(current)] : []),
-      { _tag: "Open" as const, number, after: ends && exclusive ? current?.number : undefined },
+      { _tag: "Open", number, after: ends && exclusive ? current?.number : undefined },
     ],
   });
 
@@ -178,18 +183,9 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
       if (state._tag === "Opening")
         return { state: { ...state, serving: undefined }, events, commands: [release(lost)] };
 
-      const reopened = next(
-        (state._tag === "Open" ? lost.number : state.number) + 1,
-        true,
-        lost,
-        true,
-      );
+      const reopened = next((state._tag === "Open" ? lost.number : state.number) + 1, true, lost, true);
 
-      return {
-        state: reopened.state,
-        events: [...events, reopened.event],
-        commands: reopened.commands,
-      };
+      return { ...reopened, events: [...events, ...reopened.events] };
     }
     case "Rotate": {
       if (state._tag === "Retired") return stay;
@@ -198,14 +194,8 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
         return stay;
       if (state._tag === "Opening") return { ...stay, reply: state.number };
       const number = (state._tag === "Open" ? state.serving.number : state.number) + 1;
-      const rotated = next(number, false, state.serving, exclusive);
 
-      return {
-        state: rotated.state,
-        events: [rotated.event],
-        commands: rotated.commands,
-        reply: number,
-      };
+      return { ...next(number, false, state.serving, exclusive), reply: number };
     }
     case "Retire": {
       const current = servingOf(state);
