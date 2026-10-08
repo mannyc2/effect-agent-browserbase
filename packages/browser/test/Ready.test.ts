@@ -1,5 +1,5 @@
 import { assert, it, layer } from "@effect/vitest";
-import { Duration, Effect, Option, Schedule, Stream } from "effect";
+import { Duration, Effect, Schedule, Stream } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
@@ -198,8 +198,11 @@ it.live(
       const page = yield* browser.newPage(ticking);
 
       yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* page.latestFrame.pipe(
-        Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: Option.isSome }),
+      yield* page.state.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced("10 millis"),
+          until: (state) => state.frame !== undefined,
+        }),
       );
       yield* page.changes();
       proxy.withhold = (method) => method === "Page.screencastFrame";

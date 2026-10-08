@@ -1,69 +1,78 @@
 /**
  * What a page showed, and what changed on it, over a window of time.
  *
- * `capture` gathers a page's screencast frames over a window, what visibly changed on it up to its
- * last frame, and its events in between, and on request its snapshot at the end. `toPrompt` turns
- * a moment into one user message for any `effect/ai` call: a structured answer from
- * `LanguageModel.generateObject`, a caption from `generateText`, or one turn of a `Chat` that
- * follows moment after moment. It leads with what changed, news before what keeps changing, and
- * names an action as what a change followed; as a step where changes followed it but none names
- * it, or where its effect is drawn rather than written, as on a canvas, which only the screenshots
- * show; and claims nothing of what changed where the record did not see.
+ * A page's timeline has three tracks on its browser's host clock: its events, what visibly changed
+ * on it (`Change`), and its screencast frames. A `Window` holds the three from `since` to `until`,
+ * and says why a part it could not read is missing rather than fail. `Page.window` takes one, which
+ * can end in the past, at a frame a delayed consumer airs late, so that a line written now tells
+ * what its viewers will see; `stillness` says how long a window's page had been still at its end.
+ *
+ * A `Moment` is a window that ends at a picture of the page now: `capture` takes the picture, then
+ * the window up to it, and on request the page's outline. `toPrompt` turns a moment into one user
+ * message for any `effect/ai` call: a structured answer from `LanguageModel.generateObject`, a
+ * caption from `generateText`, or one turn of a `Chat` that follows moment after moment. It leads
+ * with what changed, news before what keeps changing, and names an action as what a change
+ * followed; as a step where changes followed it but none names it, or where its effect is drawn
+ * rather than written, as on a canvas, which only the screenshots show; and claims nothing of what
+ * changed where the record did not see, or of a part it could not read, which it names with why.
  *
  * Frames come from a running screencast, as far back as the browser's `frameHistory` keeps them.
- * The last frame is the page now: the newest frame if it was painted after the page's latest input
- * and at most 250 ms ago, else a new screenshot timed by its capture.
+ * A moment's picture is the newest frame if it was painted after the page's latest input and at
+ * most 250 ms ago, else a new screenshot timed by its capture.
  *
  * @since 0.3.0
  */
-import { Duration, Effect, Option, Schema } from "effect";
+import { Duration, Effect, Option, Result, Schema } from "effect";
 import { Prompt } from "effect/ai";
 
-import { InvalidRequest } from "./BrowserError.ts";
-import {
-  type Action,
-  BrowserEvent,
-  type Subject,
-  type SubjectContext,
-  TrackEvent,
-} from "./BrowserEvent.ts";
+import { BrowserError, InvalidRequest } from "./BrowserError.ts";
+import { type Action, BrowserEvent, type Subject, type SubjectContext } from "./BrowserEvent.ts";
 import { type Change, Changes } from "./Change.ts";
 import { Frame } from "./Frame.ts";
 import { undispatched } from "./internal/page/context.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
-const isTrackEvent = Schema.is(TrackEvent);
-
-export class Moment extends Schema.Class<Moment>("effect-browser/Moment")({
+/** A page's events, changes and frames over one window of its browser's host clock. */
+export class Window extends Schema.Class<Window>("effect-browser/Window")({
   page: Schema.String,
   /** Where the window starts, in host monotonic milliseconds on the owning browser’s clock. */
-  from: Schema.Finite,
-  /** Where it ends: the time of the last frame. */
-  at: Schema.Finite,
-  /** Oldest first; the last frame is the page at `at`. */
-  frames: Schema.Array(Frame),
-  /** The page at the end of the window, when the capture asked for it. */
-  snapshot: Schema.optional(Snapshot),
-  /** The page’s events after `from`, up to `at`, oldest first, without the input presentation track. */
+  since: Schema.Finite,
+  /** Where it ends, never after it was taken. */
+  until: Schema.Finite,
+  /** The page's events after `since`, up to `until`, oldest first, without the input presentation track. */
   events: Schema.Array(BrowserEvent),
   /**
-   * What visibly changed after `from`, up to the last frame's paint; absent when the page could not
-   * say, as while it navigated. A page's first moment starts its record, so its record sees none of
-   * the window, and `toPrompt` says what changed was not recorded.
+   * What visibly changed after `since`, up to `until`; absent where `missing` says why. A page's
+   * first window starts its record, so the record sees none of it.
    */
   changes: Schema.optional(Changes),
+  /** Screencast frames painted from `since` to `until`, oldest first, as far back as kept. */
+  frames: Schema.Array(Frame),
+  /**
+   * Why each part that could not be read is missing: the read of its changes, by whatever
+   * operation failed there, or a moment's picture (`frame`) or outline (`snapshot`).
+   */
+  missing: Schema.Array(BrowserError),
 }) {}
 
-const isMoment = Schema.is(Moment);
+/**
+ * A window that ends at a picture of the page, its last frame, unless `missing` says why it has
+ * none. Its frames are a few, spread over the window, so that it still begins where it starts.
+ */
+export class Moment extends Window.extend<Moment>("effect-browser/Moment")({
+  /** The page's outline at the end of the window, when the capture asked for it. */
+  snapshot: Schema.optional(Snapshot),
+}) {}
 
 export interface CaptureOptions {
   /**
-   * Where the window starts: a previous moment, so that consecutive moments neither repeat nor
-   * miss an event or a change, or how far back from the last frame. Defaults to 5 seconds.
+   * Where the window starts, as for `Page.window`: a previous window or moment, so that consecutive
+   * ones neither repeat nor miss an event or a change, or a `Duration` back from the picture.
+   * Defaults to 5 seconds.
    */
-  readonly since?: Moment | Duration.Input | undefined;
-  /** Frames to keep, at least 1, spread over the window and ending with the page now. Defaults to 2. */
+  readonly since?: Page.WindowOptions["since"] | undefined;
+  /** Frames to keep, at least 1, spread over the window and ending with the picture. Defaults to 2. */
   readonly frames?: number | undefined;
   /**
    * Whether to take the page's outline at the end, or its options; `true` means 4,000 characters.
@@ -86,22 +95,6 @@ const spread = (frames: ReadonlyArray<Frame>, count: number): ReadonlyArray<Fram
   );
 };
 
-/** Where a window that ends at `at` starts; undefined for a negative or unbounded duration. */
-const startOf = (since: Moment | Duration.Input): ((at: number) => number) | undefined => {
-  if (isMoment(since)) return () => since.at;
-
-  const millis = Number.isNaN(since)
-    ? Number.NaN
-    : Option.match(Duration.fromInput(since), {
-        onNone: () => Number.NaN,
-        onSome: Duration.toMillis,
-      });
-
-  return Number.isFinite(millis) && millis >= 0 ? (at) => at - millis : undefined;
-};
-
-const invalid = (detail: string) => undispatched("moment", new InvalidRequest({ detail }));
-
 export const capture = Effect.fn("Moment.capture")(function* (
   page: Page.Page,
   options: CaptureOptions = {},
@@ -109,67 +102,86 @@ export const capture = Effect.fn("Moment.capture")(function* (
   const count = options.frames ?? 2;
 
   if (!Number.isSafeInteger(count) || count < 1)
-    return yield* invalid("frames must be a positive safe integer");
-  const since = options.since ?? Duration.seconds(5);
-  const start = startOf(since);
-
-  if (start === undefined)
-    return yield* invalid("since must be a moment or a finite duration that is not negative");
-
+    return yield* undispatched(
+      "moment",
+      new InvalidRequest({ detail: "frames must be a positive safe integer" }),
+    );
   const outline = options.snapshot ?? false;
 
-  // The picture comes first, at no call with a running screencast, and the changes are read up to
-  // its paint, from where the previous moment's ended, so they hold nothing it does not show. The
-  // outline is taken alongside. A page that cannot say what changed still has a moment.
-  const { picture, snapshot } = yield* Effect.all(
+  // The picture comes first, at no call with a running screencast, and the window ends at its
+  // paint, so its changes hold nothing it does not show; without one, the window ends now. The
+  // outline is taken alongside. What cannot be read is missing from the moment, not its end.
+  const { pictured, outlined } = yield* Effect.all(
     {
-      picture: Effect.flatMap(page.frame({ after: "input" }), (current) =>
-        page
-          .changes({
-            since: isMoment(since)
-              ? (since.changes ?? since.frames.at(-1) ?? since.at)
-              : start(current.hostTime),
-            until: current,
-            unmask: options.unmask,
-          })
-          .pipe(
-            Effect.option,
-            Effect.map((changes) => ({ current, changes: Option.getOrUndefined(changes) })),
+      pictured: Effect.result(page.frame({ after: "input" })).pipe(
+        Effect.flatMap((picture) =>
+          Effect.map(
+            page.window({
+              since: options.since ?? Duration.seconds(5),
+              until: Result.getOrUndefined(picture),
+              unmask: options.unmask,
+            }),
+            (window) => ({ window, picture }),
           ),
+        ),
       ),
-      snapshot:
+      outlined: Effect.result(
         outline === false
           ? Effect.void
           : page.snapshot({ maxChars: 4000, ...(outline === true ? {} : outline) }),
+      ),
     },
     { concurrency: 2 },
   );
 
-  const { current, changes } = picture;
-  const at = current.hostTime;
-  const from = start(at);
-
-  // The selection spans the whole window, so a two-frame moment still begins where the window does.
-  const recent = (yield* page.recentFrames).filter(
-    (frame) => frame !== current && frame.hostTime >= from && frame.hostTime <= at,
-  );
-
-  const events = (yield* page.recentEvents).filter(
-    (event) => event.at > from && event.at <= at && !isTrackEvent(event),
-  );
+  const { window, picture } = pictured;
+  const shown = Result.getOrUndefined(picture);
 
   return new Moment({
-    page: page.id,
-    from,
-    at,
-    frames: spread([...recent, current], count),
-    snapshot: snapshot ?? undefined,
-    events,
-    changes,
+    ...window,
+    frames: spread(
+      shown === undefined
+        ? window.frames
+        : [...window.frames.filter((frame) => frame !== shown), shown],
+      count,
+    ),
+    snapshot: Result.getOrUndefined(outlined) ?? undefined,
+    missing: [
+      ...window.missing,
+      ...Option.toArray(Result.getFailure(picture)),
+      ...Option.toArray(Result.getFailure(outlined)),
+    ],
   });
 });
 
-const seconds = (moment: Moment, at: number) => `${((at - moment.at) / 1000).toFixed(1)}s`;
+/** A window's record of changes, if it saw any of the window: a page's first has none. */
+const recordOf = ({ changes }: Window) =>
+  changes !== undefined && changes.from < changes.until ? changes : undefined;
+
+/**
+ * How long, in milliseconds, the window's page had been still at its end: since the last change in
+ * view its record shows, or the last paint its screencast frames show, or else since the window,
+ * or its record, began. Undefined where neither could tell, with no record of the window and no
+ * painted frame: a screenshot shows the page, not when it last changed. Frames show paint only
+ * while a capture runs, and the record does not see a canvas, so a canvas that keeps drawing with
+ * no capture running reads as still.
+ */
+export const stillness = (window: Window): number | undefined => {
+  const record = recordOf(window);
+
+  const stirred = [
+    ...(record?.changes ?? []).flatMap((change) => (change.kind === "title" ? [] : [change.at])),
+    ...window.frames.flatMap((frame) =>
+      frame.timing._tag === "BrowserPaint" ? [frame.hostTime] : [],
+    ),
+  ];
+
+  return record === undefined && stirred.length === 0
+    ? undefined
+    : window.until - Math.max(window.since, record?.from ?? window.since, ...stirred);
+};
+
+const seconds = (moment: Moment, at: number) => `${((at - moment.until) / 1000).toFixed(1)}s`;
 
 const quoted = (value: string | undefined) => JSON.stringify(value ?? "");
 
@@ -203,11 +215,13 @@ const acted = (event: Action): string => {
   return named(event.subject, point);
 };
 
-/** An action as a step: `click button "Pay"`. */
+/**
+ * An action as a step: `click button "Pay"`. A failed one says only that: its error is advice for
+ * the caller that acted, which may name a ref, not a fact about the page.
+ */
 const step = (event: Action): string => {
   const target = acted(event);
   const text = event.text === undefined ? "" : JSON.stringify(event.text);
-  const outcome = event.ok ? "" : ` (failed: ${event.error ?? "unknown"})`;
 
   const what =
     event.name === "type" && target !== ""
@@ -216,7 +230,7 @@ const step = (event: Action): string => {
         ? `${text} in ${target}`
         : `${target} ${text}`;
 
-  return `${event.name} ${what}${outcome}`.replace(/\s+/g, " ").trim();
+  return `${event.name} ${what}${event.ok ? "" : " (failed)"}`.replace(/\s+/g, " ").trim();
 };
 
 /** What is drawn rather than written, whose changes only the screenshots show. */
@@ -336,11 +350,11 @@ const changed = (moment: Moment, record: Changes) => {
   return { lines, named };
 };
 
-/** A moment's record of changes, if it saw any of the window: a page's first moment has none. */
-const recordOf = (moment: Moment) =>
-  moment.changes !== undefined && moment.changes.from < moment.changes.until
-    ? moment.changes
-    : undefined;
+/** What a part a moment could not read was, by the operation that failed: a window's one read is its changes. */
+const parts = new Map([
+  ["frame", "A picture of the moment"],
+  ["snapshot", "The page's outline"],
+]);
 
 /** The moment's changes and events as lines, most notable first when its changes are recorded. */
 const account = (moment: Moment): ReadonlyArray<string> => {
@@ -398,39 +412,51 @@ const account = (moment: Moment): ReadonlyArray<string> => {
 
   const kept = ordered.slice(0, maxLines);
   const drawing = moment.events.some((event) => event._tag === "Action" && onDrawn(event));
-  const begins = record === undefined ? moment.from : Math.max(moment.from, record.from);
+  const begins = record === undefined ? moment.since : Math.max(moment.since, record.from);
+  const unread = moment.missing.some((error) => !parts.has(error.operation));
 
   return [
     ...kept.map((line) => `${seconds(moment, line.at)} ${line.text}`),
     ...(ordered.length > maxLines ? [`…and ${ordered.length - maxLines} less notable`] : []),
     ...(record === undefined
-      ? ["What changed on the page was not recorded."]
+      ? unread
+        ? []
+        : ["What changed on the page was not recorded."]
       : record.changes.length > 0
         ? []
         : [
-            `No text in view changed${begins > moment.from ? ` after ${seconds(moment, begins)}` : ""}${drawing ? "; what is drawn, such as a canvas, shows only in the screenshots" : ""}.`,
+            `No text in view changed${begins > moment.since ? ` after ${seconds(moment, begins)}` : ""}${drawing ? "; what is drawn, such as a canvas, shows only in the screenshots" : ""}.`,
           ]),
     ...(record !== undefined && record.dropped > 0
       ? [
           `The page changed too much to tell it all: at least ${record.dropped} changes are not told.`,
         ]
       : []),
-    ...(begins > moment.from
+    ...(begins > moment.since
       ? [`Changes before ${seconds(moment, begins)} are not all known.`]
       : []),
+    ...moment.missing.map(
+      (error) =>
+        `${parts.get(error.operation) ?? "What changed on the page"} could not be read: ${error.reason.message}.`,
+    ),
   ];
 };
 
 /**
  * The moment as one user message: the page's outline when the moment has one, what changed, most
  * notable first, with the actions that the changes followed, that changes followed though none
- * names them, or that drew what only the screenshots show, and its frames captioned with their
- * times, the last one "the moment". Give a model its task with `Prompt.setSystem`, and add what
- * the caller knows about the page as more text.
+ * names them, or that drew what only the screenshots show, what could not be read and why, and its
+ * frames captioned with their times, the last one "the moment" where it is the picture at its end.
+ * Give a model its task with `Prompt.setSystem`, and add what the caller knows about the page as
+ * more text.
  */
 export const toPrompt = (moment: Moment): Prompt.Prompt => {
   const count = moment.frames.length;
   const last = count - 1;
+  const pictured = moment.frames.at(-1)?.hostTime === moment.until;
+
+  const following =
+    count === 1 ? "One screenshot follows" : `${count} screenshots follow, oldest first`;
 
   return Prompt.fromMessages([
     Prompt.makeMessage("user", {
@@ -440,17 +466,20 @@ export const toPrompt = (moment: Moment): Prompt.Prompt => {
             "One moment of a browser session. Rely only on what this material shows, and prefer concrete details: numbers, names, colours, positions and motion.",
             "",
             ...(moment.snapshot === undefined ? [] : [moment.snapshot.rendered, ""]),
-            `${recordOf(moment) === undefined ? "What happened" : "What changed, most notable first"} (seconds before the moment, over ${((moment.at - moment.from) / 1000).toFixed(1)}s):`,
+            `${recordOf(moment) === undefined ? "What happened" : "What changed, most notable first"} (seconds before the moment, over ${((moment.until - moment.since) / 1000).toFixed(1)}s):`,
             ...account(moment),
-            "",
-            count === 1
-              ? "One screenshot follows: the moment itself."
-              : `${count} screenshots follow, oldest first; the last one is the moment itself.`,
+            ...(count === 0
+              ? []
+              : [
+                  "",
+                  `${following}${pictured ? (count === 1 ? ": the moment itself." : "; the last one is the moment itself.") : "."}`,
+                ]),
           ].join("\n"),
         }),
         ...moment.frames.flatMap((frame, index) => [
           Prompt.makePart("text", {
-            text: index === last ? "The moment:" : `${seconds(moment, frame.hostTime)}:`,
+            text:
+              index === last && pictured ? "The moment:" : `${seconds(moment, frame.hostTime)}:`,
           }),
           Prompt.makePart("file", { mediaType: "image/jpeg", data: frame.data }),
         ]),

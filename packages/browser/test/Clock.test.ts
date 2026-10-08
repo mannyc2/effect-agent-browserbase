@@ -126,7 +126,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
         const moment = yield* capture;
 
-        assert.strictEqual(moment.at, 5500);
+        assert.strictEqual(moment.until, 5500);
         // That capture has stopped, so its frame leads up to a new screenshot of the moment.
         assert.strictEqual(moment.frames.length, 2);
         assert.strictEqual(moment.frames[0], frame);
@@ -148,7 +148,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         time.monotonic = 7000;
         const later = yield* capture;
 
-        assert.strictEqual(later.at, 7000);
+        assert.strictEqual(later.until, 7000);
         assert.isEmpty(later.events);
         assert.strictEqual(later.frames[0]?.receivedAt, 7000);
         assert.strictEqual(later.frames[0]?.timestamp, undefined);

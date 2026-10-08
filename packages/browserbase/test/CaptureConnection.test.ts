@@ -3,7 +3,7 @@
 // in the order they open: Playwright's control connection is 0, and the capture connection opens
 // as the first capture starts.
 import { assert, it } from "@effect/vitest";
-import { Effect, Fiber, Option, Schedule, Stream } from "effect";
+import { Effect, Fiber, Schedule, Stream } from "effect";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 
@@ -153,8 +153,11 @@ it.live(
             .screencast()
             .pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
 
-          yield* page.latestFrame.pipe(
-            Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: Option.isSome }),
+          yield* page.state.pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("10 millis"),
+              until: (state) => state.frame !== undefined,
+            }),
             Effect.timeout("10 seconds"),
           );
           proxy.drop(capturing);

@@ -31,7 +31,6 @@ import {
   Disconnected,
   type DisconnectCause,
   PageClosed,
-  PageLoaded,
   PageOpened,
   PageUntracked,
   type RecordedEvent,
@@ -254,7 +253,8 @@ const watchLoss = Effect.fnUntraced(function* (
 
 /**
  * What a page's own Playwright events publish, its close and crash aside, while its scope is
- * open. Dialogs are answered: alerts accepted, others dismissed.
+ * open. Dialogs are answered: alerts accepted, others dismissed. The page's own session tells its
+ * documents' commits and loads.
  */
 const listen = (
   playwright: PlaywrightPage,
@@ -263,9 +263,6 @@ const listen = (
   now: () => number,
   on: { readonly close: () => void; readonly crash: () => void },
 ) => {
-  const parsed = () => publish(new PageLoaded({ at: now(), page, state: "domcontentloaded" }));
-  const load = () => publish(new PageLoaded({ at: now(), page, state: "load" }));
-
   const dialog = (shown: Dialog) => {
     const kind = shown.type();
 
@@ -280,16 +277,12 @@ const listen = (
     Effect.sync(() => {
       playwright.on("close", on.close);
       playwright.on("crash", on.crash);
-      playwright.on("domcontentloaded", parsed);
-      playwright.on("load", load);
       playwright.on("dialog", dialog);
     }),
     () =>
       Effect.sync(() => {
         playwright.off("close", on.close);
         playwright.off("crash", on.crash);
-        playwright.off("domcontentloaded", parsed);
-        playwright.off("load", load);
         playwright.off("dialog", dialog);
       }),
   );

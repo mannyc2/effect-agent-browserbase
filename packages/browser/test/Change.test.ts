@@ -231,7 +231,15 @@ describe("a moment's account", () => {
   const moment = (events: ReadonlyArray<Action>, changes?: Changes) =>
     textOf(
       Moment.toPrompt(
-        new Moment.Moment({ page: "p1", from: 5000, at: 10_000, frames: [], events, changes }),
+        new Moment.Moment({
+          page: "p1",
+          since: 5000,
+          until: 10_000,
+          frames: [],
+          events,
+          changes,
+          missing: [],
+        }),
       ),
     );
 
@@ -293,8 +301,8 @@ describe("a moment's account", () => {
         Moment.toPrompt(
           new Moment.Moment({
             page: "p1",
-            from: 5000,
-            at: 10_000,
+            since: 5000,
+            until: 10_000,
             frames: [],
             events: [],
             changes: new Changes({
@@ -305,6 +313,7 @@ describe("a moment's account", () => {
               dropped: 0,
               changes,
             }),
+            missing: [],
           }),
         ),
       );
