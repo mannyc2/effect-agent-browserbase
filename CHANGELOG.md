@@ -128,13 +128,17 @@ lead with.
   its `subject` and structured context (row, column, label, heading), what it showed at the
   window's start and end, how often it changed, the lowest and highest of a number that changed
   more than once, when it last changed before the window, and the trusted input it followed where
-  it was that input's doing (`cause`). A page records once something reads its changes, and then
-  from the start of each later document, until nobody has read it for two minutes; a page nobody
-  reads records nothing and costs nothing. The record keeps 256 elements with their last 32 changes
-  for a minute; an element that keeps changing gives way before news, and `Changes.dropped` counts
-  what gave way, with `Changes.from` past it. A window can start at the previous read's `cursor`,
-  exactly, or at a frame's paint, and end at a frame's paint. Field values read `••••` unless
-  unmasked.
+  it was that input's doing (`cause`). A cause needs a change that was not in flux, neither
+  changing nor gaining or losing a sibling in the 10 s before the input, so a ticker's tick or a
+  feed's line names no click; and out of the input's reach, its row, form, dialog or controlled
+  element, it needs a page that was still for the 2 s before, so a portal's menu keeps its click
+  and a chat line beside a ticking board does not. A page records once something reads its
+  changes, and then from the start of each later document, until nobody has read it for two
+  minutes; a page nobody reads records nothing and costs nothing. The record keeps 256 elements
+  with their last 32 changes for a minute; an element that keeps changing gives way before news,
+  and `Changes.dropped` counts what gave way, with `Changes.from` past it. A window can start at
+  the previous read's `cursor`, exactly, or at a frame's paint, and end at a frame's paint. Field
+  values read `••••` unless unmasked.
 - `Moment.changes`, and `Moment.CaptureOptions.unmask`: a moment reads what changed up to its last
   frame's paint, from where the previous moment's changes ended; a page that cannot say, as while
   it navigates, still has its moment.
@@ -188,10 +192,13 @@ lead with.
 - `Supervisor`'s `Lost` carries its `cause`, and `Opened` no longer takes `expiresAt`: the
   supervisor reads the browser's.
 - `Moment.toPrompt` leads with what changed, news before what keeps changing and cells of a column
-  that changed together as one line, and names an action only as what a change followed, or as a
-  step where its effect is drawn, such as a click on a canvas, or came before the record began.
-  Hovers, scrolls and attempts that changed nothing are left out. Only a moment without a record
-  of changes lists every step, as before. The prompt's wording changed with it.
+  that changed together as one line, and names an action as what a change followed, or as a step
+  where changes followed it but none names it, where its effect is drawn, such as a click on a
+  canvas, or where it came before the record began. Hovers, scrolls and attempts that nothing
+  followed are left out. A moment whose record saw none of its window, as a page's first, or that
+  has no record of changes lists every step, as before, and says what changed was not recorded;
+  one whose record began within the window claims nothing before. The prompt's wording changed
+  with it.
 - `Page` has a `changes` member, so a hand-made `Page` needs one.
 
 ## 0.3.0-beta.1 (unreleased)
