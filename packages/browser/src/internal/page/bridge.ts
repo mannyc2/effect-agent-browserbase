@@ -6,7 +6,7 @@
  * the order they depend on one another. At the first read of a page's changes, its session
  * registers the recorder too, so every later document records from its start.
  */
-import { Effect, Schema, Semaphore } from "effect";
+import { Effect, Schema, SynchronizedRef } from "effect";
 
 import { type BrowserError, Failed } from "../../BrowserError.ts";
 import { Navigated } from "../../BrowserEvent.ts";
@@ -174,11 +174,9 @@ export const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): strin
 export const make = Effect.fnUntraced(function* (page: PageContext) {
   const { id, cdp, native, span, publish, now } = page;
   const { send } = page.protocol;
-  const registering = yield* Semaphore.make(1);
-  // Whether this session has registered the script, and the recorder, which the first read of
-  // changes asks for.
-  let registered = false;
-  let recording = false;
+  // How far this session has registered: the script, then the recorder, which the first read of
+  // changes asks for. One caller takes each step, once, while the others wait.
+  const registration = yield* SynchronizedRef.make<"none" | "script" | "recorder">("none");
   // The current document's world, forgotten when the main frame commits another document; the
   // commits this session has seen, the latest marked on the page; and the page's address.
   let world: number | undefined;
@@ -241,25 +239,23 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
         addScript(operation, `if (globalThis === globalThis.top) ${installSource};`),
       ],
       { concurrency: "unbounded" },
-    ).pipe(
-      Effect.map(() => {
-        registered = true;
-      }),
-      span("Page.register", {}, "Debug"),
+    ).pipe(span("Page.register", {}, "Debug"));
+
+  /** Take registration from `from` to `to` by `step`, unless it is past `from` already. */
+  const advance = (
+    from: "none" | "script",
+    to: "script" | "recorder",
+    step: Effect.Effect<unknown, BrowserError>,
+  ) =>
+    SynchronizedRef.updateEffect(registration, (state) =>
+      state === from ? Effect.as(step, to) : Effect.succeed(state),
     );
 
   /** Register the script once, and the recorder after it once a read of changes asks for it. */
   const ensure = (operation: string, recorder: boolean) =>
-    registering.withPermits(1)(
-      Effect.suspend(() =>
-        Effect.andThen(registered ? Effect.void : register(operation), () =>
-          !recorder || recording
-            ? Effect.void
-            : Effect.map(addScript(operation, recorderSource), () => {
-                recording = true;
-              }),
-        ),
-      ),
+    Effect.andThen(
+      advance("none", "script", register(operation)),
+      recorder ? advance("script", "recorder", addScript(operation, recorderSource)) : Effect.void,
     );
 
   const createWorld = (operation: string) =>
