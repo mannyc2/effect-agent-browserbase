@@ -182,14 +182,14 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 14,169                 | 11,064 → 15,446 | 129 → 174                 |
+| `effect-browser`               | 8,871 → 14,178                 | 11,064 → 15,507 | 129 → 174                 |
 | `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,593     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
 `effect-browser`'s figures include phase 2 so far: the supervisor, 602 source lines, 506 test lines
 and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports; the
 capture connection's port and transport, 324 source lines, 43 test lines and 1 export; and the
-change record, 1,414 source lines, 667 test lines and 6 exports.
+change record, 1,423 source lines, 728 test lines and 6 exports.
 Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
 11,000 through phase 4.
 
