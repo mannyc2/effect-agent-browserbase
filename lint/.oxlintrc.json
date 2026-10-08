@@ -171,7 +171,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 242, "skipBlankLines": true, "skipComments": true }
+          { "max": 237, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },
