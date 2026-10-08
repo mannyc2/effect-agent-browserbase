@@ -28,6 +28,11 @@ export interface Options extends Browser.Options {
   readonly connectTimeoutMillis?: number | undefined;
   /** When the provider ends the session on its own, as a hosted session's timeout does. */
   readonly expiresAt?: DateTime.Utc | undefined;
+  /**
+   * A connection apart from this one for the pages' screencasts, as a hosted provider supplies.
+   * Without one, each page's capture runs on its own session.
+   */
+  readonly capture?: Browser.CaptureSource | undefined;
 }
 
 /**
@@ -86,7 +91,12 @@ export const open = Effect.fn("Cdp.open")(function* (options: Options) {
 
   return yield* Browser.make(
     context,
-    { id: options.id ?? "cdp", provider: options.provider ?? "cdp", expiresAt: options.expiresAt },
+    {
+      id: options.id ?? "cdp",
+      provider: options.provider ?? "cdp",
+      expiresAt: options.expiresAt,
+      capture: options.capture,
+    },
     options,
   );
 });

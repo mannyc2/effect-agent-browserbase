@@ -87,6 +87,41 @@ export interface EventOptions {
   readonly after?: number | undefined;
 }
 
+/**
+ * A connection to the browser apart from the one that drives its pages, for their screencasts,
+ * as a provider that reaches the browser over a network supplies it: a frame and its
+ * acknowledgement then never wait behind a large message, such as an upload or a read's answer,
+ * on the connection that drives the page. It is read-only. A page's session on it sends the
+ * capture's commands alone, and the page's own session keeps its focus emulation, which keeps a
+ * tab behind painting.
+ */
+export interface CaptureSource {
+  /**
+   * A session on the page's target, for the scope. `event` gets the session's events in the order
+   * the browser sent them, its target's detach among them, until the scope closes; `lost` gets
+   * the connection's failure, once, if it fails first.
+   */
+  readonly attach: (
+    target: string,
+    listener: {
+      readonly event: (method: string, params: unknown) => void;
+      readonly lost: (error: BrowserError) => void;
+    },
+  ) => Effect.Effect<
+    (
+      method:
+        | "Page.enable"
+        | "Page.getFrameTree"
+        | "Page.startScreencast"
+        | "Page.screencastFrameAck"
+        | "Page.stopScreencast",
+      params?: Record<string, unknown>,
+    ) => Promise<unknown>,
+    BrowserError,
+    Scope.Scope
+  >;
+}
+
 export interface Service {
   /** The provider's session id, or a local id. */
   readonly id: string;
@@ -330,6 +365,8 @@ export const make = Effect.fn("Browser.make")(function* (
     readonly id: string;
     readonly provider: string;
     readonly expiresAt?: DateTime.Utc | undefined;
+    /** Where pages' screencasts run, if not on each page's own session. */
+    readonly capture?: CaptureSource | undefined;
   },
   options: Options = {},
 ) {
@@ -438,6 +475,7 @@ export const make = Effect.fn("Browser.make")(function* (
             focused: call("focus", () => focusing, closedBy).pipe(Effect.asVoid),
             paging: (operation) => call(operation, () => paging, closedBy).pipe(Effect.asVoid),
             closedBy,
+            capture: info.capture,
           });
 
           const close = () => {

@@ -24,6 +24,8 @@ export interface Command {
    * they would share the latency of a remote browser. Screencast acknowledgements take none.
    */
   readonly round: number;
+  /** The connection it came on, numbered from 0 in the order the clients connected. */
+  readonly connection: number;
 }
 
 export interface Proxy {
@@ -37,8 +39,17 @@ export interface Proxy {
   readonly attached: Set<string>;
   /** Answer a command with an empty result instead of sending it on. */
   swallow: (command: Command) => boolean;
-  /** Cut every connection open now, as a network fault would; the browser runs on. */
-  readonly drop: () => void;
+  /**
+   * How long a command takes to reach the browser, every later message on its connection waiting
+   * behind it, as behind a large upload on a slow link. None by default.
+   */
+  hold: (command: Command) => number;
+  /** How long what the browser sends on a connection takes to reach its client. None by default. */
+  lag: (connection: number) => number;
+  /** How many connections clients have opened. */
+  connected: number;
+  /** Cut every connection open now, or the one numbered `connection`, as a network fault would. */
+  readonly drop: (connection?: number) => void;
 }
 
 // The messages a client sends over a WebSocket: each frame is masked, and a message can span
@@ -107,14 +118,28 @@ const frame = (text: string) => {
 const accept = (key: string) =>
   createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
 
+const sleep = (millis: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, millis);
+  });
+
 // Relay each connection to the browser, counting what it sends and swallowing what it asks to.
-const relay = (browser: URL, proxy: Proxy) =>
+const relay = (browser: URL, proxy: Proxy, connections: Map<number, Socket>) =>
   createServer((client) => {
+    const connection = proxy.connected++;
     const attaching = new Set<number>();
     const awaiting = new Set<number>();
     let rounds = 0;
     let upstream: WebSocket | undefined;
     let request = Buffer.alloc(0);
+    // Each direction keeps its order: a held message holds the ones after it, and a lagging
+    // answer the ones after it.
+    let sending = Promise.resolve();
+    let receiving = Promise.resolve();
+    let receivedLast = 0;
+
+    connections.set(connection, client);
+    client.on("close", () => connections.delete(connection));
 
     const fromClient = messages(
       (text) => {
@@ -122,7 +147,15 @@ const relay = (browser: URL, proxy: Proxy) =>
         const acknowledging = method === "Page.screencastFrameAck";
 
         if (!acknowledging && awaiting.size === 0) rounds++;
-        const command = { id, method, sessionId, bytes: Buffer.byteLength(text), round: rounds };
+
+        const command = {
+          id,
+          method,
+          sessionId,
+          bytes: Buffer.byteLength(text),
+          round: rounds,
+          connection,
+        };
 
         proxy.commands.push(command);
         if (method === "Target.attachToTarget") attaching.add(id);
@@ -130,7 +163,12 @@ const relay = (browser: URL, proxy: Proxy) =>
           client.write(frame(JSON.stringify({ id, result: {}, sessionId })));
         else {
           if (!acknowledging) awaiting.add(id);
-          upstream?.send(text);
+          const held = proxy.hold(command);
+
+          sending = sending.then(async () => {
+            if (held > 0) await sleep(held);
+            upstream?.send(text);
+          });
         }
       },
       () => {
@@ -168,7 +206,13 @@ const relay = (browser: URL, proxy: Proxy) =>
         }
         if (id !== undefined && attaching.delete(id) && result?.sessionId !== undefined)
           proxy.attached.add(result.sessionId);
-        client.write(frame(data));
+        const at = Math.max(performance.now() + proxy.lag(connection), receivedLast);
+
+        receivedLast = at;
+        receiving = receiving.then(async () => {
+          if (at > performance.now()) await sleep(at - performance.now());
+          if (!client.destroyed) client.write(frame(data));
+        });
       });
       socket.addEventListener("close", () => client.destroy());
     });
@@ -239,7 +283,7 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
     Effect.sync(stop),
   );
 
-  const connections = new Set<Socket>();
+  const connections = new Map<number, Socket>();
 
   const proxy: Proxy = {
     endpoint: "",
@@ -247,19 +291,20 @@ export const behindProxy = Effect.fnUntraced(function* (args: ReadonlyArray<stri
     answers: new Map(),
     attached: new Set(),
     swallow: () => false,
-    drop: () => {
-      for (const connection of connections) connection.destroy();
+    hold: () => 0,
+    lag: () => 0,
+    connected: 0,
+    drop: (connection) => {
+      for (const [number, socket] of connections)
+        if (connection === undefined || connection === number) socket.destroy();
     },
   };
 
   const server = yield* Effect.acquireRelease(
     Effect.callback<Server>((resume) => {
-      const listening = relay(endpoint, proxy)
-        .on("connection", (connection: Socket) => {
-          connections.add(connection);
-          connection.on("close", () => connections.delete(connection));
-        })
-        .listen(0, "127.0.0.1", () => resume(Effect.succeed(listening)));
+      const listening = relay(endpoint, proxy, connections).listen(0, "127.0.0.1", () =>
+        resume(Effect.succeed(listening)),
+      );
     }),
     (server) => Effect.sync(() => server.close()),
   );
