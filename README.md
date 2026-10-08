@@ -63,6 +63,9 @@ const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
 program.pipe(Effect.provide([Hosted, Model]), Effect.runPromise);
 ```
 
+Its pages' screencasts run on a second connection to the session, so frames keep coming while a
+large read or upload crosses the connection that drives the pages.
+
 ## A moment
 
 `Moment.capture` gathers a page's screencast frames over a window and its events in between, naming

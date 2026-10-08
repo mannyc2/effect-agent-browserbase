@@ -84,6 +84,25 @@ Browserbase.layer({
 Pages open at Browserbase's default viewport, which was 2560×1440 on 7 October 2026: four times
 the pixels of `Chromium.layer`'s 1280×720. `browserSettings.viewport` sets another.
 
+## The capture connection
+
+A page's screencast runs on a second connection to the session that carries nothing else. On the
+connection Playwright drives the pages over, a frame and its acknowledgement would wait behind any
+large message, such as an upload or a read's answer, because Browserbase refuses compression: on a
+hosted session at 1280×720, while another tab read and uploaded, the on-air page's longest wait
+between frames was 1,802 ms on that connection and 352 ms on its own (8 October 2026).
+
+The connection is raw CDP, with no Playwright, and read-only: a page's session on it starts,
+acknowledges and stops the screencast, and turns on the Page domain and reads the frame tree, so
+that each frame carries the document its own connection saw commit, numbered as `Navigated`
+numbers them. Its first capture costs the connection itself, an attach, and one round trip for
+both; a later capture of the page costs the start alone. The page's own session keeps the focus
+emulation that keeps a tab behind painting: a session that held it too would blur the page as it
+went. The connection opens with the first capture and closes with the browser. If it fails, the
+capture ends with `Failed`, the page and its own session stay as they were, and the next capture
+opens another. `captureConnection: false` keeps captures on each page's own session; so does a
+DevTools server's `http:` address, such as a local Chromium's in tests.
+
 ## Stored contexts
 
 A context keeps cookies, storage and cache between sessions. A session that loads it with
