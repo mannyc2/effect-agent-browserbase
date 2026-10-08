@@ -42,6 +42,7 @@ export interface PageApi {
   record: Recorder["start"];
   changes: Changes["read"];
   ready: ReturnType<typeof ready>["wait"];
+  settle: ReturnType<typeof ready>["settle"];
   point: Targets["point"];
   scrollPlan: Targets["scrollPlan"];
   viewport: Outline["viewport"];
@@ -49,7 +50,6 @@ export interface PageApi {
   validateInput: Guard["validateInput"];
   typeable: Edit["typeable"];
   focus: Edit["focus"];
-  checkText: Edit["checkText"];
   select: Edit["select"];
 }
 
@@ -81,7 +81,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 10) return installed;
+  if (installed !== undefined && installed.version === 11) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
@@ -95,15 +95,17 @@ const install = (
   const located = makeTargets(named, walked, placing);
   const guarded = makeGuard(named, located, makeEvidence(named, placing));
   const edited = makeEdit(named, guarded, placing);
+  const readiness = makeReady(walked, texts, kept);
 
   const api: PageApi = {
-    version: 10,
+    version: 11,
     snapshot: read.snapshot,
     find: subjected.find,
     text: texts.read,
     record: recorder.start,
     changes: makeChanges(named, placing, kept, seeing, marking, recorder).read,
-    ready: makeReady(walked, texts, kept).wait,
+    ready: readiness.wait,
+    settle: readiness.settle,
     point: located.point,
     scrollPlan: located.scrollPlan,
     viewport: read.viewport,
@@ -111,7 +113,6 @@ const install = (
     validateInput: guarded.validateInput,
     typeable: edited.typeable,
     focus: edited.focus,
-    checkText: edited.checkText,
     select: edited.select,
   };
 
@@ -185,8 +186,8 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   const currentDocument = (operation: string) =>
     page.paging(operation).pipe(Effect.map(() => documents));
 
-  /** What a frame that arrives now shows: the page's current document and its address. */
-  const frameTag = () => ({ document: documents, url });
+  /** What a frame that arrives now shows: its session, the page's current document and address. */
+  const frameTag = () => ({ session: page.session, document: documents, url });
 
   /** The document the main frame's latest commit of `loader` began, if this session counted it. */
   const documentOf = (loader: string) => loaders.get(loader);

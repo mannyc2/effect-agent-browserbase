@@ -1,6 +1,8 @@
 /**
- * The page's actions: click, hover, drag, type, press, scroll and select. Each runs through
- * `perform`, which admits it, puts it to the input guard and records it.
+ * The page's actions: click, hover, drag, type, press, scroll and select, each sent in a style,
+ * plainly or performed for viewers, and the aim a performed click starts early. Each runs through
+ * `perform`, which admits it, puts it to the input guard and records it. A click, a key or a scroll
+ * then waits for the page to settle: a task and a frame, and a document if the input asked for one.
  */
 import { Duration, Effect } from "effect";
 
@@ -12,67 +14,34 @@ import type { Viewport } from "../page/viewport.ts";
 import * as Dispatch from "./dispatch.ts";
 import * as Script from "./edit.inpage.ts";
 import * as Guard from "./guard.ts";
-import * as Human from "./human.ts";
 import * as Keyboard from "./keyboard.ts";
 import * as Keys from "./keys.ts";
 import * as Perform from "./perform.ts";
 import * as Pointer from "./pointer.ts";
+import * as Settle from "./settle.ts";
+import { plain, type Style } from "./style.ts";
 import * as Targets from "./targets.ts";
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
-
-// Typing's deadline: the action timeout, with humanized typing's own pace and, under a guard, a
-// focus check before each space and after the last key, each about two protocol round trips.
-const typingTimeout = ({ settings }: PageContext, text: string) =>
-  Duration.sum(
-    settings.actionTimeout,
-    Duration.millis(
-      settings.humanize
-        ? Human.typingDuration(text) +
-            (settings.guard === undefined ? 0 : 250 * ((text.match(/\s/gu)?.length ?? 0) + 1))
-        : 0,
-    ),
-  );
-
-const presentationPause = (page: PageContext) => (kind: "action" | "focus") =>
-  page.settings.humanize
-    ? Human.pause(kind).pipe(Effect.flatMap((millis) => Effect.sleep(Duration.millis(millis))))
-    : Effect.void;
-
-// Give a navigation the input started a moment to begin, then wait for its document.
-// Presentation randomness supplements this floor; it can never shorten readiness.
-const settle = (page: PageContext) =>
-  Effect.sleep(Duration.millis(page.settings.humanize ? 250 : 120)).pipe(
-    Effect.andThen(
-      Effect.tryPromise(() =>
-        page.playwright.waitForLoadState("domcontentloaded", { timeout: 5_000 }),
-      ).pipe(
-        // A document still loading after 5 seconds, or a closed page, is the next look's to show.
-        Effect.catch(() => Effect.annotateCurrentSpan("loaded", false)),
-      ),
-    ),
-    Effect.andThen(presentationPause(page)("action")),
-    page.span("Page.settle", {}, "Debug"),
-  );
 
 const partsOf = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
   const dispatch = Dispatch.make(page);
   const pointer = Pointer.make(page, dispatch, viewport);
   const guard = Guard.make(page, bridge);
+  const settling = Settle.make(page, bridge);
 
   return {
     page,
-    evaluate: bridge.evaluate,
+    bridge,
+    ...settling,
     viewportFor: viewport.viewportFor,
     perform: Perform.make(page, dispatch),
     ...guard,
-    ...Targets.make(page, bridge, viewport, guard, pointer, dispatch),
+    ...Targets.make(bridge, viewport, guard, pointer, dispatch, settling),
     ...pointer,
     ...Keyboard.make(page, bridge, dispatch),
     sendMouse: dispatch.sendMouse,
     flush: dispatch.flush,
-    settle: settle(page),
-    presentationPause: presentationPause(page),
   };
 };
 
@@ -82,15 +51,17 @@ type Parts = ReturnType<typeof partsOf>;
 const finite = (...values: ReadonlyArray<number | undefined>) =>
   values.every((value) => value === undefined || Number.isFinite(value));
 
+const named = (target: Target) => (typeof target === "string" ? target : `${target.x},${target.y}`);
+
 const click = (input: Parts) => {
   const { settings } = input.page;
-  const { perform, preparePolicy, targetFor, moveTo, sendMouse, flush, settle } = input;
+  const { perform, preparePolicy, targetFor, moveTo, sendMouse, flush, mark, settle } = input;
 
-  return (target: Target, clickOptions: ClickOptions = {}) =>
+  return (target: Target, clickOptions: ClickOptions = {}, style: Style = plain) =>
     perform(
       "click",
       {
-        target: typeof target === "string" ? target : `${target.x},${target.y}`,
+        target: named(target),
         options: {
           button: clickOptions.button,
           clickCount: clickOptions.clickCount,
@@ -124,6 +95,8 @@ const click = (input: Parts) => {
           yield* marks.on(resolved);
           yield* moveTo("click", marks, point, resolved.cursor);
           if (approval !== undefined) yield* approval.check({ presses: [{ index: 0, ...point }] });
+          const before = mark();
+
           yield* marks.sent;
           for (let index = 1; index <= count; index++) {
             // An earlier click of a multi-click can replace the approved control under the
@@ -152,9 +125,10 @@ const click = (input: Parts) => {
               clickCount: index,
             });
 
-            const hold =
-              clickOptions.holdMillis ?? (settings.humanize ? yield* Human.pressDelay : 0);
+            // A hold the caller asks for is the click's own; the style's is presentation.
+            const hold = clickOptions.holdMillis ?? (yield* marks.style.hold);
 
+            if (clickOptions.holdMillis === undefined) yield* marks.present(hold);
             if (hold > 0) yield* Effect.sleep(Duration.millis(hold));
             yield* sendMouse("click", marks.input, {
               type: "mouseReleased",
@@ -165,10 +139,11 @@ const click = (input: Parts) => {
             });
           }
           yield* flush("click", marks.input);
-          yield* settle;
+          yield* settle("click", before);
 
           return resolved;
         }),
+      style,
     );
 };
 
@@ -176,10 +151,10 @@ const hover = (input: Parts) => {
   const { settings } = input.page;
   const { perform, preparePolicy, targetFor, moveTo, flush } = input;
 
-  return (target: Target) =>
+  return (target: Target, style: Style = plain) =>
     perform(
       "hover",
-      { target: typeof target === "string" ? target : `${target.x},${target.y}` },
+      { target: named(target) },
       settings.actionTimeout,
       preparePolicy("hover", { target: typeof target === "string" ? target : undefined }, [target]),
       (marks, approval) =>
@@ -192,14 +167,40 @@ const hover = (input: Parts) => {
           yield* moveTo("hover", marks, point, resolved.cursor, "hover");
           yield* flush("hover", marks.input);
         }),
+      style,
     );
+};
+
+/**
+ * The pointer's travel to a target, before its action is asked: no guard holds it, no action is
+ * recorded, and nothing is pressed. A guarded page aims nothing, as its input waits for approval.
+ */
+const aim = (input: Parts) => {
+  const { settings } = input.page;
+  const { perform, targetFor, moveTo, flush } = input;
+
+  return (target: Target, style: Style) =>
+    settings.guard === undefined
+      ? perform(
+          "aim",
+          { target: named(target), recorded: false },
+          settings.actionTimeout,
+          Effect.die("an aim is never put to a guard"),
+          (marks) =>
+            targetFor("aim", target, undefined, marks).pipe(
+              Effect.flatMap(({ point, cursor }) => moveTo("aim", marks, point, cursor)),
+              Effect.andThen(flush("aim", marks.input)),
+            ),
+          style,
+        )
+      : Effect.void;
 };
 
 const drag = (input: Parts) => {
   const { settings } = input.page;
   const { perform, preparePolicy, targetFor, resolve, moveTo, sendMouse, flush } = input;
 
-  return (from: Target, to: Target) =>
+  return (from: Target, to: Target, style: Style = plain) =>
     perform(
       "drag",
       { target: `${JSON.stringify(from)} -> ${JSON.stringify(to)}` },
@@ -244,28 +245,25 @@ const drag = (input: Parts) => {
           });
           yield* flush("drag", marks.input);
         }),
+      style,
     );
 };
 
 const typeText = (input: Parts) => {
   const { settings, now } = input.page;
-  const { perform, preparePolicy, evaluate, mutate, targetFor, moveTo, sendMouse, flush } = input;
-  const { currentDocument, sameDocument, keyStroke, typeEvent, settle, presentationPause } = input;
+  const { perform, preparePolicy, mutate, targetFor, moveTo, sendMouse, flush, bridge } = input;
+  const { currentDocument, sameDocument, keyStroke, typeEvent, mark, settle } = input;
 
-  return (text: string, typeOptions: TypeOptions = {}) =>
+  return (text: string, typeOptions: TypeOptions = {}, style: Style = plain) =>
     perform(
       "type",
       {
         target: typeOptions.into,
-        options: {
-          replace: typeOptions.replace,
-          submit: typeOptions.submit,
-          prose: typeOptions.prose,
-        },
+        options: { replace: typeOptions.replace, submit: typeOptions.submit },
         text,
         secret: true,
       },
-      typingTimeout(input.page, text),
+      settings.actionTimeout,
       preparePolicy("type", { target: typeOptions.into, text }, [typeOptions.into ?? null], {
         submit: typeOptions.submit ?? false,
       }),
@@ -273,8 +271,6 @@ const typeText = (input: Parts) => {
         Effect.gen(function* () {
           const replace = typeOptions.replace ?? true;
           const into = typeOptions.into;
-          let corrected = false;
-          let eligible = false;
 
           if (into !== undefined && !/^e\d+$/.test(into))
             return yield* failWith(
@@ -287,7 +283,7 @@ const typeText = (input: Parts) => {
           const asked = scriptCall("typeable", into ?? null, typeOptions.secret === true);
 
           const typeable = yield* (
-            approval === undefined ? evaluate("type", asked) : mutate("type", asked, approval)
+            approval === undefined ? bridge.evaluate("type", asked) : mutate("type", asked, approval)
           ).pipe(Effect.flatMap(decodeWith("type", Script.TypeableResultSchema)));
 
           if ("error" in typeable)
@@ -303,130 +299,96 @@ const typeText = (input: Parts) => {
           let secret = typeable.secret;
 
           if (into !== undefined) {
-            const ref = into;
-            const target = yield* targetFor("type", ref, approval, marks);
+            const target = yield* targetFor("type", into, approval, marks);
 
             yield* marks.at(target.point);
             yield* marks.on(target);
-            if (settings.humanize) {
+            // Viewers see the pointer click into the field.
+            if (marks.style.shown) {
               yield* moveTo("type", marks, target.point, target.cursor);
               if (approval !== undefined)
                 yield* approval.check({ presses: [{ index: 0, ...target.point }] });
               yield* marks.sent;
-              yield* sendMouse("type", marks.input, {
-                type: "mousePressed",
-                ...target.point,
-                button: "left",
-                buttons: 1,
-                clickCount: 1,
-              });
-              yield* sendMouse("type", marks.input, {
-                type: "mouseReleased",
-                ...target.point,
-                button: "left",
-                buttons: 0,
-                clickCount: 1,
-              });
+              for (const type of ["mousePressed", "mouseReleased"] as const)
+                yield* sendMouse("type", marks.input, {
+                  type,
+                  ...target.point,
+                  button: "left",
+                  buttons: type === "mousePressed" ? 1 : 0,
+                  clickCount: 1,
+                });
               yield* flush("type", marks.input);
             }
 
             // Focusing can run page handlers, including navigation, before the script returns.
             yield* marks.sent;
 
-            const focused = yield* mutate("type", scriptCall("focus", ref, replace), approval).pipe(
+            const focused = yield* mutate("type", scriptCall("focus", into, replace), approval).pipe(
               Effect.flatMap(decodeWith("type", Script.FocusResultSchema)),
             );
 
-            if ("error" in focused) return yield* Guard.editFailure("type", ref, focused);
-            eligible = focused.prose;
+            if ("error" in focused) return yield* Guard.editFailure("type", into, focused);
             secret ||= focused.secret;
           }
           if (!secret) yield* marks.reveal;
-          yield* presentationPause("focus");
           if (approval !== undefined) yield* approval.check({ focused: true });
           yield* marks.sent;
 
           // A key's handlers can move focus, and later keys then reach a control nobody approved.
           // Under a guard, the field is approved once: plain text goes in one insertion, which no
-          // handler can split, and humanized keys check that the field still has focus, once the
-          // keys before are answered, before each space, which could press a button, and after
-          // the last key.
+          // handler can split, and keys typed one at a time check that the field still has focus,
+          // once the keys before are answered, before each space, which could press a button, and
+          // after the last key.
           const focusHeld =
             approval === undefined
               ? Effect.void
               : flush("type", marks.input).pipe(Effect.andThen(approval.check({ focused: true })));
 
-          if (text === "" && replace && typeOptions.into !== undefined) {
+          if (text === "" && replace && into !== undefined) {
             yield* sameDocument("type", since);
             yield* keyStroke("type", marks.input, ["Delete"]);
-          } else if (settings.humanize) {
-            // Separate down/up deadlines permit overlapping holds without adding one hold to
-            // every inter-key gap. The same bounded run owns all releases and interruptions.
-            const prose =
-              typeOptions.prose === true &&
-              typeOptions.into !== undefined &&
-              replace &&
-              eligible &&
-              !/\d|@|[a-z][a-z\d+.-]*:\/\/|\bwww\.|\b[a-z\d-]+\.[a-z]{2,}\b/i.test(text);
-
-            const plan = yield* Human.typing(text, { prose });
-
-            corrected = plan.events.some((event) => event.key === "Backspace");
+          } else {
+            const events = yield* marks.style.typing(text, approval !== undefined);
+            const keyed = events.some((event) => event.phase === "down");
+            const checks = approval !== undefined && keyed ? (text.match(/\s/gu)?.length ?? 0) + 1 : 0;
+            // Each check is about two round trips, which only keys typed one at a time need.
             const started = now();
 
-            for (const event of plan.events) {
-              yield* Effect.sleep(
-                Duration.millis(Math.max(0, started + event.afterMillis - now())),
-              );
-              if (event.phase !== "up" && /\s/u.test(event.key)) yield* focusHeld;
+            yield* marks.present((events.at(-1)?.afterMillis ?? 0) + checks * 250);
+            for (const event of events) {
+              const remaining = started + event.afterMillis - now();
+
+              if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
+              if (event.phase === "down" && /\s/u.test(event.key)) yield* focusHeld;
               if (event.phase !== "up") yield* sameDocument("type", since);
               yield* typeEvent(marks.input, event, secret);
             }
-            yield* focusHeld;
-          } else if (approval !== undefined) {
-            yield* sameDocument("type", since);
-            yield* typeEvent(marks.input, { phase: "insert", key: text }, secret);
-          } else {
-            for (const character of text) {
-              yield* sameDocument("type", since);
-              if (Keys.description(character) === undefined)
-                yield* typeEvent(marks.input, { phase: "insert", key: character }, secret);
-              else {
-                yield* typeEvent(marks.input, { phase: "down", key: character }, secret);
-                yield* typeEvent(marks.input, { phase: "up", key: character }, secret);
-              }
-            }
+            if (keyed) yield* focusHeld;
           }
           // Public Playwright keys preserve platform editing commands. Drain the raw text
           // session before Enter uses Playwright's session, so submit cannot overtake typing.
           yield* flush("type", marks.input);
-          if (corrected && typeOptions.into !== undefined) {
-            const checked = yield* mutate(
-              "type",
-              scriptCall("checkText", typeOptions.into, text),
-              approval,
-            ).pipe(Effect.flatMap(decodeWith("type", Script.EditResultSchema)));
-
-            if ("error" in checked)
-              return yield* Guard.editFailure("type", typeOptions.into, checked);
-          }
           if (typeOptions.submit === true) {
             // Typing can move focus or change the form; Enter goes only to the approved field.
             if (approval !== undefined) yield* approval.check({ focused: true });
             yield* sameDocument("type", since);
+            const before = mark();
+
             yield* keyStroke("type", marks.input, ["Enter"]);
             yield* flush("type", marks.input);
-            yield* settle;
+            yield* settle("type", before);
           }
         }),
+      style,
     );
 };
 
 const press = (input: Parts) => {
   const { settings, now } = input.page;
-  const { perform, preparePolicy, currentDocument, sameDocument, keyStroke, flush, settle } = input;
+  const { perform, preparePolicy, currentDocument, sameDocument, keyStroke, flush } = input;
+  const { mark, settle } = input;
 
-  return (keys: string, pressOptions: PressOptions = {}) =>
+  return (keys: string, pressOptions: PressOptions = {}, style: Style = plain) =>
     perform(
       "press",
       { target: keys, options: { times: pressOptions.times, holdMillis: pressOptions.holdMillis } },
@@ -468,6 +430,7 @@ const press = (input: Parts) => {
           const hold = pressOptions.holdMillis ?? 0;
           const activates = parts.at(-1) === "Enter" || parts.at(-1) === "Space";
           const since = yield* currentDocument("press");
+          const before = mark();
           let due = now();
 
           yield* marks.sent;
@@ -480,23 +443,27 @@ const press = (input: Parts) => {
             }
             yield* sameDocument("press", since);
             yield* keyStroke("press", marks.input, parts, hold);
-            if (index + 1 < times && settings.humanize) {
-              due += hold + (yield* Human.keyDelay);
-              yield* Effect.sleep(Duration.millis(Math.max(0, due - now())));
+            if (index + 1 < times) {
+              const gap = yield* marks.style.keyGap;
+
+              yield* marks.present(gap);
+              due += hold + gap;
+              if (due > now()) yield* Effect.sleep(Duration.millis(due - now()));
             }
           }
           yield* flush("press", marks.input);
-          yield* settle;
+          yield* settle("press", before);
         }),
+      style,
     );
 };
 
 const scroll = (input: Parts) => {
   const { settings } = input.page;
   const { perform, preparePolicy, viewportFor, targetFor, resolve, moveTo, wheel, flush } = input;
-  const { presentationPause } = input;
+  const { mark, settle } = input;
 
-  return (scrollOptions: ScrollOptions = {}) => {
+  return (scrollOptions: ScrollOptions = {}, style: Style = plain) => {
     const target = scrollOptions.at;
 
     const valid =
@@ -507,12 +474,7 @@ const scroll = (input: Parts) => {
     return perform(
       "scroll",
       {
-        target:
-          scrollOptions.at === undefined
-            ? undefined
-            : typeof scrollOptions.at === "string"
-              ? scrollOptions.at
-              : `${scrollOptions.at.x},${scrollOptions.at.y}`,
+        target: target === undefined ? undefined : named(target),
         options: { dx: scrollOptions.dx, dy: scrollOptions.dy },
       },
       settings.actionTimeout,
@@ -543,11 +505,11 @@ const scroll = (input: Parts) => {
             scrollOptions.dy ??
             (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
 
-          // A page scroll has no target, but a visible pointer still shows the cursor it lands on.
+          // A page scroll has no target, but viewers still see the cursor it lands on.
           const resolved =
             target !== undefined
               ? yield* targetFor("scroll", target, approval, marks)
-              : settings.humanize
+              : marks.style.shown
                 ? yield* resolve("scroll", middle, approval).pipe(
                     Effect.orElseSucceed(() => undefined),
                   )
@@ -558,12 +520,14 @@ const scroll = (input: Parts) => {
           yield* marks.at(point);
           if (target !== undefined && resolved !== undefined) yield* marks.on(resolved);
           yield* moveTo("scroll", marks, point, resolved?.cursor);
+          const before = mark();
+
           yield* marks.sent;
-          yield* wheel("scroll", marks.input, point, dx, dy);
+          yield* wheel("scroll", marks, point, dx, dy);
           yield* flush("scroll", marks.input);
-          yield* Effect.sleep(Duration.millis(150));
-          yield* presentationPause("action");
+          yield* settle("scroll", before);
         }),
+      style,
     );
   };
 };
@@ -614,6 +578,7 @@ export const make = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
     preparePolicy: parts.preparePolicy,
     click: click(parts),
     hover: hover(parts),
+    aim: aim(parts),
     drag: drag(parts),
     type: typeText(parts),
     press: press(parts),
@@ -621,3 +586,6 @@ export const make = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
     select: select(parts),
   };
 };
+
+/** A page's input, each action in any style. */
+export type Input = ReturnType<typeof make>;

@@ -1,18 +1,20 @@
 /**
  * Where an action's input goes: a ref or a point resolved to a control and a viewport point,
- * scrolled into view first when it is outside the viewport.
+ * scrolled into view first when it is outside the viewport: at once, or with the wheel where
+ * viewers watch.
  */
 import { Effect } from "effect";
 
 import { InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
 import { ResolvedTarget, type Target } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { decodeWith, failWith, type PageContext } from "../page/context.ts";
+import { decodeWith, failWith } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import type { Dispatch } from "./dispatch.ts";
 import type { Approval, Guard } from "./guard.ts";
 import type { InputMarks } from "./perform.ts";
 import type { Pointer } from "./pointer.ts";
+import type { Settle } from "./settle.ts";
 import * as Script from "./targets.inpage.ts";
 
 const pointFailure = (
@@ -43,14 +45,13 @@ const resolvedTarget = (result: Script.ResolvedPoint): ResolvedTarget =>
   });
 
 export const make = (
-  page: PageContext,
   bridge: Bridge,
   viewport: Viewport,
   guard: Guard,
   pointer: Pointer,
   dispatch: Dispatch,
+  settling: Settle,
 ) => {
-  const { settings } = page;
   const { evaluate } = bridge;
   const { mutate } = guard;
   const { moveTo, wheel } = pointer;
@@ -94,7 +95,7 @@ export const make = (
     approval: Approval | undefined,
     marks: InputMarks,
   ) {
-    if (!settings.humanize || typeof target !== "string")
+    if (!marks.style.shown || typeof target !== "string")
       return yield* resolve(operation, target, approval);
 
     // Inspection and policy approval happen before this point. Every retry is geometry only;
@@ -115,23 +116,27 @@ export const make = (
 
       yield* marks.at(point);
       yield* moveTo(operation, marks, point);
+      const before = settling.mark();
+
       yield* wheel(
         operation,
-        marks.input,
+        marks,
         point,
         Math.max(-size.width * 0.9, Math.min(size.width * 0.9, plan.dx)),
         Math.max(-size.height * 0.9, Math.min(size.height * 0.9, plan.dy)),
       );
       yield* flush(operation, marks.input);
-      yield* Effect.sleep("150 millis");
+      yield* settling.settle(operation, before);
       if (approval !== undefined) yield* approval.check();
     }
 
     // Wheels may be prevented or the target may need unsupported nested/frame geometry. One
     // explicit fallback preserves reachability without a distance-dependent protocol loop.
     yield* marks.touched;
+    const before = settling.mark();
+
     yield* resolve(operation, target, approval);
-    yield* Effect.sleep("150 millis");
+    yield* settling.settle(operation, before);
     if (approval !== undefined) yield* approval.check();
 
     return yield* resolve(operation, target, approval, false);

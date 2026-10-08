@@ -3,7 +3,7 @@
  * protocol session, stamped with the browser's clock when its run has a mapping, and is published
  * as it is submitted.
  */
-import { Effect, MutableRef, Option, Ref } from "effect";
+import { Effect, MutableRef, Option } from "effect";
 
 import { BrowserError } from "../../BrowserError.ts";
 import {
@@ -90,7 +90,7 @@ export const make = (page: PageContext) => {
     const response = send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 
     noteInput();
-    if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
+    if (event.type === "mouseMoved") MutableRef.set(pointer, Option.some(point));
     if (track !== undefined) publish(track);
     submitted?.();
 
@@ -119,7 +119,7 @@ export const make = (page: PageContext) => {
               dispatchMouse(
                 {
                   type: "mouseReleased",
-                  ...Option.getOrElse(Ref.getUnsafe(pointer), () => ({ x: event.x, y: event.y })),
+                  ...Option.getOrElse(MutableRef.get(pointer), () => ({ x: event.x, y: event.y })),
                   button: event.button ?? "left",
                   buttons: 0,
                   clickCount: event.clickCount ?? 1,

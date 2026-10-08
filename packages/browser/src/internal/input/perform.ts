@@ -1,6 +1,6 @@
 /**
  * Performing one action: its turn on the page, the input guard's step, the input run that owns its
- * replies, and the action's record.
+ * replies, and the action's record. Its deadline leaves out the time its style takes to show it.
  */
 import { Duration, Effect, Exit, Option, Ref } from "effect";
 
@@ -12,8 +12,16 @@ import type * as BrowserClock from "../pictures/clock.ts";
 import type { Dispatch } from "./dispatch.ts";
 import type { Approval, PolicyPlan } from "./guard.ts";
 import * as Replies from "./replies.ts";
+import { plain, type Style } from "./style.ts";
 
 export interface InputMarks {
+  /** How the action's input is sent: plainly, or performed for viewers. */
+  readonly style: Style;
+  /**
+   * Time the style spends showing the input, such as a glide or typing at a person's pace, planned
+   * from now: the deadline moves back by as much, so presentation has a budget of its own.
+   */
+  readonly present: (millis: number) => Effect.Effect<void>;
   /** The action's own input, such as a press, key or wheel, has reached the page. */
   readonly sent: Effect.Effect<void>;
   /** Preparatory input, such as the pointer travelling to a target, has reached the page. */
@@ -59,7 +67,39 @@ export interface Call {
   readonly secret?: boolean | undefined;
   /** False for navigation, which sends no input. */
   readonly input?: boolean | undefined;
+  /** False for the pointer's travel ahead of an action, which is no action of its own. */
+  readonly recorded?: boolean | undefined;
 }
+
+const timedOut = (operation: string, timeout: Duration.Duration) =>
+  Effect.fail(
+    new BrowserError({
+      operation,
+      reason: new Timeout({ millis: Duration.toMillis(timeout) }),
+      dispatched: false,
+    }),
+  );
+
+/**
+ * Fail `effect` with `Timeout` once `timeout` has passed, and as much later again as `presented`
+ * says presentation has planned meanwhile.
+ */
+const deadline =
+  (operation: string, timeout: Duration.Duration, now: () => number, presented: () => number) =>
+  <A>(effect: Effect.Effect<A, BrowserError>) =>
+    Effect.suspend(() => {
+      const due = now() + Duration.toMillis(timeout);
+
+      const expiry: Effect.Effect<never, BrowserError> = Effect.suspend(() => {
+        const left = due + presented() - now();
+
+        return left <= 0
+          ? timedOut(operation, timeout)
+          : Effect.sleep(Duration.millis(left)).pipe(Effect.andThen(expiry));
+      });
+
+      return Effect.raceFirst(effect, expiry);
+    });
 
 export const make = (page: PageContext, sender: Dispatch) => {
   const { id, settings, mapping, lane, publish, now, noteInput, span, owned } = page;
@@ -74,6 +114,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
     timeout: Duration.Duration,
     prepare: Effect.Effect<PolicyPlan, BrowserError>,
     body: (marks: InputMarks, approval: Approval | undefined) => Effect.Effect<A, BrowserError>,
+    style: Style = plain,
   ): Effect.Effect<A, BrowserError> =>
     Effect.gen(function* () {
       const startedAt = now();
@@ -89,8 +130,15 @@ export const make = (page: PageContext, sender: Dispatch) => {
 
       // A failure before the action checks its field, a denial included, records no text.
       let revealed = info.secret !== true;
+      // The time the style has planned to show the input, which the deadline leaves out.
+      let presented = 0;
 
       const marks = {
+        style,
+        present: (millis: number) =>
+          Effect.sync(() => {
+            presented += Math.max(0, millis);
+          }),
         sent: Ref.set(sent, true).pipe(Effect.andThen(touch)),
         touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
@@ -100,19 +148,6 @@ export const make = (page: PageContext, sender: Dispatch) => {
         }),
       };
 
-      const timedOut = (duration: Duration.Duration) =>
-        Effect.fail(
-          new BrowserError({
-            operation: name,
-            reason: new Timeout({ millis: Duration.toMillis(duration) }),
-            dispatched: false,
-          }),
-        );
-
-      const bounded = <Value>(
-        effect: Effect.Effect<Value, BrowserError>,
-        duration: Duration.Duration,
-      ) => effect.pipe(Effect.timeoutOrElse({ duration, orElse: () => timedOut(duration) }));
 
       // Admission waits only on this page's own unresolved replies, in its turn, so a stalled page
       // cannot delay input on other pages. Input never waits for the clock mapping: until a
@@ -175,7 +210,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
                   duration: Duration.millis(
                     Math.max(0, Duration.toMillis(timeout) - (now() - asked)),
                   ),
-                  orElse: () => timedOut(timeout),
+                  orElse: () => timedOut(name, timeout),
                 }),
               ),
             ).pipe(
@@ -184,7 +219,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
                   queuedMillis = Math.round(now() - asked);
                 }),
               ),
-              Effect.andThen(bounded(action, timeout)),
+              Effect.andThen(deadline(name, timeout, now, () => presented)(action)),
             ),
           );
         });
@@ -197,7 +232,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
               const plan = yield* lane
-                .read(name)(bounded(prepare, settings.actionTimeout))
+                .read(name)(deadline(name, settings.actionTimeout, now, () => 0)(prepare))
                 .pipe(span("Page.prepare", {}, "Debug"));
 
               // A hold lasts as long as this span; a judge's model call is its child.
@@ -252,7 +287,8 @@ export const make = (page: PageContext, sender: Dispatch) => {
             }),
           });
 
-          publish(
+          if (info.recorded !== false)
+            publish(
             new Action({
               at: now(),
               startedAt,

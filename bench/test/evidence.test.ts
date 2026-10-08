@@ -8,6 +8,7 @@ import { gapsWithin, precedesAnyJump, precedesJump } from "../Tasks.ts";
 const painted = (millis: number) =>
   new Frame({
     page: "page-1",
+    session: "session-1",
     data: new Uint8Array(),
     timing: new BrowserPaint({
       timestamp: 1_700_000_000_000 + millis,

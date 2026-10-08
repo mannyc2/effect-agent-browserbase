@@ -836,27 +836,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       }).pipe(Effect.provide(guarded));
     }),
   );
-
-  it.effect("moves the pointer along a path when humanized", () =>
-    Effect.gen(function* () {
-      const site = yield* Site;
-
-      yield* Effect.gen(function* () {
-        const browser = yield* Browser;
-        const page = yield* browser.newPage(site.url("/form"));
-
-        yield* page.click(refOf(yield* page.snapshot(), "button", "Submit"));
-        assert.strictEqual(yield* text(page, "#outcome"), "Ordered 10 btc");
-
-        const moves = (yield* browser.recentEvents).filter(
-          (event) => event._tag === "TrackPlanned",
-        );
-
-        assert.strictEqual(moves.length, 1);
-        assert.isAbove(moves[0]?.samples.length ?? 0, 5);
-      }).pipe(Effect.provide(Chromium.layer({ humanize: true })));
-    }),
-  );
 });
 
 setFlagsFromString("--expose_gc");

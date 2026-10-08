@@ -133,10 +133,6 @@ export const Type = tool(
       description: "Keep the field's content and add to it",
     }),
     submit: absent(Schema.Boolean, { description: "Press Enter afterwards" }),
-    prose: absent(Schema.Boolean, {
-      description:
-        "Allow corrected slips when humanized and replacing an explicit prose ref; sensitive fields stay exact",
-    }),
   },
 );
 
@@ -608,9 +604,9 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       ),
     browser_hover: (op) =>
       act(`Hovered over ${named(op)}.`, (tab) => Effect.flatMap(target(op), tab.hover), false),
-    browser_type: ({ text, ref, append, submit, prose }) =>
+    browser_type: ({ text, ref, append, submit }) =>
       act(`Typed ${JSON.stringify(text)}${ref === undefined ? "" : ` into ${ref}`}.`, (tab) =>
-        tab.type(text, { into: ref, replace: append !== true, submit, prose }),
+        tab.type(text, { into: ref, replace: append !== true, submit }),
       ),
     browser_press: ({ keys, times, holdMillis }) =>
       act(`Pressed ${keys}${times === undefined || times === 1 ? "" : ` ${times} times`}.`, (tab) =>

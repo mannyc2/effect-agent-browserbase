@@ -1,11 +1,22 @@
 // Pages for the tests, served from loopback: an order form, a canvas slot machine, a canvas
-// price chart, a price table, a long page with pinned parts, an account form, and a red page that
-// keeps painting beside a blue one the server answers late. The slot machine has no DOM controls
-// at all, so only point input can play it.
+// price chart, a price table, a long page with pinned parts, an account form, a red page that
+// keeps painting beside a blue one the server answers late, and controls that navigate in each
+// way input can start a navigation. The slot machine has no DOM controls at all, so only point
+// input can play it.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { Context, Effect, Layer } from "effect";
+
+import * as Presentation from "../src/Presentation.ts";
+
+/** A presenter's pace with no wait before an action, for a test that times only its input. */
+export const unpaused: Presentation.Pacing = {
+  ...Presentation.human,
+  expected: 0,
+  surprise: 0,
+  unrelated: 0,
+};
 
 const form = `<!doctype html><title>Order</title>
 <body style="margin:0;font-family:sans-serif">
@@ -177,7 +188,21 @@ const desk = `<!doctype html><title>Desk</title>
 <p id="below">Below the fold</p>
 <script>place.onclick = () => setTimeout(() => (answer.textContent = "Order placed"), 600);</script>`;
 
+// Each control in a row of its own, 40 px tall from the top: a link, a handler that navigates in a
+// timer, one that navigates once a fetch answers half a second later, `pushState`, a link the
+// server answers with no content, and a button that does nothing.
+const navigating = `<!doctype html><title>Navigating</title>
+<body style="margin:0;font:16px sans-serif">
+<style>a, button { display: block; height: 40px; width: 200px; margin: 0; padding: 0 }</style>
+<a id="link" href="/next">Link</a>
+<button id="timer" onclick="setTimeout(() => (location.href = '/next'), 0)">Timer</button>
+<button id="fetch" onclick="fetch('/slow').then(() => (location.href = '/next'))">Fetch</button>
+<button id="push" onclick="history.pushState({}, '', '/pushed')">Push</button>
+<a id="empty" href="/empty">Empty</a>
+<button id="still" onclick="this.textContent = 'Pressed'">Still</button>`;
+
 const pages: Record<string, string> = {
+  "/navigating": navigating,
   "/desk": desk,
   "/spinning": spinning,
   "/late": late,
@@ -203,6 +228,18 @@ export const SiteLayer = Layer.effect(
       Effect.callback<ReturnType<typeof createServer>>((resume) => {
         const server = createServer((request, response) => {
           const page = pages[request.url ?? ""];
+
+          if (request.url === "/empty") {
+            response.writeHead(204);
+            response.end();
+
+            return;
+          }
+          if (request.url === "/slow") {
+            setTimeout(() => response.end("ok"), 500);
+
+            return;
+          }
 
           const answer = () => {
             response.writeHead(page === undefined ? 404 : 200, {

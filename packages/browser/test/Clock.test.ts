@@ -6,6 +6,7 @@ import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Frame } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
+import * as Presentation from "../src/Presentation.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 
 const refOf = (text: string, role: string, name: string) =>
@@ -189,11 +190,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     Effect.gen(function* () {
       const live = yield* Clock.Clock;
 
-      const { browser, page } = yield* setup(live, {
-        humanize: true,
-        actionTimeout: Duration.seconds(5),
-      });
-
+      const { browser, page: plain } = yield* setup(live, { actionTimeout: Duration.seconds(5) });
+      const page = (yield* Presentation.make()).view(plain);
       const site = yield* Site;
 
       // A caller's TestClock never advances on its own; the browser must not sleep on it.

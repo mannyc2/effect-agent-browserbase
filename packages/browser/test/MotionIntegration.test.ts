@@ -7,6 +7,8 @@ import type { CDPSession } from "playwright-core";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
 import * as Motion from "../src/Motion.ts";
+import * as Presentation from "../src/Presentation.ts";
+import { unpaused } from "./fixtures.ts";
 
 interface NativeInput {
   readonly type?: string;
@@ -22,10 +24,11 @@ interface Dispatch {
   settledAt?: number;
 }
 
+// Its pages open performed by one presenter with `motion`, unless they open plain.
 const setup = Effect.fnUntraced(function* (
   motion: Motion.Service,
   replyDelayMillis = 0,
-  humanize = true,
+  performed = true,
 ) {
   const native = (yield* Browser).context.browser();
   const clock = yield* Clock.Clock;
@@ -78,14 +81,12 @@ const setup = Effect.fnUntraced(function* (
     return session;
   };
 
-  const browser = yield* makeBrowser(
-    context,
-    { id: "motion-test", provider: "test" },
-    { humanize },
-  ).pipe(Effect.provideService(Motion.Motion, motion));
+  const browser = yield* makeBrowser(context, { id: "motion-test", provider: "test" });
+  const presenter = yield* Presentation.make({ motion, pacing: unpaused });
 
   const open = Effect.gen(function* () {
-    const page = yield* browser.newPage();
+    const plain = yield* browser.newPage();
+    const page = performed ? presenter.view(plain) : plain;
 
     yield* Effect.promise(() =>
       page.playwright.setContent('<body style="margin:0;width:800px;height:600px"></body>'),
@@ -106,10 +107,9 @@ const setup = Effect.fnUntraced(function* (
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Motion integration",
   (it) => {
-    it.effect("captures the planner once for every page and bypasses it for plain input", () =>
+    it.effect("plans every view's glide with its presenter's planner, never plain input's", () =>
       Effect.gen(function* () {
         const planned: Array<{ readonly from: Motion.Point; readonly to: Motion.Point }> = [];
-        let lateCalls = 0;
 
         const fixture = yield* setup({
           plan: (from, to) =>
@@ -123,28 +123,19 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             }),
         });
 
-        const late: Motion.Service = {
-          plan: (_from, to) =>
-            Effect.sync(() => {
-              lateCalls++;
-
-              return [{ ...to, afterMillis: 0 }];
-            }),
-        };
-
-        const first = yield* fixture.open.pipe(Effect.provideService(Motion.Motion, late));
-        const second = yield* fixture.open.pipe(Effect.provideService(Motion.Motion, late));
+        const first = yield* fixture.open;
+        const second = yield* fixture.open;
         const firstTarget = { x: 100, y: 100 };
         const secondTarget = { x: 650, y: 450 };
 
-        yield* first.hover(firstTarget).pipe(Effect.provideService(Motion.Motion, late));
-        yield* second.hover(secondTarget).pipe(Effect.provideService(Motion.Motion, late));
+        yield* first.hover(firstTarget);
+        yield* second.hover(secondTarget);
 
-        assert.strictEqual(lateCalls, 0);
-        // Each page's pointer starts mid-viewport.
+        // The views share the presenter's pointer: it starts mid-viewport, and on the second page
+        // where viewers last saw it, on the first.
         assert.deepStrictEqual(planned, [
           { from: { x: 400, y: 300 }, to: firstTarget },
-          { from: { x: 400, y: 300 }, to: secondTarget },
+          { from: firstTarget, to: secondTarget },
         ]);
         assert.strictEqual(fixture.dispatches.length, 4);
 
@@ -276,7 +267,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
     it.effect("moves the pointer with every default sample except a repeated exact endpoint", () =>
       Effect.gen(function* () {
-        const fixture = yield* setup(yield* Motion.Motion);
+        const fixture = yield* setup(Motion.lognormal);
         const page = yield* fixture.open;
 
         const record = Effect.promise(() =>

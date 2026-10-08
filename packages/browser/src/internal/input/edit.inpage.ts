@@ -1,6 +1,7 @@
 /**
  * In the page: editing a field. It refuses text that a focused control could act on, focuses a
- * field, chooses a select's options and checks a corrected field's final text. See `reading/names.inpage.ts` for what a page-side part may use.
+ * field and chooses a select's options. See `reading/names.inpage.ts` for what a page-side part
+ * may use.
  */
 import { Schema } from "effect";
 
@@ -13,17 +14,9 @@ export type EditResult =
   | { readonly ok: true; readonly detail: string }
   | { readonly error: string; readonly stale?: boolean };
 
-/**
- * A focused field, whether opted-in prose slips may apply to it as it is now, and whether it is
- * secret.
- */
+/** A focused field, and whether it is secret. */
 export type FocusResult =
-  | {
-      readonly ok: true;
-      readonly detail: string;
-      readonly prose: boolean;
-      readonly secret: boolean;
-    }
+  | { readonly ok: true; readonly detail: string; readonly secret: boolean }
   | { readonly error: string; readonly stale?: boolean };
 
 /**
@@ -39,7 +32,6 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
     activeElement,
     clean,
     describe,
-    inCurrentDocument,
     isDisabled,
     isHtml,
     isInput,
@@ -51,26 +43,7 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
     roleOf,
   } = names;
 
-  const { proseEligible, textEntry, typingRefusal } = guard;
-
-  // A corrected slip must not submit a different value when a widget swallowed the correction.
-  // Report only equality, never the field's contents.
-  const checkText = (ref: string, expected: string): EditResult => {
-    const element = lookup(ref);
-
-    if (element === undefined || !inCurrentDocument(element) || activeElement() !== element)
-      return { error: "the prose field changed before its final value could be checked" };
-
-    const value = isTextArea(element)
-      ? element.value
-      : isHtml(element) && element.isContentEditable
-        ? element.innerText
-        : undefined;
-
-    return value === expected
-      ? { ok: true, detail: "corrected prose matches the requested text" }
-      : { error: "corrected prose did not match the requested text" };
-  };
+  const { textEntry, typingRefusal } = guard;
 
   /** Whether text may be typed into a ref or focus, and, for a `secret`, only into a secret field. */
   const typeable = (ref: string | null, secret: boolean): TypeableResult => {
@@ -117,13 +90,8 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
       else element.ownerDocument.getSelection()?.selectAllChildren(element);
     }
 
-    // Decided after focusing: a focus handler can mark the field sensitive or secret.
-    return {
-      ok: true,
-      detail: describe(element),
-      prose: proseEligible(element),
-      secret: isSecret(element),
-    };
+    // Decided after focusing: a focus handler can mark the field secret.
+    return { ok: true, detail: describe(element), secret: isSecret(element) };
   };
 
   const select = (ref: string, values: ReadonlyArray<string>): EditResult => {
@@ -154,7 +122,7 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
     return { ok: true, detail: chosen.map((option) => clean(option.text, 40)).join(", ") };
   };
 
-  return { checkText, focus, select, typeable };
+  return { focus, select, typeable };
 };
 
 export type Edit = ReturnType<typeof edit>;
@@ -171,12 +139,7 @@ export const TypeableResultSchema = Schema.Union([
 const EditFailure = Schema.Struct({ error: Schema.String, stale: Schema.optional(Schema.Boolean) });
 
 export const FocusResultSchema = Schema.Union([
-  Schema.Struct({
-    ok: Schema.Literal(true),
-    detail: Schema.String,
-    prose: Schema.Boolean,
-    secret: Schema.Boolean,
-  }),
+  Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String, secret: Schema.Boolean }),
   EditFailure,
 ]);
 

@@ -3,13 +3,22 @@
  * clock, and how they call the browser and report its failures. The assembly in `page.ts` builds
  * one context per page.
  */
-import { Clock, Context, Duration, Effect, Fiber, Option, Ref, Schema, type Scope } from "effect";
+import {
+  Clock,
+  Context,
+  Duration,
+  Effect,
+  Fiber,
+  MutableRef,
+  Option,
+  Schema,
+  type Scope,
+} from "effect";
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
 import type { CaptureSource } from "../../Browser.ts";
 import { BrowserError, Closed, Failed, type Reason, Timeout } from "../../BrowserError.ts";
 import type { BrowserEvent } from "../../BrowserEvent.ts";
-import type * as Motion from "../../Motion.ts";
 import type { Point, Settings } from "../../Page.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
 import * as Lane from "./lane.ts";
@@ -21,6 +30,8 @@ export type ClosedCause = Closed["cause"];
 export interface MakeOptions {
   /** The page's CDP target id, which is also its main frame's id. */
   readonly id: string;
+  /** The id of the browser's session, which its frames carry. */
+  readonly session: string;
   /** The page's address when the browser began tracking it. */
   readonly url: string;
   readonly playwright: PlaywrightPage;
@@ -28,7 +39,6 @@ export interface MakeOptions {
   /** A call's reply, or a failure as for a closed page once the browser is lost first. */
   readonly untilLost: <A>(reply: Promise<A>) => Promise<A>;
   readonly settings: Settings;
-  readonly motion: Motion.Service;
   readonly clock: Clock.Clock;
   /** The browser's epoch mapping: its first capture measures it, and later ones renew it. */
   readonly mapping: BrowserClock.Mapping;
@@ -266,9 +276,10 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     scope,
   });
 
-  // Where this page's latest move left its pointer, which is where its next glide starts. Its lane
-  // orders the page's input, and Chromium keeps a pointer per page too.
-  const pointer = Ref.makeUnsafe(Option.none<Point>());
+  // Where this page's latest move left its pointer, which is where its next plain glide starts and
+  // where a held button is released. Its lane orders the page's input, and Chromium keeps a
+  // pointer per page too.
+  const pointer = MutableRef.make(Option.none<Point>());
 
   // Named, so that the declarations of what holds it need not spell out Playwright's protocol types.
   const protocol: Pick<CDPSession, "send"> = { send };
