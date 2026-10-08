@@ -8,7 +8,6 @@
 import { Effect, Schema } from "effect";
 
 import type { BrowserError } from "../../BrowserError.ts";
-import { Subject } from "../../BrowserEvent.ts";
 import { Change, Changes } from "../../Change.ts";
 import type { Frame } from "../../Frame.ts";
 import type { ChangesOptions } from "../../Page.ts";
@@ -62,6 +61,8 @@ export const make =
         dropped: result.dropped,
       });
 
+      const later = (epoch: number | undefined) => (epoch === undefined ? undefined : host(epoch));
+
       return new Changes({
         document: bridge.frameTag().document,
         from: host(result.from),
@@ -71,22 +72,11 @@ export const make =
         changes: result.records.map(
           (one) =>
             new Change({
-              kind: one.kind,
-              subject: new Subject({
-                role: one.role,
-                name: one.name,
-                tag: one.tag,
-                context: one.context,
-              }),
+              ...one,
               startedAt: host(one.startedAt),
               at: host(one.at),
-              before: one.before ?? undefined,
-              after: one.after ?? undefined,
-              count: one.count,
-              lowest: one.lowest ?? undefined,
-              highest: one.highest ?? undefined,
-              earlier: one.earlier === null ? undefined : host(one.earlier),
-              cause: one.cause === null ? undefined : host(one.cause),
+              earlier: later(one.earlier),
+              cause: later(one.cause),
             }),
         ),
       });

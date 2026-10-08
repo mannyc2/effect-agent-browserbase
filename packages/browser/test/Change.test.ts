@@ -1,7 +1,7 @@
 // The change record: its rules over many inputs, without a page, and what it records on real pages.
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Arbitrary, Duration, Effect, Layer, Schema, Stream } from "effect";
-import { Prompt } from "effect/ai";
+import { type Prompt } from "effect/ai";
 
 import { Browser } from "../src/Browser.ts";
 import { Subject } from "../src/BrowserEvent.ts";
@@ -242,9 +242,11 @@ describe("a moment's account", () => {
       );
 
       const line = (index: number) => text.indexOf(`"after-${index}"`);
+
       const news = told.flatMap((one, index) =>
         one.count === 1 && !one.earlier ? [line(index)] : [],
       );
+
       const flux = told.flatMap((one, index) =>
         one.count > 1 || one.earlier ? [line(index)] : [],
       );
@@ -474,6 +476,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* Effect.sleep(Duration.millis(100));
       const moment = yield* Moment.capture(page, { since: Duration.seconds(3) });
       const placed = moment.changes?.changes.find((change) => change.after === "Order placed");
+
       const click = moment.events.find(
         (event) => event._tag === "Action" && event.name === "click",
       );

@@ -17,7 +17,7 @@
  */
 import { Schema } from "effect";
 
-import { SubjectContext } from "../../BrowserEvent.ts";
+import { Change } from "../../Change.ts";
 import type { Known, ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Folded } from "./fold.inpage.ts";
@@ -33,32 +33,18 @@ export interface ChangesRequest {
   readonly unmask: boolean;
 }
 
-export const ChangeRecordSchema = Schema.Struct({
-  kind: Schema.Literals(["text", "appeared", "disappeared", "brief", "value", "title"]),
-  role: Schema.NullOr(Schema.String),
-  name: Schema.String,
-  tag: Schema.String,
-  context: SubjectContext,
-  startedAt: Schema.Finite,
-  at: Schema.Finite,
-  before: Schema.NullOr(Schema.String),
-  after: Schema.NullOr(Schema.String),
-  count: Schema.Int,
-  lowest: Schema.NullOr(Schema.String),
-  highest: Schema.NullOr(Schema.String),
-  earlier: Schema.NullOr(Schema.Finite),
-  cause: Schema.NullOr(Schema.Finite),
-});
-
-/** What a read sends back: its window and the record's state on the page's clock, and the changes. */
+/**
+ * What a read sends back: its window and the record's state, and each change as `Change` encodes
+ * it, all on the page's clock.
+ */
 export const ChangesResultSchema = Schema.Struct({
   until: Schema.Finite,
   from: Schema.Finite,
   dropped: Schema.Int,
-  records: Schema.Array(ChangeRecordSchema),
+  records: Schema.Array(Change),
 });
 
-export type ChangesResult = typeof ChangesResultSchema.Type;
+export type ChangesResult = typeof ChangesResultSchema.Encoded;
 
 export const changes = (
   names: Names,
@@ -86,7 +72,7 @@ export const changes = (
   };
 
   /** The input a change followed, on the page's clock, where the change was its own doing. */
-  const causeOf = (one: Folded, element: Element): number | null => {
+  const causeOf = (one: Folded, element: Element): number | undefined => {
     for (const input of recorder.inputs().toReversed()) {
       const after = one.startedAt - input.at;
 
@@ -100,48 +86,44 @@ export const changes = (
       if (!changing && (after <= 500 || local(input.target, element))) return input.at;
     }
 
-    return null;
+    return undefined;
   };
 
-  const describe = (one: Folded, known: Known, unmask: boolean) => {
-    const key = one.track.key;
-    const element = key instanceof Element ? key : null;
-    const where = element?.isConnected === true ? element : (marking.placeOf(key) ?? null);
+  const describe = (one: Folded, known: Known, unmask: boolean): typeof Change.Encoded => {
+    const { track, kind, before, after, lowest, highest, ...times } = one;
+    const element = track.key instanceof Element ? track.key : null;
+    const where = element?.isConnected === true ? element : (marking.placeOf(track.key) ?? null);
     const role = element === null ? null : roleOf(element);
+    const field = kind === "value";
 
     const checkable =
       element !== null && isInput(element) && /^(checkbox|radio)$/.test(element.type);
 
     // A field's value is masked unless asked, empty or a box's state; a secret one never kept more.
     const masked = (value: string | undefined) =>
-      value === undefined
-        ? null
-        : one.kind !== "value" || unmask || checkable || value === ""
-          ? value
-          : "••••";
+      value === undefined || !field || unmask || checkable || value === "" ? value : "••••";
 
     return {
-      kind: one.kind,
-      role,
-      // An element's own words are what changed, so it is named only by what else names it.
-      name:
-        element === null
-          ? ""
-          : one.kind === "value"
-            ? nameOf(element, role)
-            : clean(element.getAttribute("aria-label"), 120),
-      tag: element === null ? "title" : element.tagName.toLowerCase(),
-      context: one.kind === "title" || where === null ? {} : placing.contextOf(where, known),
-      startedAt: one.startedAt,
-      at: one.at,
-      before: masked(one.before),
-      after: masked(one.after),
-      count: one.count,
-      lowest: one.kind === "value" ? null : (one.lowest ?? null),
-      highest: one.kind === "value" ? null : (one.highest ?? null),
-      earlier: one.earlier ?? null,
+      ...times,
+      kind,
+      subject: {
+        role,
+        // An element's own words are what changed, so it is named only by what else names it.
+        name:
+          element === null
+            ? ""
+            : field
+              ? nameOf(element, role)
+              : clean(element.getAttribute("aria-label"), 120),
+        tag: element === null ? "title" : element.tagName.toLowerCase(),
+        context: kind === "title" || where === null ? {} : placing.contextOf(where, known),
+      },
+      before: masked(before),
+      after: masked(after),
+      lowest: field ? undefined : lowest,
+      highest: field ? undefined : highest,
       // A field's own edit needs no cause.
-      cause: one.kind === "value" || where === null ? null : causeOf(one, where),
+      cause: field || where === null ? undefined : causeOf(one, where),
     };
   };
 

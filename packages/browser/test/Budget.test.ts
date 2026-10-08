@@ -220,6 +220,7 @@ it.live("a read of changes costs one call, its first a registration beside it", 
   Effect.gen(function* () {
     const { proxy, browser } = yield* opened();
     const page = yield* browser.newPage(animated);
+
     // Registrations on the library's own session; Playwright registers scripts on its own.
     const registrations = () =>
       proxy.commands.filter(
