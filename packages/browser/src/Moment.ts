@@ -333,11 +333,12 @@ const account = (moment: Moment): ReadonlyArray<string> => {
   const record = moment.changes;
   const lines = [...(record === undefined ? [] : changed(moment, record))];
 
-  // With a record, an action is told only where its effect is drawn, or the record began after it.
+  // With a record, an action is told only where its effect is drawn, or the record began after it
+  // started, as on the document a click opened.
   const told = (event: Action) =>
     !(event.ok && ["navigate", "back", "reload"].includes(event.name)) &&
     (record === undefined ||
-      event.at <= record.from ||
+      event.startedAt <= record.from ||
       (onDrawn(event) && event.name !== "scroll"));
 
   for (const event of moment.events)

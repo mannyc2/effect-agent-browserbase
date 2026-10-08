@@ -1,8 +1,9 @@
 # effect-browser
 
 Browser automation for [Effect](https://effect.website) agents, over Playwright: page control, a
-compact page outline for models, screencast frames, `effect/ai` browser tools, an agent loop, and
-moments, a picture-and-timeline account of what a page showed at one point in time.
+compact page outline for models, screencast frames, `effect/ai` browser tools, an agent loop, a
+record of what visibly changed on a page, and moments, an account in pictures and words of what a
+page showed and what changed on it over a window.
 
 ```sh
 npm install effect-browser@beta effect playwright-core
@@ -34,7 +35,8 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Tools`        | The `effect/ai` browser toolkit                                                      |
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
-| `Moment`       | What a page showed and what happened on it over a window, laid out as a model prompt |
+| `Change`       | What visibly changed on a page over a window, element by element                     |
+| `Moment`       | What a page showed and what changed on it over a window, laid out as a model prompt  |
 | `Plan`         | A walk recorded from a page's events, replayed on a fresh page by subject            |
 | `Supervisor`   | A browser kept open across losses and session ends, as generations                   |
 
@@ -125,11 +127,56 @@ frame over half a second late. A capture's silence alone proves little: a stalle
 frames on their way, and Chromium sends frames only while few acknowledgements are unanswered. So
 the spell counts only while every acknowledgement is answered, and it ends with one more call to the
 page, whose answer arrives behind every frame sent before it; a frame that comes first starts the
-spell again. That call costs the wait one round trip. Stillness is a heuristic on a canvas: a
-canvas that keeps drawing, such as a live chart, is never still, and one that pauses longer than
-`quietMillis` between phases reads as still. On the slot machine fixture, with the connection
-stalled for 450 to 900 ms toward either end while the reels spun, none of 132 waits ended early,
-where all 36 did before.
+spell again. That call costs the wait one round trip. Where the page's changes are recorded, the
+page's own check also waits until nothing in view has changed for the spell, so frames the browser
+holds back, as an encoder's backlog does, cannot pass for a still page. Stillness is a heuristic
+on a canvas: a canvas that keeps drawing, such as a live chart, is never still, and one that pauses
+longer than `quietMillis` between phases reads as still. On the slot machine fixture, with the
+connection stalled for 450 to 900 ms toward either end while the reels spun, none of 132 waits
+ended early, where all 36 did before.
+
+`Page.changes({ since, until })` says what visibly changed on a page over a window, in one call to
+the page, element by element, as a `Change`: text that changed, appeared, disappeared or came and
+went (`brief`), a field's value, or the title. Each says what it showed at the window's start and
+end, how often that changed, the lowest and highest of a number that changed more than once, when
+it last changed before the window, so news stands apart from what keeps changing, and its
+`subject` with the context that binds it: a price under its row and column. A field's value reads
+`••••` unless `unmask` is set, and a secret field's always does. A change names its `cause`, the
+trusted input it followed, only where it was that input's doing: it had not changed in the second
+before, and it changed within 500 ms, or within 3 s inside what the input acted on or its row, form,
+dialog or controlled element, so "Order placed" a server's reply later keeps its click, and a
+ticker's next tick after a click names none.
+
+A page records once something reads its changes: the first read starts it, and finds nothing yet.
+From then the page's own session starts the recorder at the start of each later document, once it
+is parsed, until nobody has read it for two minutes; a page nobody reads records nothing and costs
+nothing. The first read also registers the recorder, in the same round trip, and every later read
+is one call. While it runs, a MutationObserver marks what changed: a text-only element, as most
+prices are, is read at once, and anything else, with whether it was in view, as the page renders
+it, through an IntersectionObserver that forces no layout. A change counts as seen when it was in
+the viewport as the page rendered it, its style showing it, so one scrolled away later is still
+told, and something removed or hidden only if it was in view before. On a 2,000-cell table
+rewritten every 50 ms, locally, the page's busy time went from about 100 ms per 3 s to about 230
+recording, where an empty observer costs about 180.
+
+The record keeps 256 elements with their last 32 changes, for a minute. On a busier page, an
+element that keeps changing gives way first, then one never seen in view, then one that has gone,
+so news stays; whatever gives way, or finds no room, is counted in `dropped`, and `from` moves
+past it: the record never claims to be whole where it is not. A window can start at a previous
+read's `Changes`, continuing exactly where it ended on the page's own clock, or at a frame's
+paint, and end at a frame's paint, so a narrator airing a frame late is told nothing that frame
+does not show. Times are host milliseconds through the browser's one clock mapping, as frames'
+are. The record does not see pictures, a canvas, frames, shadow roots or SVG, a value a script
+sets, or a class that reveals an element it has not seen before, such as a toast already on the
+page, though its later changes it does.
+
+`Moment.capture` reads what changed up to its last frame's paint, from where the previous moment's
+changes ended, and `Moment.toPrompt` leads with it: news first, then what keeps changing, with the
+cells of a column that changed together on one line. It names an action only as what a change
+followed, or as a step where its effect is drawn, such as a click on a canvas, which only the
+screenshots show, or came before the record began; hovers, scrolls and attempts that changed
+nothing are left out. A moment of a page whose changes could not be read, as while it navigated,
+has none, and its prompt lists every step instead.
 
 `Plan` rehearses a walk once and replays it later, near live, with no model call.
 `Plan.fromEvents(page.recentEvents)` keeps one page's completed actions with their subjects and
