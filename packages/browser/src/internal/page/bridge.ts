@@ -121,14 +121,15 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   let registered = false;
   let paging = false;
   // The current document's world, forgotten when the main frame commits another document, and the
-  // commits this session has seen. Only a commit is a new document: `frameStartedLoading` also
-  // fires on `pushState`.
+  // commits this session has seen, the latest marked on the page. Only a commit is a new document:
+  // `frameStartedLoading` also fires on `pushState`.
   let world: number | undefined;
   let documents = 0;
 
   cdp.on("Page.frameNavigated", ({ frame }) => {
     if (frame.parentId !== undefined) return;
     documents++;
+    page.activity.documentAt = page.now();
     world = undefined;
   });
 
