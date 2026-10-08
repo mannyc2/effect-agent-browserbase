@@ -642,11 +642,14 @@ waiting, because a schedule would only hide a configuration error. `rotate`, or 
 `rotateBefore` ahead of a generation's browser's `expiresAt`, opens the next generation before it
 releases the current one, unless generations are `exclusive`: then the current one is released
 first.
-`retire` stops reopening at once and releases what is open; closing the scope retires too. `states`
-streams each generation's `Opening`, `Reopening`, `Open`, `Lost`, `Down` and `Closed`, the last with
-the provider's release outcome, `Settled` or `Unconfirmed`, so time open is a subtraction of their
-stamps. Pages don't carry over from one generation to the next. `effect-browserbase`'s
-`Browserbase.supervise` supervises hosted sessions.
+`retire` stops reopening at once and releases what is open, asking the provider's `release` before
+it closes a generation's scope; closing the scope retires too, unless the supervisor `keep`s: then
+the generation serving is left running, `Kept`, its scope closed but its provider never asked to
+release it, for a provider whose scope only disconnects. `states` streams each generation's
+`Opening`, `Reopening`, `Open`, `Lost`, `Down`, `Closed`, the last with the provider's release
+outcome, `Settled` or `Unconfirmed`, and `Kept`, so time open is a subtraction of their stamps.
+Pages don't carry over from one generation to the next. `effect-browserbase`'s
+`Browserbase.supervise` supervises hosted sessions, and with `keep` adopts the one it kept.
 
 Every module is also an entry point, such as `effect-browser/Agent`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.

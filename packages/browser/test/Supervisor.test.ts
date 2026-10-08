@@ -1,7 +1,7 @@
 // The supervisor's lifecycle as a model: random runs of opens, failures, losses, rotations,
-// releases and retiring, each checked against the rules a supervisor must keep. Then the
-// supervisor itself: over local Chromium for losses and rotations, and over stand-in browsers on
-// the test clock for its timing.
+// releases and retiring or keeping, each checked against the rules a supervisor must keep. Then
+// the supervisor itself: over local Chromium for losses and rotations, and over stand-in browsers
+// on the test clock for its timing.
 
 import { assert, describe, it } from "@effect/vitest";
 import { Arbitrary, DateTime, Effect, Fiber, Option, Schedule, Schema, Stream } from "effect";
@@ -26,6 +26,8 @@ interface World {
   readonly ordered: Set<number>;
   readonly releasing: Set<number>;
   readonly released: Set<number>;
+  /** Left running as the supervisor stopped, never released. */
+  readonly left: Set<number>;
   readonly watched: Set<number>;
   readonly fired: Set<string>;
   readonly phases: Map<number, { phase: Phase }>;
@@ -37,6 +39,7 @@ const moves = {
   Lost: [["open"], "lost"],
   Down: [["opening"], "ended"],
   Closed: [["opening", "open", "lost"], "ended"],
+  Kept: [["open"], "ended"],
 } satisfies Record<string, readonly [ReadonlyArray<Phase>, Phase]>;
 
 const advance = (world: World, number: number, state: Lifecycle.GenerationState) => {
@@ -81,9 +84,20 @@ const apply = (world: World, input: Lifecycle.Input<string>) => {
       case "Release":
         assert.isTrue(world.opened.has(command.live.number), "only what opened is released");
         assert.isFalse(world.ordered.has(command.live.number), "each generation is released once");
+        assert.isFalse(world.left.has(command.live.number), "a kept one is never released");
         world.ordered.add(command.live.number);
         world.releasing.add(command.live.number);
         world.watched.delete(command.live.number);
+        break;
+      case "Leave":
+        assert.strictEqual(input._tag, "Keep", "only keeping leaves one running");
+        assert.isFalse(world.ordered.has(command.live.number), "a released one is never kept");
+        assert.strictEqual(
+          before._tag !== "Retired" && before.serving?.number,
+          command.live.number,
+          "only the one serving is kept",
+        );
+        world.left.add(command.live.number);
     }
   world.state = step.state;
 
@@ -220,16 +234,26 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
   return actions;
 };
 
-const retire = (world: World) => {
+/** Stop the supervisor: retire it, or close its scope as a keeping one does. */
+const retire = (world: World, keep: boolean) => {
+  const serving = world.state._tag === "Retired" ? undefined : world.state.serving;
+
   world.retired = true;
   world.cancelling = true;
-  apply(world, { _tag: "Retire" });
+  apply(world, { _tag: keep ? "Keep" : "Retire" });
+  if (keep && serving !== undefined)
+    assert.isTrue(world.left.has(serving.number), "keeping leaves the one serving running");
 };
 
 // Callers and timers act less often than the runtime's own fibers, so runs reach deep states.
 const weight = (name: string) => (name === "rotate" ? 1 : /^(lose|due) /.test(name) ? 2 : 6);
 
-const run = (choices: ReadonlyArray<number>, exclusive: boolean, retireAt: number) => {
+const run = (
+  choices: ReadonlyArray<number>,
+  exclusive: boolean,
+  retireAt: number,
+  keep: boolean,
+) => {
   const started = Lifecycle.start<string>();
 
   const world: World = {
@@ -243,6 +267,7 @@ const run = (choices: ReadonlyArray<number>, exclusive: boolean, retireAt: numbe
     ordered: new Set(),
     releasing: new Set(),
     released: new Set(),
+    left: new Set(),
     watched: new Set(),
     fired: new Set(),
     phases: new Map(),
@@ -251,7 +276,7 @@ const run = (choices: ReadonlyArray<number>, exclusive: boolean, retireAt: numbe
   for (const [number, state] of started.events) advance(world, number, state);
 
   for (const [index, choice] of choices.entries()) {
-    if (index === retireAt) retire(world);
+    if (index === retireAt) retire(world, keep);
     const actions = enabled(world);
     let pick = choice % actions.reduce((total, [name]) => total + weight(name), 0);
 
@@ -263,8 +288,8 @@ const run = (choices: ReadonlyArray<number>, exclusive: boolean, retireAt: numbe
       }
     }
   }
-  // Retire, then let everything still running finish.
-  if (!world.retired) retire(world);
+  // Stop, then let everything still running finish.
+  if (!world.retired) retire(world, keep);
   for (let guard = 0; world.opening !== undefined || world.releasing.size > 0; guard++) {
     assert.isBelow(guard, 100, "a retired supervisor settles");
     const actions = enabled(world).filter(([name]) => !/^(lose|due|rotate)/.test(name));
@@ -274,9 +299,11 @@ const run = (choices: ReadonlyArray<number>, exclusive: boolean, retireAt: numbe
 
   for (const [number, { phase }] of world.phases)
     assert.strictEqual(phase, "ended", `generation ${number} ends once retired`);
+  // Everything opened is released once, but what was kept, which is never released.
+  assert.isAtMost(world.left.size, keep ? 1 : 0, "at most the one serving is kept");
   assert.deepStrictEqual(
     [...world.opened].toSorted((a, b) => a - b),
-    [...world.released].toSorted((a, b) => a - b),
+    [...world.released, ...world.left].toSorted((a, b) => a - b),
   );
 };
 
@@ -290,8 +317,9 @@ describe("Supervisor's lifecycle", () => {
       ),
       exclusive: Arbitrary.schema(Schema.Boolean),
       retireAt: Arbitrary.schema(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 150 }))),
+      keep: Arbitrary.schema(Schema.Boolean),
     },
-    ({ choices, exclusive, retireAt }) => run(choices, exclusive, retireAt),
+    ({ choices, exclusive, retireAt, keep }) => run(choices, exclusive, retireAt, keep),
     { arbitrary: { runs: 1000, size: 120 } },
   );
 });
@@ -394,6 +422,51 @@ describe("Supervisor", () => {
         else
           assert.isBelow(lines.indexOf("2 Open"), lines.indexOf("1 Closed Settled"), lines.join());
       }
+    }),
+  );
+
+  it.effect("leaves the serving generation running as a keeping one's scope closes", () =>
+    Effect.gen(function* () {
+      // What the provider was asked, in order: its release, and its generation's scope closing.
+      const order: Array<string> = [];
+
+      const open = Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => Effect.sync(() => order.push("scope")));
+
+        return {
+          browser: standIn(),
+          release: Effect.sync(() => order.push("release")).pipe(
+            Effect.as(new Supervisor.Settled()),
+          ),
+        };
+      });
+
+      const kept = yield* Effect.gen(function* () {
+        const supervisor = yield* Supervisor.make({ open, keep: true });
+        const states = yield* record(supervisor);
+
+        yield* supervisor.browser;
+
+        return states;
+      }).pipe(Effect.scoped, Effect.flatMap(Fiber.join));
+
+      assert.deepStrictEqual(order, ["scope"]);
+      assert.deepStrictEqual(kept, ["1 Opening", "1 Open", "1 Kept"]);
+      order.length = 0;
+
+      // Retiring releases it all the same, the provider first, so what its scope holds goes last.
+      const retired = yield* Effect.gen(function* () {
+        const supervisor = yield* Supervisor.make({ open, keep: true });
+        const states = yield* record(supervisor);
+
+        yield* supervisor.browser;
+        yield* supervisor.retire;
+
+        return states;
+      }).pipe(Effect.scoped, Effect.flatMap(Fiber.join));
+
+      assert.deepStrictEqual(order, ["release", "scope"]);
+      assert.deepStrictEqual(retired, ["1 Opening", "1 Open", "1 Closed Settled"]);
     }),
   );
 
