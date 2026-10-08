@@ -309,6 +309,5 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(yield* page.title, "Armed");
       }),
     );
-
   },
 );

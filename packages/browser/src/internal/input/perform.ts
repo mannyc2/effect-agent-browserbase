@@ -148,7 +148,6 @@ export const make = (page: PageContext, sender: Dispatch) => {
         }),
       };
 
-
       // Admission waits only on this page's own unresolved replies, in its turn, so a stalled page
       // cannot delay input on other pages. Input never waits for the clock mapping: until a
       // capture has measured one, it keeps Chromium's own receipt time.
@@ -289,28 +288,32 @@ export const make = (page: PageContext, sender: Dispatch) => {
 
           if (info.recorded !== false)
             publish(
-            new Action({
-              at: now(),
-              startedAt,
-              page: id,
-              name,
-              target: info.target,
-              options: Exit.isSuccess(exit) ? info.options : undefined,
-              subject,
-              to,
-              box,
-              text:
-                info.text === undefined ? undefined : revealed ? info.text.slice(0, 200) : redacted,
-              x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
-              y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
-              ok: Exit.isSuccess(exit),
-              dispatched,
-              error: Option.match(failure, {
-                onNone: () => (Exit.hasInterrupts(exit) ? "interrupted" : undefined),
-                onSome: (error) => error.message,
+              new Action({
+                at: now(),
+                startedAt,
+                page: id,
+                name,
+                target: info.target,
+                options: Exit.isSuccess(exit) ? info.options : undefined,
+                subject,
+                to,
+                box,
+                text:
+                  info.text === undefined
+                    ? undefined
+                    : revealed
+                      ? info.text.slice(0, 200)
+                      : redacted,
+                x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
+                y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
+                ok: Exit.isSuccess(exit),
+                dispatched,
+                error: Option.match(failure, {
+                  onNone: () => (Exit.hasInterrupts(exit) ? "interrupted" : undefined),
+                  onSome: (error) => error.message,
+                }),
               }),
-            }),
-          );
+            );
           if (Exit.isSuccess(exit)) return exit.value;
           if (dispatched)
             return yield* Exit.mapError(exit, (error) =>

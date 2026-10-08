@@ -79,7 +79,7 @@ export const sections: ReadonlyArray<Section> = [
   {
     id: "human-input",
     title: "Human-like input",
-    lede: "The same script does the same task twice, and only one option differs. On the left, input arrives instantly, the way most automation sends it. On the right, with humanize: true, effect-browser glides the pointer along curved paths, types key by key and pauses the way a person does. Press “Play both” to start them together.",
+    lede: "The same script does the same task twice, and only one thing differs. On the left, input arrives instantly, the way most automation sends it. On the right, the script acts through a presenter's view of the page, so effect-browser glides the pointer along curved paths, types key by key and pauses the way a person does. Press “Play both” to start them together.",
     demos: [
       {
         id: "checkout",

@@ -30,6 +30,7 @@ import { BenchError, efforts, modelRunner, noCalls, noTiming, optedIn, refuse } 
 import { tasks } from "./Catalog.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import * as Latency from "./Latency.ts";
+import * as Presented from "./Presented.ts";
 import * as Recorder from "./Recorder.ts";
 import * as Relay from "./Relay.ts";
 import * as Report from "./Report.ts";
@@ -61,9 +62,8 @@ export const hostedSessionSeconds = 30 * 60;
  * Each hosted trial's browser: a new 1280×720 session that ends at least by its own timeout, with
  * `userMetadata` for Browserbase to show with it.
  */
-export const hostedBrowser = (humanize: boolean, userMetadata?: Readonly<Record<string, string>>) =>
+export const hostedBrowser = (userMetadata?: Readonly<Record<string, string>>) =>
   Browserbase.layer({
-    humanize,
     frameHistory,
     session: {
       timeout: hostedSessionSeconds,
@@ -157,7 +157,9 @@ const flags = {
   ),
   humanize: Flag.Boolean("humanize").pipe(
     Flag.withDefault(false),
-    Flag.withDescription("Move the pointer and type at a human pace."),
+    Flag.withDescription(
+      "Perform the input for viewers, through a presenter: the pointer glides, keys go at a person's pace.",
+    ),
   ),
   record: Flag.Boolean("record").pipe(
     Flag.withDefault(false),
@@ -206,19 +208,23 @@ export const command = Command.make(
       Layer.provide(FetchHttpClient.layer),
     );
 
-    // A trial's browser. A latency or hosted run's records the DevTools commands the trial
-    // sends, and a hosted run's session carries the trial's `metadata`.
+    // A trial's browser, its input performed for viewers with `--humanize`. A latency or hosted
+    // run's records the DevTools commands the trial sends, and a hosted run's session carries the
+    // trial's `metadata`.
     const browser = (trial: {
       readonly record: (command: Latency.Command) => void;
       readonly metadata: Readonly<Record<string, string>>;
-    }) =>
-      hosted
-        ? hostedBrowser(options.humanize, trial.metadata).pipe(
+    }) => {
+      const plain = hosted
+        ? hostedBrowser(trial.metadata).pipe(
             Layer.provide(Relay.client(trial.record).pipe(Layer.provide(browserbaseClient))),
           )
         : latency !== undefined
-          ? Latency.layer(latency, { humanize: options.humanize, frameHistory }, trial.record)
-          : Chromium.layer({ humanize: options.humanize, frameHistory });
+          ? Latency.layer(latency, { frameHistory }, trial.record)
+          : Chromium.layer({ frameHistory });
+
+      return options.humanize ? Presented.layer(plain) : plain;
+    };
 
     // After a create whose outcome is unknown, no further hosted session is requested.
     const hostedHalt = yield* Ref.make(false);

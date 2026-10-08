@@ -98,9 +98,10 @@ const lognormal = Effect.fnUntraced(function* (
 export const pause = (median: number, sigma: number) =>
   median <= 0 ? Effect.succeed(0) : lognormal(median, sigma, 0, median * 4);
 
-// A mouse press about 80 ms long, a key about 110 ms, each with an occasional longer one.
-const pressHold = lognormal(80, 0.35, 35, 200);
-const keyHold = lognormal(110, 0.2, 60, 220);
+// A mouse press about 80 ms long on average, a key about 110 ms, each now and then longer: their
+// medians are the means times exp(-sigma^2 / 2).
+const pressHold = lognormal(75.2, 0.35, 35, 200);
+const keyHold = lognormal(107.8, 0.2, 60, 220);
 const eventOrder = { up: 0, insert: 1, down: 2 };
 
 /**
@@ -122,7 +123,8 @@ const typing = Effect.fnUntraced(function* (
     if (/\s/u.test(previous) && /[\p{L}\p{N}]/u.test(character)) due += 60;
     const description = Keys.description(character);
 
-    if (description === undefined) events.push({ afterMillis: due, phase: "insert", key: character });
+    if (description === undefined)
+      events.push({ afterMillis: due, phase: "insert", key: character });
     else {
       due = Math.max(due, (releases.get(description.code) ?? -1) + 1);
       const released = due + (yield* keyHold);
@@ -157,9 +159,7 @@ const bursts = Effect.fnUntraced(function* (dx: number, dy: number) {
 
   for (let index = 0; index < notches; index++) {
     if (index > 0)
-      due += yield* index % 9 === 0
-        ? Random.nextBetween(600, 2600)
-        : Random.nextBetween(30, 140);
+      due += yield* index % 9 === 0 ? Random.nextBetween(600, 2600) : Random.nextBetween(30, 140);
     steps.push({ dx: dx / notches, dy: dy / notches, afterMillis: due });
   }
 

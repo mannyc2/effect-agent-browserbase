@@ -50,7 +50,9 @@ const session = Effect.fnUntraced(function* (id: string) {
     const observed: CDPSession["send"] = (method, params) => {
       sent.push({ target, method, at: Number(clock.monotonicTimeNanosUnsafe()) / 1e6 });
 
-      return (faults.get(target)?.(method) as ReturnType<typeof send> | undefined) ?? send(method, params);
+      const fault = faults.get(target)?.(method);
+
+      return fault === undefined ? send(method, params) : (fault as never);
     };
 
     cdp.send = observed;
@@ -63,16 +65,23 @@ const session = Effect.fnUntraced(function* (id: string) {
   return { browser, sent, faults };
 });
 
-/** The stage's frames as they come, from now. */
+/** The stage's frames as they come, from now, and when each came, on the host clock. */
 const collect = Effect.fnUntraced(function* (stage: Stage.Stage) {
+  const clock = yield* Clock.Clock;
   const frames: Array<Frame> = [];
+  const came: Array<number> = [];
 
   yield* stage.frames.pipe(
-    Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+    Stream.runForEach((frame) =>
+      Effect.sync(() => {
+        frames.push(frame);
+        came.push(Number(clock.monotonicTimeNanosUnsafe()) / 1e6);
+      }),
+    ),
     Effect.forkScoped,
   );
 
-  return frames;
+  return Object.assign(frames, { came });
 });
 
 const eventually = (check: Effect.Effect<boolean>) =>
@@ -84,7 +93,8 @@ const eventually = (check: Effect.Effect<boolean>) =>
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Stage",
   (it) => {
-    it.effect("switches within a session at the new page's first frame, the old capture stopped first", () =>
+    // Two captures fit in one session, as on Browserbase, so a switch there overlaps them too.
+    it.effect("switches within a session with no dark spell, the captures overlapping", () =>
       Effect.gen(function* () {
         const { browser, sent } = yield* session("one");
         const first = yield* browser.newPage(animated);
@@ -97,7 +107,9 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const asked = yield* browser.now;
         const shown = yield* stage.present(second, { at: asked });
 
-        yield* eventually(Effect.sync(() => frames.filter((frame) => frame.page === second.id).length >= 5));
+        yield* eventually(
+          Effect.sync(() => frames.filter((frame) => frame.page === second.id).length >= 5),
+        );
         const turn = frames.findIndex((frame) => frame.page === second.id);
         const before = frames.slice(0, turn);
         const after = frames.slice(turn);
@@ -111,48 +123,60 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           Math.max(asked, after[0]?.hostTime ?? asked, before.at(-1)?.hostTime ?? asked),
         );
         assert.strictEqual(shown.latency, shown.at - asked);
-        assert.isTrue(frames.every((frame) => frame.session === "one" && frame.url.startsWith("data:")));
+        assert.isTrue(
+          frames.every((frame) => frame.session === "one" && frame.url.startsWith("data:")),
+        );
+        // The new page's newest frame went out as the last of the old page's did.
+        assert.isBelow((frames.came[turn] ?? Infinity) - (frames.came[turn - 1] ?? 0), 100);
 
         const at = (target: unknown, method: string) =>
           sent.findIndex((each) => each.target === target && each.method === method);
 
-        assert.isAbove(at(first.playwright, "Page.stopScreencast"), -1);
-        assert.isAbove(at(second.playwright, "Page.startScreencast"), at(first.playwright, "Page.stopScreencast"));
+        assert.isAbove(at(second.playwright, "Page.startScreencast"), -1);
+        assert.isAbove(
+          at(first.playwright, "Page.stopScreencast"),
+          at(second.playwright, "Page.startScreencast"),
+        );
         assert.deepStrictEqual(yield* stage.current, Option.some(second));
         // Presenting what is on the stage again changes nothing.
         assert.deepStrictEqual(yield* stage.present(second), shown);
       }),
     );
 
-    it.effect("switches across sessions at the time asked, with the new capture started ahead", () =>
-      Effect.gen(function* () {
-        const one = yield* session("one");
-        const two = yield* session("two");
-        const first = yield* one.browser.newPage(animated);
-        const second = yield* two.browser.newPage(animated);
-        const stage = yield* Stage.make();
-        const frames = yield* collect(stage);
+    it.effect(
+      "switches across sessions at the time asked, with the new capture started ahead",
+      () =>
+        Effect.gen(function* () {
+          const one = yield* session("one");
+          const two = yield* session("two");
+          const first = yield* one.browser.newPage(animated);
+          const second = yield* two.browser.newPage(animated);
+          const stage = yield* Stage.make();
+          const frames = yield* collect(stage);
 
-        yield* stage.present(first);
-        yield* eventually(Effect.sync(() => frames.length >= 5));
-        const asked = (yield* one.browser.now) + 800;
-        const shown = yield* stage.present(second, { at: asked });
-        const turn = frames.findIndex((frame) => frame.page === second.id);
+          yield* stage.present(first);
+          yield* eventually(Effect.sync(() => frames.length >= 5));
+          const asked = (yield* one.browser.now) + 800;
+          const shown = yield* stage.present(second, { at: asked });
+          const turn = frames.findIndex((frame) => frame.page === second.id);
 
-        assert.isAtLeast(shown.at, asked);
-        assert.isBelow(shown.latency, 500);
-        // The first page stayed on the stage until the time asked, its frames painted before it.
-        assert.isTrue(frames.slice(0, turn).every((frame) => frame.page === first.id));
-        assert.isAbove(frames.slice(0, turn).filter((frame) => frame.hostTime > asked - 300).length, 0);
-        assert.isTrue(frames.slice(0, turn).every((frame) => frame.hostTime <= shown.at));
-        assert.isTrue(frames.slice(turn).every((frame) => frame.session === "two"));
+          assert.isAtLeast(shown.at, asked);
+          assert.isBelow(shown.latency, 500);
+          // The first page stayed on the stage until the time asked, its frames painted before it.
+          assert.isTrue(frames.slice(0, turn).every((frame) => frame.page === first.id));
+          assert.isAbove(
+            frames.slice(0, turn).filter((frame) => frame.hostTime > asked - 300).length,
+            0,
+          );
+          assert.isTrue(frames.slice(0, turn).every((frame) => frame.hostTime <= shown.at));
+          assert.isTrue(frames.slice(turn).every((frame) => frame.session === "two"));
 
-        const started = two.sent.find((each) => each.method === "Page.startScreencast");
-        const stopped = one.sent.find((each) => each.method === "Page.stopScreencast");
+          const started = two.sent.find((each) => each.method === "Page.startScreencast");
+          const stopped = one.sent.find((each) => each.method === "Page.stopScreencast");
 
-        assert.isBelow(started?.at ?? Infinity, asked - 300);
-        assert.isAtLeast(stopped?.at ?? -Infinity, asked);
-      }),
+          assert.isBelow(started?.at ?? Infinity, asked - 300);
+          assert.isAtLeast(stopped?.at ?? -Infinity, asked);
+        }),
     );
 
     it.effect("fails a switch whose first frame is late, and the old page stays on the stage", () =>
@@ -231,11 +255,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Effect.sleep("300 millis");
 
         const sizes = new Set(frames.map((frame) => `${frame.width}x${frame.height}`));
-        const stats = yield* stage.stats({ window: "30 seconds" });
+        const stats = Option.getOrThrow(yield* stage.stats({ window: "30 seconds" }));
 
         assert.strictEqual(sizes.size, 1, [...sizes].join(", "));
-        assert.isAbove(stats.filtered, 0);
-        assert.strictEqual(stats.frames, frames.length);
+        assert.isAbove(stats.foreignSize + stats.duringPictures, 0);
+        assert.isAtLeast(stats.accepted, frames.length);
       }).pipe(Effect.scoped),
     );
   },

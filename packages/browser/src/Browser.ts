@@ -37,7 +37,7 @@ import {
   type RecordedEvent,
   SessionEnding,
 } from "./BrowserEvent.ts";
-import { call, failWith, undispatched } from "./internal/page/context.ts";
+import { call, failWith, type Settings, undispatched } from "./internal/page/context.ts";
 import { FailFast } from "./internal/page/lane.ts";
 import * as PageImpl from "./internal/page/page.ts";
 import * as Url from "./internal/page/url.ts";
@@ -171,7 +171,7 @@ const settingsOf = Effect.fnUntraced(function* (options: Options) {
       : Effect.fail(invalid(`${name} must be finite and greater than zero`));
   };
 
-  const settings: Page.Settings = {
+  const settings: Settings = {
     actionTimeout: yield* bound("actionTimeout", options.actionTimeout, Duration.seconds(10)),
     navigationTimeout: yield* bound(
       "navigationTimeout",

@@ -76,6 +76,19 @@ const centerPixel = (page: Page, image: BrowserImage) =>
     ),
   );
 
+/** What the page shows, read as the next look after an action reads it. */
+const shows = (page: Page) => Effect.map(page.text(), (read) => read.text);
+
+/** How long `effect` took, on the browser's clock. */
+const timed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const browser = yield* Browser;
+    const started = yield* browser.now;
+    const value = yield* effect;
+
+    return { value, millis: (yield* browser.now) - started };
+  });
+
 const reason = <A>(effect: Effect.Effect<A, BrowserError>) =>
   Effect.flip(effect).pipe(
     Effect.map((error) => ({ tag: error.reason._tag, dispatched: error.dispatched })),
@@ -783,6 +796,57 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ),
         "150,40",
       );
+    }),
+  );
+
+  // After input a page gets a task and a frame, and a document only if the input asked for one:
+  // a link and a handler's timer do; a fetch's answer comes too late to tell; `pushState` and a
+  // link the server answers with no content ask for none.
+  it.effect("waits after a click for the document it asked for, and for nothing else", () =>
+    Effect.gen(function* () {
+      for (const [role, name] of [
+        ["link", "Link"],
+        ["button", "Timer"],
+      ] as const) {
+        const page = yield* open("/navigating");
+
+        yield* page.click(refOf(yield* page.snapshot(), role, name));
+        assert.include(yield* shows(page), "The next page", name);
+      }
+
+      const fetching = yield* open("/navigating");
+
+      const asked = yield* timed(
+        fetching.click(refOf(yield* fetching.snapshot(), "button", "Fetch")),
+      );
+
+      assert.isBelow(asked.millis, 400);
+      assert.include(yield* shows(fetching), "Fetch");
+      yield* fetching.waitForText("The next page");
+
+      for (const [role, name] of [
+        ["button", "Push"],
+        ["link", "Empty"],
+      ] as const) {
+        const page = yield* open("/navigating");
+        const clicked = yield* timed(page.click(refOf(yield* page.snapshot(), role, name)));
+
+        assert.isBelow(clicked.millis, 1000, name);
+        assert.include(yield* shows(page), "Still", name);
+      }
+    }),
+  );
+
+  // The fixed sleeps after clicks alone took 1.2 s per ten.
+  it.effect("settles ten clicks in a fraction of the time the fixed sleeps took", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/navigating");
+      const still = refOf(yield* page.snapshot(), "button", "Still");
+
+      yield* page.click(still);
+      const ten = yield* timed(Effect.repeat(page.click(still), { times: 9 }));
+
+      assert.isBelow(ten.millis, 1200);
     }),
   );
 

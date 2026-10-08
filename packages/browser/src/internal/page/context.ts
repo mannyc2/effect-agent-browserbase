@@ -19,13 +19,23 @@ import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 import type { CaptureSource } from "../../Browser.ts";
 import { BrowserError, Closed, Failed, type Reason, Timeout } from "../../BrowserError.ts";
 import type { BrowserEvent } from "../../BrowserEvent.ts";
-import type { Point, Settings } from "../../Page.ts";
+import type { InputGuard, Point } from "../../Page.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
 import * as Lane from "./lane.ts";
 import * as Url from "./url.ts";
 
 /** Why a page is gone. */
 export type ClosedCause = Closed["cause"];
+
+/** What every page of a browser shares, from its options. */
+export interface Settings {
+  readonly actionTimeout: Duration.Duration;
+  readonly policyTimeout: Duration.Duration;
+  readonly navigationTimeout: Duration.Duration;
+  /** How long screencast frames stay in `recentFrames`, measured back from the newest. */
+  readonly frameHistory: Duration.Duration;
+  readonly guard: InputGuard | undefined;
+}
 
 export interface MakeOptions {
   /** The page's CDP target id, which is also its main frame's id. */

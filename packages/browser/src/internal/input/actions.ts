@@ -283,7 +283,9 @@ const typeText = (input: Parts) => {
           const asked = scriptCall("typeable", into ?? null, typeOptions.secret === true);
 
           const typeable = yield* (
-            approval === undefined ? bridge.evaluate("type", asked) : mutate("type", asked, approval)
+            approval === undefined
+              ? bridge.evaluate("type", asked)
+              : mutate("type", asked, approval)
           ).pipe(Effect.flatMap(decodeWith("type", Script.TypeableResultSchema)));
 
           if ("error" in typeable)
@@ -323,9 +325,11 @@ const typeText = (input: Parts) => {
             // Focusing can run page handlers, including navigation, before the script returns.
             yield* marks.sent;
 
-            const focused = yield* mutate("type", scriptCall("focus", into, replace), approval).pipe(
-              Effect.flatMap(decodeWith("type", Script.FocusResultSchema)),
-            );
+            const focused = yield* mutate(
+              "type",
+              scriptCall("focus", into, replace),
+              approval,
+            ).pipe(Effect.flatMap(decodeWith("type", Script.FocusResultSchema)));
 
             if ("error" in focused) return yield* Guard.editFailure("type", into, focused);
             secret ||= focused.secret;
@@ -350,7 +354,8 @@ const typeText = (input: Parts) => {
           } else {
             const events = yield* marks.style.typing(text, approval !== undefined);
             const keyed = events.some((event) => event.phase === "down");
-            const checks = approval !== undefined && keyed ? (text.match(/\s/gu)?.length ?? 0) + 1 : 0;
+            const checks =
+              approval !== undefined && keyed ? (text.match(/\s/gu)?.length ?? 0) + 1 : 0;
             // Each check is about two round trips, which only keys typed one at a time need.
             const started = now();
 

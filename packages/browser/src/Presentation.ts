@@ -1,14 +1,10 @@
 /**
- * Input performed for viewers. A presenter owns one drawn pointer and a pace, and `view(page)` is
- * the page with its actions performed: the pointer glides along the motion planner's paths from
- * where viewers last saw it, on whichever page that was; a field is clicked before it is typed
- * into; keys go at the pace's words per minute with overlapping holds; the wheel turns in notches
- * and bursts, and scrolls to a target out of view; and each action first waits as long as a person
- * reacts. The page itself stays plain, so its timing never depends on whether something presents
- * it, and plain input on another page never waits for a view.
- *
- * One view acts at a time, as one hand moves one pointer. The time a view spends showing an action
- * has a budget of its own: the browser's `actionTimeout` bounds only the rest.
+ * Input performed for viewers. A presenter owns one drawn pointer and a pace; `view(page)` is the
+ * page with its actions performed: each waits as long as a person reacts, the pointer glides from
+ * where viewers last saw it, on whichever page, a field is clicked before typing, keys go at the
+ * pace's words a minute and the wheel turns in bursts, out to a target out of view. One view acts at
+ * a time, as one hand moves one pointer, and its presentation time is outside `actionTimeout`. The
+ * page itself stays plain, and plain input never waits for a view.
  *
  * ```ts
  * const presenter = yield* Presentation.make({ motion: yield* HumanStrokes.motion })
@@ -60,11 +56,9 @@ export interface Options {
 /** A page whose actions are performed, which can also start the pointer toward a target early. */
 export interface View extends Page {
   /**
-   * Start the pointer's glide toward `target` as soon as it is known, as when it appears in a
-   * model's streamed tool-call arguments. The view's next action completes the glide: it waits for
-   * it when it acts on the same target, and otherwise stops it where it is. An aim presses nothing
-   * and records no action; on a page with an input guard it does nothing, as input there waits for
-   * approval.
+   * Start the glide toward `target` as soon as it is known, as in a model's streamed tool call. The
+   * next action waits for it when it acts on the same target, and otherwise stops it where it is.
+   * An aim presses nothing and records no action; under an input guard it does nothing.
    */
   readonly aim: (target: Target) => Effect.Effect<void>;
 }
@@ -103,11 +97,11 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
     unrelated: Duration.toMillis(Duration.fromInputUnsafe(pacing.unrelated)),
   };
 
-  // The latest performed action: where, in which document, and when it ended.
+  // The latest performed action: its page, the document it began in, and when it ended.
   let last: { readonly page: string; readonly document: number; readonly at: number } | undefined;
 
-  // A person reacts to what the last action left: an expected change, a new document, or another
-  // page altogether. Time already spent since it ended counts toward the wait.
+  // A person reacts to what the last action left: an expected change, a new document, as a link
+  // opens, or another page altogether. Time already spent since it ended counts toward the wait.
   const react = (page: Page, internals: Internals) =>
     Effect.gen(function* () {
       const kind =
@@ -133,7 +127,9 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
     if (internals === undefined)
       throw new TypeError("only a page that a Browser opened can be presented");
     const { input } = internals;
-    let aiming: { readonly target: Target; readonly fiber: Fiber.Fiber<void, BrowserError> } | undefined;
+    let aiming:
+      | { readonly target: Target; readonly fiber: Fiber.Fiber<void, BrowserError> }
+      | undefined;
 
     // An aim at the action's own target is completed; any other is stopped where it is.
     const completeAim = (target: Target | undefined) =>
@@ -154,22 +150,25 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
         completeAim(target).pipe(
           Effect.andThen(
             hand.withPermits(1)(
-              react(page, internals).pipe(
-                Effect.andThen(action),
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    last = { page: page.id, document: internals.document(), at: now() };
-                  }),
-                ),
-              ),
+              Effect.gen(function* () {
+                yield* react(page, internals);
+                const document = internals.document();
+
+                return yield* action.pipe(
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      last = { page: page.id, document, at: now() };
+                    }),
+                  ),
+                );
+              }),
             ),
           ),
         );
 
     const performed: View = {
       ...page,
-      click: (target, clickOptions) =>
-        perform(target)(input.click(target, clickOptions, style)),
+      click: (target, clickOptions) => perform(target)(input.click(target, clickOptions, style)),
       hover: (target) => perform(target)(input.hover(target, style)),
       drag: (from, to) => perform(from)(input.drag(from, to, style)),
       type: (text, typeOptions) => perform(typeOptions?.into)(input.type(text, typeOptions, style)),
@@ -181,9 +180,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
           yield* completeAim(undefined);
           aiming = {
             target,
-            fiber: yield* hand
-              .withPermits(1)(input.aim(target, style))
-              .pipe(Effect.forkIn(scope)),
+            fiber: yield* hand.withPermits(1)(input.aim(target, style)).pipe(Effect.forkIn(scope)),
           };
         }),
     };

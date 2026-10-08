@@ -326,15 +326,6 @@ export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
-export interface Settings {
-  readonly actionTimeout: Duration.Duration;
-  readonly policyTimeout: Duration.Duration;
-  readonly navigationTimeout: Duration.Duration;
-  /** How long screencast frames stay in `recentFrames`, measured back from the newest. */
-  readonly frameHistory: Duration.Duration;
-  readonly guard: InputGuard | undefined;
-}
-
 export interface Page {
   /** The page's CDP target id: the same page has it again after a reconnect to its browser. */
   readonly id: string;

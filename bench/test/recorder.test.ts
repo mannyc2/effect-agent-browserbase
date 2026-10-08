@@ -9,6 +9,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import * as Chromium from "effect-browser/Chromium";
 
+import * as Presented from "../Presented.ts";
 import * as Recorder from "../Recorder.ts";
 import { plain, Recording } from "../Recording.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
@@ -26,7 +27,14 @@ const record = Effect.fnUntraced(function* (name: string, humanize: boolean) {
 
   const outcome = yield* recorder
     .around(task.scripted({ seed: 23, trace: recorder.trace }))
-    .pipe(Effect.provide(Chromium.layer({ humanize, frameHistory }), { local: true }));
+    .pipe(
+      Effect.provide(
+        humanize
+          ? Presented.layer(Chromium.layer({ frameHistory }))
+          : Chromium.layer({ frameHistory }),
+        { local: true },
+      ),
+    );
 
   yield* recorder.finish({
     task: { name: task.name, kind: task.kind, summary: task.summary, prompt: task.prompt },
@@ -64,7 +72,7 @@ const record = Effect.fnUntraced(function* (name: string, humanize: boolean) {
 }, Effect.provide(NodeServices.layer));
 
 describe("recorder", () => {
-  it.live("records a humanized operate trial's frames, glides and keys", () =>
+  it.live("records a performed operate trial's frames, glides and keys", () =>
     Effect.gen(function* () {
       const { recording, filesExist } = yield* record("checkout", true);
       const tags = new Set(recording.events.map((record) => record.event._tag));

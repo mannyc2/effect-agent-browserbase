@@ -1,9 +1,8 @@
 /**
- * The wait after input: one task and one frame in the page, in one call, and then a document only
- * if the input asked the main frame for one. The page's own session says when a navigation is
- * asked for, by a link, a form or a script, and when it ends: committed, which the bridge counts,
- * and parsed, or stopped without a document, as a 204 answer does. `pushState` asks for none, and
- * `frameStartedLoading`, which it also fires, is never taken for a navigation.
+ * The wait after input: one task and one frame in the page, in one call, then a document only if
+ * the input asked the main frame for one, as a link, a form or a script's timer does, until it is
+ * parsed or the navigation stops without one, as on a 204. `pushState` asks for none, and
+ * `frameStartedLoading`, which it fires, is never taken for a navigation.
  */
 import { Deferred, Duration, Effect, Exit } from "effect";
 
