@@ -22,6 +22,7 @@ import {
 import * as Chromium from "effect-browser/Chromium";
 import * as Browserbase from "effect-browserbase/Browserbase";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
+import * as ContextLease from "effect-browserbase/ContextLease";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
@@ -60,7 +61,8 @@ export const hostedSessionSeconds = 30 * 60;
 
 /**
  * Each hosted trial's browser: a new 1280×720 session that ends at least by its own timeout, with
- * `userMetadata` for Browserbase to show with it.
+ * `userMetadata` for Browserbase to show with it. It saves to no stored context, so each trial can
+ * have a lease of its own.
  */
 export const hostedBrowser = (userMetadata?: Readonly<Record<string, string>>) =>
   Browserbase.layer({
@@ -70,7 +72,7 @@ export const hostedBrowser = (userMetadata?: Readonly<Record<string, string>>) =
       browserSettings: { viewport: { width: 1280, height: 720 } },
       userMetadata,
     },
-  });
+  }).pipe(Layer.provide(ContextLease.layer));
 
 /** A failure as the bench may print or record it: provider errors can embed URLs or ids. */
 export const errorText = (cause: Cause.Cause<unknown>) => {
