@@ -130,7 +130,10 @@ frame over half a second late. A capture's silence alone proves little: a stalle
 frames on their way, and Chromium sends frames only while few acknowledgements are unanswered. So
 the spell counts only while every acknowledgement is answered, and it ends with one more call to the
 page, whose answer arrives behind every frame sent before it; a frame that comes first starts the
-spell again. That call costs the wait one round trip. Where the page's changes are recorded, the
+spell again. That call costs the wait one round trip. A capture on a connection of its own, as on
+Browserbase, gets one round trip there too, beside the call, since frames there do not wait behind
+the page's calls: a 4 fps canvas whose capture connection stalled for a frame read as still in 2
+of 2 waits before, and in none since. Where the page's changes are recorded, the
 page's own check also waits until nothing in view has changed for the spell, so frames the browser
 holds back, as an encoder's backlog does, cannot pass for a still page. Stillness is a heuristic
 on a canvas: a canvas that keeps drawing, such as a live chart, is never still, and one that pauses
@@ -212,7 +215,9 @@ that is not the picture is not shown as the moment.
 `Plan` rehearses a walk once and replays it later, near live, with no model call.
 `Plan.fromEvents(page.recentEvents)` keeps one page's completed actions with their subjects and
 the options they were given, its navigations with the address asked for and the one reached, and
-what was typed as an input slot named for its field, never the text itself. `Plan.replay(page,
+what was typed as an input slot named for its field, never the text itself. A navigation to an
+address with a credential withheld is an input slot too, `address`, so replay goes where the caller
+says, never to the address without its credential. `Plan.replay(page,
 plan, { inputs })` takes the steps in turn: before each that acts, it waits for `Page.ready`
 (`settle` sets how, or `false` not to wait), finds the one element the step's subject names with
 `Plan.locate`, and acts on it. An element that does not repeat every part of the recorded context
@@ -567,8 +572,10 @@ when `Navigated` or `PageLoaded` says the page moved.
 The browser's own end is one `Disconnected`, and `browser.disconnected` completes with its cause:
 `connection`, `session`, at or after the provider's `expiresAt`, which `SessionEnding` announces,
 or `released`, by the owner's scope. A browser lost so publishes no `PageClosed` for its pages,
-and calls in flight on them fail at once rather than at their deadline. A crashed page is closed:
-Playwright drives it no more, and its calls would never return.
+and calls in flight on them fail at once rather than at their deadline. A screencast's readers are
+told as the page's scope closes, once that cause is known: a capture that fails first, as one on a
+connection of its own can, waits up to two seconds for it before it fails as itself. A crashed page
+is closed: Playwright drives it no more, and its calls would never return.
 
 A failure on a page that is gone is `Closed` with its cause: `page`, `crashed`, or the browser's.
 `BrowserError.consequence(error)` says what any failure leaves: what was `lost` (`nothing`, the
@@ -577,10 +584,14 @@ reached the browser; `check` its effect first, as it may have taken place; `poin
 such as with a stale ref; or `resume` reading events from a newer cursor. `message` is a sentence
 for operators, and the browser tools tell a model what to do about the failure.
 
-Every address the library reports, in events, frames, reads, errors and a guard's request, keeps
-its identity and loses its userinfo and the query and fragment parameters named for credentials:
-tokens, keys, signatures, passwords, sessions, assertions and authorization codes. A chart's
-`?ticker=ETH` stays.
+Every address the library reports, in events, frames, reads, errors, a guard's request and the
+outline's links, keeps its identity and loses its userinfo and its credentials' values, which read
+`Page.redacted`. A credential is a query, fragment or path parameter named for a token, secret,
+password, signature, assertion, session id or one-time code, or for a code or key that signs
+someone in, such as `verification_code` or `api_key`. `code`, `key`, `session`, `sid` and `ticket`
+as often name what a page shows, so under them only a value that looks generated, of at least 16
+characters with letters and digits, is one. A chart's `?ticker=ETH` and a quote's `?code=BTC`
+stay; a short one-time code under a bare `code` stays too.
 
 `initScripts` take `{ match, source }`. The source runs before each new document's own scripts, in
 every frame, or only where `match`, a `RegExp`, finds the document's address, as a block. Playwright

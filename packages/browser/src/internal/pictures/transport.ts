@@ -28,6 +28,11 @@ export interface Transport {
   readonly acknowledge: (frame: number) => Promise<unknown>;
   readonly stop: () => Promise<unknown>;
   /**
+   * A round trip whose answer comes behind every frame sent before it. On the page's own session,
+   * the page's own calls are such round trips already, so it sends nothing.
+   */
+  readonly sync: () => Promise<unknown>;
+  /**
    * Hand its frames to `on.frame` as they arrive, and its end to `on.lost` should it end, until
    * the returned function is called.
    */
@@ -51,6 +56,7 @@ export const own = (page: PageContext, bridge: Bridge): Transport => {
     start: (settings) => send("Page.startScreencast", settings),
     acknowledge: (frame) => send("Page.screencastFrameAck", { sessionId: frame }),
     stop: () => send("Page.stopScreencast"),
+    sync: () => Promise.resolve(),
     listen: ({ frame }) => {
       page.cdp.on("Page.screencastFrame", frame);
 
@@ -184,6 +190,7 @@ export const apart = (
         start: (settings) => send("Page.startScreencast", settings),
         acknowledge: (frame) => send("Page.screencastFrameAck", { sessionId: frame }),
         stop: () => send("Page.stopScreencast"),
+        sync: () => send("Page.getFrameTree"),
         listen: (on) => {
           listening = on;
 

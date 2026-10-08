@@ -4,6 +4,7 @@
 // as the first capture starts.
 import { assert, it } from "@effect/vitest";
 import { Effect, Fiber, Schedule, Stream } from "effect";
+import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 
@@ -124,6 +125,18 @@ it.live(
           assert.isAtMost(stats.ackBacklog, 32);
           assert.isAtLeast(stats.received, stats.accepted);
           assert.isAtLeast(stats.accepted, frames.length);
+
+          // A wait for a still screen with a capture on air asks the page twice on the control
+          // connection, as on the page's own session, and ends with one round trip on the capture
+          // connection.
+          const still = yield* browser.newPage(html("<p>Still</p>"));
+
+          yield* still.snapshot();
+          yield* recorded(still);
+          from = proxy.commands.length;
+          yield* still.ready({ quietMillis: 200 });
+          assert.strictEqual(sentOn(proxy, control, from).length, 2);
+          assert.deepStrictEqual(methods(sentOn(proxy, capturing, from)), ["Page.getFrameTree"]);
         }),
       );
 
@@ -175,6 +188,123 @@ it.live(
         }),
       );
     }).pipe(Effect.scoped),
+);
+
+/** A failure's reason, and its cause when the page or browser is gone. */
+const lossOf = (error: BrowserError) => ({
+  reason: error.reason._tag,
+  cause: error.reason._tag === "Closed" ? error.reason.cause : undefined,
+});
+
+// A capture's reader hears that the browser was lost, as every other call on the page does,
+// whichever connection hears the end first: the connections dropping, the capture connection's
+// first or the control connection's, or the owner releasing the session, on the capture
+// connection and on the page's own session.
+it.live("tells a capture's reader the browser was lost, whichever connection hears it first", () =>
+  Effect.gen(function* () {
+    const ends = [
+      [true, "drop, capture connection first"],
+      [true, "drop, control connection first"],
+      [true, "release"],
+      [false, "drop"],
+      [false, "release"],
+    ] as const;
+
+    const told = yield* Effect.forEach(ends, ([captureConnection, end]) =>
+      Effect.gen(function* () {
+        const proxy = yield* behindProxy();
+
+        return yield* hosted(
+          proxy,
+          ({ browser, release }) =>
+            Effect.gen(function* () {
+              const page = yield* browser.newPage(animated);
+
+              const reader = yield* page
+                .screencast()
+                .pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
+
+              yield* page.state.pipe(
+                Effect.repeat({
+                  schedule: Schedule.spaced("10 millis"),
+                  until: (state) => state.frame !== undefined,
+                }),
+                Effect.timeout("10 seconds"),
+              );
+              // Browserbase cuts the connections as it ends a session it was asked to release.
+              if (end === "release") yield* release;
+              for (const connection of end === "drop, control connection first"
+                ? [control, capturing]
+                : [capturing, control])
+                proxy.drop(connection);
+
+              const error = yield* Fiber.join(reader).pipe(Effect.timeout("10 seconds"));
+
+              return {
+                end,
+                captureConnection,
+                ...lossOf(error),
+                lost: yield* browser.disconnected,
+              };
+            }),
+          { captureConnection },
+        );
+      }).pipe(Effect.scoped),
+    );
+
+    assert.deepStrictEqual(
+      Array.from(told),
+      ends.map(([captureConnection, end]) => {
+        const cause = end === "release" ? "released" : "connection";
+
+        return { end, captureConnection, reason: "Closed", cause, lost: cause } as const;
+      }),
+    );
+  }),
+);
+
+// A canvas that repaints four times a second is never still. The capture connection stalls for a
+// frame's length while a wait for a still screen runs, holding a frame back for 700 ms, which is
+// longer than the spell, while every acknowledgement is answered and the page's own evidence comes
+// back at once on the control connection. The wait must never end.
+it.live("never reads a stall on the capture connection as a still screen", () =>
+  Effect.gen(function* () {
+    const proxy = yield* behindProxy();
+    let stalledUntil = 0;
+
+    proxy.lag = (connection) =>
+      connection === capturing && performance.now() < stalledUntil ? 700 : 0;
+
+    const ticking = html(`<body style="margin:0"><canvas id=c width=300 height=300></canvas><script>
+      const g = c.getContext("2d"); let n = 0;
+      setInterval(() => { g.fillStyle = "hsl(" + (n++ * 37 % 360) + ",80%,50%)"; g.fillRect(0, 0, 300, 300); }, 250);
+    </script></body>`);
+
+    const waits = yield* hosted(proxy, ({ browser }) =>
+      Effect.gen(function* () {
+        const page = yield* browser.newPage(ticking);
+
+        yield* recorded(page);
+        yield* Effect.sleep("1 second");
+
+        return yield* Effect.forEach([0, 1], () =>
+          Effect.gen(function* () {
+            yield* Effect.sleep("200 millis").pipe(
+              Effect.andThen(Effect.sync(() => (stalledUntil = performance.now() + 270))),
+              Effect.forkChild,
+            );
+
+            return yield* page.ready({ quietMillis: 400, timeout: "3 seconds" }).pipe(
+              Effect.as("still"),
+              Effect.catch((error) => Effect.succeed(error.reason._tag)),
+            );
+          }),
+        );
+      }),
+    );
+
+    assert.deepStrictEqual(waits, ["Timeout", "Timeout"]);
+  }).pipe(Effect.scoped),
 );
 
 /** The longest wait between frames a reader got within the interval, its ends included. */

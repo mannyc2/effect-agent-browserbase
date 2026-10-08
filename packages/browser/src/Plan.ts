@@ -4,7 +4,9 @@
  *
  * `fromEvents` keeps one page's completed actions with their subjects and the options they were
  * given, its navigations with both the address asked for and the one reached, and what was typed
- * as a named input slot, never the text itself. `replay` takes the steps in turn. Before a step
+ * as a named input slot, never the text itself. A navigation to an address whose credentials the
+ * events withheld is an input slot too, so replay goes where the caller says, or nowhere, and
+ * never to the address without them. `replay` takes the steps in turn. Before a step
  * that acts on the page, it waits for `Page.ready`; then it finds the one element the step's
  * subject names, by role and name among those that repeat all its recorded context, and acts on
  * it. Text typed into focus was typed into the focused field, which replay finds the same way, and
@@ -72,7 +74,10 @@ export class Step extends Schema.Class<Step>("effect-browser/Plan/Step")({
   toPoint: Schema.optional(ViewportPoint),
   /** The box of what a step aimed at by point found there, so replay aims at the same place in it. */
   box: Schema.optional(Box),
-  /** The input slot whose text a `type` step types. */
+  /**
+   * The input slot whose text a `type` step types, or whose address a `navigate` step goes to, as
+   * its recorded address had a credential withheld.
+   */
   input: Schema.optional(Schema.String),
   /** The slot's text went into a secret field, so replay types it into nothing else. */
   secret: Schema.optional(Schema.Literal(true)),
@@ -159,7 +164,12 @@ export const fromEvents = (events: Iterable<BrowserEvent>): Plan => {
         point,
         toPoint: pointIn(drag?.[1]),
         box: point === undefined ? undefined : action.box,
-        input: action.name === "type" ? slotFor(taken, action.subject?.name) : undefined,
+        input:
+          action.name === "type"
+            ? slotFor(taken, action.subject?.name)
+            : action.name === "navigate" && action.target?.includes(redacted) === true
+              ? slotFor(taken, "address")
+              : undefined,
         secret: action.name === "type" && action.text === redacted ? true : undefined,
         options: action.options,
       });
@@ -239,7 +249,7 @@ const take = (
 
   switch (step.action) {
     case "navigate":
-      return page.goto(step.target ?? step.url);
+      return page.goto(step.input === undefined ? (step.target ?? step.url) : text);
     case "back":
       return page.back;
     case "reload":

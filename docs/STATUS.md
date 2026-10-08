@@ -14,6 +14,8 @@
   context's sessions, which `open` labels in their user metadata, before it writes, and fails
   `ContextHeld` while they cannot be confirmed ended, so no context is held with no way out and no
   two sessions write to one. `Browserbase.reconcile` does the same without opening a session.
+  Each create carries a nonce of its own, so a session that a create whose answer was lost made is
+  found and ended, whether it persists a context or not, rather than billing until its timeout.
   `effect-browserbase/testing` holds the Browserbase API in memory, with scripted faults and
   Browserbase's own answer to each id shape, and the contract checks it passes. Pages' screencasts
   run on a capture connection of their own, a second, read-only connection to the session, so a
@@ -32,8 +34,9 @@
   cause, `connection`, `session` or `released`, also `browser.disconnected`; frames carry their
   document and address. A failure on a page that is gone is `Closed` with its cause, calls in
   flight fail at once with a lost browser or a crashed page, and `BrowserError.consequence` says
-  what any failure leaves and whether to repeat it. Every reported address loses its userinfo and
-  credential parameters, and init scripts run where their `match` allows, a popup's first document
+  what any failure leaves and whether to repeat it. Every reported address, the outline's links
+  among them, loses its userinfo and its credentials' values and keeps what it is about, such as
+  `?code=BTC`, and init scripts run where their `match` allows, a popup's first document
   included. Chromium announces a title change only with the next address change, so titles are
   read on demand.
 - `effect-browser-human-strokes`: an optional pointer planner, `HumanStrokes.motion`, over 32,130
@@ -218,8 +221,13 @@ and each becoming the next beta.
   reach, only on a page that was still, so an inert click beside boards ticking every 0.25 to 6 s
   was credited with none of 401 ticks and 96 chat lines, where it had been with about half the
   slower boards' ticks and every line; a moment tells an action that changes followed but none
-  names as a step, and claims nothing of a window its record did not see. Its beta,
-  `0.3.0-beta.2`, is prepared in the changelog and the package versions, and is not tagged.
+  names as a step, and claims nothing of a window its record did not see. So are its fixes for
+  identity and lifetime: a capture's reader is told the browser's loss whichever connection hears
+  it first, and a release as released; a wait for a still screen holds through a stall on the
+  capture connection; an address withholds each credential's value and keeps what it is about, the
+  outline's links too, and replay goes to an address it withheld only where told; and a lost
+  create's session is found by its own nonce and ended. Its beta, `0.3.0-beta.2`, is prepared in
+  the changelog and the package versions, and is not tagged.
 - **Phase 3, concurrency and presentation, has begun.** Per-page admission is in: the browser-wide
   input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
   pages have a budget, and guarded typing approves its field once. So are the stage, the presenter
@@ -232,8 +240,8 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 15,188                 | 11,064 → 16,339 | 129 → 186                 |
-| `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,643     | 32 → 36, and 14 `testing` |
+| `effect-browser`               | 8,871 → 15,286                 | 11,064 → 16,488 | 129 → 186                 |
+| `effect-browserbase`           | 807 → 1,410, and 595 `testing` | 611 → 1,813     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
 `effect-browser`'s figures include phase 2, as each part landed: the supervisor, 602 source lines,
@@ -241,7 +249,8 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 exports; the capture connection's port and transport, 324 source lines, 43 test lines and 1 export;
 and the change record, 1,423 source lines, 728 test lines and 6 exports. The phase's simplify pass
 took 118 source lines back out, and its review's fixes for the change record's causes and moments
-added 95 source lines and 78 test lines. The figures include phase 3's per-page admission too,
+added 95 source lines and 78 test lines, and those for captures, readiness, addresses and replay
+98 source lines and 149 test lines. The figures include phase 3's per-page admission too,
 508 source lines, 411 test lines and 3 exports, most of it the lane, which deleting the
 browser-wide input lock paid for only in part; and the stage, the presenter and the wait after
 input, 525 source lines, 359 test lines and 9 exports, which deleting `humanize`, its prose slips

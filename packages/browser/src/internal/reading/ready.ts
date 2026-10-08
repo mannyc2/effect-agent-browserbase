@@ -5,8 +5,9 @@
  * the capture must then show no frame that long. A capture's silence cannot prove the last paint
  * arrived: a frame can be held on its way by a stalled connection, and Chromium sends frames only
  * while few acknowledgements are unanswered. So the spell counts only while every acknowledgement
- * is answered, and it ends with the page's evidence once more, whose answer comes behind every
- * frame sent before it: a frame that arrives first starts the spell again. Where the page's changes
+ * is answered, and it ends with the page's evidence once more and, where the capture runs on a
+ * connection of its own, a round trip there: each answer comes behind every frame sent before it on
+ * its connection, and a frame that arrives first starts the spell again. Where the page's changes
  * are recorded, its evidence includes them: nothing in view may have changed for the spell, which a
  * DOM page's changes show better than its paint, and no stall on the way can hide.
  */
@@ -77,7 +78,7 @@ export const make =
             yield* spell;
             const before = received;
 
-            yield* settled(until);
+            yield* Effect.all([settled(until), capture.sync], { concurrency: 2, discard: true });
             if ((yield* look) >= millis && received === before) return;
           }
         });

@@ -25,6 +25,7 @@ import { type CaptureStats, Frame, Image, type ScreencastOptions } from "./Frame
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
 import { FailFast } from "./internal/page/lane.ts";
+import * as Url from "./internal/page/url.ts";
 import type { Window } from "./Moment.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
@@ -354,8 +355,11 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Inp
   ),
 }) {}
 
-/** What replaces text typed into a `secret` field, in requests and in the recorded `Action`. */
-export const redacted = "••••••••";
+/**
+ * What replaces text typed into a `secret` field, in requests and in the recorded `Action`, and a
+ * credential's value in every address the library reports.
+ */
+export const redacted = Url.withheld;
 
 /**
  * Run page operations without waiting their turn: on a page busy with other operations, each fails

@@ -2,7 +2,7 @@
  * One CDP screencast per page, with bounded transport replies and per-reader loss accounting.
  * Native callbacks own synchronous bookkeeping; the page scope owns startup and teardown.
  */
-import { Clock, Duration, Effect, Exit, Option, Queue, Semaphore, Stream } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Option, Queue, Semaphore, Stream } from "effect";
 
 import { type BrowserError, InvalidRequest } from "../../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../../Frame.ts";
@@ -76,6 +76,8 @@ export interface Controller {
   /** Lifetime counts, or those of the latest `windowMillis`, at most `countsKept`. */
   readonly stats: (windowMillis?: number) => Effect.Effect<CaptureStats>;
   readonly active: Effect.Effect<boolean>;
+  /** Once every frame the running capture's connection sent before now has arrived. */
+  readonly sync: Effect.Effect<void, BrowserError>;
   /** Run a clipped or scaled picture of the page, keeping what it draws out of the capture. */
   readonly excluding: <A, E, R>(
     picture: Effect.Effect<A, E, R>,
@@ -419,12 +421,50 @@ const sizeFilter = (
     };
   });
 
+/**
+ * A running capture's failure, told once its page's fate is known. A capture can fail before the
+ * page's own session hears why: a capture connection hears the browser's end before the connection
+ * that drives the page does, and an acknowledgement can be refused before the browser's loss is
+ * known. So the failure waits for the page's scope to close, `closed`, and is then the page's own
+ * end or its browser's loss, as `gone` reads it; or, if the page still stands after `deadline`,
+ * the capture's own.
+ */
+const told =
+  (closed: Deferred.Deferred<void>, gone: () => BrowserError, clock: Clock.Clock) =>
+  (failure: BrowserError) =>
+    Deferred.await(closed).pipe(
+      Effect.map(gone),
+      Effect.timeoutOrElse({ duration: deadline, orElse: () => Effect.succeed(failure) }),
+      Effect.provideService(Clock.Clock, clock),
+      Effect.flatMap(Effect.fail),
+    );
+
+/**
+ * Once every frame the running capture's transport sent before now has arrived; a capture that
+ * has failed, or whose round trip fails, fails as `why` tells it.
+ */
+const synced = (
+  current: Generation | undefined,
+  why: (failure: BrowserError) => Effect.Effect<never, BrowserError>,
+  error: (cause: unknown) => BrowserError,
+): Effect.Effect<void, BrowserError> => {
+  if (current === undefined) return Effect.void;
+  if (current.failure !== undefined) return why(current.failure);
+
+  return Effect.tryPromise({ try: () => current.transport.sync(), catch: error }).pipe(
+    Effect.catch(why),
+    Effect.asVoid,
+  );
+};
+
 export const make = (options: Options) =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
     const replies = new Set<Promise<void>>();
     let generation: Generation | undefined;
-    let closed = false;
+    // Done as the page's scope closes, once the page has gone and its browser's loss, if any, is
+    // known.
+    const closed = yield* Deferred.make<void>();
     // The latest stop whose reply has not settled. A new capture waits for it rather than
     // assuming it was lost; it is never submitted again.
     let unsettledStop: Promise<void> | undefined;
@@ -507,6 +547,7 @@ export const make = (options: Options) =>
 
     const gone = () => options.error(new Error("Target page has been closed"));
     const stopDeadline = () => options.error(new Error("screencast stop exceeded its deadline"));
+    const why = told(closed, gone, options.clock);
 
     // A stop's reply, awaited for at most `deadline`; `late` is what a stop past it means.
     const settled = <E>(reply: () => Promise<void> | undefined, late: Effect.Effect<void, E>) =>
@@ -544,7 +585,7 @@ export const make = (options: Options) =>
     const acquire = (screencast: ScreencastOptions) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
-          if (closed) return yield* gone();
+          if (Deferred.isDoneUnsafe(closed)) return yield* gone();
           let current = generation;
           const starting = current === undefined;
 
@@ -553,7 +594,7 @@ export const make = (options: Options) =>
             const [transport, { calibration, viewport }] = yield* prepare(options, screencast);
             const size = screencast.size ?? viewport;
 
-            if (closed) return yield* gone();
+            if (Deferred.isDoneUnsafe(closed)) return yield* gone();
 
             const created: Generation = {
               subscribers: new Set(),
@@ -629,12 +670,10 @@ export const make = (options: Options) =>
           // The callback API must apply sliding synchronously; PubSub.publishUnsafe skips it.
           const subscription = yield* Queue.sliding<Envelope>(subscriberCapacity);
 
-          if (current.failure !== undefined) {
-            yield* Queue.shutdown(subscription);
-
-            return yield* current.failure;
-          }
           current.subscribers.add(subscription);
+          // A reader that joins a capture that has failed is told as its other readers are.
+          if (current.failure !== undefined)
+            Queue.offerUnsafe(subscription, { _tag: "Failure", error: current.failure });
           const baseline = delivered;
 
           if (starting) {
@@ -694,7 +733,7 @@ export const make = (options: Options) =>
           return Stream.fromEffectRepeat(
             Queue.take(lease.subscription).pipe(
               Effect.flatMap((envelope) => {
-                if (envelope._tag === "Failure") return Effect.fail(envelope.error);
+                if (envelope._tag === "Failure") return why(envelope.error);
 
                 return Effect.sync(() => {
                   if (envelope.sequence > previous + 1)
@@ -715,7 +754,7 @@ export const make = (options: Options) =>
         Effect.suspend(() => {
           const current = generation;
 
-          closed = true;
+          Deferred.doneUnsafe(closed, Exit.void);
           if (current === undefined) return Effect.void;
           fail(current, gone());
 
@@ -729,6 +768,7 @@ export const make = (options: Options) =>
       latest: Effect.sync(() => latest),
       recent: Effect.sync(() => history),
       active: Effect.sync(() => generation?.accepting === true),
+      sync: Effect.suspend(() => synced(generation, why, options.error)),
       excluding: pictures.excluding,
       stats: (windowMillis?: number) =>
         Effect.sync(

@@ -15,7 +15,7 @@ import {
 } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { choose } from "../src/internal/reading/choose.ts";
-import { type FindQuery, Found, type Page } from "../src/Page.ts";
+import { type FindQuery, Found, type Page, redacted } from "../src/Page.ts";
 import * as Plan from "../src/Plan.ts";
 import { DriftSite, DriftSiteLayer, type Operator, operators } from "./drift.ts";
 
@@ -421,6 +421,49 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
       const error = yield* Effect.flip(Plan.replay(page, plan));
 
       assert.deepStrictEqual([error.step, error.reason._tag], [0, "Drifted"]);
+    }),
+  );
+
+  // A walk to what a page shows, named under `code` as a stock code is, then to an address with a
+  // token. The first replays as it was; the second goes only where the caller says, never to the
+  // address without its token, so the walk cannot buy another coin and call it done.
+  it.effect("goes to each recorded address, and to one with a credential where told", () =>
+    Effect.gen(function* () {
+      const site = yield* DriftSite;
+      const token = "tok8f3a91c2d7e4b6a5";
+      const shown = site.url("/buy?coin=BTC&code=BTC");
+      const signed = site.url(`/buy?coin=ETH&token=${token}`);
+      const recording = yield* fresh;
+
+      yield* site.drift({ operator: "none", seed: 1 });
+      yield* recording.goto(shown);
+      yield* recording.goto(signed);
+      const plan = Plan.fromEvents(yield* recording.recentEvents);
+
+      assert.deepStrictEqual(
+        plan.steps.map(({ target, input }) => [target, input]),
+        [
+          [shown, undefined],
+          [site.url(`/buy?coin=ETH&token=${redacted}`), "address"],
+        ],
+      );
+      assert.notInclude(JSON.stringify(yield* Schema.encodeEffect(Plan.Plan)(plan)), token);
+
+      const unaddressed = yield* fresh;
+      const error = yield* Effect.flip(Plan.replay(unaddressed, plan));
+
+      assert.deepStrictEqual(
+        [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
+        [1, "InvalidRequest"],
+      );
+      assert.strictEqual(yield* unaddressed.url, "about:blank");
+
+      const replayed = yield* fresh;
+
+      yield* Plan.replay(replayed, new Plan.Plan({ version: 1, steps: plan.steps.slice(0, 1) }));
+      assert.strictEqual(yield* truthOf(replayed), "buy:BTC");
+      yield* Plan.replay(replayed, plan, { inputs: { address: signed } });
+      assert.strictEqual(yield* truthOf(replayed), "buy:ETH");
     }),
   );
 
