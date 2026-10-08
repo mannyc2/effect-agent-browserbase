@@ -110,6 +110,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         );
         assert.strictEqual(emptied.action?.subject?.name, "Empty");
         assert.strictEqual(emptied.action?.correlation, "call-1");
+        // The page went nowhere while the click ran, though it had moved before it.
+        assert.isUndefined(emptied.navigated);
 
         const form = (yield* Site).url("/form");
 
@@ -507,15 +509,26 @@ unit.live.prop(
               : "no outcome",
           name,
         );
-        // A receipt or a failure crosses a process boundary as JSON and comes back the same.
-        const json = Schema.toCodecJson(Schema.Union([Tools.Receipt, BrowserError]));
-        const sent = JSON.stringify(yield* Schema.encodeUnknownEffect(json)(answered));
+
+        // The call, and its receipt or failure, cross a process boundary as JSON and arrive the same.
+        const across = <S extends Schema.Top>(schema: S, value: unknown) =>
+          Effect.gen(function* () {
+            const json = Schema.toCodecJson(schema);
+            const sent = JSON.stringify(yield* Schema.encodeUnknownEffect(json)(value));
+
+            return yield* Schema.decodeUnknownEffect(json)(JSON.parse(sent));
+          });
+
+        // As the RPC's own schemas carry them.
+        const rpcOf = Tools.PageRpcs.requests.get(name);
+        const carries = Exit.isSuccess(method) ? rpcOf?.successSchema : rpcOf?.errorSchema;
 
         assert.deepStrictEqual(
-          yield* Schema.decodeUnknownEffect(json)(JSON.parse(sent)),
-          answered,
+          yield* across(rpcOf?.payloadSchema ?? Schema.Never, input),
+          input,
           name,
         );
+        assert.deepStrictEqual(yield* across(carries ?? Schema.Never, answered), answered, name);
       }
     }),
   { arbitrary: { runs: 25 } },

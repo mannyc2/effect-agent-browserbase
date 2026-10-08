@@ -283,12 +283,13 @@ answers are judged rather than matched.
 | 2   | Vision first: a screenshot after each batch and no outline; pixel targets and `browser_zoom`; no `browser_snapshot`, `browser_select` or waiting for text | As arm 5                                       |
 | 5   | `Agent.run`, the default: an outline and a screenshot after each batch                                                                                    | `Moment.capture` as it is: frames and timeline |
 
-Arm 5 is the default. Arms 1 and 2 run in the bench's own loop over the public `Tools`
-(`Arms.ts`), because `Agent.run` cannot replace its observation, its tools or its system prompt.
-The loop keeps `Agent.run`'s rules: a turn's calls halt on the first failure or on `done`, the
+Arm 5 is the default. Arms 1 and 2 are configurations of `Agent.run` on the task's page
+(`Arms.ts`): each replaces the observation, the tools, from the default ones, and the system
+prompt, and keeps the loop's rules: a turn's calls halt on the first failure or on `done`, the
 latest three pictures stay in the conversation, and a response that cannot be read goes back to
-the model. Arm 1 keeps the halt too, although the tools ran every call before batching. Arms 3
-(parsed frames), 4 (a local grounder) and 6 (vision-native computer use) are not built.
+the model. Arm 1 keeps the halt too, although the tools ran every call before batching. Each
+arm's tools are pinned to the task's page, so none offers `browser_tabs`. Arms 3 (parsed frames),
+4 (a local grounder) and 6 (vision-native computer use) are not built.
 
 ```sh
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \

@@ -135,10 +135,14 @@ describe("a loss", () => {
       yield* holdRenderer(page, 2000);
       const reading = yield* Effect.forkChild(Effect.flip(page.text()));
       const navigating = yield* Effect.forkChild(Effect.flip(other.goto(site.url("/late"))));
+      const titling = yield* Effect.forkChild(page.title);
 
       yield* Effect.sleep("100 millis");
       proxy.drop();
       assert.strictEqual(yield* browser.disconnected, "connection");
+      // The browser answers a title whatever the page's script is doing, so the busy page held up
+      // nothing, and the drop never stood in for its title with an empty one.
+      assert.strictEqual(yield* Fiber.join(titling), "one");
 
       for (const [error, dispatched] of [
         [yield* Fiber.join(reading), false],

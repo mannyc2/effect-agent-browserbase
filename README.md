@@ -29,6 +29,7 @@ const program = Effect.gen(function* () {
   yield* page.goto("https://news.ycombinator.com");
 
   const result = yield* Agent.run("Report the title and points of the top story.", {
+    page,
     answer: Schema.Struct({ title: Schema.String, points: Schema.Finite }),
   });
 
@@ -141,36 +142,50 @@ prompt.
 
 ## How the tools work
 
-`Tools.make` builds an `effect/ai` toolkit over the current tab: `browser_navigate`, `browser_back`,
-`browser_snapshot`, `browser_zoom`, `browser_click`, `browser_hover`, `browser_type`,
-`browser_press`, `browser_scroll`, `browser_drag`, `browser_select`, `browser_wait` and
-`browser_tabs`. `Agent.run` adds `done` and `give_up`.
+`Tools.make({ page })` builds an `effect/ai` toolkit pinned to a page: `browser_navigate`,
+`browser_back`, `browser_snapshot`, `browser_zoom`, `browser_click`, `browser_hover`,
+`browser_type`, `browser_press`, `browser_scroll`, `browser_drag`, `browser_select` and
+`browser_wait`. `Tools.make({ browser, follow })` adds `browser_tabs` and acts on the tab the model
+last saw. `Agent.run` takes the same page or browser, and adds `done` and `give_up`.
 
 - A snapshot is a compact outline of the viewport. Controls carry refs such as `e12`; a ref from an
   old snapshot fails as stale rather than naming another element.
 - Anything a snapshot cannot show, such as a canvas game, a chart or a video, takes x and y in
   viewport CSS pixels, as they appear in a full screenshot. Pixel click receipts name the element
   under that exact point, with its role and accessible name when available.
-- Actions return short receipts. `Agent.run` executes each turn's calls in order, stops at the first
+- Each call answers with a receipt, `Tools.Receipt`: what it did and, for an action, what followed
+  on its page while it ran: a dialog and how it was answered, where the page went, a tab it opened
+  and what visibly changed. The model reads it as a few lines of text; your code reads the value,
+  with the `Action` it recorded, whose `correlation` is the model's call id. A failure is the
+  call's `BrowserError`. `Agent.run` executes each turn's calls in order, stops at the first
   failure or completion, and answers the remaining calls as not executed. A loop of your own gets
-  the same by spreading a fresh `yield* tools.batch` into each `generateText` call. When a tab
-  opens, the tools follow it: in the receipt when it registers in time, otherwise when they next
-  look. Actions run only on the tab last observed, since the model planned them on what it saw
-  there: after a tab opens, the current tab closes or `browser_tabs` switches, later actions do
-  nothing and say so until the new current tab has been observed.
-- The model receives one outline and screenshot at the start and after each turn, including failed
-  batches. If the browser is gone, the run fails with its `BrowserError` rather than calling the
-  model again. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
-  is `"both"`. A malformed `done` answer goes back to the model to correct, and so does a response
-  that calls a tool that does not exist or passes arguments that are not JSON: none of its calls
-  run. A provider reply its client cannot decode ends the run instead.
+  the same by spreading a fresh `yield* tools.batch` into each `generateText` call.
+- Tools that follow a browser's tabs act on the tab the model last saw, since it planned on what it
+  saw there. A tab that opens is shown at the next look as `follow` says: `"select"`, the default,
+  makes it current without bringing it to front, so the page on air and an operator's view stay;
+  `"front"` brings it to front; `"never"` stays. After `browser_tabs` switches, actions wait until
+  the model has seen the new tab.
+- The model receives an outline and a screenshot at the start and after each turn that does not
+  end the run, including failed batches. If the browser is gone, or a pinned page, the run fails
+  with its `BrowserError` rather than calling the model again. `observe` replaces what it sees, as
+  a function of the page: `Agent.observe("outline")` or `Agent.observe("screenshot")` when only one
+  is needed, or your own. `tools` replaces the tools from the default ones, to rename, wrap, remove
+  or add them, and `system` the system prompt. A malformed `done` answer goes back to the model to
+  correct, and so does a response that calls a tool that does not exist or passes arguments that
+  are not JSON: none of its calls run. A provider reply its client cannot decode ends the run
+  instead. A run that ends without an answer fails with `AgentError`, which keeps its usage and its
+  conversation.
+- Each page operation is one contract, so the tools, `Tools.on(page)`'s methods and the RPC group
+  `Tools.PageRpcs` agree: `PageRpcs.toLayer(Tools.on(page))` serves a page's operations to another
+  process, where the model runs, and they answer there with the same receipts.
 - `browser_navigate` and `browser_tabs` open only http and https addresses, `data:` URLs and
   `about:blank`; a model cannot open a local file. An address without a scheme, such as
   `example.com` or `localhost:3000`, opens over HTTPS, or HTTP on loopback; `Page.goto` reads
   addresses the same way and also opens the `file:` URLs its caller passes.
-- `browser_zoom` takes a viewport region (`x`, `y`, `width`, `height`) and returns its crop beside
-  the next observation, including in outline mode. Captions give the source page and viewport
-  origin; clicks still use viewport coordinates. A batch can request at most eight crops.
+- `browser_zoom` takes a viewport region (`x`, `y`, `width`, `height`); its receipt holds the crop,
+  which `Agent.run` shows beside the next observation, whatever it observes. Captions give the
+  viewport origin, and the tab where tools follow tabs; clicks still use viewport coordinates. At
+  most eight crops follow a batch.
 - Pictures go to the model in a user message after the tool results. Only the latest few stay in
   the conversation, and older ones are replaced several at a time, so the prompt cache keeps working.
 - A page waits only for itself. An action has its page to itself, in the order actions were asked,
@@ -214,9 +229,8 @@ prompt.
   glide plans, submission receipts, button and key phases, wheel input and cursor shape. Each page
   has its own pointer position. Events have sequence cursors for bounded replay; a lagging reader
   gets an explicit history-expired error instead of missing events silently.
-- `additionalTools` accepts an `effect/ai` toolkit, merged after the browser tools. Supply its
-  handlers through their usual layer; on a name clash with a browser tool the added toolkit wins.
-  `done` and `give_up` stay the agent's own. The same batch halting applies to those tools.
+- `tools` adds a caller's own tools beside the browser's, with their handlers. `done` and
+  `give_up` stay the agent's own. The same batch halting applies to those tools.
 - `onStep` sees each model call and its tool calls; failing stops the run with that error, which is
   how a caller enforces a budget. Services it uses become requirements of the run. A run fails
   with `AgentError | AiError | BrowserError`, plus `onStep`'s error.

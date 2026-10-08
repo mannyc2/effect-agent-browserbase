@@ -53,10 +53,19 @@
   times. The core planner, `Motion.lognormal`, uses the tuned two-stroke sigma-lognormal model; a
   presenter takes either as a value. Complete bounded plans are validated and admitted before
   publication and input.
-- `Agent.run` and `Tools.batch` run a turn's tool calls in order and halt on the first failure,
-  with one outline and screenshot per turn, configurable observations and caller toolkits. A
-  response that calls an unknown tool gets a correction rather than ending the run, a browser
-  with no page ends it, and the tools follow a newly opened tab without acting on it unseen.
+- Tools and an agent that take what they act on as a value. `Tools.make({ page })` pins the tools
+  to a page; `Tools.make({ browser, follow })` acts on the tab the model last saw and shows a new
+  tab at its next look without bringing it to front, unless asked. Each call answers with a
+  receipt: what it did and what followed on its page while it ran, a dialog and how it was
+  answered, a navigation, a tab it opened and what visibly changed, which a model reads as text and
+  a caller as a value, the recorded `Action` carrying the model's call id. Each page operation is
+  one contract, from which the tools, `Tools.on(page)` and an RPC group are made, so a page's
+  operations serve another process with the same receipts. `Agent.run` takes a page or a browser,
+  and its observation, tools and system prompt can each be replaced; the default observation reads
+  what it can and names what it could not. Its batches run in order and halt on the first failure;
+  a turn that ends the run is not observed, a response that calls an unknown tool gets a correction
+  rather than ending the run, a browser or a pinned page gone ends it, and a run that ends without
+  an answer keeps its usage and conversation in its error.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
 - Structured reads in one call to the page. `Page.find` returns the elements that a query of role,
@@ -124,8 +133,8 @@
   left. A wait for a turn fails `Busy`, never `Timeout`, and `Page.failFast` fails it at once. A
   click on one page no longer waits for typing at a person's pace on another, which held an on-air
   click for about 9.5 s in the release review. Identical reads in flight share one call, a read whose
-  callers gave up serves the next caller to ask the same until the page's next action, and
-  `observe` returns what it could read, with why the rest is missing. `Browser.Options.maxPages`
+  callers gave up serves the next caller to ask the same until the page's next action.
+  `Browser.Options.maxPages`
   bounds the open pages, failing `Limit`. `page.state` says what the library already knows of a
   page at no call and with no wait: its address, document and load, its newest frame, and the
   viewport's text and title as last read, each with when it was learned.
@@ -181,8 +190,8 @@
   shared model admission budget. Every trial is graded, an infrastructure failure, denied or
   unrun, and summaries keep those
   denominators apart. `--arm` runs the paired experiment's arms 1 (an outline with every action),
-  2 (vision first) and 5 (`Agent.run`) on the same seeds; arms 1 and 2 use a bench loop over the
-  public `Tools`. The bench is an `effect/cli` program (`run`, `report`, `judges`) on `Config` and
+  2 (vision first) and 5 (`Agent.run`'s defaults) on the same seeds, each a configuration of
+  `Agent.run` on the task's page. The bench is an `effect/cli` program (`run`, `report`, `judges`) on `Config` and
   `FileSystem`; its results are versioned Schema records, and a report states its estimand and
   tests arms with exact paired tests. Paid runs remain opt-in.
 - `demos` (private): a static site that replays bench runs recorded with `--record`: the
@@ -243,7 +252,11 @@ and each becoming the next beta.
   the presenter and the wait after input: `humanize` and its fixed sleeps are gone. And so have
   windows: a page's events, changes and frames over a window that can end in the past, moments as
   windows that end at a picture and record what they could not read rather than fail,
-  `stillness`, and `page.state`.
+  `stillness`, and `page.state`. And so have page-bound tools and the open agent: tools pinned to a
+  page or following tabs without taking the screen, receipts of what each call caused, the page
+  operations as contracts with their tools, page-bound methods and RPC group, and an agent whose
+  observation, tools and prompt are values; the bench's arms are its configurations, and its copy
+  of the agent's loop is gone.
 - **Phase 4, contexts and follow-ups, has begun.** Stored contexts are durable across processes:
   `ContextLease` replaces the process-wide record of writers, `verifyContext` reads a login back,
   `attach` resumes a session from another process, and `supervise({ keep })` leaves a session
@@ -264,7 +277,7 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 15,532                 | 11,064 → 16,954 | 129 → 190                 |
+| `effect-browser`               | 8,871 → 15,782                 | 11,064 → 17,089 | 129 → 186                 |
 | `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,376     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
@@ -280,7 +293,10 @@ browser-wide input lock paid for only in part; and the stage, the presenter and 
 input, 525 source lines, 359 test lines and 9 exports, which deleting `humanize`, its prose slips
 and the fixed sleeps paid for in part; and windows, moments as windows, `stillness` and the page's
 state, 214 source lines, 393 test lines and 4 exports, which deleting `Moment`'s own window,
-`latestFrame` and the browser's own listeners for loads paid for in part. Phase 4's contexts,
+`latestFrame` and the browser's own listeners for loads paid for in part; and page-bound tools,
+receipts and the open agent, 250 source lines and 135 test lines, with 4 exports fewer, which
+deleting the hand-written tools, `Page.observe` and its observation types paid for in part, as the
+bench's copy of the agent's loop, 280 lines outside the package, did. Phase 4's contexts,
 resume and keep added 32 source lines and 73 test lines there, the supervisor's `keep`, and the
 rest to `effect-browserbase`: 294 source lines, 27 in `testing`, 557 test lines and 5 exports, the
 new `ContextLease` and `verifyContext`. Without them, phase 1 leaves the package at 11,431 source

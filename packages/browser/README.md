@@ -34,7 +34,7 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Presentation` | Input performed for viewers: a presenter, and its views of pages                     |
 | `Stage`        | The source of a live output, switched between pages and stamped                      |
 | `BrowserError` | Typed failures, whether input reached the page first, and what each leaves           |
-| `Tools`        | The `effect/ai` browser toolkit                                                      |
+| `Tools`        | The `effect/ai` browser tools, pinned to a page or following tabs, with receipts     |
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
 | `Change`       | What visibly changed on a page over a window, element by element                     |
@@ -50,28 +50,53 @@ so, and the turn counts as a step. `onStep` reports it with `rejected` set. A re
 provider's client cannot decode is not the model's to correct and ends the run with its `AiError`.
 
 `Agent.run` fails with `AgentError | AiError | BrowserError | E`: how the agent ended (`StepLimit`,
-`GaveUp` or `Refused`), the model's provider, the browser, or `E`, what `onStep` fails with. An
-added tool's failure goes back to the model rather than ending the run. The run needs the
-`Browser`, a `LanguageModel`, the added tools' handlers and whatever `onStep` uses. A caller that
-spells out the options writes `Agent.Options<E, Extra, R>`, with `R`, `onStep`'s services, last.
+`GaveUp` or `Refused`), with what it spent and its whole conversation, the model's provider, the
+browser, or `E`, what `onStep` fails with. A tool's failure goes back to the model rather than
+ending the run. The run takes its page, or a browser whose tabs its tools follow, as a value, and
+needs a `LanguageModel` and whatever `onStep` and `observe` use.
 
-The model gets one outline and screenshot at the start and after each turn. `observation` selects
-`"outline"`, `"screenshot"`, or `"both"` (the default). When the current page cannot be observed,
-the model is told why and the run goes on; when no page can be had at all, as after the browser
-closed, the run fails with that `BrowserError` instead of calling the model again. The turn
-before it is still reported to `onStep`, and an answer it gave with `done` is still returned. `Page.observe` returns that observation as
-a schema value: what it could read, with `missing` saying why the rest could not, which the model
-is told too. It fails only when nothing asked for could be read. `Tools.make` returns receipts. A caller writing its own loop spreads a fresh
-`yield* tools.batch` into each `generateText` call: it carries the toolkit with the same ordered,
-halting execution and the `concurrency: 1` that `effect/ai` needs to keep calls in order.
+The model gets an outline and a screenshot at the start and after each turn that does not end the
+run. `observe` replaces that with any function of the page; `Agent.observe("outline")`,
+`Agent.observe("screenshot")` and `Agent.observe("both")`, the default, read what they can and name
+what they could not, failing only when nothing could be read. When the page cannot be observed,
+the model is told why and the run goes on; when the browser is gone, or a pinned page, the run
+fails with that `BrowserError` instead of calling the model again. The turn before it is still
+reported to `onStep`, and an answer it gave with `done` is still returned. `system` makes the
+system prompt from the standard one. `tools` makes the run's tools from the default ones: it gets
+them with their handlers, which a caller wraps, renames under tools of its own (`Tool.make` with
+the default's schemas) or drops, and returns a toolkit and its handlers, its own tools' included.
+
+Each call answers with a `Tools.Receipt`: what it did and, for an action, what followed on its page
+while it ran, from the page's events and one read of its changes: the `Action` it recorded, the
+dialogs that opened and how each was answered (an alert accepted, a confirm dismissed), where the
+page went, the tabs it opened and what changed, with what could not be read in `missing`. The
+model is told it as text, up to three of the changes the action's input caused; `onStep` and
+`generateText`'s tool results hold the value. A failure is the call's `BrowserError`, told to the
+model with what it leaves: a tab gone, a stale ref, an action that may have taken effect, or a page
+busy with other work. The actions a call performs record the model's call id as their
+`correlation`; `Page.correlate(id)` does the same for any effect.
+
+`Tools.make({ page })` pins the tools to a page. `Tools.make({ browser, follow })` adds
+`browser_tabs`, and its calls act on the tab the model last saw: a tab that opens meanwhile is
+shown at the next look of `tools.page` as `follow` says, `"select"` (the default) without bringing
+it to front, `"front"` bringing it to front, `"never"` not at all. After `browser_tabs` switches,
+reads see the new tab and actions wait until it is seen. A caller writing its own loop spreads a
+fresh `yield* tools.batch` into each `generateText` call: it carries the toolkit with the same
+ordered, halting execution and the `concurrency: 1` that `effect/ai` needs to keep calls in order.
 `Tools.batch` does the same for any toolkit with handlers. After the batch, the caller observes
-the current `tools.page` and drains `tools.takeZooms` into that same observation message.
+`tools.page`, with the crops the receipts hold.
 
-`browser_zoom` captures a region in viewport CSS pixels when the tool runs. Requested crops arrive
-with the next observation even in outline mode, labeled with their tab's number and viewport origin.
-At most eight crops may await an observation. `Page.zoom` exposes the same capture as a `Zoom`
-schema value with `region` and `image`; crop pixel coordinates need the region's origin added before
-using them as click coordinates.
+Each page operation is one contract: its parameters, its receipt and `BrowserError` as schemas,
+and one handler. The tools are made from it, and so are `Tools.on(page)`, the operations bound to
+a page, and `Tools.PageRpcs`, an `effect/rpc` group of them. A program that runs the browser in one
+process and the model in another serves `PageRpcs.toLayer(Tools.on(page))` and calls it from the
+other, where the receipts and failures arrive as they left.
+
+`browser_zoom` captures a region in viewport CSS pixels when the tool runs; its receipt holds the
+crop, which the agent shows with the next observation whatever it observes, labeled with its
+viewport origin, and its tab's number where the tools follow tabs. At most eight crops follow a
+batch. `Page.zoom` exposes the same capture as a `Zoom` schema value with `region` and `image`;
+crop pixel coordinates need the region's origin added before using them as click coordinates.
 
 `Page.click` returns a `ResolvedTarget` captured before input: the requested point, element label,
 role, accessible name, context, cursor and link target. Pixel targeting resolves through the page
@@ -239,13 +264,11 @@ the first step it cannot take, with a `ReplayError` naming the step and why: `Mi
 ended on another site), or the step's `BrowserError`. Nothing is replayed automatically, and a plan
 of another version does not decode.
 
-Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
-merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
-share the batch's halt behavior. `done` and `give_up` end the run and stay the agent's own: a
-toolkit that names either does not type-check.
-A failure of a tool with failure mode `"error"` reaches the model encoded by that tool's failure
-schema and marked as possibly effective; a call whose parameters fail validation never reaches its
-handler and answers as not executed.
+A caller's own tools go in the set `tools` returns, and their calls share the batch's halt
+behavior. `done` and `give_up` end the run and stay the agent's own: a set that names either does
+not type-check. A failure of a tool with failure mode `"error"` reaches the model encoded by that
+tool's failure schema and marked as possibly effective; a call whose parameters fail validation
+never reaches its handler and answers as not executed.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action, the
 resolved element, the page's URL and title, and the `facts` the page's structure establishes:
@@ -467,9 +490,9 @@ miss a final paint, so a frame is only ever as current as its age. No read reuse
 before the page's current document began, when the page's own session saw its main frame commit
 it: a page that keeps painting while the next document loads would otherwise leave its own frames
 the newest when the navigation returns. Otherwise a new screenshot is
-taken, which `frame` returns as a `Screenshot`-timed frame. `observe` takes a screenshot and a
-`Moment`'s picture uses `after: "input"`, so a stopped capture, a lost final paint or later input
-never presents older paint as the page an action left.
+taken, which `frame` returns as a `Screenshot`-timed frame. A screenshot, which the agent's
+observations take, and a `Moment`'s picture use `after: "input"`, so a stopped capture, a lost
+final paint or later input never presents older paint as the page an action left.
 
 A new picture goes on the page's own protocol session. Where a device pixel is a CSS pixel and
 nothing is cropped, it is one `Page.captureScreenshot`; a crop, or another device pixel ratio, adds
@@ -568,9 +591,12 @@ counting the page's documents from 0, the one it had when the browser began trac
 after the `Navigated` that began the document; `DialogShown`; and `PageClosed`, by the
 page or because it crashed. A document count belongs to the page within one `Browser`, and starts
 again on a new connection. Each frame carries the document it followed and the page's address. A
-tab the site opened that the library could not track is `PageUntracked`. Chromium announces a
-title change only with the next change of address, so there is no title event: read `page.title`
-when `Navigated` or `PageLoaded` says the page moved.
+tab the site opened that the library could not track is `PageUntracked`. A tab a page opened names
+it as its `opener`, and the opener's events hold its opening. Chromium announces a title change
+only with the next change of address, so there is no title event: read `page.title` when
+`Navigated` or `PageLoaded` says the page moved. The browser answers it, in one call that a busy
+page cannot hold up, and an untitled page's is empty. `page.url` is where the page's own session
+saw its main frame commit or move, as `page.state.url`.
 
 The browser's own end is one `Disconnected`, and `browser.disconnected` completes with its cause:
 `connection`, `session`, at or after the provider's `expiresAt`, which `SessionEnding` announces,
@@ -716,7 +742,7 @@ records except text: the target, the subject's role, name and tag, whether input
 `error.type`. A read that shared another's work says so in `shared`: `joined` or `kept`.
 `Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
-`Page.observe`, `Page.snapshot`, `Page.find`, `Page.text`, `Page.title`, `Page.viewport`,
+`Page.snapshot`, `Page.find`, `Page.text`, `Page.title`, `Page.viewport`,
 `Page.screenshot` and `Page.frame` (with
 `source`: a reused screencast `frame` or a new `screenshot`), `Page.zoom`, `Page.ready` and the
 other waits are spans, as are `Plan.replay` and `Plan.locate`, and so is each round trip to the

@@ -70,11 +70,12 @@ const y = absent(Schema.Finite, {
   description: "Viewport y in screenshot pixels; with x, used instead of a ref",
 });
 
-/** What an operation did: its sentence, and the crop it took, if it took one. */
-interface Did {
-  readonly did: string;
-  readonly zoom?: Page.Zoom | undefined;
-}
+/** An element by ref, or a point by x and y. */
+const place = { ref, x, y };
+
+const Place = Schema.Struct(place);
+
+type Place = typeof Place.Type;
 
 export interface Operation<Name extends string, Input extends Schema.Top> {
   /** Its name, the same for its tool, its method and its RPC. */
@@ -88,7 +89,11 @@ export interface Operation<Name extends string, Input extends Schema.Top> {
    * read, whose receipt says only what it read.
    */
   readonly kind: "act" | "move" | "read";
-  readonly run: (page: Page.Page, input: Input["Type"]) => Effect.Effect<Did, BrowserError>;
+  /** What it did, in a sentence, and the crop it took, if it took one. */
+  readonly run: (
+    page: Page.Page,
+    input: Input["Type"],
+  ) => Effect.Effect<{ readonly did: string; readonly zoom?: Page.Zoom }, BrowserError>;
 }
 
 const operation = <const Name extends string, Input extends Schema.Top>(
@@ -97,12 +102,6 @@ const operation = <const Name extends string, Input extends Schema.Top>(
 
 const refused = (name: string, detail: string) =>
   Effect.fail(undispatched(name, new InvalidRequest({ detail })));
-
-interface Place {
-  readonly ref?: string | undefined;
-  readonly x?: number | undefined;
-  readonly y?: number | undefined;
-}
 
 // A point is the more specific of the two, such as a spot on a canvas a ref names.
 const target = (name: string, place: Place): Effect.Effect<Page.Target, BrowserError> =>
@@ -180,9 +179,7 @@ export const operations = {
     name: "browser_click",
     description: "Click an element by ref, or a point by x and y.",
     input: Schema.Struct({
-      ref,
-      x,
-      y,
+      ...place,
       double: absent(Schema.Boolean),
       button: absent(Schema.Literals(["left", "right", "middle"])),
     }),
@@ -200,7 +197,7 @@ export const operations = {
   browser_hover: operation({
     name: "browser_hover",
     description: "Move the pointer over an element by ref, or to a point by x and y.",
-    input: Schema.Struct({ ref, x, y }),
+    input: Place,
     kind: "move",
     run: (page, place) =>
       target("hover", place).pipe(
@@ -246,9 +243,7 @@ export const operations = {
     input: Schema.Struct({
       direction: Schema.Literals(["down", "up", "right", "left"]),
       pages: absent(Schema.Finite, { description: "How far, in viewports; defaults to 0.8" }),
-      ref,
-      x,
-      y,
+      ...place,
     }),
     kind: "move",
     run: (page, place) =>
