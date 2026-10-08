@@ -10,16 +10,19 @@
  * unseen until its timeout.
  *
  * A session that persists to a stored context saves to it when the session ends, so two at once
- * can lose one's changes. `open` lets one such session at a time hold each context in this
- * process, and keeps holding it after release until Browserbase reports the session ended and
- * `contextSettle` has passed, since the save lands later and nothing acknowledges it. A release
- * left `Unconfirmed`, or a create whose answer was lost, may leave a session saving to the
- * context: the next `open` on it first ends the context's sessions, which `open` labels in their
- * user metadata, and fails with `ContextHeld` while they can't be confirmed ended. `reconcile` ends
- * them without opening. Writers in other processes are the application's to exclude: open under
- * its own lock, in the same scope, and the lock is released only after the save has settled.
+ * can lose one's changes. `open` holds the context through the `ContextLease` the application
+ * provides, from before it creates such a session until Browserbase reports the session ended and
+ * `contextSettle` has passed, since the save lands later and nothing acknowledges it. A writer that
+ * leaves a session that saves to the context possibly running, its release `Unconfirmed`, its
+ * create's answer lost or its session kept, leaves the context unsettled: the next writer first ends
+ * the context's sessions, which `open` labels in their user metadata, and fails with `ContextHeld`
+ * while they can't be confirmed ended. `reconcile` ends them without opening, and `verifyContext`
+ * reads a context back under the same hold, from a session that saves nothing.
  *
- * `supervise` keeps a session open across losses and session ends, as `Supervisor` generations.
+ * `attach` connects to a session that already runs, as from another process: its pages keep their
+ * ids, so a page stored before is found again. `supervise` keeps a session open across losses and
+ * session ends, as `Supervisor` generations, and with `keep`, past its own scope, for the next
+ * `supervise` to adopt.
  *
  * @since 0.3.0
  */
@@ -33,12 +36,10 @@ import {
   Random,
   Redacted,
   Schedule,
-  Schema,
   Scope,
-  Semaphore,
 } from "effect";
 import * as Browser from "effect-browser/Browser";
-import type { BrowserError } from "effect-browser/BrowserError";
+import { BrowserError, Closed } from "effect-browser/BrowserError";
 import * as Cdp from "effect-browser/Cdp";
 import * as Supervisor from "effect-browser/Supervisor";
 
@@ -48,7 +49,8 @@ import {
   type Session,
   type SessionOptions,
 } from "./BrowserbaseClient.ts";
-import { BrowserbaseError, Decode, isTransient } from "./BrowserbaseError.ts";
+import { BrowserbaseError, Decode, InvalidRequest, isTransient } from "./BrowserbaseError.ts";
+import { ContextHeld, ContextLease } from "./ContextLease.ts";
 import * as CaptureConnection from "./internal/captureConnection.ts";
 
 export interface Options extends Browser.Options {
@@ -80,24 +82,14 @@ export interface Hosted {
   readonly release: Effect.Effect<Supervisor.Released>;
 }
 
-/**
- * A session that saves to the stored context may still run, as the context's sessions could not
- * be confirmed ended, so `open` does not write to it. The next `open`, or `reconcile`, tries again.
- */
-export class ContextHeld extends Schema.TaggedError<ContextHeld>()("ContextHeld", {
-  context: Schema.String,
-  detail: Schema.String,
-}) {
-  override get message() {
-    return `context ${this.context} is held: ${this.detail}`;
-  }
-}
-
 /** The user metadata key naming the stored context a persisting session writes to. */
 const contextLabel = "persistsContext";
 
 /** The user metadata key holding each create's own nonce, which finds a session made unseen. */
 const createLabel = "createNonce";
+
+/** The user metadata key naming what a supervisor keeps its sessions under, past its scope. */
+const keepLabel = "keptAs";
 
 /**
  * How long a create whose answer was lost has its session looked for: Browserbase can list a new
@@ -107,21 +99,6 @@ const orphanSearch = Duration.seconds(30);
 
 /** How long a release waits for Browserbase to report the session ended. */
 const releaseDeadline = Duration.minutes(1);
-
-/**
- * One writer at a time for each stored context in this process. A context is `unconfirmed` while
- * a session that saves to it may still run, its release unconfirmed or its create's answer lost:
- * the next writer, or `reconcile`, ends the context's sessions first.
- */
-const writers = new Map<string, { readonly lock: Semaphore.Semaphore; unconfirmed: boolean }>();
-
-const writer = (id: string) => {
-  const known = writers.get(id) ?? { lock: Semaphore.makeUnsafe(1), unconfirmed: false };
-
-  writers.set(id, known);
-
-  return known;
-};
 
 const ended = (session: Session) => session.status !== "PENDING" && session.status !== "RUNNING";
 
@@ -178,6 +155,17 @@ const confirm = (client: Service, id: string, settle: Duration.Duration | undefi
 const labelled = (label: string, value: string) => `user_metadata['${label}']:'${value}'`;
 
 /**
+ * The sessions a search finds that have not ended. Pending ones are listed first, since one listed
+ * as pending may be running by the second query.
+ */
+const unended = (client: Service, query: string) =>
+  Effect.forEach(["PENDING", "RUNNING"], (status) => client.listSessions({ status, query })).pipe(
+    Effect.map((found) => [
+      ...new Map(found.flat().map((session) => [session.id, session])).values(),
+    ]),
+  );
+
+/**
  * End the sessions and confirm they ended; then wait `settle`, if given, for the last save to land.
  * One still running at its release's deadline makes the outcome `Unconfirmed`.
  */
@@ -198,26 +186,6 @@ const endAll = (
           )
         : Effect.succeed<Supervisor.Released>(unconfirmed);
     }),
-  );
-
-/**
- * End the stored context's running sessions, found by the label `open` gives them, and confirm
- * they ended; then wait `settle` for the last save to land. Unless that settles, the context is
- * left unconfirmed, so the next writer ends its sessions again. Pending sessions are listed first,
- * since one listed as pending may be running by the second query.
- */
-const endSessions = (client: Service, id: string, settle: Duration.Duration) =>
-  Effect.forEach(["PENDING", "RUNNING"], (status) =>
-    client.listSessions({ status, query: labelled(contextLabel, id) }),
-  ).pipe(
-    Effect.flatMap((found) =>
-      endAll(client, [...new Set(found.flat().map((session) => session.id))], settle),
-    ),
-    Effect.onExit((exit) =>
-      Effect.sync(() => {
-        writer(id).unconfirmed = !(Exit.isSuccess(exit) && exit.value._tag === "Settled");
-      }),
-    ),
   );
 
 /**
@@ -259,62 +227,77 @@ const endOrphan = (client: Service, nonce: string, settle: Duration.Duration | u
   });
 
 /**
- * Hold the context as its only writer in this process, until the scope closes or the session's
- * release reports. When a session before it may still save to the context, its sessions are ended
- * first, and the open fails with `ContextHeld` if they can't be confirmed ended.
+ * Hold the stored context through the lease, as its only writer, until the scope closes or the
+ * session's end is known; the hold goes once, saying how this writer leaves the context.
  */
-const holdContext = (client: Service, id: string, settle: Duration.Duration) =>
-  Effect.gen(function* () {
-    const context = writer(id);
-    let holding = true;
+const holdContext = Effect.fnUntraced(function* (
+  client: Service,
+  lease: ContextLease["Service"],
+  id: string,
+  settle: Duration.Duration,
+) {
+  const scope = yield* Scope.fork(yield* Effect.scope);
 
-    // The context goes once: when the release reports, or else when the scope closes.
-    const letGo = Effect.suspend(() => {
-      if (!holding) return Effect.void;
-      holding = false;
+  // A second writer waits here for the first one's whole session and the save after it.
+  const hold = yield* lease
+    .hold(id)
+    .pipe(
+      Scope.provide(scope),
+      Effect.withSpan("Browserbase.holdContext", {}, { captureStackTrace: false }),
+    );
 
-      return Effect.asVoid(context.lock.release(1));
+  // Whether a session that saves to the context may run, as this writer would leave it now.
+  let unsettled = hold.unsettled;
+
+  const set = (now: boolean) =>
+    Effect.sync(() => {
+      unsettled = now;
     });
 
-    const clear = endSessions(client, id, settle).pipe(
-      Effect.flatMap((outcome) =>
-        outcome._tag === "Settled"
-          ? Effect.void
-          : Effect.fail(new ContextHeld({ context: id, detail: outcome.detail })),
-      ),
-    );
+  yield* Scope.addFinalizer(
+    scope,
+    Effect.suspend(() => hold.leave(unsettled)),
+  );
 
-    // A second writer waits here for the first one's whole session and the save after it.
-    yield* Effect.acquireRelease(
-      context.lock
-        .take(1)
-        .pipe(Effect.withSpan("Browserbase.holdContext", {}, { captureStackTrace: false })),
-      () => letGo,
-      { interruptible: true },
-    );
-    if (context.unconfirmed) yield* clear;
+  const letGo = (now: boolean) => set(now).pipe(Effect.andThen(Scope.close(scope, Exit.void)));
 
-    // Record how this writer's session ended, and let the context go.
-    const released = (outcome: Supervisor.Released) =>
-      Effect.suspend(() => {
-        context.unconfirmed = outcome._tag === "Unconfirmed";
-
-        return letGo;
-      });
-
-    return {
-      released,
-      /** How ending the session a lost create may have made went: unconfirmed, it holds the context. */
-      lost: (outcome: Supervisor.Released) =>
-        released(outcome).pipe(
-          Effect.andThen(
-            outcome._tag === "Settled"
-              ? Effect.void
-              : Effect.fail(new ContextHeld({ context: id, detail: outcome.detail })),
-          ),
+  /** End the context's sessions but `except`, found by the label `open` gives them. */
+  const end = (except: ReadonlyArray<string>) =>
+    unended(client, labelled(contextLabel, id)).pipe(
+      Effect.flatMap((found) =>
+        endAll(
+          client,
+          found.map((session) => session.id).filter((session) => !except.includes(session)),
+          settle,
         ),
-    };
-  });
+      ),
+      Effect.onExit((exit) => set(!(Exit.isSuccess(exit) && exit.value._tag === "Settled"))),
+    );
+
+  const refuse = (outcome: Supervisor.Released) =>
+    outcome._tag === "Settled"
+      ? Effect.void
+      : Effect.fail(new ContextHeld({ context: id, detail: outcome.detail }));
+
+  return {
+    end,
+    /**
+     * End the sessions, but `except`, that a writer before may have left saving to the context,
+     * failing with `ContextHeld` while they can't be confirmed ended.
+     */
+    clear: (except: ReadonlyArray<string>) =>
+      Effect.suspend(() => (unsettled ? Effect.flatMap(end(except), refuse) : Effect.void)),
+    /** A session that saves to the context runs from now. */
+    writing: set(true),
+    /** How the writer's session ended: unconfirmed, it may still save to the context. */
+    released: (outcome: Supervisor.Released) => letGo(outcome._tag === "Unconfirmed"),
+    /** How ending the session a lost create may have made went: unconfirmed, the open fails. */
+    lost: (outcome: Supervisor.Released) =>
+      letGo(outcome._tag === "Unconfirmed").pipe(Effect.andThen(refuse(outcome))),
+    /** The writer's session runs on past its scope, saving to the context when it ends. */
+    kept: letGo(true),
+  };
+});
 
 /** A create that failed so may still have made its session: its answer is lost or unreadable. */
 const mayHaveCreated = (error: BrowserbaseError) =>
@@ -328,19 +311,22 @@ const nonce = Effect.map(Effect.all([Random.nextInt, Random.nextInt]), (draws) =
 );
 
 /**
- * The create request, labelled with its own nonce, and a persisting session with its context too,
- * so either can be found.
+ * The create request, labelled with its own nonce, a persisting session with its context too, so
+ * either can be found, and a kept one with what it is kept under, kept alive past disconnecting.
  */
 const withLabels = (
   session: SessionOptions | undefined,
   own: string,
   context: string | undefined,
+  keep: string | undefined,
 ) => ({
   ...session,
+  ...(keep === undefined ? {} : { keepAlive: true }),
   userMetadata: {
     ...session?.userMetadata,
     [createLabel]: own,
     ...(context === undefined ? {} : { [contextLabel]: context }),
+    ...(keep === undefined ? {} : { [keepLabel]: keep }),
   },
 });
 
@@ -355,7 +341,8 @@ const releasing = (browser: Scope.Closeable, end: Effect.Effect<Supervisor.Relea
 /**
  * A browser over the session's DevTools address, its pages' screencasts on a capture connection of
  * their own. A DevTools server's HTTP address, as a local Chromium gives in tests, keeps them on
- * each page's own session: there the connection is loopback, and fast.
+ * each page's own session: there the connection is loopback, and fast. A session that has ended
+ * fails `Closed` by the session, with no connect.
  */
 const connect = Effect.fnUntraced(function* (
   operation: string,
@@ -364,6 +351,12 @@ const connect = Effect.fnUntraced(function* (
 ) {
   const endpoint = session.connectUrl;
 
+  if (ended(session))
+    return yield* new BrowserError({
+      operation,
+      reason: new Closed({ cause: "session" }),
+      dispatched: false,
+    });
   if (endpoint === undefined)
     return yield* new BrowserbaseError({
       operation,
@@ -381,47 +374,133 @@ const connect = Effect.fnUntraced(function* (
   });
 });
 
+/** How a supervisor keeps its sessions past its scope: under `name`, adopting one first if `adopt`. */
+interface Keeping {
+  readonly name: string;
+  readonly adopt: boolean;
+}
+
+const keepName = /^[\w.:-]{1,64}$/;
+
+const newestFirst = (sessions: ReadonlyArray<Session>) => {
+  const created = (session: Session) =>
+    Option.getOrElse(Option.map(DateTime.make(session.createdAt), DateTime.toEpochMillis), () => 0);
+
+  return sessions.toSorted((a, b) => created(b) - created(a));
+};
+
 /**
- * Create a session and open a `Browser` on it, for as long as the scope is open. If opening
- * fails, the session and context are released then, so a retry in the same scope can take them.
- * A session that may still save to a persisting open's context, its release left `Unconfirmed` or
- * its create's answer lost, is ended first, and the open fails with `ContextHeld` while that can't
- * be confirmed. A lost create's own open looks for its session by the create's nonce, within
- * `orphanSearch`, ends it, then fails with the create's error. `release` disconnects the browser
- * before it asks Browserbase to end the session, so what fails meanwhile says it was released.
+ * The newest session kept under `name` that saves where this open would, to adopt. Every other
+ * session kept under it is to end, since nothing else adopts it: those that save to this open's
+ * context are its writers, for the context's hold to end, as `writers` says, and the rest end here.
  */
-export const open = Effect.fn("Browserbase.open")(function* (options: Options = {}) {
+const adoptable = Effect.fnUntraced(function* (
+  client: Service,
+  name: string,
+  persisting: string | undefined,
+) {
+  const [newest, ...older] = newestFirst(yield* unended(client, labelled(keepLabel, name)));
+  const fits = newest !== undefined && newest.userMetadata?.[contextLabel] === persisting;
+  const others = [...(fits || newest === undefined ? [] : [newest]), ...older];
+
+  const writes = (session: Session) =>
+    persisting !== undefined && session.userMetadata?.[contextLabel] === persisting;
+
+  const rest = others.filter((session) => !writes(session));
+
+  if (rest.length > 0) {
+    const outcome = yield* endAll(
+      client,
+      rest.map((session) => session.id),
+      undefined,
+    );
+
+    yield* Effect.annotateCurrentSpan({ endedKept: rest.length, endedKeptAs: outcome._tag });
+  }
+
+  return { adoptee: fits ? newest : undefined, writers: others.some(writes) };
+});
+
+/**
+ * Open a browser on a new session, or, when keeping, adopt one a supervisor kept before. A kept
+ * session's scope only disconnects, unless it closes on a failure: `release` ends it.
+ */
+const start = Effect.fnUntraced(function* (options: Options, keeping: Keeping | undefined) {
   const client = yield* BrowserbaseClient;
+  const lease = yield* ContextLease;
   const context = options.session?.browserSettings?.context;
   const persisting = context?.persist === true ? context.id : undefined;
   const local = yield* Scope.fork(yield* Effect.scope);
   const settle = Duration.fromInputUnsafe(options.contextSettle ?? Duration.seconds(10));
 
   return yield* Effect.gen(function* () {
-    const writing =
-      persisting === undefined ? undefined : yield* holdContext(client, persisting, settle);
+    if (keeping !== undefined && !keepName.test(keeping.name))
+      return yield* new BrowserbaseError({
+        operation: "supervise",
+        reason: new InvalidRequest({
+          detail: `keep must be 1 to 64 letters, digits, "_", ".", ":" or "-"`,
+        }),
+      });
 
+    const writing =
+      persisting === undefined ? undefined : yield* holdContext(client, lease, persisting, settle);
+
+    const adoption = keeping?.adopt
+      ? yield* adoptable(client, keeping.name, persisting)
+      : undefined;
+
+    const adopted = adoption?.adoptee;
+
+    // Another writer kept under the name may still save to the context: clear it as any other.
+    if (adoption?.writers === true) yield* writing?.writing ?? Effect.void;
+    yield* writing?.clear(adopted === undefined ? [] : [adopted.id]) ?? Effect.void;
     const connected = yield* Scope.fork(local);
     const own = yield* nonce;
 
-    const { session, release } = yield* Effect.acquireRelease(
+    // Releasing ends the session; leaving, as a kept session's scope does, only disconnects.
+    const ending = (session: Session) =>
       Effect.gen(function* () {
-        const session = yield* client.createSession(withLabels(options.session, own, persisting));
+        let asked = false;
 
         const release = yield* Effect.cached(
-          releasing(connected, confirm(client, session.id, writing && settle)).pipe(
-            Effect.tap((outcome) => writing?.released(outcome) ?? Effect.void),
-          ),
+          Effect.suspend(() => {
+            asked = true;
+
+            return releasing(connected, confirm(client, session.id, writing && settle)).pipe(
+              Effect.tap((outcome) => writing?.released(outcome) ?? Effect.void),
+            );
+          }),
         );
 
-        return { session, release };
+        const leave = Effect.suspend(() =>
+          asked
+            ? Effect.void
+            : Scope.close(connected, Exit.void).pipe(Effect.andThen(writing?.kept ?? Effect.void)),
+        );
+
+        return { session, release, leave };
+      });
+
+    const made = yield* Effect.acquireRelease(
+      Effect.gen(function* () {
+        const session =
+          adopted === undefined
+            ? yield* client.createSession(
+                withLabels(options.session, own, persisting, keeping?.name),
+              )
+            : yield* client.getSession(adopted.id);
+
+        yield* writing?.writing ?? Effect.void;
+
+        return yield* ending(session);
       }),
-      ({ release }) => release,
+      ({ release, leave }, exit) =>
+        keeping !== undefined && Exit.isSuccess(exit) ? leave : Effect.asVoid(release),
     ).pipe(
       // A session nobody can see bills until its timeout, and one that saves to the context would
       // write beside the next writer: end it, found by its create's own label.
       Effect.tapError((error) =>
-        mayHaveCreated(error)
+        adopted === undefined && mayHaveCreated(error)
           ? endOrphan(client, own, writing && settle).pipe(
               Effect.flatMap((outcome) => writing?.lost(outcome) ?? Effect.void),
             )
@@ -429,9 +508,19 @@ export const open = Effect.fn("Browserbase.open")(function* (options: Options = 
       ),
     );
 
-    yield* Effect.annotateCurrentSpan({ session: session.id, region: session.region });
+    const { session, release } = made;
 
-    const browser = yield* connect("open", session, options).pipe(Scope.provide(connected));
+    yield* Effect.annotateCurrentSpan({
+      session: session.id,
+      region: session.region,
+      adopted: adopted !== undefined,
+    });
+
+    const browser = yield* connect(
+      adopted === undefined ? "open" : "attach",
+      session,
+      options,
+    ).pipe(Scope.provide(connected));
 
     return { browser, session, release } satisfies Hosted;
   }).pipe(
@@ -441,8 +530,24 @@ export const open = Effect.fn("Browserbase.open")(function* (options: Options = 
 });
 
 /**
- * Open a `Browser` on a session that already exists, such as a `keepAlive` session. Closing the
- * scope disconnects and leaves the session running; `release` ends it.
+ * Create a session and open a `Browser` on it, for as long as the scope is open. If opening
+ * fails, the session and context are released then, so a retry in the same scope can take them.
+ * A persisting open holds its context through the `ContextLease`; a session that may still save
+ * to it, as one whose release was left `Unconfirmed` or whose create's answer was lost, is ended
+ * first, and the open fails with `ContextHeld` while that can't be confirmed. A lost create's own
+ * open looks for its session by the create's nonce, within `orphanSearch`, ends it, then fails with
+ * the create's error. `release` disconnects the browser before it asks Browserbase to end the
+ * session, so what fails meanwhile says it was released.
+ */
+export const open = Effect.fn("Browserbase.open")(function* (options: Options = {}) {
+  return yield* start(options, undefined);
+});
+
+/**
+ * Open a `Browser` on a session that already runs, such as a `keepAlive` session another process
+ * opened. This is resume: its pages keep their ids, their CDP target ids, so `browser.page(id)`
+ * finds a page stored before. Closing the scope disconnects and leaves the session running;
+ * `release` ends it. A session that has ended fails `Closed` by the session. It holds no context.
  */
 export const attach = Effect.fn("Browserbase.attach")(function* (
   sessionId: string,
@@ -467,21 +572,60 @@ export const attach = Effect.fn("Browserbase.attach")(function* (
  * End a stored context's sessions, the ones `open` labelled as writing to it, and let the context
  * go once they are confirmed ended and its save has settled. `open` does this itself when a writer
  * before it may still run; `reconcile` does it without opening, as for sessions another process
- * left running. It waits for a writer this process has open. A session still running at the
- * deadline makes it `Unconfirmed`, and leaves the context unconfirmed, as a failure does.
+ * left running. It holds the context through the `ContextLease`, so it waits for a writer. A
+ * session still running at the deadline makes it `Unconfirmed`, and leaves the context unsettled,
+ * as a failure does.
  */
 export const reconcile = Effect.fn("Browserbase.reconcile")(function* (
   contextId: string,
   options: { readonly contextSettle?: Duration.Input | undefined } = {},
 ) {
   const client = yield* BrowserbaseClient;
+  const lease = yield* ContextLease;
   const settle = Duration.fromInputUnsafe(options.contextSettle ?? Duration.seconds(10));
 
   // Reading the context first refuses an id that is not one before it reaches the query.
   yield* client.getContext(contextId);
+  const hold = yield* holdContext(client, lease, contextId, settle);
 
-  return yield* writer(contextId).lock.withPermit(endSessions(client, contextId, settle));
-});
+  return yield* hold.end([]);
+}, Effect.scoped);
+
+/**
+ * Read a stored context back, as a login: a session that loads it and saves nothing runs `check`
+ * on its browser, and is released. The context is held through the `ContextLease` meanwhile, so
+ * the read never runs beside a writer, which a site could sign out, and it reads what the last
+ * writer saved, once that save settled. A session a writer before may have left saving to it is
+ * ended first, as for `open`.
+ */
+export const verifyContext = Effect.fn("Browserbase.verifyContext")(function* <A, E, R>(
+  contextId: string,
+  check: (browser: Browser.Service) => Effect.Effect<A, E, R>,
+  options: Options = {},
+) {
+  const client = yield* BrowserbaseClient;
+  const lease = yield* ContextLease;
+  const settle = Duration.fromInputUnsafe(options.contextSettle ?? Duration.seconds(10));
+  const reading = yield* holdContext(client, lease, contextId, settle);
+
+  yield* reading.clear([]);
+
+  const { browser } = yield* start(
+    {
+      ...options,
+      session: {
+        ...options.session,
+        browserSettings: {
+          ...options.session?.browserSettings,
+          context: { id: contextId, persist: false },
+        },
+      },
+    },
+    undefined,
+  );
+
+  return yield* check(browser);
+}, Effect.scoped);
 
 export interface SuperviseOptions
   extends
@@ -489,7 +633,17 @@ export interface SuperviseOptions
     Pick<
       Supervisor.Options<BrowserError | BrowserbaseError | ContextHeld, BrowserbaseClient>,
       "reopen" | "rotateBefore" | "waitTimeout"
-    > {}
+    > {
+  /**
+   * Keep the session past the supervisor's scope, under this name: 1 to 64 letters, digits, `_`,
+   * `.`, `:` or `-`. Each session is created with `keepAlive` and labelled `keptAs: <keep>` in its
+   * user metadata. Closing the scope only disconnects the current one, published as `Kept`, and
+   * the first generation of the next `supervise` under the same name adopts it, with its pages,
+   * rather than creating a session; other sessions kept under it are ended. `retire` releases. A
+   * kept session bills until it is adopted and released, or until its timeout ends it.
+   */
+  readonly keep?: string | undefined;
+}
 
 /**
  * Browserbase refused the request: no new try mends a refused key, request or id. A context held
@@ -502,21 +656,42 @@ const refused = (error: BrowserError | BrowserbaseError | ContextHeld) =>
  * Keep Browserbase sessions open as `Supervisor` generations, each a new session made from
  * `session`. Sessions that persist to a stored context are exclusive: a rotation releases the
  * current one, and its context's save settles, before the next one opens. An open Browserbase
- * refused, as for a bad key or an invalid request, is `Down` at once.
+ * refused, as for a bad key or an invalid request, is `Down` at once. With `keep`, closing the
+ * scope leaves the current session running for the next `supervise` under that name to adopt.
  */
 export const supervise = (options: SuperviseOptions = {}) =>
-  Supervisor.make({
-    open: open(options),
-    exclusive: options.session?.browserSettings?.context?.persist === true,
-    reopen: options.reopen,
-    definite: refused,
-    rotateBefore: options.rotateBefore,
-    waitTimeout: options.waitTimeout,
+  Effect.suspend(() => {
+    const { keep } = options;
+    // Only the first generation adopts a kept session: a later one would find its own.
+    let opened = false;
+
+    return Supervisor.make({
+      open: Effect.suspend(() =>
+        start(options, keep === undefined ? undefined : { name: keep, adopt: !opened }),
+      ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            opened = true;
+          }),
+        ),
+        Effect.withSpan("Browserbase.open", {}, { captureStackTrace: false }),
+      ),
+      exclusive: options.session?.browserSettings?.context?.persist === true,
+      keep: keep !== undefined,
+      reopen: options.reopen,
+      definite: refused,
+      rotateBefore: options.rotateBefore,
+      waitTimeout: options.waitTimeout,
+    });
   });
 
 export const layer = (
   options: Options = {},
-): Layer.Layer<Browser.Browser, BrowserError | BrowserbaseError | ContextHeld, BrowserbaseClient> =>
+): Layer.Layer<
+  Browser.Browser,
+  BrowserError | BrowserbaseError | ContextHeld,
+  BrowserbaseClient | ContextLease
+> =>
   Layer.effect(
     Browser.Browser,
     Effect.map(open(options), ({ browser }) => browser),

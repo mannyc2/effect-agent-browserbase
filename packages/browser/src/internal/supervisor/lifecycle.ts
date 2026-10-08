@@ -47,7 +47,13 @@ export class Closed extends Schema.TaggedClass<Closed>()("Closed", {
   released: Schema.optional(Released),
 }) {}
 
-export const GenerationState = Schema.Union([Opening, Reopening, Open, Lost, Down, Closed]);
+/**
+ * It was serving as the supervisor's scope closed, and was left running, not released: its scope
+ * closed, and its provider runs it on, and bills, until something adopts and releases it.
+ */
+export class Kept extends Schema.TaggedClass<Kept>()("Kept", {}) {}
+
+export const GenerationState = Schema.Union([Opening, Reopening, Open, Lost, Down, Closed, Kept]);
 
 export type GenerationState = typeof GenerationState.Type;
 
@@ -88,6 +94,8 @@ export type Input<A> =
   /** A caller asks for the next generation, or the rotation time of `due` came. */
   | { readonly _tag: "Rotate"; readonly due?: number | undefined }
   | { readonly _tag: "Retire" }
+  /** Stop as `Retire` does, but leave the serving generation running. */
+  | { readonly _tag: "Keep" }
   | { readonly _tag: "Released"; readonly number: number; readonly released: Released };
 
 export type Command<A> =
@@ -95,7 +103,9 @@ export type Command<A> =
   | { readonly _tag: "Open"; readonly number: number; readonly after: number | undefined }
   /** Watch a generation that opened for its loss and its rotation time. */
   | { readonly _tag: "Watch"; readonly live: Live<A> }
-  | { readonly _tag: "Release"; readonly live: Live<A> };
+  | { readonly _tag: "Release"; readonly live: Live<A> }
+  /** Close its scope without asking its provider to release it. */
+  | { readonly _tag: "Leave"; readonly live: Live<A> };
 
 export interface Step<A> {
   readonly state: State<A>;
@@ -199,16 +209,20 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
 
       return { ...next(number, false, state.serving, exclusive), reply: number };
     }
-    case "Retire": {
+    case "Retire":
+    case "Keep": {
       const current = servingOf(state);
 
       if (state._tag === "Retired") return stay;
+      if (current === undefined) return { state: { _tag: "Retired" }, events: [], commands: [] };
 
-      return {
-        state: { _tag: "Retired" },
-        events: [],
-        commands: current === undefined ? [] : [release(current)],
-      };
+      return input._tag === "Retire"
+        ? { state: { _tag: "Retired" }, events: [], commands: [release(current)] }
+        : {
+            state: { _tag: "Retired" },
+            events: [[current.number, new Kept()]],
+            commands: [{ _tag: "Leave", live: current }],
+          };
     }
   }
 };

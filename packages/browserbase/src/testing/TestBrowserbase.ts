@@ -9,7 +9,8 @@
  * defect. It doesn't model regions, quotas or billing, and a context is only a record, with no
  * browser state. Every session hands out the script's `connectUrl`, such as the DevTools address
  * of a local Chromium. Its ids are UUIDs, as Browserbase's are, and as Browserbase does, it refuses
- * a session id of any other shape as invalid, where it answers an unknown one as not found.
+ * a session or context id of any other shape as invalid, where it answers an unknown one as not
+ * found.
  *
  * @category testing
  * @since 0.3.0
@@ -92,6 +93,10 @@ export interface Kept {
   readonly status: string;
   readonly userMetadata: Readonly<Record<string, unknown>> | undefined;
   readonly releases: number;
+  /** Whether it was created to outlive its connections, until released or timed out. */
+  readonly keepAlive: boolean;
+  /** The stored context it loaded, and whether it saves to it as it ends. */
+  readonly context: { readonly id: string; readonly persist: boolean } | undefined;
 }
 
 export interface Handle {
@@ -117,7 +122,11 @@ const CreateBody = Schema.fromJsonString(
     keepAlive: Schema.optional(Schema.Boolean),
     userMetadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
     browserSettings: Schema.optional(
-      Schema.Struct({ context: Schema.optional(Schema.Struct({ id: Schema.String })) }),
+      Schema.Struct({
+        context: Schema.optional(
+          Schema.Struct({ id: Schema.String, persist: Schema.optional(Schema.Boolean) }),
+        ),
+      }),
     ),
   }),
 );
@@ -134,7 +143,7 @@ interface Row {
   readonly expiresAt: number;
   readonly keepAlive: boolean;
   readonly userMetadata: Readonly<Record<string, unknown>> | undefined;
-  readonly contextId: string | undefined;
+  readonly context: { readonly id: string; readonly persist: boolean } | undefined;
   /** How and when it ends, unless its timeout comes first. */
   ends: { readonly status: string; readonly at: number } | undefined;
   releases: number;
@@ -190,7 +199,7 @@ const describe = (fake: Fake, row: Row, connect: boolean) => {
     keepAlive: row.keepAlive,
     region: "us-west-2",
     ...(end === undefined ? {} : { endedAt: iso(end.at) }),
-    ...(row.contextId === undefined ? {} : { contextId: row.contextId }),
+    ...(row.context === undefined ? {} : { contextId: row.context.id }),
     ...(row.userMetadata === undefined ? {} : { userMetadata: row.userMetadata }),
     ...(connect && fake.connectUrl !== undefined ? { connectUrl: fake.connectUrl } : {}),
     ...(connect
@@ -253,9 +262,9 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
   if (request.headers["x-bb-api-key"] !== apiKey)
     return answer(401, { message: "Invalid API key" });
   if (version !== "v1") return unsupported(`serves only /v1, not ${url.pathname}`);
-  // Browserbase refuses a session id that is not a UUID before it looks for the session.
-  if (kind === "sessions" && id !== undefined && !uuid.test(id))
-    return answer(400, { message: "Invalid Session ID" });
+  // Browserbase refuses a session or context id that is not a UUID before it looks for it.
+  if ((kind === "sessions" || kind === "contexts") && id !== undefined && !uuid.test(id))
+    return answer(400, { message: `Invalid ${kind === "sessions" ? "Session" : "Context"} ID` });
 
   switch (
     `${request.method} ${kind}${id === undefined ? "" : " id"}${rest === undefined ? "" : ` ${rest}`}`
@@ -272,6 +281,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
             : { "retry-after": `${reply.retryAfterSeconds}` },
         );
       const body = Option.getOrUndefined(Schema.decodeOption(CreateBody)(bodyText(request)));
+      const loaded = body?.browserSettings?.context;
       const createdAt = fake.now();
 
       const created: Row = {
@@ -281,7 +291,8 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
         expiresAt: createdAt + (body?.timeout ?? 300) * 1000,
         keepAlive: body?.keepAlive ?? false,
         userMetadata: body?.userMetadata,
-        contextId: body?.browserSettings?.context?.id,
+        context:
+          loaded === undefined ? undefined : { id: loaded.id, persist: loaded.persist ?? false },
         ends: undefined,
         releases: 0,
       };
@@ -403,6 +414,8 @@ export const make = Effect.fnUntraced(function* (script: Script = {}) {
         status: endOf(fake, row)?.status ?? "RUNNING",
         userMetadata: row.userMetadata,
         releases: row.releases,
+        keepAlive: row.keepAlive,
+        context: row.context,
       })),
     ),
     end: (id) =>

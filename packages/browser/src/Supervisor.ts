@@ -11,7 +11,8 @@
  * rotation makes the next generation before it breaks the current one, unless generations are
  * `exclusive`, as sessions saving to one stored context must be: then the current one is released
  * first. `retire` stops reopening at once and releases what is open; the scope's close retires
- * too. `states` publishes each generation's changes, with the provider's release outcome last.
+ * too, unless the supervisor `keep`s: then it leaves the serving generation running, `Kept`. `states`
+ * publishes each generation's changes, with the provider's release outcome last.
  *
  * Providers supply the specifics: `Browserbase.supervise` opens hosted sessions this way.
  *
@@ -45,6 +46,7 @@ export {
   Closed,
   Down,
   GenerationState,
+  Kept,
   Lost,
   Open,
   Opening,
@@ -79,8 +81,9 @@ export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable"
 export interface Opened {
   readonly browser: Browser.Service;
   /**
-   * Whether the provider confirmed its end. The supervisor asks once it has closed the
-   * generation's scope; without it, a closed scope counts as `Settled`.
+   * End the generation, and say whether the provider confirmed its end. The supervisor asks it
+   * before it closes the generation's scope; without it, closing the scope ends the generation,
+   * which counts as `Settled`.
    */
   readonly release?: Effect.Effect<Lifecycle.Released> | undefined;
 }
@@ -102,6 +105,12 @@ export interface Options<E, R> {
   readonly rotateBefore?: Duration.Input | undefined;
   /** Generations must not overlap: a rotation releases the current one before it opens the next. */
   readonly exclusive?: boolean | undefined;
+  /**
+   * Closing the scope leaves the serving generation running, `Kept`: it closes the generation's
+   * scope but never asks `release`. For providers whose scope only disconnects, such as
+   * `Browserbase.supervise` with `keep`. `retire` still releases it.
+   */
+  readonly keep?: boolean | undefined;
   /** How long `browser` and `rotate` wait for a generation to open. Defaults to 2 minutes. */
   readonly waitTimeout?: Duration.Input | undefined;
 }
@@ -235,6 +244,9 @@ export const make = Effect.fn("Supervisor.make")(function* <E, R>(
             break;
           case "Release":
             runRelease(command.live.number, release(command.live));
+            break;
+          case "Leave":
+            runRelease(command.live.number, Scope.close(command.live.value.scope, Exit.void));
         }
     });
 
@@ -299,27 +311,33 @@ export const make = Effect.fn("Supervisor.make")(function* <E, R>(
     return Effect.all([loss, rotation], { concurrency: 2, discard: true });
   };
 
+  // The provider releases before the scope closes, so what the scope holds, such as a stored
+  // context's lease, goes only once the release has reported.
   const release = (live: Lifecycle.Live<Held>) =>
-    Scope.close(live.value.scope, Exit.void).pipe(
-      Effect.andThen(live.value.opened.release ?? Effect.succeed(new Lifecycle.Settled())),
+    (live.value.opened.release ?? Effect.succeed(new Lifecycle.Settled())).pipe(
       Effect.catchCause((cause) =>
         Effect.succeed(
           new Lifecycle.Unconfirmed({ detail: `the release failed: ${describe(cause)}` }),
         ),
       ),
+      Effect.ensuring(Scope.close(live.value.scope, Exit.void)),
       Effect.flatMap((released) => apply({ _tag: "Released", number: live.number, released })),
     );
 
-  const retire = yield* Effect.cached(
-    apply({ _tag: "Retire" }).pipe(
+  const end = yield* Effect.cached(PubSub.publish(events, Exit.void));
+
+  // Stop at once, end or leave what is open, and wait for every release.
+  const stop = (input: Lifecycle.Input<Held>) =>
+    apply(input).pipe(
       Effect.andThen(FiberHandle.clear(opening)),
       Effect.andThen(FiberMap.awaitEmpty(releases)),
-      Effect.andThen(PubSub.publish(events, Exit.void)),
+      Effect.andThen(end),
       Effect.asVoid,
-    ),
-  );
+    );
 
-  yield* Effect.addFinalizer(() => retire);
+  const retire = yield* Effect.cached(stop({ _tag: "Retire" }));
+
+  yield* Effect.addFinalizer(() => (options.keep === true ? stop({ _tag: "Keep" }) : retire));
   yield* perform(started);
 
   return {

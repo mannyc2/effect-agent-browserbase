@@ -9,9 +9,13 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 
 - `Browserbase`: `open` and `layer` create a session and release it when their scope closes, so
   billing stops then rather than at the session's timeout. `attach` connects to a running session
-  without taking ownership of it. `supervise` keeps sessions open across losses and session ends,
-  and `reconcile` ends a stored context's sessions. A persisting open that will not write to a
-  context whose sessions may still save to it fails with `ContextHeld`.
+  without taking ownership of it, as from another process: that is resume. `supervise` keeps
+  sessions open across losses and session ends, and with `keep`, past its own scope. `reconcile`
+  ends a stored context's sessions, and `verifyContext` reads a stored context back.
+- `ContextLease`: who may write a stored context. `ContextLease.layer` lets one writer at a time
+  hold each context in this process; an application provides its own to exclude writers across
+  processes. A persisting open that will not write to a context whose sessions may still save to
+  it fails with `ContextHeld`.
 - `BrowserbaseClient`: sessions, Live View, stored contexts, extensions, Search and Fetch.
   `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
 - `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
@@ -20,10 +24,22 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
   A create whose answer named its session but did not decode is `Decode` with `released`, whether
   the client released that session.
 
-Each page keeps its CDP target id as its `id` across connections, so after a dropped connection
-`attach` to the same session finds a page stored before it with `browser.page(id)`. The browser
-carries the session's `expiresAt`, announces it as a `SessionEnding` event, and reports a loss at or
-after it as the session's end (`Disconnected` with cause `session`), any other drop as `connection`.
+`open`, `layer`, `supervise`, `reconcile` and `verifyContext` need a `ContextLease`, and the client:
+
+```ts
+const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
+  Layer.provide(BrowserbaseClient.layerConfig()),
+  Layer.provide(ContextLease.layer),
+  Layer.provide(FetchHttpClient.layer),
+);
+```
+
+Each page keeps its CDP target id as its `id` across connections, so `attach` to the same session,
+after a dropped connection or from another process, finds a page stored before with
+`browser.page(id)`. `attach` refuses a session that has ended, `Closed` by the session, before it
+connects. The browser carries the session's `expiresAt`, announces it as a `SessionEnding` event,
+and reports a loss at or after it as the session's end (`Disconnected` with cause `session`), any
+other drop as `connection`.
 
 The API key travels only in the `x-bb-api-key` header, which logs and traces redact, and the client
 refuses redirects so the key never follows one. Each request attempt has a deadline
@@ -76,6 +92,29 @@ const program = Effect.gen(function* () {
   const browser = yield* sessions.browser;
   // `retire` releases every session; so does the scope's close.
 });
+```
+
+### Keeping a session past the scope
+
+With `keep`, a name, closing the supervisor's scope leaves its current session running instead of
+releasing it, published as `Kept`, and the first generation of the next `supervise` under the same
+name adopts that session, its pages and their ids with it, rather than creating one. So a deploy or
+a restart of the process that owns the browser keeps its prepared pages and its signed-in state.
+It is off by default, and opt-in, because a kept session bills until something adopts and releases
+it, or until its own `timeout` ends it: set one that bounds what a forgotten session costs.
+
+- Each session is created with `keepAlive`, so it outlives its connection, and labelled
+  `keptAs: <name>` in its user metadata, since Browserbase sets user metadata only at the create.
+  A name is 1 to 64 letters, digits, `_`, `.`, `:` or `-`; another is refused, `Down` at once.
+- Adopting takes the newest session kept under the name that saves to the same stored context, or
+  to none; any other session kept under the name is ended, as nothing else adopts it.
+- `retire` always releases, `keep` or not. Only the first generation adopts: a later one, after a
+  loss or a rotation, is a new session.
+- One supervisor at a time per name: two at once would adopt one session together.
+
+```ts
+const sessions = yield * Browserbase.supervise({ keep: "on-air", session: { timeout: 60 * 60 } });
+const browser = yield * sessions.browser; // the session the last process kept, if one runs
 ```
 
 ## Session settings
@@ -140,30 +179,65 @@ const program = Effect.gen(function* () {
 ```
 
 Two sessions saving to one context at once can lose one's changes, and sites may sign a session out
-when another uses its login. So `Browserbase.open` and `layer` let one persisting session at a time
-hold each context in this process; another waits. The writer's release keeps holding the context
-until Browserbase reports the session ended and then `contextSettle` (10 seconds by default)
-longer, because the save lands after the session ends and Browserbase does not acknowledge it.
-Writers in other processes are the application's to exclude: take its own lock first, in the same
-scope, and the lock is released only after the save has settled. `attach` never holds a context.
-`deleteContext` is permanent.
+when another uses its login. So a persisting `open` holds the context through the `ContextLease`,
+and another writer waits. It takes the hold before it creates the session, and the writer's release
+keeps it until Browserbase reports the session ended and then `contextSettle` (10 seconds by
+default) longer, because the save lands after the session ends and Browserbase does not
+acknowledge it. `ContextLease.layer` excludes writers in this process. To exclude writers in other
+processes, provide a `ContextLease` of your own, such as an advisory lock in your database: `hold`
+holds a context for a scope, waiting while another holds it, and passes on how the writer before
+left it. `attach` never holds a context. `deleteContext` is permanent.
 
-Two things leave a session that may still be saving to the context: a release left `Unconfirmed`,
-and a create whose answer was lost, which may have made a session nobody can see. Either marks the
-context, and the next `open` on it clears the mark before it writes: it ends the context's sessions,
-which `open` labels with `persistsContext: <context id>` in Browserbase's user metadata, confirms
-they ended, waits `contextSettle` and goes on. While they cannot be confirmed ended it fails with
-`ContextHeld`, which leaves the mark, so the open after it tries again. A lost create's own open
-ends that session, found by its create's nonce, waits `contextSettle`, and then fails with the
-create's error. No context is ever held with no way out, and no two sessions write to one context.
+```ts
+const Lease = Layer.succeed(ContextLease.ContextLease, {
+  // Take the row's lock for the scope; say `unsettled` when its holder left it so, or never said.
+  hold: (context) => lockRow(context), // Effect<ContextLease.Hold, ContextHeld, Scope>
+});
+```
+
+Three things leave a session that may still be saving to the context: a release left `Unconfirmed`;
+a create whose answer was lost, which may have made a session nobody can see; and a session kept
+past its supervisor's scope. Each leaves the context unsettled, through the lease, and the next
+writer clears it before it writes: it ends the context's sessions, which `open` labels with
+`persistsContext: <context id>` in Browserbase's user metadata, confirms they ended, waits
+`contextSettle` and goes on. While they cannot be confirmed ended it fails with `ContextHeld`, which
+leaves the context unsettled, so the open after it tries again. A lost create's own open ends that
+session, found by its create's nonce, waits `contextSettle`, and then fails with the create's error.
+A lease that outlives its holders' processes reads a holder that ended without saying, as when its
+process was killed, as unsettled too. No context is ever held with no way out, and no two sessions
+write to one context.
 
 `reconcile(contextId)` does that clearing without opening a session: the way to end sessions another
-process left running. It waits for a writer this process has open, and a session still running at
-its deadline makes it `Unconfirmed` and leaves the context marked.
+process left running. It holds the context through the lease, so it waits for a writer, and a
+session still running at its deadline makes it `Unconfirmed` and leaves the context unsettled.
+
+`verifyContext(contextId, check)` reads a context back, as a login: a session that loads the
+context and saves nothing runs `check` on its browser and is released, and `verifyContext` gives
+what `check` gave. It holds the context meanwhile, so it reads what the last writer saved, once
+that save has settled, and never runs beside a writer that a site could sign out; a session a
+writer before may have left saving to the context is ended first.
+
+```ts
+const signedIn =
+  yield *
+  Browserbase.verifyContext(contextId, (browser) =>
+    Effect.gen(function* () {
+      const page = yield* browser.firstPage;
+
+      yield* page.goto("https://example.com/account");
+
+      return (yield* page.text()).text.includes("Sign out");
+    }),
+  );
+```
 
 A supervised persisting session reopens through the same path, so a held context is tried again on
 the `reopen` schedule. An open that Browserbase refused outright, as for a bad key, is `Down` at
-once instead, with its cause: a schedule would only hide a configuration error.
+once instead, with its cause: a schedule would only hide a configuration error. A supervisor that
+keeps a persisting session leaves its context unsettled, so any other writer ends that session
+first; the next supervisor under its name adopts it without ending it. Under `ContextLease.layer`,
+a later process's other writers can't know it runs: keep one where the next writer is the
+supervisor that adopts it, or under a lease that outlives the process.
 
 ## Extensions
 
@@ -186,18 +260,25 @@ const program = Effect.gen(function* () {
 under the real `BrowserbaseClient`, so the client and `Browserbase` run as they would against
 Browserbase, for free. Sessions run until released or until their timeout on the Effect `Clock`, so
 `TestClock` ends them. A `Script` loses a create, whose session it can list only `listedAfter` a
-while, leaves a release pending, refuses it, or fails status reads, in turn. `connectUrl` gives each session a DevTools address, such as a local
-Chromium's. It keeps sessions and stored contexts only, and fails a test that calls anything else.
-Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase does: it
-refuses a session id of any other shape, where it answers an unknown well-formed one as not found.
-`BrowserbaseContract.checks` are what this package relies on Browserbase to do, each an Effect over
-`BrowserbaseClient`; the fake passes them. Its answers also have the shapes Browserbase's published
-API reference gives them, which the package's tests check against a copy of it, except that a
-session has a `connectUrl` only when the script gives one.
+while, leaves a release pending, refuses it, or fails status reads, in turn. `connectUrl` gives
+each session a DevTools address, such as a local Chromium's. It keeps sessions and stored contexts
+only, and fails a test that calls anything else; `sessions` tells each session's status, user
+metadata, releases asked, whether it was kept alive, and the stored context it loaded and whether
+it saves to it. Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase
+does: it refuses a session id of any other shape, where it answers an unknown well-formed one as
+not found. `BrowserbaseContract.checks` are what this package relies on Browserbase to do, each an
+Effect over `BrowserbaseClient`; the fake passes them. Its answers also have the shapes
+Browserbase's published API reference gives them, which the package's tests check against a copy
+of it, except that a session has a `connectUrl` only when the script gives one. Give each test a
+`ContextLease.layer` of its own, so no test inherits a context another left unsettled.
 
 ```ts
-it.effect("leaves the context held while a release is pending", () =>
-  work.pipe(Effect.provide(TestBrowserbase.layer({ releases: [{ _tag: "Pending" }] }))),
+it.effect("leaves the context unsettled while a release is pending", () =>
+  work.pipe(
+    Effect.provide(
+      Layer.merge(TestBrowserbase.layer({ releases: [{ _tag: "Pending" }] }), ContextLease.layer),
+    ),
+  ),
 );
 ```
 
