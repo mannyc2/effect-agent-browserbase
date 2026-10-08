@@ -47,8 +47,11 @@ export const Create = Schema.Union([
   }),
   /** The session is made, but the answer holds only its id. */
   Schema.TaggedStruct("Malformed", {}),
-  /** The session is made, but no answer arrives. */
-  Schema.TaggedStruct("Lost", {}),
+  /**
+   * The session is made, but no answer arrives, and Browserbase lists it only `listedAfter`
+   * milliseconds later, as a search can trail what was made.
+   */
+  Schema.TaggedStruct("Lost", { listedAfter: Schema.optional(Schema.Finite) }),
 ]);
 
 /** How a release answers. */
@@ -126,6 +129,8 @@ const ReleaseBody = Schema.fromJsonString(
 interface Row {
   readonly id: string;
   readonly createdAt: number;
+  /** When a list first shows it. */
+  readonly listedAt: number;
   readonly expiresAt: number;
   readonly keepAlive: boolean;
   readonly userMetadata: Readonly<Record<string, unknown>> | undefined;
@@ -272,6 +277,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
       const created: Row = {
         id: nextId(fake),
         createdAt,
+        listedAt: createdAt + (reply._tag === "Lost" ? (reply.listedAfter ?? 0) : 0),
         expiresAt: createdAt + (body?.timeout ?? 300) * 1000,
         keepAlive: body?.keepAlive ?? false,
         userMetadata: body?.userMetadata,
@@ -300,6 +306,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
         [...fake.sessions.values()]
           .filter(
             (kept) =>
+              kept.listedAt <= fake.now() &&
               (status === null || (endOf(fake, kept)?.status ?? "RUNNING") === status) &&
               matches(kept.userMetadata),
           )

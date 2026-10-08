@@ -447,11 +447,11 @@ const pass = (seconds: number) =>
 describe("Browserbase", () => {
   it.effect("settles a session create that never answers, without sending it again", () =>
     Effect.gen(function* () {
-      let requests = 0;
+      let creates = 0;
 
-      const silent = HttpClient.make(() =>
+      const silent = HttpClient.make((request) =>
         Effect.sync(() => {
-          requests += 1;
+          if (request.method === "POST") creates += 1;
         }).pipe(Effect.andThen(Effect.never)),
       );
 
@@ -462,11 +462,9 @@ describe("Browserbase", () => {
 
       const open = Browserbase.open().pipe(Effect.scoped, Effect.provide(client));
 
-      // Alone, the create fails at its deadline with the reason that says it may exist.
-      const alone = yield* Effect.forkChild(Effect.flip(open));
-
-      yield* TestClock.adjust("60 seconds");
-      const error = yield* Fiber.join(alone);
+      // Alone, the create fails at its deadline with the reason that says it may exist, once the
+      // search for the session it may have made has given up on an answer.
+      const error = yield* finish(yield* Effect.forkChild(Effect.flip(open)));
 
       assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Transport"]);
 
@@ -476,8 +474,47 @@ describe("Browserbase", () => {
 
       yield* TestClock.adjust("60 seconds");
       yield* Fiber.join(stopping);
-      assert.strictEqual(requests, 2);
+      assert.strictEqual(creates, 2);
     }),
+  );
+
+  it.live("ends the session a lost create made, found by its own label, and no other", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        // The first open's session runs on; the second's create answer is lost.
+        yield* Browserbase.open();
+        const error = yield* Effect.flip(Browserbase.open().pipe(Effect.scoped));
+
+        assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Transport"]);
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["RUNNING", "COMPLETED"],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          TestBrowserbase.layer({ connectUrl, creates: [{ _tag: "Accept" }, { _tag: "Lost" }] }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("looks for a lost create's session until Browserbase lists it, and ends it", () =>
+    Effect.gen(function* () {
+      const error = yield* finish(
+        yield* Effect.forkChild(Effect.flip(Browserbase.open().pipe(Effect.scoped))),
+      );
+
+      assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Transport"]);
+      assert.deepStrictEqual(
+        (yield* kept).map(({ status }) => status),
+        ["COMPLETED"],
+      );
+    }).pipe(
+      Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Lost", listedAfter: 5000 }] })),
+    ),
   );
 
   it.effect("releases a created session whose answer does not decode", () =>
@@ -681,12 +718,18 @@ describe("Browserbase", () => {
           (yield* kept).map(({ status }) => status),
           ["COMPLETED"],
         );
+
         // That session was confirmed ended, so the next writer looks for no other first.
-        assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
-        assert.strictEqual(
-          (yield* asked).filter((request) => request.startsWith("GET /v1/sessions?")).length,
-          2,
+        const searches = Effect.map(
+          asked,
+          (requests) =>
+            requests.filter((request) => request.startsWith("GET /v1/sessions?")).length,
         );
+
+        const before = yield* searches;
+
+        assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
+        assert.strictEqual(yield* searches, before);
       }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl, creates: [{ _tag: "Lost" }] })));
     }),
   );
