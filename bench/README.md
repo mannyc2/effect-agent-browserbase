@@ -64,7 +64,7 @@ to cover its paying cascades, rather than asking the model to count transitions 
 pictures, and its capture is incomplete if two consecutive frames are 1,800 ms (one cascade) or
 more apart. The jump task's first frame must precede the jump, and its control's frames must all
 precede any jump. Half the chart seeds drift up and half down, so a constant trend answer cannot
-pass. Operate tasks run a Yielded agent with `effect-browser-agent`'s tools: in the default arm, it
+pass. Operate tasks run a Yielded agent with `effect-agent-browser`'s tools: in the default arm, it
 sees a screenshot before each turn and reads the outline with `observe` and after each `act`;
 `zoom` adds requested viewport crops before the next turn, and pixel clicks name the element under
 the requested point. Runs without a model still use the free

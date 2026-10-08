@@ -29,8 +29,8 @@
         "@types/node": "26.1.2",
         "@yielded/agent": "0.1.0-beta.168",
         "effect": "4.0.0",
+        "effect-agent-browser": "workspace:*",
         "effect-browser": "workspace:*",
-        "effect-browser-agent": "workspace:*",
         "effect-browserbase": "workspace:*",
         "playwright-core": "1.63.0",
         "typescript": "7.0.2",
@@ -61,8 +61,8 @@
         "vitest": "5.0.3",
       },
     },
-    "packages/agent": {
-      "name": "effect-browser-agent",
+    "packages/agent-browser": {
+      "name": "effect-agent-browser",
       "version": "0.3.0-beta.3",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
@@ -525,9 +525,9 @@
 
     "effect": ["effect@4.0.0", "", {}, "sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ=="],
 
-    "effect-browser": ["effect-browser@workspace:packages/browser"],
+    "effect-agent-browser": ["effect-agent-browser@workspace:packages/agent-browser"],
 
-    "effect-browser-agent": ["effect-browser-agent@workspace:packages/agent"],
+    "effect-browser": ["effect-browser@workspace:packages/browser"],
 
     "effect-browser-human-strokes": ["effect-browser-human-strokes@workspace:packages/human-strokes"],
 

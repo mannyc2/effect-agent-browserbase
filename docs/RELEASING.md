@@ -1,6 +1,6 @@
 # Releasing
 
-`effect-browser`, `effect-browserbase`, `effect-browser-human-strokes` and `effect-browser-agent`
+`effect-browser`, `effect-browserbase`, `effect-browser-human-strokes` and `effect-agent-browser`
 are released together, at one version, by `.github/workflows/publish.yml`. The workflow runs on a
 `v<version>` tag on `main`, runs `bun run ready`, packs the four packages, checks the archives in a clean consumer and
 publishes them through npm trusted publishing: no npm token, and npm signs provenance for each
@@ -13,10 +13,9 @@ settings.
 The owner does this once, in npm and GitHub settings.
 
 1. **Reserve the names.** npm can only trust a publisher for a name that exists, so each name is
-   published by hand once as a placeholder, `0.0.0-reserved.0`. `effect-browser` and
-   `effect-browser-human-strokes` are done; `effect-browser-agent` is not yet, and the first
-   release that carries it needs it. npm points `latest` at a name's first version, so `latest`
-   stays on the placeholder until a stable release.
+   published by hand once as a placeholder, `0.0.0-reserved.0`. `effect-browser`,
+   `effect-browser-human-strokes` and `effect-agent-browser` are done. npm points `latest` at a
+   name's first version, so `latest` stays on the placeholder until a stable release.
 
 2. **Trust the workflow on npm.** For each of the four packages, open the package's
    **Settings → Trusted publishing** on npmjs.com, choose **GitHub Actions** and enter:
@@ -30,10 +29,10 @@ The owner does this once, in npm and GitHub settings.
    | Allowed actions      | `npm publish`              |
 
    The workflow publishes with `npm publish`, so tick it under allowed actions: an entry created
-   after 3 September 2026 allows only `npm stage publish` until you do. `effect-browser` and
-   `effect-browserbase` were published by this workflow file in 0.2, so they should already have
-   this entry; check that it matches. npm does not test the entry when it is saved, so the first
-   release is the test.
+   after 3 September 2026 allows only `npm stage publish` until you do. `effect-browser`,
+   `effect-browserbase` and `effect-agent-browser` were published by this workflow file in 0.2, so
+   they should already have this entry; check that it matches. npm does not test the entry when
+   it is saved, so the first release is the test.
 
 3. **Protect the `npm` environment.** In the repository's **Settings → Environments**, the `npm`
    environment (it exists from 0.2) should have the owner as a required reviewer, and its
@@ -55,8 +54,8 @@ The owner does this once, in npm and GitHub settings.
   - Widen it to `^4.0.0` once those modules are stable.
 - **`effect-browser`** is a caret range in the other three packages, from the version each needs.
   Move it in the release that needs a newer one.
-- **`@yielded/agent`** is one exact version in `effect-browser-agent`, because each Yielded beta may
-  change the ports that `effect-browser-agent` implements. Its README's install line names that
+- **`@yielded/agent`** is one exact version in `effect-agent-browser`, because each Yielded beta may
+  change the ports that `effect-agent-browser` implements. Its README's install line names that
   version.
 - **`playwright-core`** is `^1.63.0`.
 
@@ -64,7 +63,7 @@ The owner does this once, in npm and GitHub settings.
 
 1. In one PR, set the same `version` in all four `packages/*/package.json`, add the release's
    section to `CHANGELOG.md`, move the `effect-browser` peer ranges in `effect-browserbase`,
-   `effect-browser-human-strokes` and `effect-browser-agent` if the release needs the new version, and run
+   `effect-browser-human-strokes` and `effect-agent-browser` if the release needs the new version, and run
    `bun install --ignore-scripts` so `bun.lock` agrees. 0.3's first release also deletes the root
    README's note that 0.3 is not on npm.
 2. Once it is merged, tag the merge commit and push the tag:
