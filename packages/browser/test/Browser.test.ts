@@ -16,7 +16,7 @@ import {
 } from "effect";
 
 import type * as Browser from "../src/Browser.ts";
-import { type BrowserError, consequence } from "../src/BrowserError.ts";
+import type { BrowserError } from "../src/BrowserError.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Chromium from "../src/Chromium.ts";
@@ -45,11 +45,10 @@ const found = (browser: Browser.Service, id: string) =>
     Option.map((page) => page.playwright.url()),
   );
 
-/** What a page's failure leaves: its reason, why the page is gone, and the consequence. */
+/** A page's failure: its reason, and why the page is gone. */
 const lossOf = (error: BrowserError) => ({
   reason: error.reason._tag,
   cause: error.reason._tag === "Closed" ? error.reason.cause : undefined,
-  lost: consequence(error).lost,
 });
 
 /** The browser's events since `from` of them were recorded. */
@@ -147,11 +146,7 @@ describe("a loss", () => {
         [yield* Fiber.join(watching), false],
         [yield* Effect.flip(page.snapshot()), false],
       ] as const) {
-        assert.deepStrictEqual(lossOf(error), {
-          reason: "Closed",
-          cause: "connection",
-          lost: "session",
-        });
+        assert.deepStrictEqual(lossOf(error), { reason: "Closed", cause: "connection" });
         assert.strictEqual(error.dispatched, dispatched);
       }
       // The browser ran on, so a new connection finds the page under its name. By then the first
@@ -182,7 +177,6 @@ describe("a loss", () => {
       assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
         reason: "Closed",
         cause: "session",
-        lost: "session",
       });
       assert.deepStrictEqual(losses(yield* browser.recentEvents), ["Disconnected session"]);
     }).pipe(Effect.scoped),
@@ -200,7 +194,6 @@ describe("a loss", () => {
       assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
         reason: "Closed",
         cause: "crashed",
-        lost: "page",
       });
       assert.isTrue(page.playwright.isClosed());
 

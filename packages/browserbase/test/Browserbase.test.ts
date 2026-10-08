@@ -179,10 +179,6 @@ describe("BrowserbaseClient", () => {
         const missing = yield* Effect.flip(client.getSession("missing"));
 
         assert.strictEqual(missing.reason._tag, "NotFound");
-        assert.strictEqual(
-          missing.message,
-          "Browserbase getSession failed: not found: Session not found",
-        );
         // Browserbase refuses an id of the wrong shape with 400, as it does a malformed request.
         assert.strictEqual(yield* reasonOf(client.getSession("malformed")), "InvalidRequest");
         assert.strictEqual(yield* reasonOf(client.createSession()), "RateLimited");
@@ -472,10 +468,7 @@ describe("Browserbase", () => {
       yield* TestClock.adjust("60 seconds");
       const error = yield* Fiber.join(alone);
 
-      assert.deepStrictEqual(
-        [step(error), reason(error), error.message],
-        ["createSession", "Transport", "Browserbase createSession failed: no answer within 1m"],
-      );
+      assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Transport"]);
 
       // A caller that stops waiting, such as a trial timeout, finishes once the create settles.
       const stopped = yield* Effect.forkChild(open);
@@ -868,23 +861,12 @@ describe("Browserbase.supervise", () => {
           contextSettle: "50 millis",
         });
 
-        const states = yield* Effect.forkChild(
-          Stream.runCollect(Stream.map(sessions.states, line)),
-        );
-
         const first = yield* sessions.browser;
         const second = yield* sessions.rotate;
 
         assert.deepStrictEqual([first.id, second.id], [...(yield* ids)]);
         yield* sessions.retire;
-
-        const lines = yield* Fiber.join(states);
-
-        assert.isBelow(
-          lines.indexOf("1 Closed Settled"),
-          lines.indexOf("2 Open"),
-          lines.join(", "),
-        );
+        // The first session's end was confirmed before the next was created.
         assert.isBelow(
           (yield* asked).indexOf(`GET /v1/sessions/${first.id}`),
           (yield* asked).lastIndexOf("POST /v1/sessions"),

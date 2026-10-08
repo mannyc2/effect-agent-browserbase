@@ -4,7 +4,6 @@
 // as the first capture starts.
 import { assert, it } from "@effect/vitest";
 import { Effect, Fiber, Option, Schedule, Stream } from "effect";
-import { consequence } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 
@@ -163,11 +162,11 @@ it.live(
           const error = yield* Fiber.join(reader).pipe(Effect.timeout("5 seconds"));
 
           assert.deepStrictEqual(
-            [error.operation, error.reason._tag, consequence(error)],
-            ["screencast", "Failed", { lost: "nothing", repeat: "safe" }],
+            [error.operation, error.reason._tag, error.dispatched],
+            ["screencast", "Failed", false],
           );
           // The page and its own session stand.
-          assert.include((yield* page.snapshot()).text, "");
+          yield* page.snapshot();
           yield* firstFrame(page);
           assert.strictEqual(proxy.connected, 3);
         }),

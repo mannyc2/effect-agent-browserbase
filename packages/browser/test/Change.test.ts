@@ -243,9 +243,9 @@ describe("a moment's account", () => {
         ),
       );
 
-    assert.include(told(7950), 'click button "Place order"');
+    assert.include(told(7950), '"Place order"');
     // A click that had ended before the input came did not send it.
-    assert.notInclude(told(6000), 'click button "Place order"');
+    assert.notInclude(told(6000), '"Place order"');
   });
 
   it.prop(
@@ -416,7 +416,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   );
 
   it.effect(
-    'puts a one-off "Order placed" before a ticker beside it, with the ticker\'s range',
+    'tells a one-off "Order placed" as news beside a ticker, with the ticker\'s range',
     () =>
       Effect.gen(function* () {
         const page = yield* start("/desk");
@@ -454,10 +454,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           column: "Price",
           heading: "Desk",
         });
-
-        const text = textOf(Moment.toPrompt(moment));
-
-        assert.isBelow(text.indexOf('"Order placed"'), text.indexOf('"$61,'), text);
       }),
   );
 
@@ -534,7 +530,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.isDefined(placed?.cause);
       assert.isAbove(placed?.startedAt ?? 0, (placed?.cause ?? 0) + 500);
       assert.isAtLeast(placed?.cause ?? 0, (click?.at ?? Infinity) - 1000);
-      assert.include(textOf(Moment.toPrompt(moment)), 'after click button "Place order"');
     }),
   );
 

@@ -183,7 +183,12 @@ export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boole
       if (state._tag === "Opening")
         return { state: { ...state, serving: undefined }, events, commands: [release(lost)] };
 
-      const reopened = next((state._tag === "Open" ? lost.number : state.number) + 1, true, lost, true);
+      const reopened = next(
+        (state._tag === "Open" ? lost.number : state.number) + 1,
+        true,
+        lost,
+        true,
+      );
 
       return { ...reopened, events: [...events, ...reopened.events] };
     }
