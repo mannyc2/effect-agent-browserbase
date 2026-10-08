@@ -3,7 +3,7 @@
 // in the order they open: Playwright's control connection is 0, and the capture connection opens
 // as the first capture starts.
 import { assert, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Option, Schedule, Stream } from "effect";
+import { Effect, Fiber, Layer, Schedule, Stream } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
@@ -169,8 +169,11 @@ it.live(
             .screencast()
             .pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
 
-          yield* page.latestFrame.pipe(
-            Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: Option.isSome }),
+          yield* page.state.pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("10 millis"),
+              until: (state) => state.frame !== undefined,
+            }),
             Effect.timeout("10 seconds"),
           );
           proxy.drop(capturing);
@@ -224,8 +227,11 @@ it.live("tells a capture's reader the browser was lost, whichever connection hea
                 .screencast()
                 .pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
 
-              yield* page.latestFrame.pipe(
-                Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: Option.isSome }),
+              yield* page.state.pipe(
+                Effect.repeat({
+                  schedule: Schedule.spaced("10 millis"),
+                  until: (state) => state.frame !== undefined,
+                }),
                 Effect.timeout("10 seconds"),
               );
               // Browserbase cuts the connections as it ends a session it was asked to release.

@@ -47,6 +47,17 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Motion.lognormal`, the tuned two-stroke planner, as a value, and `HumanStrokes.motion`, which
   loads the recorded strokes as a planner, for `Presentation.make`.
 - `Frame.session`: every frame names its browser session, as `Browser.Service.id` gives it.
+- `Moment.Window` and `Page.window({ since, until })`: a page's events, changes and frames over one
+  window of the browser's host clock. A window can end in the past, at a frame a delayed consumer
+  airs seconds after it was painted, so that what it writes now tells what its viewers will see; it
+  can go on exactly where a previous one ended. Its events and frames cost no call and its changes
+  one. A part that cannot be read is in `missing`, with why, and the window is still made.
+- `Moment.stillness(window)`: how long a window's page had been still at its end, by the last
+  change in view its record shows or the last paint among its screencast frames, and nothing where
+  neither could see.
+- `Page.state`: what the library already knows of a page, at no call and with no wait for its turn:
+  its address, its document and when it was committed, how far it has loaded, its newest frame,
+  and the viewport's text and title as last read, each with when it was learned.
 - `ContextLease`, a new `effect-browserbase` module: who may write a stored context, as a service
   the application provides. `hold(context)` holds a context for a scope, waiting while another
   holds it, and passes on how the writer before left it, `unsettled` while a session that saves to
@@ -97,6 +108,15 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   that navigates nowhere took 1.65 s locally and 3.75 s at a 70 ms round trip, and take 0.5 s and
   3.25 s. `pushState` and a 204 answer wait for nothing, and a navigation a handler starts once a
   fetch answers is the next look's to see, as it was.
+- A moment never fails because a part of it did. A picture, a read of changes or an outline that
+  cannot be had is in its `missing`, with why, and `Moment.toPrompt` says what it could not read
+  and why, and shows no older frame as the moment. A failed read of changes used to be dropped, so
+  a moment of a page whose connection was lost said only that changes were not recorded, and a
+  failed picture failed the moment.
+- `Moment.toPrompt` tells a failed action only as failed: its error, which may name a ref or advise
+  the caller that acted, is left out.
+- `PageLoaded` comes from the page's own session, as `Navigated` does, so a document's load always
+  follows its commit.
 
 ### Breaking
 
@@ -119,6 +139,12 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   is a value given to `Presentation.make`, so a misplaced layer can no longer be ignored in silence.
 - `Page.Settings` is internal.
 - `Frame` has a `session`, which a program that builds frames must give.
+- `Moment` is a `Window`: its `from` and `at` are `since` and `until`, and it has `missing`, which a
+  program that builds moments must give. `Moment.capture`'s `since` is a window's: a previous window
+  or moment, a frame, a host time, or a `Duration` back, so a number is a host time now, not
+  milliseconds back, and a duration is a `Duration`. A moment whose picture could not be taken ends
+  when it was read.
+- `Page.latestFrame` is gone: `page.state` has the newest frame.
 - `Browserbase.open`, `layer`, `supervise`, `reconcile` and `verifyContext` need a `ContextLease`:
   provide `ContextLease.layer` for one writer per stored context in the process, as before. The
   process-wide record of writers is gone, so no layer or test inherits a context another left

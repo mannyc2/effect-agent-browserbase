@@ -15,17 +15,18 @@
  *
  * @since 0.3.0
  */
-import { type Duration, Effect, type Option, Schema, type Stream } from "effect";
+import { type Duration, Effect, Schema, type Stream } from "effect";
 import type { Page as PlaywrightPage } from "playwright-core";
 
 import { BrowserError, type PolicyDenied } from "./BrowserError.ts";
-import { Box, type BrowserEvent, Subject, SubjectContext } from "./BrowserEvent.ts";
+import { Box, type BrowserEvent, PageLoaded, Subject, SubjectContext } from "./BrowserEvent.ts";
 import type { Changes } from "./Change.ts";
-import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
+import { type CaptureStats, Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
 import { FailFast } from "./internal/page/lane.ts";
 import * as Url from "./internal/page/url.ts";
+import type { Window } from "./Moment.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
 export interface Point {
@@ -228,6 +229,46 @@ export interface ChangesOptions {
   readonly unmask?: boolean | undefined;
 }
 
+/** The window `window` reads, and whether to show what fields hold. */
+export interface WindowOptions {
+  /**
+   * Where the window starts: a previous window, to continue exactly where it ended; a frame, at its
+   * paint; host monotonic milliseconds; or a `Duration` back from `until`. A start after `until`
+   * leaves the window empty there.
+   */
+  readonly since: Window | Frame | Duration.Duration | number;
+  /**
+   * Where it ends: a frame, at its paint, such as one a delayed consumer airs now; or host
+   * monotonic milliseconds. Defaults to now, and is never later.
+   */
+  readonly until?: Frame | number | undefined;
+  /** Show what fields hold in its changes; a secret field still reads `••••`. Defaults to false. */
+  readonly unmask?: boolean | undefined;
+}
+
+/**
+ * What the library knows of a page now, without asking it, each part with when it learned it, in
+ * host monotonic milliseconds: a part's age is `at` less its time. Text read before the current
+ * document began is left out, since it tells of a document that has gone.
+ */
+export class State extends Schema.Class<State>("effect-browser/PageState")({
+  page: Schema.String,
+  /** When this was taken. */
+  at: Schema.Finite,
+  /** Where the main frame last committed or moved, without userinfo or known secret parameters. */
+  url: Schema.String,
+  /** The page's document, as `Navigated` counts them. */
+  document: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** When the main frame committed it; absent for the one the browser began tracking it with. */
+  committedAt: Schema.optional(Schema.Finite),
+  /** How far that document has loaded, as the page's own session heard; absent until parsed. */
+  load: Schema.optional(PageLoaded),
+  /** The newest screencast frame, of whichever document it names. */
+  frame: Schema.optional(Frame),
+  /** The viewport's text as it was last read, with the page's title then. */
+  text: Schema.optional(Text),
+}) {}
+
 /** What to include in an observation of the current viewport. */
 export type ObservationMode = "outline" | "screenshot" | "both";
 
@@ -396,6 +437,17 @@ export interface Page {
    * document, until nobody has read it for two minutes. See `Change`.
    */
   readonly changes: (options?: ChangesOptions) => Effect.Effect<Changes, BrowserError>;
+  /**
+   * The page's events, changes and frames over a window: the frames and events it keeps, at no
+   * call, and its changes, in one call, the first starting its record as `changes` does. A part
+   * that cannot be read is missing, with why; the window fails only for bounds that are not finite.
+   */
+  readonly window: (options: WindowOptions) => Effect.Effect<Window, BrowserError>;
+  /**
+   * What the library knows of the page now, at no call and with no wait for its turn: where it is,
+   * its document and how far it has loaded, its newest frame, and its text and title as last read.
+   */
+  readonly state: Effect.Effect<State>;
 
   readonly click: (
     target: Target,
@@ -449,7 +501,6 @@ export interface Page {
   readonly captureStats: (options?: {
     readonly window?: Duration.Input | undefined;
   }) => Effect.Effect<CaptureStats, BrowserError>;
-  readonly latestFrame: Effect.Effect<Option.Option<Frame>>;
   /** Screencast frames painted within `frameHistory` of the newest, oldest first. */
   readonly recentFrames: Effect.Effect<ReadonlyArray<Frame>>;
   /** This page's events among the browser's latest `eventHistory`, oldest first. */

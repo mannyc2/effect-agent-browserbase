@@ -1,15 +1,16 @@
 /**
- * The bridge to the page script, and the page's documents as its own session sees them commit. At
- * the library's first read of a page, its own protocol session registers the script, so every
- * later document runs it in an isolated world from its start; calls go to the current document's
- * world. The script is composed from the domains' page-side parts, the `*.inpage.ts` modules, in
- * the order they depend on one another. At the first read of a page's changes, its session
- * registers the recorder too, so every later document records from its start.
+ * The bridge to the page script, and the page's documents as its own session sees them commit and
+ * load, so a load follows its commit. At the library's first read of a page, its own protocol
+ * session registers the script, so every later document runs it in an isolated world from its
+ * start; calls go to the current document's world. The script is composed from the domains'
+ * page-side parts, the `*.inpage.ts` modules, in the order they depend on one another. At the first
+ * read of a page's changes, its session registers the recorder too, so every later document
+ * records from its start.
  */
 import { Effect, Schema, SynchronizedRef } from "effect";
 
 import { type BrowserError, Failed } from "../../BrowserError.ts";
-import { Navigated } from "../../BrowserEvent.ts";
+import { Navigated, PageLoaded } from "../../BrowserEvent.ts";
 import { edit, type Edit } from "../input/edit.inpage.ts";
 import { evidence } from "../input/evidence.inpage.ts";
 import { guard, type Guard } from "../input/guard.inpage.ts";
@@ -180,10 +181,12 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   // changes asks for. One caller takes each step, once, while the others wait.
   const registration = yield* SynchronizedRef.make<"none" | "script" | "recorder">("none");
   // The current document's world, forgotten when the main frame commits another document; the
-  // commits this session has seen, the latest marked on the page; and the page's address.
+  // commits this session has seen, the latest marked on the page; the page's address; and how far
+  // the current document has loaded.
   let world: number | undefined;
   let documents = 0;
   let url = Url.redact(page.url);
+  let loaded: PageLoaded | undefined;
   // The latest commits' loaders and the documents they began, newest last: a capture connection
   // sees the same commits, and numbers its frames by them.
   const loaders = new Map<string, number>();
@@ -201,6 +204,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       if (loaders.size > 8 && oldest !== undefined) loaders.delete(oldest);
       page.activity.documentAt = now();
       world = undefined;
+      loaded = undefined;
     }
     url = seen.url;
     const sameDocument = seen.loader === undefined;
@@ -208,8 +212,16 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     publish(new Navigated({ at: now(), page: id, url, document: documents, sameDocument }));
   };
 
+  // The session tells these of the main frame alone.
+  const onLoaded = (state: PageLoaded["state"]) => () => {
+    loaded = new PageLoaded({ at: now(), page: id, state });
+    publish(loaded);
+  };
+
   cdp.on("Page.frameNavigated", onMainFrame);
   cdp.on("Page.navigatedWithinDocument", onMainFrame);
+  cdp.on("Page.domContentEventFired", onLoaded("domcontentloaded"));
+  cdp.on("Page.loadEventFired", onLoaded("load"));
 
   /**
    * The main-frame commits seen so far, once the Page domain, which registration turned on, has
@@ -350,6 +362,8 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     currentDocument,
     frameTag,
     documentOf,
+    /** How far the current document has loaded, as this session heard; nothing until parsed. */
+    loaded: () => loaded,
     /** Register the recorder, so every later document records from its start. */
     registerRecorder: (operation: string) => ensure(operation, true),
   };

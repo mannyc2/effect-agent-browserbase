@@ -3,7 +3,7 @@
 // A refactor or a Playwright upgrade that adds a call or a round trip to one of these operations
 // fails here; the counts, not the timings, are the contract.
 import { assert, it } from "@effect/vitest";
-import { Deferred, Effect, Option, Schedule, Stream, Tracer } from "effect";
+import { Deferred, Effect, Schedule, Stream, Tracer } from "effect";
 
 import * as Cdp from "../src/Cdp.ts";
 import * as Moment from "../src/Moment.ts";
@@ -75,8 +75,11 @@ const toFirstFrame = (proxy: Proxy, page: Page) =>
   });
 
 const framesArrive = (page: Page) =>
-  page.latestFrame.pipe(
-    Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: Option.isSome }),
+  page.state.pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced("10 millis"),
+      until: (state) => state.frame !== undefined,
+    }),
     Effect.timeout("10 seconds"),
   );
 
@@ -230,6 +233,54 @@ it.live("identical reads asked together cost one call between them", () =>
     );
 
     holds(yield* sentBy(proxy, reads), 3, 1);
+  }).pipe(Effect.scoped),
+);
+
+// What the library already knows of a page costs nothing to say: no call, and no wait for the
+// page's turn, so a caller that must never wait, such as an on-air read of the screen, reads it.
+it.live("a page's state costs no call, nor waits for an action, and holds what the page gave", () =>
+  Effect.gen(function* () {
+    const { proxy, browser } = yield* opened();
+    const page = yield* browser.newPage(still("known"));
+
+    yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+    yield* framesArrive(page);
+    const text = yield* page.text();
+
+    const state = yield* page.state.pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced("10 millis"),
+        until: (known) => known.load?.state === "load",
+      }),
+      Effect.timeout("10 seconds"),
+    );
+
+    holds(yield* sentBy(proxy, page.state), 0, 0);
+    assert.deepStrictEqual(
+      [state.url, state.document, state.text?.title, state.text],
+      [
+        yield* page.url,
+        (yield* page.recentEvents).findLast((event) => event._tag === "Navigated")?.document,
+        "known",
+        text,
+      ],
+    );
+    assert.isDefined(state.committedAt);
+    assert.isDefined(state.frame);
+    // An action holding the page for two seconds holds no read of its state back.
+    yield* page.press("Shift", { holdMillis: 2000 }).pipe(Effect.forkScoped);
+    yield* Effect.sleep("200 millis");
+    const asked = yield* browser.now;
+
+    yield* page.state;
+    assert.isBelow((yield* browser.now) - asked, 500);
+    // A new document leaves behind the text read of the one before, and any load it holds is the
+    // new document's.
+    yield* page.goto(still("next"));
+    const moved = yield* page.state;
+
+    assert.deepStrictEqual([moved.document, moved.text], [state.document + 1, undefined]);
+    assert.isAtLeast(moved.load?.at ?? Infinity, moved.committedAt ?? Infinity);
   }).pipe(Effect.scoped),
 );
 
