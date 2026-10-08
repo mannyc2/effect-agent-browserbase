@@ -47,6 +47,32 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Motion.lognormal`, the tuned two-stroke planner, as a value, and `HumanStrokes.motion`, which
   loads the recorded strokes as a planner, for `Presentation.make`.
 - `Frame.session`: every frame names its browser session, as `Browser.Service.id` gives it.
+- `ContextLease`, a new `effect-browserbase` module: who may write a stored context, as a service
+  the application provides. `hold(context)` holds a context for a scope, waiting while another
+  holds it, and passes on how the writer before left it, `unsettled` while a session that saves to
+  it may still run. `ContextLease.layer` holds contexts within the process that builds it, as
+  `Browserbase.open` did before; an application whose writers run in several processes provides
+  its own, such as an advisory lock in its database, which reads a holder that never said, as one
+  whose process was killed, as unsettled. `open`, `reconcile` and `verifyContext` hold contexts
+  through it, from before a persisting create until its save has settled.
+- `Browserbase.verifyContext(contextId, check)` reads a stored context back, as a login: a session
+  that loads the context and saves nothing runs `check` on its browser and is released. It holds
+  the context meanwhile, so it reads what the last writer saved, once that save settled, never
+  beside a writer, and ends first a session a writer before may have left saving to it.
+- Keeping a session past its scope: `Browserbase.supervise({ keep })`, a name, leaves the current
+  session running as the supervisor's scope closes, rather than releasing it, and the first
+  generation of the next `supervise` under that name adopts it, with its pages and their ids, so a
+  deploy or a restart keeps prepared pages and a signed-in state. Its sessions are created with
+  `keepAlive` and labelled `keptAs` in their user metadata; other sessions kept under the name are
+  ended as one is adopted. It is off by default, since a kept session bills until adopted and
+  released or until its timeout, and `retire` always releases. A kept session that saves to a
+  stored context leaves the context unsettled, so any writer but the adopting supervisor ends it
+  first. Underneath, `Supervisor.Options.keep` closes the serving generation's scope without
+  asking its provider to release it, published as the new state `Kept`.
+- `Browserbase.attach` is resume: from another process too, a page is found again by its id. It
+  refuses a session that has ended, failing `Closed` by the session before it connects.
+- `TestBrowserbase`'s sessions tell whether each was kept alive, and the stored context it loaded
+  and whether it saves to it.
 
 ### Changed
 
@@ -93,6 +119,14 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   is a value given to `Presentation.make`, so a misplaced layer can no longer be ignored in silence.
 - `Page.Settings` is internal.
 - `Frame` has a `session`, which a program that builds frames must give.
+- `Browserbase.open`, `layer`, `supervise`, `reconcile` and `verifyContext` need a `ContextLease`:
+  provide `ContextLease.layer` for one writer per stored context in the process, as before. The
+  process-wide record of writers is gone, so no layer or test inherits a context another left
+  unsettled. `reconcile` can fail with `ContextHeld` when a lease cannot be taken.
+- `Browserbase.ContextHeld` is `ContextLease.ContextHeld`, beside the lease that can fail with it.
+- `Supervisor` asks a generation's `release` before it closes the generation's scope, so what the
+  scope holds, such as a stored context's lease, goes only once the release has reported.
+- `Supervisor.GenerationState` has `Kept`, so a program that switches over it has one more case.
 
 ## 0.3.0-beta.2 (unreleased)
 

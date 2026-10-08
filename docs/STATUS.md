@@ -7,13 +7,19 @@
 - `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
   `Frame`, `BrowserEvent` and `BrowserError`; `Tools`, `Agent` and `Moment`.
 - `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`. Stored contexts
-  and uploaded extensions are managed through the client; `Browserbase.open` lets one persisting
-  session at a time write to each context in a process and holds it until the save settles. A
-  release confirms the session ended and says so, `Settled` or `Unconfirmed`. An unconfirmed
-  release, or a create whose answer was lost, marks the context: the next `open` on it ends the
-  context's sessions, which `open` labels in their user metadata, before it writes, and fails
-  `ContextHeld` while they cannot be confirmed ended, so no context is held with no way out and no
-  two sessions write to one. `Browserbase.reconcile` does the same without opening a session.
+  and uploaded extensions are managed through the client. A persisting `open` holds its context
+  through a `ContextLease` from before its create until its save settles: `ContextLease.layer`
+  excludes writers in the process, and an application provides its own, such as an advisory lock
+  in its database, to exclude them across processes. A release confirms the session ended and says
+  so, `Settled` or `Unconfirmed`. An unconfirmed release, a create whose answer was lost, or a
+  session kept past its scope leaves the context unsettled, through the lease: the next writer
+  ends the context's sessions, which `open` labels in their user metadata, before it writes, and
+  fails `ContextHeld` while they cannot be confirmed ended, so no context is held with no way out
+  and no two sessions write to one. `Browserbase.reconcile` does the same without opening a
+  session, and `Browserbase.verifyContext` reads a context back, as a login, from a session that
+  saves nothing, under the same hold: on Browserbase it read back the cookie and local storage a
+  writer had saved (8 October). `Browserbase.attach` is resume: on Browserbase a second process
+  attached to a running session by its id, found its page by its target id and changed it.
   Each create carries a nonce of its own, so a session that a create whose answer was lost made is
   found and ended, whether it persists a context or not, rather than billing until its timeout.
   `effect-browserbase/testing` holds the Browserbase API in memory, with scripted faults and
@@ -26,7 +32,10 @@
   break first for sessions saving to one stored context), and stopping at once on `retire`. A
   failure the provider deems definite, such as a refused key, is `Down` at once with its cause,
   rather than hidden behind the schedule. Each generation's changes stream as `states`, with its
-  release outcome last, a loss with its cause. `Browserbase.supervise` supervises hosted sessions.
+  release outcome last, a loss with its cause. `Browserbase.supervise` supervises hosted sessions,
+  and with `keep`, a name, leaves its session running past its scope, `Kept`, for the next
+  supervisor under that name to adopt with its pages: opt-in, since a kept session bills until it
+  is adopted and released, or its timeout ends it.
 - Pages with durable names and a life story. A page's id is its CDP target id, so a new connection
   to the same browser finds it again with `browser.page(id)`. The timeline tells each page's
   documents and moves within them (`Navigated` with `document` and `sameDocument`), its loads
@@ -225,6 +234,20 @@ and each becoming the next beta.
   input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
   pages have a budget, and guarded typing approves its field once. So are the stage, the presenter
   and the wait after input: `humanize` and its fixed sleeps are gone.
+- **Phase 4, contexts and follow-ups, has begun.** Stored contexts are durable across processes:
+  `ContextLease` replaces the process-wide record of writers, `verifyContext` reads a login back,
+  `attach` resumes a session from another process, and `supervise({ keep })` leaves a session
+  running past its scope for the next supervisor to adopt. Its hosted checks, on 8 October, used 3
+  browser minutes by the project's usage, 503 to 506, over three sessions one at a time that ran
+  75 s by Browserbase's own clock, all released and confirmed. They also found that a malformed
+  context id is refused as invalid (400), as a malformed session id is, which the fake now does;
+  that a search by user metadata with no status lists a new session within one search of its
+  create, 104 to 170 ms, and an ended one by its end; and that Browserbase cut a timed-out
+  session's connection 4.4 s after its `expiresAt`, its own `endedAt` 4.3 s after, so the browser
+  reported the session's end. A context's `updatedAt` did not move when a session saved to it, so
+  nothing in the API tells when a save has landed, and `contextSettle` stays a fixed wait. And a
+  raw crop changed what the page reads as its screen from 1280×720 to 800×600 for the rest of the
+  session, `device-width` media queries with it, while the window stayed 1280×720.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
@@ -257,7 +280,7 @@ build. The 0.2 PRs are closed, except #164, kept open as a reference.
 The larger pieces left for later:
 
 - recording to video files;
-- operator handoff, reconnecting to a kept-alive session, and uploads;
+- operator handoff and uploads;
 - the paid hosted checks.
 
 ## Releases
