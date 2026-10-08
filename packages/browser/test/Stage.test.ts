@@ -187,6 +187,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const stage = yield* Stage.make();
 
         yield* stage.present(first);
+
         const pressing = yield* first
           .press("Shift", { holdMillis: 1500 })
           .pipe(Effect.andThen(browser.now), Effect.forkScoped);
