@@ -264,8 +264,8 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 15,500                 | 11,064 → 16,881 | 129 → 190                 |
-| `effect-browserbase`           | 807 → 1,410, and 595 `testing` | 611 → 1,819     | 32 → 36, and 14 `testing` |
+| `effect-browser`               | 8,871 → 15,532                 | 11,064 → 16,954 | 129 → 190                 |
+| `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,376     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
 
 `effect-browser`'s figures include phase 2, as each part landed: the supervisor, 602 source lines,
@@ -280,8 +280,11 @@ browser-wide input lock paid for only in part; and the stage, the presenter and 
 input, 525 source lines, 359 test lines and 9 exports, which deleting `humanize`, its prose slips
 and the fixed sleeps paid for in part; and windows, moments as windows, `stillness` and the page's
 state, 214 source lines, 393 test lines and 4 exports, which deleting `Moment`'s own window,
-`latestFrame` and the browser's own listeners for loads paid for in part. Without them, phase 1
-leaves the package at 11,431 source lines, against a soft ceiling of about 11,000 through phase 4.
+`latestFrame` and the browser's own listeners for loads paid for in part. Phase 4's contexts,
+resume and keep added 32 source lines and 73 test lines there, the supervisor's `keep`, and the
+rest to `effect-browserbase`: 294 source lines, 27 in `testing`, 557 test lines and 5 exports, the
+new `ContextLease` and `verifyContext`. Without them, phase 1 leaves the package at 11,431 source
+lines, against a soft ceiling of about 11,000 through phase 4.
 
 ## Not rebuilt yet
 
