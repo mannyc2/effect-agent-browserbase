@@ -26,7 +26,9 @@ export const sight = (names: Names, walked: Walk, texts: Texts, kept: History) =
 
   /** What an element shows: its words, if its style shows it. */
   const shownBy = (element: Element): Shown =>
-    element.isConnected && visible(element) ? clean(texts.lines(element, false), 200) || null : null;
+    element.isConnected && visible(element)
+      ? clean(texts.lines(element, false), 200) || null
+      : null;
 
   /** Settle what waited on an element; its words are read once, if one of them needs them. */
   const judge = (element: Element, pending: ReadonlyArray<Sample>, seen: boolean, was: boolean) => {

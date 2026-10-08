@@ -150,6 +150,9 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   let world: number | undefined;
   let documents = 0;
   let url = Url.redact(page.url);
+  // The latest commits' loaders and the documents they began, newest last: a capture connection
+  // sees the same commits, and numbers its frames by them.
+  const loaders = new Map<string, number>();
 
   const navigated = (next: string, sameDocument: boolean) => {
     url = Url.redact(next);
@@ -161,6 +164,11 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   cdp.on("Page.frameNavigated", ({ frame }) => {
     if (frame.parentId !== undefined) return;
     documents++;
+    loaders.delete(frame.loaderId);
+    loaders.set(frame.loaderId, documents);
+    const [oldest] = loaders.keys();
+
+    if (loaders.size > 8 && oldest !== undefined) loaders.delete(oldest);
     page.activity.documentAt = now();
     world = undefined;
     navigated(frame.url + (frame.urlFragment ?? ""), false);
@@ -180,6 +188,9 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   /** What a frame that arrives now shows: the page's current document and its address. */
   const frameTag = () => ({ document: documents, url });
 
+  /** The document the main frame's latest commit of `loader` began, if this session counted it. */
+  const documentOf = (loader: string) => loaders.get(loader);
+
   // The registration belongs to this session and the world to the page, so a session that attaches
   // later, as after a reconnect, registers again and finds the script already installed. With the
   // Page domain enabled, a source runs in each new document, in the order registered;
@@ -197,11 +208,9 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       ],
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.andThen(
-        Effect.sync(() => {
-          registered = true;
-        }),
-      ),
+      Effect.map(() => {
+        registered = true;
+      }),
       span("Page.register", {}, "Debug"),
     );
 
@@ -215,13 +224,9 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
         recording
           ? Effect.void
           : Effect.andThen(registered ? Effect.void : register(operation), () =>
-              addScript(operation, recorderSource).pipe(
-                Effect.andThen(
-                  Effect.sync(() => {
-                    recording = true;
-                  }),
-                ),
-              ),
+              Effect.map(addScript(operation, recorderSource), () => {
+                recording = true;
+              }),
             ),
       ),
     );
@@ -328,6 +333,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     evaluateWithContext,
     currentDocument,
     frameTag,
+    documentOf,
     registerRecorder,
   };
 });

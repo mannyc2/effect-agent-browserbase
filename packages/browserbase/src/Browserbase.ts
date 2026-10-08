@@ -28,6 +28,7 @@ import {
   Exit,
   Layer,
   Option,
+  Redacted,
   Schedule,
   Schema,
   Scope,
@@ -45,6 +46,7 @@ import {
   type SessionOptions,
 } from "./BrowserbaseClient.ts";
 import { BrowserbaseError, Decode, isTransient } from "./BrowserbaseError.ts";
+import * as CaptureConnection from "./internal/captureConnection.ts";
 
 export interface Options extends Browser.Options {
   readonly session?: SessionOptions | undefined;
@@ -55,6 +57,12 @@ export interface Options extends Browser.Options {
    * land. Defaults to 10 seconds, after which hosted checks have read a save back.
    */
   readonly contextSettle?: Duration.Input | undefined;
+  /**
+   * Run the pages' screencasts on a second connection to the session, which carries nothing else,
+   * so that a frame never waits behind a large message, such as an upload or a read's answer, on
+   * the connection that drives the page. Defaults to true.
+   */
+  readonly captureConnection?: boolean | undefined;
 }
 
 /** A browser on a Browserbase session. */
@@ -245,21 +253,34 @@ const labelled = (session: SessionOptions | undefined, context: string | undefin
     ? session
     : { ...session, userMetadata: { ...session?.userMetadata, [contextLabel]: context } };
 
-const connect = (operation: string, session: Session, options: Options) =>
-  session.connectUrl === undefined
-    ? Effect.fail(
-        new BrowserbaseError({
-          operation,
-          reason: new Decode({ detail: `session ${session.id} has no connectUrl` }),
-        }),
-      )
-    : Cdp.open({
-        ...options,
-        endpoint: session.connectUrl,
-        id: session.id,
-        provider: "browserbase",
-        expiresAt: Option.getOrUndefined(DateTime.make(session.expiresAt)),
-      });
+/**
+ * A browser over the session's DevTools address, its pages' screencasts on a capture connection of
+ * their own. A DevTools server's HTTP address, as a local Chromium gives in tests, keeps them on
+ * each page's own session: there the connection is loopback, and fast.
+ */
+const connect = Effect.fnUntraced(function* (
+  operation: string,
+  session: Session,
+  options: Options,
+) {
+  const endpoint = session.connectUrl;
+
+  if (endpoint === undefined)
+    return yield* new BrowserbaseError({
+      operation,
+      reason: new Decode({ detail: `session ${session.id} has no connectUrl` }),
+    });
+  const apart = options.captureConnection !== false && /^wss?:/i.test(Redacted.value(endpoint));
+
+  return yield* Cdp.open({
+    ...options,
+    endpoint,
+    id: session.id,
+    provider: "browserbase",
+    expiresAt: Option.getOrUndefined(DateTime.make(session.expiresAt)),
+    capture: apart ? yield* CaptureConnection.make(endpoint) : undefined,
+  });
+});
 
 /**
  * Create a session and open a `Browser` on it, for as long as the scope is open. If opening

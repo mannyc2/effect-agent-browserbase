@@ -3,11 +3,11 @@
  * Native callbacks own synchronous bookkeeping; the page scope owns startup and teardown.
  */
 import { Clock, Duration, Effect, Exit, Option, Queue, Semaphore, Stream } from "effect";
-import type { CDPSession } from "playwright-core";
 
 import { BrowserError, InvalidRequest } from "../../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../../Frame.ts";
 import { type Estimate, toHostTime, uncertaintyAt } from "./clock.ts";
+import type { NativeFrame, Transport } from "./transport.ts";
 
 interface Size {
   readonly width: number;
@@ -16,10 +16,8 @@ interface Size {
 
 interface Options {
   readonly id: string;
-  /** The page's own session, for the capture's events. */
-  readonly cdp: CDPSession;
-  /** Its calls, counted into the operation that sends them. */
-  readonly send: CDPSession["send"];
+  /** Where each capture's screencast runs, found as it starts. */
+  readonly transport: Effect.Effect<Transport, BrowserError>;
   readonly clock: Clock.Clock;
   /** The estimate a capture starts with, once the page can be captured. */
   readonly calibrate: Effect.Effect<Estimate, BrowserError>;
@@ -34,8 +32,6 @@ interface Options {
   /** The viewport in CSS pixels; a capture is scaled to fit it, as screenshots are. */
   readonly viewport: Effect.Effect<Size, BrowserError>;
   readonly imageSize: (data: Uint8Array) => Size | undefined;
-  /** The page's current document and address, which each frame carries from its arrival. */
-  readonly frameTag: () => { readonly document: number; readonly url: string };
   readonly error: (cause: unknown) => BrowserError;
   readonly onClose: (callback: () => void) => () => void;
 }
@@ -43,16 +39,6 @@ interface Options {
 type Envelope =
   | { readonly _tag: "Frame"; readonly sequence: number; readonly frame: Frame }
   | { readonly _tag: "Failure"; readonly error: BrowserError };
-
-interface NativeFrame {
-  readonly data: string;
-  readonly metadata: {
-    readonly timestamp?: number;
-    readonly deviceWidth: number;
-    readonly deviceHeight: number;
-  };
-  readonly sessionId: number;
-}
 
 interface Held {
   readonly frame: Frame;
@@ -69,6 +55,9 @@ interface Run {
 
 interface Generation {
   readonly subscribers: Set<Queue.Queue<Envelope>>;
+  readonly transport: Transport;
+  /** Stops handing the transport's frames to this generation. */
+  unlisten: () => void;
   readonly calibration: Estimate;
   /** The native capture's settings; every reader of this generation shares them. */
   readonly quality: number;
@@ -271,7 +260,7 @@ const timed = (
   options: Options,
   native: NativeFrame,
   timestamp: number,
-  generation: Pick<Generation, "calibration" | "size">,
+  generation: Pick<Generation, "calibration" | "size" | "transport">,
 ) => {
   const data = Buffer.from(native.data, "base64");
   const image = options.imageSize(data);
@@ -291,7 +280,7 @@ const timed = (
     receivedAt: Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6,
     width: size.width,
     height: size.height,
-    ...options.frameTag(),
+    ...generation.transport.frameTag(),
   });
 
   return { frame, image, device };
@@ -304,6 +293,25 @@ const readViewport = (options: Options) =>
     Effect.timeoutOrElse({ duration: deadline, orElse: () => Effect.succeed(null) }),
     Effect.orElseSucceed(() => null),
     Effect.provideService(Clock.Clock, options.clock),
+  );
+
+/**
+ * What a new capture starts with: where it runs, the clock's estimate, and the viewport unless
+ * the reader gave a size. A capture connection attaches while the page's own session maps the
+ * clock, and a page too busy to report its viewport is still captured, at device size.
+ */
+const prepare = (options: Options, screencast: ScreencastOptions) =>
+  Effect.all(
+    [
+      options.transport.pipe(Effect.interruptible),
+      Effect.gen(function* () {
+        const calibration = yield* options.calibrate.pipe(Effect.interruptible);
+        const viewport = screencast.size === undefined ? yield* readViewport(options) : null;
+
+        return { calibration, viewport };
+      }),
+    ],
+    { concurrency: 2 },
   );
 
 /**
@@ -478,20 +486,11 @@ export const make = (options: Options) =>
       if (!current.accepting) return;
       current.accepting = false;
       sizes.end();
-      options.cdp.off("Page.screencastFrame", current.onFrame);
-      let response: Promise<unknown>;
-
-      try {
-        response = options.send("Page.stopScreencast");
-      } catch (cause) {
-        notifyFailure(current, options.error(cause));
-
-        return;
-      }
+      current.unlisten();
 
       // Attach both handlers in the callback turn. Even a caller that leaves immediately never
       // abandons a rejected native reply, and an uncertain stop is never submitted twice.
-      const reply = response.then(
+      const reply = current.transport.stop().then(
         () => undefined,
         (cause: unknown) => {
           notifyFailure(current, options.error(cause));
@@ -567,16 +566,15 @@ export const make = (options: Options) =>
 
           if (current === undefined) {
             yield* awaitPreviousStop;
-            const calibration = yield* options.calibrate.pipe(Effect.interruptible);
-
-            // A page too busy to report its viewport is still captured, at device size.
-            const viewport = screencast.size === undefined ? yield* readViewport(options) : null;
+            const [transport, { calibration, viewport }] = yield* prepare(options, screencast);
             const size = screencast.size ?? viewport;
 
             if (closed) return yield* options.error(new Error("Target page has been closed"));
 
             const created: Generation = {
               subscribers: new Set(),
+              transport,
+              unlisten: () => undefined,
               calibration,
               quality: screencast.quality ?? 80,
               size,
@@ -595,19 +593,8 @@ export const make = (options: Options) =>
 
                   return;
                 }
-                let response: Promise<unknown>;
 
-                try {
-                  response = options.send("Page.screencastFrameAck", {
-                    sessionId: native.sessionId,
-                  });
-                } catch (cause) {
-                  fail(created, options.error(cause));
-
-                  return;
-                }
-
-                const reply = response.then(
+                const reply = created.transport.acknowledge(native.sessionId).then(
                   () => {
                     replies.delete(reply);
                   },
@@ -668,12 +655,17 @@ export const make = (options: Options) =>
           const baseline = delivered;
 
           if (starting) {
-            options.cdp.on("Page.screencastFrame", current.onFrame);
-            const { quality, size } = current;
+            const { transport, quality, size } = current;
+            const listening = current;
+
+            current.unlisten = transport.listen({
+              frame: current.onFrame,
+              lost: (error) => fail(listening, error),
+            });
 
             const screencast = Effect.tryPromise({
               try: () =>
-                options.send("Page.startScreencast", {
+                transport.start({
                   format: "jpeg",
                   quality,
                   ...(size === null ? {} : { maxWidth: size.width, maxHeight: size.height }),

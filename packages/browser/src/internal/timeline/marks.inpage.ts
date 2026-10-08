@@ -150,10 +150,7 @@ export const marks = (names: Names, kept: History, seeing: Sight) => {
       // A text-only element the record follows changes only its text, as a ticking price does,
       // so its nodes need no look: each would cost this world a wrapper of its own.
       if (change.type !== "attributes")
-        if (
-          change.type === "characterData" ||
-          (target.childElementCount === 0 && kept.has(target))
-        )
+        if (change.type === "characterData" || (target.childElementCount === 0 && kept.has(target)))
           batch.owners.add(target);
         else nodes(change, target, batch);
       else if (isHtml(target) && target !== document.body && target !== document.documentElement)

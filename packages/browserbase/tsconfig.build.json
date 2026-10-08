@@ -1,0 +1,6 @@
+// The declarations' build reads the source alone. The tests reach effect-browser's own counting
+// proxy, and would otherwise have its declarations written beside it.
+{
+  "extends": "./tsconfig.json",
+  "include": ["src"]
+}

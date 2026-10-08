@@ -32,7 +32,7 @@ export const history = (
   // When the record let changes go, and how many, and the latest such time; keys whose tracks went.
   let losses: Array<[number, number]> = [];
   let lastLoss = Number.NEGATIVE_INFINITY;
-  let gone: Array<object> = [];
+  const gone: Array<object> = [];
   let begun: number | undefined;
 
   // Losses at one time count together. Beyond 256 times the first noted go, so a count falls short
@@ -200,13 +200,7 @@ export const history = (
     },
     changing,
     /** Keys whose tracks went since this was last asked, for the recorder to stop watching. */
-    forgotten: (): ReadonlyArray<object> => {
-      const keys = gone;
-
-      gone = [];
-
-      return keys;
-    },
+    forgotten: (): ReadonlyArray<object> => gone.splice(0),
     has: (key: object) => tracks.has(key),
     lose,
     note,

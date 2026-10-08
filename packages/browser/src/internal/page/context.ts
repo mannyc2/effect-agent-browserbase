@@ -16,6 +16,7 @@ import {
 } from "effect";
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
+import type { CaptureSource } from "../../Browser.ts";
 import { BrowserError, Closed, Failed, type Reason, Timeout } from "../../BrowserError.ts";
 import type { BrowserEvent } from "../../BrowserEvent.ts";
 import type * as Motion from "../../Motion.ts";
@@ -51,6 +52,8 @@ export interface MakeOptions {
   readonly paging: (operation: string) => Effect.Effect<void, BrowserError>;
   /** Why the page is gone, once it is: its browser's loss, else its own close or crash. */
   readonly closedBy: () => ClosedCause;
+  /** Where the page's screencast runs, if not on its own session. */
+  readonly capture?: CaptureSource | undefined;
 }
 
 const messageOf = (cause: unknown): string =>
