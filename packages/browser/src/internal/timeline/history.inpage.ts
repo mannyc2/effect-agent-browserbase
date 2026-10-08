@@ -177,6 +177,29 @@ export const history = (
     };
   };
 
+  /**
+   * Each element's changes from `from` on, a field's own edits aside, with whether it came or went
+   * at each; and when the record let changes go since. A read judges by them what was in flux
+   * before an input.
+   */
+  const recent = (from: number) => ({
+    tracks: Array.from(tracks.values(), ({ key, kind, initial, samples }) => ({
+      key,
+      changes: samples.flatMap(({ at, shown }, index) =>
+        kind === "value" || at < from
+          ? []
+          : [
+              {
+                at,
+                moved:
+                  shown === null || (index === 0 ? initial : samples[index - 1]?.shown) === null,
+              },
+            ],
+      ),
+    })),
+    losses: losses.flatMap(([at]) => (at < from ? [] : [at])),
+  });
+
   /** When something in view last changed, or something not yet judged; for a wait for stillness. */
   const changing = (): number =>
     Math.max(
@@ -209,6 +232,7 @@ export const history = (
     lose,
     note,
     read,
+    recent,
     /** A track moves to the element that took its key's place, as a re-rendered price does. */
     rekey: (from: object, to: object): boolean => {
       const track = tracks.get(from);

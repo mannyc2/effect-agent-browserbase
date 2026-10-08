@@ -54,10 +54,13 @@ export class Change extends Schema.Class<Change>("effect-browser/Change")({
   /** When it last changed before the window, as far back as the record keeps: in flux, not news. */
   earlier: Schema.optional(Schema.Finite),
   /**
-   * When the trusted input it followed reached the page, where it was that input's doing: it had not
-   * changed in the second before, and it changed within 500 ms, or within 3 s inside what the input
-   * acted on or its row, form, dialog or controlled element. The page's `Action` that sent it holds
-   * that time.
+   * When the trusted input it followed reached the page, where it was that input's doing. It was not
+   * in flux: in the 10 s before the input it had not changed, and nothing had come into or left what
+   * it sits in, so a ticker's tick or a feed's line is not. Then it changed within 3 s inside what
+   * the input acted on or its row, form, dialog or controlled element; or, elsewhere, within 500 ms
+   * of an input on a page where nothing had changed in the 2 s before, as a menu a portal puts at
+   * the end of the page does. What holds the input's target, as a menu holds its item, does not
+   * count against it. The page's `Action` that sent it holds that time.
    */
   cause: Schema.optional(Schema.Finite),
 }) {}

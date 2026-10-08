@@ -64,25 +64,80 @@ export const changes = (
     );
   };
 
-  /** The input a change followed, on the page's clock, where the change was its own doing. */
-  const causeOf = (one: Folded, element: Element): number | undefined => {
-    for (const input of recorder.inputs().toReversed()) {
+  /** What an element sits in, or sat in as it went. */
+  const parentOf = (key: object): Element | null =>
+    key instanceof Element
+      ? key.isConnected
+        ? key.parentElement
+        : (marking.placeOf(key) ?? null)
+      : null;
+
+  // What changed in the 10 s before an input is in flux at it, and a change in the 2 s before says
+  // the page was not still.
+  const fluxMillis = 10_000;
+  const stillMillis = 2000;
+
+  /**
+   * Each input a change may follow, with what the page did before it: what changed in the 10 s
+   * before, the parents that gained or lost a child then, and whether nothing changed, and nothing
+   * was let go, in the 2 s before. What holds the input's target, as a menu holds its item, came
+   * with it, so it counts only as changing itself.
+   */
+  const before = () => {
+    const inputs = recorder.inputs();
+    const { tracks, losses } = kept.recent((inputs[0]?.at ?? Infinity) - fluxMillis);
+
+    return inputs.map(({ at, target }) => {
+      const changed = new Set<object>();
+      const moved = new Set<Element | null>();
+      let still = losses.every((lost) => lost >= at || lost < at - stillMillis);
+
+      for (const { key, changes } of tracks) {
+        const prior = changes.filter((change) => change.at < at && change.at >= at - fluxMillis);
+
+        if (prior.length > 0) changed.add(key);
+        if (prior.length === 0 || (key instanceof Element && key.contains(target))) continue;
+        if (prior.some((change) => change.moved)) moved.add(parentOf(key));
+        if (prior.some((change) => change.at >= at - stillMillis)) still = false;
+      }
+
+      return { at, target, changed, moved, still };
+    });
+  };
+
+  /** The input a change followed, on the page's clock, where `Change.cause`'s rule names one. */
+  const causeOf = (
+    one: Folded,
+    element: Element,
+    inputs: ReturnType<typeof before>,
+  ): number | undefined => {
+    const parent = parentOf(one.track.key);
+
+    for (const input of inputs.toReversed()) {
       const after = one.startedAt - input.at;
 
       if (after <= 0) continue;
       if (after > 3000) break;
 
+      // In flux: it changed, or another came into or left what it sits in, in the 10 s before.
       const changing =
-        one.track.known >= input.at - 1000 ||
-        one.track.samples.some((sample) => sample.at < input.at && sample.at >= input.at - 1000);
+        one.track.known >= input.at - fluxMillis ||
+        input.changed.has(one.track.key) ||
+        (parent !== null && input.moved.has(parent));
 
-      if (!changing && (after <= 500 || local(input.target, element))) return input.at;
+      if (!changing && (local(input.target, element) || (after <= 500 && input.still)))
+        return input.at;
     }
 
     return undefined;
   };
 
-  const describe = (one: Folded, known: Known, unmask: boolean): typeof Change.Encoded => {
+  const describe = (
+    one: Folded,
+    known: Known,
+    unmask: boolean,
+    inputs: ReturnType<typeof before>,
+  ): typeof Change.Encoded => {
     const { track, kind, before, after, lowest, highest, ...times } = one;
     const element = track.key instanceof Element ? track.key : null;
     const where = element?.isConnected === true ? element : (marking.placeOf(track.key) ?? null);
@@ -116,7 +171,7 @@ export const changes = (
       lowest: field ? undefined : lowest,
       highest: field ? undefined : highest,
       // A field's own edit needs no cause.
-      cause: field || where === null ? undefined : causeOf(one, where),
+      cause: field || where === null ? undefined : causeOf(one, where, inputs),
     };
   };
 
@@ -135,12 +190,13 @@ export const changes = (
     );
 
     const known = placing.known();
+    const inputs = before();
 
     return {
       until,
       from,
       dropped,
-      records: folded.map((one) => describe(one, known, request.unmask)),
+      records: folded.map((one) => describe(one, known, request.unmask, inputs)),
     };
   };
 

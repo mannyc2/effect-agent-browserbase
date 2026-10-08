@@ -488,7 +488,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("names no cause for a tick that follows an inert click", () =>
+  it.effect("names no cause for what changes on its own after an inert click", () =>
     Effect.gen(function* () {
       const page = yield* start("/desk");
       const menu = yield* button(page, "Menu");
@@ -499,42 +499,84 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         if (btc !== null) btc.textContent = `$61,${Number(btc.textContent?.slice(-3)) + 10}`;
       });
 
-      yield* page.changes();
-      // It ticked 400 ms before the click, so it was already changing when the click came.
-      yield* tick;
-      yield* Effect.sleep(Duration.millis(400));
-      const before = yield* page.changes();
+      // The page's own feed adds a line elsewhere 250 ms on, as a chat does.
+      const line = run(page, () => {
+        setTimeout(
+          () => document.querySelector("#alerts")?.insertAdjacentHTML("beforeend", "<p>gg wp</p>"),
+          250,
+        );
+      });
 
+      yield* page.changes();
+      // A line follows a click on a page that ticked a second before.
+      yield* tick;
+      yield* Effect.sleep(Duration.millis(1000));
+      const ticked = yield* page.changes();
+
+      yield* line;
+      yield* page.click(menu);
+      yield* Effect.sleep(Duration.millis(2500));
+      const busy = yield* page.changes({ since: ticked });
+
+      // On a page still for two seconds, a slow ticker ticks just after a click, and the feed
+      // adds a line again.
+      yield* line;
       yield* page.click(menu);
       yield* tick;
-      yield* Effect.sleep(Duration.millis(300));
-      const after = yield* page.changes({ since: before });
+      yield* Effect.sleep(Duration.millis(400));
+      const still = yield* page.changes({ since: busy });
 
-      assert.isNotEmpty(after.changes);
-      assert.isTrue(after.changes.every((change) => change.cause === undefined));
+      assert.deepStrictEqual(told(busy), [["appeared", undefined, "gg wp"]]);
+      assert.sameDeepMembers(told(still), [
+        ["text", "$61,250", "$61,260"],
+        ["appeared", undefined, "gg wp"],
+      ]);
+      assert.isTrue(
+        [...busy.changes, ...still.changes].every((change) => change.cause === undefined),
+      );
     }),
   );
 
-  it.effect("names the click a delayed answer inside its form followed", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
+  it.effect(
+    "names the click its effects followed, out of its reach on a still page or later in its form",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* start("/desk");
 
-      yield* page.changes();
-      yield* page.click(yield* button(page, "Place order"));
-      yield* page.waitForText("Order placed");
-      yield* Effect.sleep(Duration.millis(100));
-      const moment = yield* Moment.capture(page, { since: Duration.seconds(3) });
-      const placed = moment.changes?.changes.find((change) => change.after === "Order placed");
+        // Menu opens a menu where a portal puts it, at the end of the body, and its item a dialog.
+        yield* run(page, () =>
+          document.addEventListener("click", ({ target }) => {
+            const opens =
+              target instanceof Element && target.id === "menu"
+                ? '<div role="menu" style="position:fixed;top:40px;left:200px"><button type="button" role="menuitem">Share</button></div>'
+                : target instanceof Element && target.getAttribute("role") === "menuitem"
+                  ? '<div role="dialog" style="position:fixed;top:80px;left:200px">Share this page</div>'
+                  : "";
 
-      const click = moment.events.find(
-        (event) => event._tag === "Action" && event.name === "click",
-      );
+            document.body.insertAdjacentHTML("beforeend", opens);
+          }),
+        );
+        yield* page.changes();
+        yield* page.click(yield* button(page, "Menu"));
+        yield* page.click(
+          (yield* page.find({ role: "menuitem", name: "Share" }))[0]?.ref ?? "no menu",
+        );
+        yield* page.click(yield* button(page, "Place order"));
+        yield* page.waitForText("Order placed");
+        yield* Effect.sleep(Duration.millis(100));
+        const moment = yield* Moment.capture(page, { since: Duration.seconds(3) });
+        const changes = moment.changes?.changes ?? [];
+        const changed = (after: string) => changes.find((change) => change.after === after);
+        const [menu, sheet, placed] = ["Share", "Share this page", "Order placed"].map(changed);
 
-      // 600 ms on, too late to be direct, but inside the form whose button was clicked.
-      assert.isDefined(placed?.cause);
-      assert.isAbove(placed?.startedAt ?? 0, (placed?.cause ?? 0) + 500);
-      assert.isAtLeast(placed?.cause ?? 0, (click?.at ?? Infinity) - 1000);
-    }),
+        // At once, out of reach: the menu, and the dialog, though the menu holding the item that
+        // opened it came just before.
+        assert.isDefined(menu?.cause);
+        assert.isAbove(sheet?.cause ?? 0, menu?.cause ?? Infinity);
+        // 600 ms on, too late to be direct, but inside the form whose button was clicked.
+        assert.isAbove(placed?.cause ?? 0, sheet?.cause ?? Infinity);
+        assert.isAbove(placed?.startedAt ?? 0, (placed?.cause ?? Infinity) + 500);
+      }),
   );
 
   it.effect("masks what a field holds unless asked, and ends a window at a frame's paint", () =>
