@@ -95,8 +95,10 @@ between frames was 1,802 ms on that connection and 352 ms on its own (8 October 
 The connection is raw CDP, with no Playwright, and read-only: a page's session on it starts,
 acknowledges and stops the screencast, and turns on the Page domain and reads the frame tree, so
 that each frame carries the document its own connection saw commit, numbered as `Navigated`
-numbers them. Its first capture costs the connection itself, an attach, and one round trip for
-both; a later capture of the page costs the start alone. The page's own session keeps the focus
+numbers them. A page's first capture there costs three round trips, run beside the control
+connection's own: the attach, then the Page domain and the frame tree together, then the start.
+The browser's first capture also opens the connection. A later capture of the page costs the start
+alone, and on the control connection a capture costs one call fewer. The page's own session keeps the focus
 emulation that keeps a tab behind painting: a session that held it too would blur the page as it
 went. The connection opens with the first capture and closes with the browser. If it fails, the
 capture ends with `Failed`, the page and its own session stay as they were, and the next capture

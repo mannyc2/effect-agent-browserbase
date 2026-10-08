@@ -8,7 +8,11 @@ export default defineConfig({
       externalConditions: ["@effect-browser/source"],
     },
   },
-  pack: { entry: ["src/*.ts", "src/testing/index.ts"], dts: true, sourcemap: true },
+  pack: {
+    entry: ["src/*.ts", "src/testing/index.ts"],
+    dts: { tsconfig: "tsconfig.build.json" },
+    sourcemap: true,
+  },
   test: {
     include: ["test/**/*.test.ts"],
     testTimeout: 60_000,
