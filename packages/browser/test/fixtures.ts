@@ -207,7 +207,16 @@ const navigating = `<!doctype html><title>Navigating</title>
 <a id="empty" href="/empty">Empty</a>
 <button id="still" onclick="this.textContent = 'Pressed'">Still</button>`;
 
+// Links whose addresses hold credentials, a Java session id among them, and one that only says
+// what it shows.
+const links = `<!doctype html><title>Links</title>
+<a href="/download?verification_code=SECRET111&format=pdf">Download</a>
+<a href="https://partner.example/?token=SECRET222&ticker=ETH">Partner</a>
+<a href="/chart?code=BTC">Chart</a>
+<a href="/cart;jsessionid=0123456789abcdefABCDEF">Cart</a>`;
+
 const pages: Record<string, string> = {
+  "/links": links,
   "/navigating": navigating,
   "/desk": desk,
   "/spinning": spinning,
