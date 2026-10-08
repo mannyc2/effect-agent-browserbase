@@ -66,6 +66,22 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   capture opens another.
 - `Browser.CaptureSource` and `Cdp.Options.capture`: the port a provider supplies its capture
   connection through. Without one, a capture runs on the page's own session, as before.
+- `Change`, a new module, and `Page.changes({ since, until, unmask })`: what visibly changed on a
+  page over a window, in one call to the page, element by element. Each `Change` is text that
+  changed, appeared, disappeared or came and went (`brief`), a field's value or the title, with
+  its `subject` and structured context (row, column, label, heading), what it showed at the
+  window's start and end, how often it changed, the lowest and highest of a number that changed
+  more than once, when it last changed before the window, and the trusted input it followed where
+  it was that input's doing (`cause`). A page records once something reads its changes, and then
+  from the start of each later document, until nobody has read it for two minutes; a page nobody
+  reads records nothing and costs nothing. The record keeps 256 elements with their last 32 changes
+  for a minute; an element that keeps changing gives way before news, and `Changes.dropped` counts
+  what gave way, with `Changes.from` past it. A window can start at the previous read's `cursor`,
+  exactly, or at a frame's paint, and end at a frame's paint. Field values read `••••` unless
+  unmasked.
+- `Moment.changes`, and `Moment.CaptureOptions.unmask`: a moment reads what changed up to its last
+  frame's paint, from where the previous moment's changes ended; a page that cannot say, as while
+  it navigates, still has its moment.
 - Per-page admission. Each page admits its operations in one lane of its own: an action, which
   sends input or navigates, has the page to itself, in the order actions were asked, and reads
   share it, after the action in flight and every action asked before them, so a read describes the
@@ -85,6 +101,9 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   or fails at once under `Page.failFast`.
 
 ### Changed
+
+- `Page.ready({ quietMillis })` also waits, where the page's changes are recorded, until nothing in
+  view has changed for the spell, so frames a browser holds back cannot pass for a still page.
 
 - Every address the library reports, in events, frames, reads, errors and a guard's request, loses
   its userinfo and the query and fragment parameters named for credentials, such as tokens, keys,
@@ -143,12 +162,20 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - `Browser.Options.initScripts` takes `{ match, source }` objects, not strings.
 - `Supervisor`'s `Lost` carries its `cause`, and `Opened` no longer takes `expiresAt`: the
   supervisor reads the browser's.
+- `Moment.toPrompt` leads with what changed, news before what keeps changing and cells of a column
+  that changed together as one line, and names an action only as what a change followed, or as a
+  step where its effect is drawn, such as a click on a canvas, or came before the record began.
+  Hovers, scrolls and attempts that changed nothing are left out. Only a moment without a record
+  of changes lists every step, as before. The prompt's wording changed with it.
+- `Page` has a `changes` member, so a hand-made `Page` needs one.
 - A wait behind other operations on the page fails `Busy`, not `Timeout`, and `Reason` has `Busy`
   and `Limit` beside the rest, so a caller that handles reasons by tag has two more to handle.
-- Reads wait for the action in flight on their page: a snapshot, find, text, picture or zoom no
-  longer runs while an action is changing the page, and an action waits for the reads before it.
+- Reads wait for the action in flight on their page: a snapshot, `find`, `text`, `changes`, a
+  picture or a zoom no longer runs while an action is changing the page, and an action waits for
+  the reads before it.
 - `Observation` carries `missing`, and `observe` succeeds with what it could read.
-- Under a guard, plain typing sends no key events: the page sees the text arrive in one insertion.
+- Under a guard, plain typing sends no key events: the text arrives in one insertion once its field
+  is approved, so a page listening for key events sees none.
 - Each page has its own pointer, where its own last move left it; a glide on a page starts there,
   or mid-viewport, not where input on another tab left the pointer.
 

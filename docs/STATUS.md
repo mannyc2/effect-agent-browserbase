@@ -76,15 +76,28 @@
   fails closed on input with facts when its judge fails; `Agent.run` provides the task and ends
   after three refusals in a row. The judges are tested with scripted models; `bun run bench judges` in
   the bench grades them against the corpus, with paid arms only on opt-in.
-- Moments: `Moment.capture` gathers a page's frames and events over a window that can start where
-  the previous moment ended, so consecutive moments neither repeat nor miss an event, and needs
-  only the page. Its timeline names what each action acted on by role and name, from the
-  `Action`'s `subject`, never by ref. The outline is opt-in (`snapshot: true`): in the first
-  paired run, moments with and without it scored 61/80 each on every task but `navigated`, where
-  the outline's reused refs misled the model, and it doubled the tokens on `quote-dense`.
-  `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call; describing it is
-  the caller's own `generateObject`, `generateText` or `Chat` turn. Pages keep the screencast
-  frames of the last 5 seconds (`frameHistory`), a moment's default window.
+- What changed on a page: `Page.changes({ since, until })` reads, in one call, what visibly
+  changed over a window, element by element: text that changed, appeared, disappeared or came
+  and went, fields' values (masked unless asked) and the title, each with what it showed at
+  either end, how often it changed, a number's range, its row, column, label and heading, and the
+  input it followed where it was that input's doing. A page records once something reads its
+  changes, from the start of each later document, and a page nobody reads records nothing and
+  costs nothing; on a 2,000-cell table rewritten every 50 ms, recording takes the page's busy time
+  from about 100 ms per 3 s to about 230, where an empty observer costs about 180. The record keeps
+  news over what keeps changing, counts what it lets go and never claims to be whole where it is
+  not, and a window can continue exactly where the last read ended or end at a frame's paint.
+  `Page.ready({ quietMillis })` also waits for nothing in view to change where a page records.
+- Moments: `Moment.capture` gathers a page's frames, events and changes over a window that can
+  start where the previous moment ended, so consecutive moments neither repeat nor miss an event
+  or a change, and needs only the page. `Moment.toPrompt` lays a moment out as one message for any
+  `effect/ai` call, leading with what changed, news first, and naming an action only as what a
+  change followed or where its effect is drawn, as on a canvas; describing it is the caller's own
+  `generateObject`, `generateText` or `Chat` turn. Whether a model describes a page better from
+  changes than from steps is not yet measured: the paid narration run is phase 4's. The outline is
+  opt-in (`snapshot: true`): in the first paired run, moments with and without it scored 61/80
+  each on every task but `navigated`, where the outline's reused refs misled the model, and it
+  doubled the tokens on `quote-dense`. Pages keep the screencast frames of the last 5 seconds
+  (`frameHistory`), a moment's default window.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
 - Per-page admission: a page waits only for itself. Its operations take turns in one lane, where an
@@ -124,12 +137,14 @@
   there it also traces each DevTools command under the span that was open when it was sent. Hosted
   sessions carry their trial in Browserbase's user metadata, and connect through a relay in the
   bench that traces their commands the same way.
-- `bench` (private): fifteen tasks over canvas games, live charts, dense quote tables, orders,
-  navigation, forms, a board, menus and a catalogue, graded against seeded page truth and captured
-  evidence. The six operate tasks' pages vary with the seed, and `--split eval` holds a family of
-  seeds out for comparing arms. Trials run with separate browsers and bounded concurrency,
-  task-specific reasoning defaults, elapsed-time metrics and a shared model admission budget. Every
-  trial is graded, an infrastructure failure, denied or unrun, and summaries keep those
+- `bench` (private): nineteen tasks over canvas games, live charts, dense quote tables, orders,
+  navigation, forms, a board, menus, a catalogue and a market board whose prices tick, flash and
+  scroll out of view, graded against seeded page truth and captured evidence; an understand task's
+  page records its changes from before its setup. The six operate tasks' pages vary with the seed,
+  and `--split eval` holds a family of seeds out for comparing arms. Trials run with separate
+  browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics and a
+  shared model admission budget. Every trial is graded, an infrastructure failure, denied or
+  unrun, and summaries keep those
   denominators apart. `--arm` runs the paired experiment's arms 1 (an outline with every action),
   2 (vision first) and 5 (`Agent.run`) on the same seeds; arms 1 and 2 use a bench loop over the
   public `Tools`. The bench is an `effect/cli` program (`run`, `report`, `judges`) on `Config` and
@@ -170,7 +185,9 @@ and each becoming the next beta.
   cause, `consequence`, redacted addresses and per-origin init scripts are in. So is the capture
   connection: on Browserbase, pages' screencasts run on a second, read-only connection to the
   session, and on a hosted session the on-air page's longest wait between frames, while another
-  tab read and uploaded, fell from 1,802 ms to 352 ms.
+  tab read and uploaded, fell from 1,802 ms to 352 ms. And the change record is: the page records
+  what visibly changes on it from the first read of its changes, at the start of each later
+  document, and moments lead with it.
 - **Phase 3, concurrency and presentation, has begun.** Per-page admission is in: the browser-wide
   input lock is gone, reads follow the action in flight and keep their work, a wait fails `Busy`,
   pages have a budget, and guarded typing approves its field once.
@@ -180,17 +197,17 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 13,247                 | 11,064 → 15,185 | 129 → 171                 |
+| `effect-browser`               | 8,871 → 14,686                 | 11,064 → 15,918 | 129 → 177                 |
 | `effect-browserbase`           | 807 → 1,297, and 588 `testing` | 611 → 1,593     | 32 → 36, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 309                      | 261 → 261       | 4 → 4                     |
 
 `effect-browser`'s figures include phase 2 so far: the supervisor, 602 source lines, 506 test lines
-and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports; and
-the capture connection's port and transport, 324 source lines, 43 test lines and 1 export. They
-include phase 3's per-page admission too, 492 source lines, 406 test lines and 3 exports, most of
-it the lane, which deleting the browser-wide input lock paid for only in part. Without them, phase
-1 leaves the package at 11,431 source lines, against a soft ceiling of about 11,000 through phase
-4.
+and 7 exports; pages' identity and lifecycle, 398 source lines, 542 test lines and 9 exports; the
+capture connection's port and transport, 324 source lines, 43 test lines and 1 export; and the
+change record, 1,423 source lines, 728 test lines and 6 exports. They include phase 3's per-page
+admission too, 508 source lines, 411 test lines and 3 exports, most of it the lane, which deleting
+the browser-wide input lock paid for only in part. Without them, phase 1 leaves the package at
+11,431 source lines, against a soft ceiling of about 11,000 through phase 4.
 
 ## Not rebuilt yet
 

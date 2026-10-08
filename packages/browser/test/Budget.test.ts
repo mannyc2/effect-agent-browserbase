@@ -6,6 +6,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Option, Schedule, Stream, Tracer } from "effect";
 
 import * as Cdp from "../src/Cdp.ts";
+import * as Moment from "../src/Moment.ts";
 import type { Page } from "../src/Page.ts";
 import { behindProxy, type Command, type Proxy } from "./protocol.ts";
 
@@ -213,19 +214,22 @@ it.live("a read costs two calls on a new document, and one warm", () =>
 );
 
 // Reads asked together share the page's turn, so they go out in one round, and identical ones
-// share one call and its result.
+// share one call and its result. The first read of changes registers the recorder and maps the
+// clock, so it comes first.
 it.live("identical reads asked together cost one call between them", () =>
   Effect.gen(function* () {
     const { proxy, browser } = yield* opened();
     const page = yield* browser.newPage(still("joined"));
 
     yield* page.snapshot();
+    yield* page.changes();
 
-    const reads = Effect.all([page.snapshot(), page.snapshot(), page.text(), page.text()], {
-      concurrency: "unbounded",
-    });
+    const reads = Effect.all(
+      [page.snapshot(), page.snapshot(), page.text(), page.text(), page.changes(), page.changes()],
+      { concurrency: "unbounded" },
+    );
 
-    holds(yield* sentBy(proxy, reads), 2, 1);
+    holds(yield* sentBy(proxy, reads), 3, 1);
   }).pipe(Effect.scoped),
 );
 
@@ -259,6 +263,42 @@ it.live(
       yield* page.press("Shift");
       holds(yield* sentBy(proxy, page.text()), 1, 1);
     }).pipe(Effect.scoped),
+);
+
+// The change record costs a page nothing until something reads its changes: no registration, no
+// call. The first read registers the recorder beside the read, in one round trip, and every later
+// read is one call; a moment of a page on air adds that one call to its free picture.
+it.live("a read of changes costs one call, its first a registration beside it", () =>
+  Effect.gen(function* () {
+    const { proxy, browser } = yield* opened();
+    const page = yield* browser.newPage(animated);
+
+    // Registrations on the library's own session; Playwright registers scripts on its own.
+    const registrations = () =>
+      proxy.commands.filter(
+        (command) =>
+          command.method === "Page.addScriptToEvaluateOnNewDocument" &&
+          proxy.attached.has(command.sessionId ?? ""),
+      );
+
+    yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+    yield* framesArrive(page);
+    yield* page.snapshot();
+    yield* page.ready();
+    yield* page.goto(still("unread"));
+    yield* page.snapshot();
+    // Reads, pictures and a new document register only the page script.
+    assert.strictEqual(registrations().length, 1);
+    yield* page.goto(animated);
+    yield* framesArrive(page);
+    yield* page.snapshot();
+
+    holds(yield* sentBy(proxy, page.changes()), 2, 1);
+    assert.strictEqual(registrations().length, 2);
+    holds(yield* sentBy(proxy, page.changes()), 1, 1);
+    yield* Moment.capture(page);
+    holds(yield* sentBy(proxy, Moment.capture(page)), 1, 1);
+  }).pipe(Effect.scoped),
 );
 
 // A wait for a still screen asks the page before its quiet spell and once more to end it, whose

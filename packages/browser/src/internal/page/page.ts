@@ -10,6 +10,7 @@ import * as Actions from "../input/actions.ts";
 import * as Pictures from "../pictures/pictures.ts";
 import * as Reading from "../reading/reading.ts";
 import * as Ready from "../reading/ready.ts";
+import * as Changes from "../timeline/changes.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
@@ -58,6 +59,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     observe: reading.observe,
     find: reading.find,
     text: reading.text,
+    changes: Changes.make(page, bridge, pictures.estimate),
     click: input.click,
     hover: input.hover,
     drag: input.drag,

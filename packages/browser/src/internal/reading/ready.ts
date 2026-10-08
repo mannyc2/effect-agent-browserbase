@@ -6,9 +6,9 @@
  * arrived: a frame can be held on its way by a stalled connection, and Chromium sends frames only
  * while few acknowledgements are unanswered. So the spell counts only while every acknowledgement
  * is answered, and it ends with the page's evidence once more, whose answer comes behind every
- * frame sent before it: a frame that arrives first starts the spell again. Once the change record
- * runs (phase 2), nothing in view changing for the spell joins the frames here, which a DOM page's
- * changes show better than its paint.
+ * frame sent before it: a frame that arrives first starts the spell again. Where the page's changes
+ * are recorded, its evidence includes them: nothing in view may have changed for the spell, which a
+ * DOM page's changes show better than its paint, and no stall on the way can hide.
  */
 import { Duration, Effect, Schedule, Stream } from "effect";
 
@@ -27,7 +27,14 @@ export const make =
     // The page's own evidence, checked in the page until nothing is left or `until` has come.
     const settled = (until: number) =>
       Effect.suspend(() =>
-        bridge.evaluate("ready", scriptCall("ready", Math.max(0, Math.round(until - page.now())))),
+        bridge.evaluate(
+          "ready",
+          scriptCall(
+            "ready",
+            Math.max(0, Math.round(until - page.now())),
+            options.quietMillis ?? 0,
+          ),
+        ),
       ).pipe(
         Effect.flatMap(decodeWith("ready", ReadinessSchema)),
         Effect.tap((waiting) => Effect.annotateCurrentSpan({ waiting: waiting.join(",") })),

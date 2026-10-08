@@ -1,8 +1,9 @@
 # effect-browser
 
 Browser automation for [Effect](https://effect.website) agents: page control, a compact page
-outline for models, screencast frames, browser tools for `effect/ai`, an agent loop, and moments:
-what a page showed, and what happened on it, over a window of time, ready for a model.
+outline for models, screencast frames, browser tools for `effect/ai`, an agent loop, a record of
+what visibly changed on a page, and moments: what a page showed, and what changed on it, over a
+window of time, ready for a model.
 
 | Package                                                  | What it is                                                         |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -19,8 +20,8 @@ Any `effect/ai` `LanguageModel` drives the agent. This one goes through OpenRout
 ```ts
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Config, Effect, Layer, Schema } from "effect";
-import { FetchHttpClient } from "effect/http";
 import { Agent, Browser, Chromium } from "effect-browser";
+import { FetchHttpClient } from "effect/http";
 
 const program = Effect.gen(function* () {
   const page = yield* (yield* Browser.Browser).firstPage;
@@ -68,9 +69,13 @@ large read or upload crosses the connection that drives the pages.
 
 ## A moment
 
-`Moment.capture` gathers a page's screencast frames over a window and its events in between, naming
-what each action acted on (`click button "Play"`), never by ref; `snapshot: true` adds the page's
-outline at the end. `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call:
+`Moment.capture` gathers a page's screencast frames over a window, what visibly changed on it, and
+its events in between; `snapshot: true` adds the page's outline at the end. A page records what
+changes on it from its first moment, so its next moments can say `"$61,240" became "$62,010" (row
+"BTC", column "Price")`, or that an alert came and went between two frames. `Moment.toPrompt` lays a
+moment out as one message for any `effect/ai` call, leading with what changed and naming an action
+(`click button "Play"`), never by ref, only as what a change followed or where its effect is drawn,
+as on a canvas:
 
 ```ts
 import { LanguageModel, Prompt } from "effect/ai";
@@ -102,8 +107,8 @@ const watch = Effect.gen(function* () {
 }).pipe(Effect.scoped);
 ```
 
-Each moment can start where the last one ended, so a narrator neither repeats nor misses an event.
-Keeping one `Chat` lets the model see what it already said:
+Each moment can start where the last one ended, so a narrator neither repeats nor misses an event
+or a change. Keeping one `Chat` lets the model see what it already said:
 
 ```ts
 import { Chat } from "effect/ai";

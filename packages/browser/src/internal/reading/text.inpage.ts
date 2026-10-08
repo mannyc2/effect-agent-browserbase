@@ -68,13 +68,10 @@ export const text = (names: Names, walked: Walk) => {
   };
 
   /**
-   * What the viewport, or one element, shows as text: a line per block, table cells apart by a
-   * tab, and each field as `shown` gives it.
+   * What the viewport, or one element whole, shows as text: a line per block, table cells apart by
+   * a tab, and each field as `shown` gives it.
    */
-  const read = (request: TextRequest): TextResult => {
-    const root = request.ref === null ? null : lookup(request.ref);
-
-    if (root === undefined) return null;
+  const lines = (root: Element | null, unmask: boolean): string => {
     const lines: Array<string> = [];
     let line = "";
 
@@ -88,10 +85,10 @@ export const text = (names: Names, walked: Walk) => {
       line = "";
     };
 
-    walked.visit(root, request.ref === null, false, {
+    walked.visit(root, root === null, false, {
       enter: (element, style) => {
         const { display } = style;
-        const value = shown(element, request.unmask);
+        const value = shown(element, unmask);
 
         const block =
           !display.startsWith("inline") && display !== "contents" && display !== "table-cell";
@@ -117,14 +114,22 @@ export const text = (names: Names, walked: Walk) => {
     });
     end();
 
-    return {
-      ...cut(lines.join("\n"), request.maxChars),
-      url: location.href,
-      title: document.title,
-    };
+    return lines.join("\n");
   };
 
-  return { cut, read, shown };
+  const read = (request: TextRequest): TextResult => {
+    const root = request.ref === null ? null : lookup(request.ref);
+
+    return root === undefined
+      ? null
+      : {
+          ...cut(lines(root, request.unmask), request.maxChars),
+          url: location.href,
+          title: document.title,
+        };
+  };
+
+  return { cut, lines, read, shown };
 };
 
 export type Texts = ReturnType<typeof text>;

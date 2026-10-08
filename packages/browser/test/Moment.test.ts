@@ -13,6 +13,7 @@ import {
   Subject,
   TrackEvent,
 } from "../src/BrowserEvent.ts";
+import { Changes } from "../src/Change.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { Frame, Screenshot } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
@@ -95,30 +96,24 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
   });
 
   const prompt = Moment.toPrompt(moment);
+  const [text = "", ...captions] = texts(prompt);
 
   assert.deepStrictEqual(
     prompt.content.map((message) => message.role),
     ["user"],
   );
-  assert.deepStrictEqual(texts(prompt), [
-    [
-      "One moment of a browser session. Rely only on what this material shows, and prefer concrete details: numbers, names, colours, positions and motion.",
-      "",
-      "Page: Cart",
-      "URL: https://shop.example/cart",
-      "Viewport: 800x600",
-      '- button "Pay" [ref=e3]',
-      "",
-      "Timeline (seconds before the moment, over 5.0s):",
-      '-1.2s click button "Pay"',
-      "-1.0s navigated to https://shop.example/paid",
-      '-0.5s a dialog (alert) said "Paid"',
-      "",
-      "2 screenshots follow, oldest first; the last one is the moment itself.",
-    ].join("\n"),
-    "-3.0s:",
-    "The moment:",
-  ]);
+  // The outline, then the events in order of time, each timed before the moment; with no record
+  // of changes, every step is told. The frames follow, captioned with their times.
+  const at = (line: string) => text.indexOf(line);
+
+  assert.isAbove(at('- button "Pay" [ref=e3]'), 0);
+  assert.isTrue(
+    at('- button "Pay" [ref=e3]') < at('-1.2s click button "Pay"') &&
+      at('-1.2s click button "Pay"') < at("-1.0s navigated to https://shop.example/paid") &&
+      at("-1.0s navigated to https://shop.example/paid") < at('-0.5s a dialog (alert) said "Paid"'),
+    text,
+  );
+  assert.deepStrictEqual(captions, ["-3.0s:", "The moment:"]);
   assert.deepStrictEqual(
     pictures(prompt).map((part) => part.data),
     moment.frames.map((frame) => frame.data),
@@ -204,28 +199,33 @@ it("names what each action acted on, never by a ref", () => {
   );
 });
 
-it("says when nothing happened, and leaves out an outline the capture left out", () => {
-  const prompt = Moment.toPrompt(
-    new Moment.Moment({
-      page: "p1",
-      from: 9000,
-      at: 10_000,
-      frames: [shot(10_000, 1)],
-      events: [],
-    }),
-  );
+it("tells no event, and no outline, where the moment has none", () => {
+  const empty = (changes?: Changes) =>
+    texts(
+      Moment.toPrompt(
+        new Moment.Moment({
+          page: "p1",
+          from: 9000,
+          at: 10_000,
+          frames: [shot(10_000, 1)],
+          events: [],
+          changes,
+        }),
+      ),
+    );
 
-  assert.deepStrictEqual(texts(prompt), [
-    [
-      "One moment of a browser session. Rely only on what this material shows, and prefer concrete details: numbers, names, colours, positions and motion.",
-      "",
-      "Timeline (seconds before the moment, over 1.0s):",
-      "(nothing happened in the window)",
-      "",
-      "One screenshot follows: the moment itself.",
-    ].join("\n"),
-    "The moment:",
-  ]);
+  const timed = (text: string) => text.split("\n").filter((line) => /^-\d+\.\ds /.test(line));
+
+  for (const changes of [
+    undefined,
+    new Changes({ document: 1, from: 0, until: 10_000, cursor: 0, dropped: 0, changes: [] }),
+  ]) {
+    const [text = "", ...captions] = empty(changes);
+
+    assert.deepStrictEqual(timed(text), []);
+    assert.notInclude(text, "Page:");
+    assert.deepStrictEqual(captions, ["The moment:"]);
+  }
 });
 
 /** A new tab at `path`, in front and closed with the test, so no earlier frames are retained. */
@@ -361,9 +361,11 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         click?._tag === "Action" ? click.subject : undefined,
         new Subject({ role: "link", name: "Next page", tag: "a", context: {} }),
       );
-      // The new page's outline gives refs to its own elements; the timeline uses none of them.
+      // The new page's outline gives refs to its own elements; what follows it uses none of them.
+      // The click came before the new document's record began, so it is told as a step.
       const [text = ""] = texts(Moment.toPrompt(moment));
-      const timeline = text.slice(text.indexOf("Timeline"));
+      const outline = moment.snapshot?.rendered ?? "";
+      const timeline = text.slice(text.indexOf(outline) + outline.length);
 
       assert.match(text, /\[ref=e\d+\]/);
       assert.include(timeline, 'click link "Next page"');

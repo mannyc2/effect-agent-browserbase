@@ -459,5 +459,9 @@ export const make = Effect.fnUntraced(function* (
         );
   };
 
-  return { capture, screenshot, frame, zoom, captureStats };
+  // The browser's clock mapping, measured on this page only while the browser has none, as the
+  // change record's times need it.
+  const estimate = mapping.current(calibrateClock);
+
+  return { capture, screenshot, frame, zoom, captureStats, estimate };
 });
