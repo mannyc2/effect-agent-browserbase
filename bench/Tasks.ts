@@ -109,10 +109,11 @@ const narrate = <E>(
       );
       if (yield* Deferred.isDone(stop)) return;
 
-      // The page can be mid-navigation; that window is left to the next caption.
+      // A moment says what it could not read, as mid-navigation, rather than fail; one that fails
+      // anyway leaves its window to the next caption.
       const captured = yield* Moment.capture(page, {
         frames: 3,
-        since: previous ?? every,
+        since: previous ?? Duration.fromInputUnsafe(every),
         snapshot: false,
       }).pipe(Effect.option);
 
@@ -412,15 +413,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       const moment =
         shot === undefined || (newest !== undefined && current(newest))
           ? captured
-          : new Moment.Moment({
-              page: captured.page,
-              from: captured.from,
-              at: captured.at,
-              frames: [...captured.frames.slice(0, -1), shot],
-              snapshot: captured.snapshot,
-              events: captured.events,
-              changes: captured.changes,
-            });
+          : new Moment.Moment({ ...captured, frames: [...captured.frames.slice(0, -1), shot] });
 
       const last = moment.frames.at(-1);
 

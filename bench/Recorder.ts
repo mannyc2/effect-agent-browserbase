@@ -98,8 +98,8 @@ export const make = Effect.fnUntraced(function* (
 
         moments.push(
           new RecordedMoment({
-            at: entry.moment.at,
-            from: entry.moment.from,
+            at: entry.moment.until,
+            from: entry.moment.since,
             frames: pictures,
             question: entry.question,
             ...(entry.expected === undefined ? {} : { expected: plain(entry.expected) }),

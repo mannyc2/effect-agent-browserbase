@@ -126,7 +126,9 @@ it.live("captures an unsized page at its CSS viewport and reuses current frames"
 
     yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
     yield* Effect.sleep("500 millis");
-    const frame = Option.getOrThrow(yield* page.latestFrame);
+    const { frame } = yield* page.state;
+
+    if (frame === undefined) return yield* Effect.die("no frame came");
 
     // At a device scale factor of 2 the native frame would be twice the CSS viewport.
     assert.deepStrictEqual([frame.width, frame.height], [viewport.width, viewport.height]);

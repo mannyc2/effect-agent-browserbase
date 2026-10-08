@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Option, Schedule, Stream, Struct } from "effect";
+import { Deferred, Duration, Effect, Fiber, Schedule, Stream, Struct } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
@@ -710,10 +710,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
           // While the page animates, a frame painted moments ago is current.
           yield* Effect.gen(function* () {
-            const latest = yield* page.latestFrame;
+            const { frame } = yield* page.state;
             const at = yield* browser.now;
 
-            return Option.isSome(latest) && at - latest.value.hostTime < 50;
+            return frame !== undefined && at - frame.hostTime < 50;
           }).pipe(
             Effect.repeat({ schedule: Schedule.spaced("5 millis"), until: (fresh) => fresh }),
             Effect.timeout("5 seconds"),

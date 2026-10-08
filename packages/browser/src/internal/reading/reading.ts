@@ -1,7 +1,8 @@
 /**
  * Reading a page: its outline with refs, the elements a query finds, the text it shows, and an
  * observation that pairs the outline with a picture. Each read takes its turn on the page and
- * shares its work with identical reads, as `lane.ts` describes.
+ * shares its work with identical reads, as `lane.ts` describes. The viewport's text as it was last
+ * read is kept, for `Page.state`.
  */
 import { Duration, Effect, Option, Ref, Result, Schedule, Schema } from "effect";
 
@@ -58,6 +59,7 @@ export const make = Effect.fnUntraced(function* (
   const snapshots = lane.shared<Snapshot>("snapshot", true);
   const finds = lane.shared<ReadonlyArray<Found>>("find", true);
   const texts = lane.shared<Text>("text", true);
+  let viewed: Text | undefined;
 
   const snapshot = (snapshotOptions: SnapshotOptions = {}) => {
     const asked = {
@@ -143,8 +145,11 @@ export const make = Effect.fnUntraced(function* (
                 chars: result.text.length,
                 truncated: result.truncated,
               });
+              const shown = new Text({ ...result, url: Url.redact(result.url), at: now() });
 
-              return new Text({ ...result, url: Url.redact(result.url), at: now() });
+              if (request.ref === null) viewed = shown;
+
+              return shown;
             }).pipe(within("text")),
           )
     ).pipe(span("Page.text", { scope: scope === "viewport" ? "viewport" : "ref" }), owned);
@@ -196,7 +201,11 @@ export const make = Effect.fnUntraced(function* (
       owned,
     );
 
-  return { snapshot, find, text, observe, waitForText };
+  /** The viewport's text as it was last read, if after `since`, as a document began. */
+  const viewedSince = (since: number) =>
+    viewed !== undefined && viewed.at > since ? viewed : undefined;
+
+  return { snapshot, find, text, observe, waitForText, viewedSince };
 });
 
 export type Reading = Effect.Success<ReturnType<typeof make>>;
