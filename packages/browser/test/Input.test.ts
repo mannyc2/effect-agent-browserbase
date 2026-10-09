@@ -7,6 +7,7 @@ import type { CDPSession } from "playwright-core";
 import { Browser } from "../src/Browser.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
+import * as Openings from "../src/internal/page/openings.ts";
 import * as PageImpl from "../src/internal/page/page.ts";
 import * as BrowserClock from "../src/internal/pictures/clock.ts";
 import type * as Page from "../src/Page.ts";
@@ -232,6 +233,12 @@ const setup = Effect.fnUntraced(function* (
       return ++sequence;
     },
     recentEvents: Effect.sync(() => [...track]),
+    openings: yield* Openings.make(
+      playwright,
+      cdp,
+      () => Effect.void,
+      () => "page",
+    ),
     url: targetInfo.url,
     untilLost: (reply) => reply,
     focused: Effect.void,

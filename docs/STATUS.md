@@ -64,8 +64,10 @@ Agent, the renamed Effect Agent:
   screenshot of the current tab, as context the run never keeps. Yielded runs the agent: its loop,
   policy and budgets, approval, context and run events. Its browser interface is on Yielded's
   `main` but not yet on npm: the package pins `@yielded/agent` `0.1.0-beta.168`, which upstream's
-  pending release publishes. Until then the repository's `overrides` install a pack of upstream's
-  release candidate from this repository's `vendor/yielded-agent` branch.
+  pending release publishes. Until then the repository's `overrides` install a commit-pinned pack
+  of upstream's release candidate from this repository's `vendor/yielded-agent` branch for
+  development and CI. The source can merge with that pack; the publish workflow rejects the
+  override, so an npm release waits for the actual npm dependency and fresh consumer checks.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
 - Structured reads in one call to the page. `Page.find` returns the elements that a query of role,

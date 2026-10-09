@@ -183,7 +183,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
               }),
               // The finalizer only submits missing releases. It cannot wait forever for a
               // disconnected peer; the page retains those replies and gates its next action.
-              Effect.ensuring(run.close),
+              Effect.ensuring(run.close.pipe(Effect.andThen(page.openings.clear))),
             ),
           ),
         );
