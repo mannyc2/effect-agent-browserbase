@@ -4,7 +4,7 @@ import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
 import { BrowserError, Closed } from "../../BrowserError.ts";
 
-interface Mark {
+export interface Mark {
   windows: number;
   readonly registrations: Array<Effect.Effect<void, BrowserError>>;
   changed: Deferred.Deferred<void>;
