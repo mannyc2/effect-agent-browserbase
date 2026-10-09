@@ -69,11 +69,15 @@ EOF
 # Yielded Agent's own declarations do not pass `skipLibCheck: false`: its memory modules, as
 # published in 0.1.0-beta.167 too, name types they never declare. Only an error in another file
 # fails the check. TypeScript 7 colours its errors even into a pipe, which would hide every
-# `error TS` line from the filter, so they come plain.
-if ! checked="$("$consumer/node_modules/.bin/tsc" -p "$consumer/tsconfig.json" --pretty false)"; then
-  ours="$(printf '%s\n' "$checked" | grep 'error TS' | grep -v 'node_modules/@yielded/' || true)"
-  if [ -n "$ours" ]; then printf '%s\n' "$checked" >&2; exit 1; fi
-  echo "Yielded Agent's own declarations have $(printf '%s\n' "$checked" | grep -c 'error TS') errors; none is in these packages."
+# `error TS` line from the filter, so they come plain. With noEmit, its diagnostic exit is 1;
+# fatal exits and output other than these diagnostics and their indented continuations fail.
+checked="$("$consumer/node_modules/.bin/tsc" -p "$consumer/tsconfig.json" --pretty false 2>&1)" && compiler_status=0 || compiler_status=$?
+if [ "$compiler_status" -ne 0 ]; then
+  errors="$(printf '%s\n' "$checked" | grep 'error TS' || true)"
+  if [ "$compiler_status" -ne 1 ]; then printf '%s\n' "$checked" >&2; exit "$compiler_status"; fi
+  ours="$(printf '%s\n' "$checked" | grep -vE '^[^(]*node_modules/@yielded/agent/[^()]+\([0-9]+,[0-9]+\): error TS[0-9]+:|^[[:space:]]|^$' || true)"
+  if [ -z "$errors" ] || [ -n "$ours" ]; then printf '%s\n' "$checked" >&2; exit 1; fi
+  echo "Yielded Agent's own declarations have $(printf '%s\n' "$errors" | grep -c 'error TS') errors; none is in these packages."
 fi
 (cd "$consumer" && node --input-type=module -e "$(printf 'await import("%s");\n' "${entries[@]}")")
 echo "The ${#entries[@]} entry points of ${names[*]} $version typecheck and load in a clean consumer."

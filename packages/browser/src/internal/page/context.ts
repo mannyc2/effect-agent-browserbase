@@ -22,6 +22,7 @@ import type { BrowserEvent } from "../../BrowserEvent.ts";
 import type { InputGuard, Point } from "../../Page.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
 import * as Lane from "./lane.ts";
+import type { Openings } from "./openings.ts";
 import * as Url from "./url.ts";
 
 /** Why a page is gone. */
@@ -55,6 +56,8 @@ export interface MakeOptions {
   readonly publish: (event: BrowserEvent) => number;
   /** This page's retained events, oldest first. */
   readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
+  /** Registration of the actual popups this page's current input opened. */
+  readonly openings: Openings;
   /** Succeeds once the page's own session holds focus emulation, which keeps it painting behind. */
   readonly focused: Effect.Effect<void, BrowserError>;
   /** Succeeds once the page's own session has the Page domain on, so it sees every later commit. */
