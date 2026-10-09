@@ -17,7 +17,8 @@
     "check": "bun run --filter '*' check",
     "test": "bun run --filter '*' test",
     "build": "bun run --filter '*' build",
-    "ready": "bun run fmt:check && bun run lint && bun run check && bun run test && bun run build"
+    "size": "tools/check-size.sh",
+    "ready": "bun run fmt:check && bun run lint && bun run size && bun run check && bun run test && bun run build"
   },
   "devDependencies": {
     "@effect/tsgo": "0.51.0",

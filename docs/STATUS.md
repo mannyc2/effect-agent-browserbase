@@ -307,7 +307,8 @@ and each becoming the next beta.
   - They also say that an action reads its subject when it resolves its target, not as its input is
     sent.
   - The model is told when a confirm dialog was dismissed; `effect-agent-browser`'s tests hold it.
-  - Running the packed check on every PR, not only before a release, is the owner's call.
+  - The packed check now runs on every PR and push to main, after `ready`, as well as before a
+    release.
 
   The phase's simplify pass found nothing its parts had made redundant to delete. It planted nine
   bugs in the lease, `verifyContext`, `attach`, `keep` and a crop's screen. Eight failed the suite
@@ -352,7 +353,9 @@ which phase 3's simplify pass then took out with `waitForText` itself. Expectati
 source lines, 258 test lines and 9 exports: `Expect`, and the wait it asks the page for.
 Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
 11,000 through phase 4. `Moment.account` then added 48 source lines, 100 test lines and 1 export,
-net of `stillness`, which it took in.
+net of `stillness`, which it took in. The cuts left to reach 11,000 would each drop a feature, so
+the ceiling is now 15,000 and checked by `ready` (`bun run size`): from here, a change that adds
+source deletes as much.
 
 ## Not rebuilt yet
 
@@ -376,7 +379,8 @@ The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` a
 is on npm; [RELEASING.md](RELEASING.md) has the steps, and
 [CHANGELOG.md](../CHANGELOG.md) lists what each release changes. Before it publishes, the workflow
 installs the packed archives in a clean consumer, typechecks every entry point's declarations with
-`skipLibCheck: false` and imports each one, with `tools/check-packed.sh`, which runs locally too.
+`skipLibCheck: false` and imports each one, with `tools/check-packed.sh`, which CI runs on every PR
+and which runs locally too.
 
 ## History
 

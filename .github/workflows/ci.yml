@@ -1,5 +1,6 @@
 # One job for every pull request and every push to main: format, lint, typecheck, test against a
-# real local Chromium, and build. Nothing here reaches a hosted browser or a paid model.
+# real local Chromium, and build; then the packed check, which installs the packed packages in a
+# clean consumer as npm would. Nothing here reaches a hosted browser or a paid model.
 name: CI
 
 on:
@@ -32,3 +33,4 @@ jobs:
       - run: bun run patch:tsgo
       - run: ./node_modules/.bin/playwright-core install --with-deps chromium
       - run: bun run ready
+      - run: tools/check-packed.sh
