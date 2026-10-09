@@ -11,9 +11,12 @@ implements over these pages.
 | [`effect-browser`](packages/browser)                     | The browser, its pages and moments, over Playwright                |
 | [`effect-agent-browser`](packages/agent-browser)                 | Its pages as Yielded Agent's browser ports, with the agent's tools |
 | [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
-| [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, supplied as one layer            |
+| [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
 | [`demos`](demos) (private)                               | A site that replays recorded bench runs, graded                    |
+
+0.3 is not on npm yet. Until its first beta is published, `@beta` installs `0.2.0-beta.9`, whose
+API differs; [docs/STATUS.md](docs/STATUS.md) has the state.
 
 ## An agent in a local Chromium
 

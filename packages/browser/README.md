@@ -467,7 +467,8 @@ first read takes two round trips and later reads one. Tabs the library only trac
 and the clock probe runs in a world of its own.
 Every operation is recorded as an `Action`, also when its caller interrupts it. An element or point
 action records its `subject`, and a drag where it ended (`to`): the role, accessible name, tag and
-context of what it found, read as the input was sent, the same subject `Page.find` gives. A ref is
+context of what it found, read when its target was resolved, before the pointer moved or any input
+was sent, so a click that removes its element still names it: the same subject `Page.find` gives. A ref is
 reused by later outlines, so read `subject` rather than resolving `target` against a later snapshot.
 
 Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its

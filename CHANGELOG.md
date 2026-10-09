@@ -53,6 +53,10 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ### Breaking
 
+- `effect` is a `~4.0.0` peer of every package, not `^4.0.0`. The packages are built on `effect/ai`,
+  `effect/http` and `effect/observability`, which Effect marks unstable and a minor release may
+  change, so a consumer on Effect 4.1 or later sees a peer warning, or an install npm refuses.
+  `docs/RELEASING.md` says when the range widens.
 - `Browserbase.open`, `layer`, `supervise`, `reconcile` and `verifyContext` need a `ContextLease`:
   provide `ContextLease.layer` for one writer per stored context in the process, as before. The
   process-wide record of writers is gone, so no layer or test inherits a context another left

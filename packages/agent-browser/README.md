@@ -5,7 +5,7 @@ browser ports, with the tools an agent drives them by. Yielded runs the agent: i
 budgets, approval, context and run events. This package gives that agent a browser.
 
 ```sh
-npm install effect-agent-browser@beta effect-browser@beta @yielded/agent@beta effect playwright-core
+npm install effect-agent-browser@beta effect-browser@beta @yielded/agent@0.1.0-beta.168 effect playwright-core
 ```
 
 | Module         | What it holds                                                                  |
