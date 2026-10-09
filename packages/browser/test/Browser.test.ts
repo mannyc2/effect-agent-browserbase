@@ -301,16 +301,10 @@ describe("init scripts", () => {
 
       yield* named.click(link?.ref ?? "");
 
-      const popup = yield* browser.pages.pipe(
-        Effect.map((open) => open.at(-1)),
-        Effect.repeat({
-          schedule: Schedule.spaced("20 millis"),
-          until: (newest) => newest !== undefined && newest !== named,
-        }),
-        Effect.timeout("5 seconds"),
-        Effect.map((newest) => newest as Page),
-      );
+      // The click is done once the browser tracks the tab it opened.
+      const popup = (yield* browser.pages).at(-1) as Page;
 
+      assert.notStrictEqual(popup, named);
       yield* Effect.promise(() => popup.playwright.waitForLoadState("domcontentloaded"));
       assert.match(popup.playwright.url(), /^http:\/\/localhost:\d+\/next$/);
       assert.deepStrictEqual(yield* marks(popup), ["localhost", true]);

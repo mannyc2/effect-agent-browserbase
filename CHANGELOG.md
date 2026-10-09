@@ -80,6 +80,16 @@ settled, as the paid narration run found moments did not.
 - A page's pictures go one at a time. Each restores the view's size it found, so two crops asked
   together left the page's view at the first one's size: in ten tries of two zooms at once,
   another session's whole picture of each page then showed only the first region.
+- An input that opens a tab is done once the browser tracks the tab, as one that navigates is done
+  once its document is parsed. A busy browser tracked it after the click was done, in 88 of 128
+  clicks under parallel load, so `browser.pages` and the page's events could miss it, and
+  `effect-agent-browser`'s look after the action stayed on the old tab and did not say one opened.
+  Chromium tells the page's session of the window before the click is done, and the wait for the
+  tab is a second at most, since one that closed as it opened is never tracked.
+- A change in the same tick as the input it followed is that input's, as `Change.cause` says. A
+  busy page runs a press and its release back to back, so the press can have the change's own time:
+  a menu a click opened was then no input's doing, and a dialog its item opened was the menu
+  button's.
 
 ### Breaking
 

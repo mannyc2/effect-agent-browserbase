@@ -379,9 +379,11 @@ Space are first checked against the approved element.
 After a click, a key, a submit or a scroll, the page settles before the action returns: one call
 waits a task and a frame in the page, and Chromium answers it only once a navigation the input
 asked for, by a link, a form or a handler's timer, has committed. A document that committed is then
-waited for until it is parsed, within 5 seconds. `pushState` and a 204 answer wait for nothing. A
-navigation a handler starts once a fetch answers comes too late for any wait; the next look sees
-it, and a picture never shows a document the page has left.
+waited for until it is parsed, within 5 seconds. A tab the input opened is waited for until the
+browser tracks it, within a second, so `browser.pages` holds it when the action returns.
+`pushState` and a 204 answer wait for nothing. A navigation a handler starts once a fetch answers
+comes too late for any wait; the next look sees it, and a picture never shows a document the page
+has left.
 
 ## Presenting pages
 

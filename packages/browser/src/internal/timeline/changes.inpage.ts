@@ -124,7 +124,9 @@ export const changes = (
     for (const input of inputs.toReversed()) {
       const after = one.startedAt - input.at;
 
-      if (after <= 0) continue;
+      // A change in the input's own tick followed it, as when a busy page runs a press and its
+      // release back to back.
+      if (after < 0) continue;
       if (after > 3000) break;
 
       // In flux: it changed, or another came into or left what it sits in, in the 10 s before.

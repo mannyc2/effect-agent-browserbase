@@ -16,13 +16,8 @@ import * as Capture from "./capture.ts";
 import * as BrowserClock from "./clock.ts";
 import * as Transport from "./transport.ts";
 
-interface Size {
-  readonly width: number;
-  readonly height: number;
-}
-
 /** Read a JPEG's dimensions from its start-of-frame marker. */
-export const jpegSize = (bytes: Uint8Array): Size | undefined => {
+export const jpegSize = (bytes: Uint8Array): Capture.Size | undefined => {
   let offset = 2;
 
   while (offset + 9 < bytes.length) {
@@ -42,7 +37,7 @@ export const jpegSize = (bytes: Uint8Array): Size | undefined => {
 };
 
 /** Read a PNG's dimensions from its header chunk. */
-export const pngSize = (bytes: Uint8Array): Size | undefined => {
+export const pngSize = (bytes: Uint8Array): Capture.Size | undefined => {
   if (bytes.length < 24 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47)
     return undefined;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -226,7 +221,7 @@ const camera = (
     operation: string,
     format: Format,
     quality: number,
-    clip?: Size & { readonly x: number; readonly y: number; readonly scale: number },
+    clip?: Capture.Size & { readonly x: number; readonly y: number; readonly scale: number },
   ) =>
     native(operation, () =>
       send("Page.captureScreenshot", {
