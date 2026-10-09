@@ -78,49 +78,31 @@ export const make = (page: PageContext, bridge: Bridge, dispatch: Dispatch) => {
         const held = "raw:" + code;
 
         if (event.phase === "up") return yield* run.up(held);
+
+        // The key going down carries its text; going up, only the key.
+        const keyEvent = (phase: "down" | "up") => () =>
+          dispatchKey(
+            key,
+            phase,
+            (at, estimate) =>
+              send("Input.dispatchKeyEvent", {
+                type: phase === "down" ? "keyDown" : "keyUp",
+                ...stamp(estimate, at),
+                modifiers: 0,
+                windowsVirtualKeyCode: keyCode,
+                code,
+                key,
+                location: 0,
+                ...(phase === "down"
+                  ? { commands: [], text, unmodifiedText: text, autoRepeat: false, isKeypad: false }
+                  : {}),
+              }),
+            run,
+            secret,
+          );
+
         yield* run.reserve(2);
-        yield* run.down(
-          held,
-          () =>
-            dispatchKey(
-              key,
-              "down",
-              (at, estimate) =>
-                send("Input.dispatchKeyEvent", {
-                  type: "keyDown",
-                  ...stamp(estimate, at),
-                  modifiers: 0,
-                  windowsVirtualKeyCode: keyCode,
-                  code,
-                  commands: [],
-                  key,
-                  text,
-                  unmodifiedText: text,
-                  autoRepeat: false,
-                  location: 0,
-                  isKeypad: false,
-                }),
-              run,
-              secret,
-            ),
-          () =>
-            dispatchKey(
-              key,
-              "up",
-              (at, estimate) =>
-                send("Input.dispatchKeyEvent", {
-                  type: "keyUp",
-                  ...stamp(estimate, at),
-                  modifiers: 0,
-                  windowsVirtualKeyCode: keyCode,
-                  code,
-                  key,
-                  location: 0,
-                }),
-              run,
-              secret,
-            ),
-        );
+        yield* run.down(held, keyEvent("down"), keyEvent("up"));
       }),
     );
 
