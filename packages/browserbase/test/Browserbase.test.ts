@@ -1291,6 +1291,21 @@ describe("Browserbase.supervise", () => {
       }),
   );
 
+  it.live("rotates a keeping supervisor onto a new session, not the one it keeps", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const sessions = yield* Browserbase.supervise({ keep: "air" });
+        const first = yield* sessions.browser;
+        const second = yield* sessions.rotate;
+
+        assert.notStrictEqual(second.id, first.id);
+        yield* sessions.retire;
+      }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
+    }),
+  );
+
   it.live("keeps a writer's session running, which only a writer that adopts it does not end", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;

@@ -4,7 +4,13 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
-## Unreleased
+## 0.3.0-beta.4 (unreleased)
+
+Contexts and follow-ups: stored contexts held through a `ContextLease` across processes, read back
+with `verifyContext`, and sessions resumed with `attach` or kept past their supervisor's scope;
+`Expect`, which checks what an action is for before it is sent again; a crop that leaves the
+page's screen as it was; and the release hygiene left from earlier phases, the `effect` peer range
+among it. `Moment.account` is not in it: it waits for the paid narration run.
 
 ### Added
 
