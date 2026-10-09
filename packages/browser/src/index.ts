@@ -7,6 +7,7 @@ export * as BrowserEvent from "./BrowserEvent.ts";
 export * as Cdp from "./Cdp.ts";
 export * as Change from "./Change.ts";
 export * as Chromium from "./Chromium.ts";
+export * as Expect from "./Expect.ts";
 export * as Frame from "./Frame.ts";
 export * as Moment from "./Moment.ts";
 export * as Motion from "./Motion.ts";

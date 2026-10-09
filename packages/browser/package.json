@@ -50,6 +50,11 @@
       "types": "./dist/Chromium.d.mts",
       "default": "./dist/Chromium.mjs"
     },
+    "./Expect": {
+      "@effect-browser/source": "./src/Expect.ts",
+      "types": "./dist/Expect.d.mts",
+      "default": "./dist/Expect.mjs"
+    },
     "./Frame": {
       "@effect-browser/source": "./src/Frame.ts",
       "types": "./dist/Frame.d.mts",

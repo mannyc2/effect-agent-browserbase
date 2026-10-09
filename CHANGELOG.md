@@ -8,6 +8,15 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ### Added
 
+- `Expect`, a new module: what an action is for, checked on the page, so that an action whose
+  outcome is uncertain is sent again only where it did not take effect. `Expect.attempt(page,
+  expectation, { wait })` takes the expectation's baseline as it begins: `appeared(query)`,
+  `gone(query)`, `changed(query)`, with `Page.find`'s queries over the whole document, or
+  `navigated(url?)`. `attempt.run(page, act)` sends nothing where it holds already, `AlreadyDone`,
+  and otherwise acts and waits for it, `Done` or `NotDone`; an action that fails after its input
+  went is checked as well, `Done` if its effect came, and otherwise fails as it did, so the next
+  `run` acts only if nothing came, on the same page or the one a reconnect finds by its id. A check
+  and a wait are one call each, `navigated` none, and what `changed` compares stays in the page.
 - `ContextLease`, a new `effect-browserbase` module: who may write a stored context, as a service
   the application provides. `hold(context)` holds a context for a scope, waiting while another
   holds it, and passes on how the writer before left it, `unsettled` while a session that saves to
@@ -37,6 +46,9 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ### Changed
 
+- A presenter's view is its page to the library: a stage switching away from a view waits for the
+  input under way on it, as it does for the page, where it used to switch at once, and
+  `presenter.view` takes a view as it takes its page.
 - `Chromium.layer` leaves signals to the program. Playwright's handlers closed every browser on
   SIGINT, SIGTERM and SIGHUP, and on SIGINT then exited the process, so no finalizer ran. Under
   `NodeRuntime.runMain`, an interrupt closes the browser with its scope.

@@ -17,6 +17,7 @@ import { guard, type Guard } from "../input/guard.inpage.ts";
 import { targets, type Targets } from "../input/targets.inpage.ts";
 import { context } from "../reading/context.inpage.ts";
 import { controls, type Controls } from "../reading/controls.inpage.ts";
+import { expectations, type Expectations } from "../reading/expect.inpage.ts";
 import { match } from "../reading/match.inpage.ts";
 import { names } from "../reading/names.inpage.ts";
 import { outline, type Outline } from "../reading/outline.inpage.ts";
@@ -38,6 +39,7 @@ export interface PageApi {
   readonly version: number;
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
+  until: Expectations["until"];
   waitUntil: Controls["waitUntil"];
   text: Texts["read"];
   record: Recorder["start"];
@@ -69,6 +71,7 @@ const install = (
   makeMatch: typeof match,
   makeContext: typeof context,
   makeSubjects: typeof subjects,
+  makeExpectations: typeof expectations,
   makeText: typeof text,
   makeControls: typeof controls,
   makeFold: typeof fold,
@@ -87,7 +90,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 17) return installed;
+  if (installed !== undefined && installed.version === 18) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
@@ -105,9 +108,10 @@ const install = (
   const readiness = makeReady(walked, texts, kept);
 
   const api: PageApi = {
-    version: 17,
+    version: 18,
     snapshot: read.snapshot,
     find: subjected.find,
+    until: makeExpectations(named, subjected).until,
     waitUntil: controlled.waitUntil,
     text: texts.read,
     record: recorder.start,
@@ -132,7 +136,7 @@ const install = (
 };
 
 /** The expression that installs the script and evaluates to its API. */
-export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, text, controls, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit, Url.addresses].join(", ")})`;
+export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, expectations, text, controls, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit, Url.addresses].join(", ")})`;
 
 const worldName = "effect-browser";
 

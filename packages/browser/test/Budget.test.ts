@@ -6,6 +6,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Schedule, Stream, Tracer } from "effect";
 
 import * as Cdp from "../src/Cdp.ts";
+import * as Expect from "../src/Expect.ts";
 import * as Moment from "../src/Moment.ts";
 import type { Page } from "../src/Page.ts";
 import { behindProxy, type Command, type Proxy } from "./protocol.ts";
@@ -218,6 +219,22 @@ it.live("a read costs two calls on a new document, and one warm", () =>
       }),
     );
     holds(yield* sentBy(proxy, page.waitFor({ text: "Arrived" })), 1, 1);
+    // An expectation is one call to check before acting and one to wait for its effect.
+    const later = yield* Expect.attempt(page, Expect.appeared({ text: "Later" }));
+
+    yield* Effect.promise(() =>
+      page.playwright.evaluate(() => {
+        setTimeout(() => document.body.insertAdjacentHTML("beforeend", "<p>Later</p>"), 600);
+      }),
+    );
+    holds(
+      yield* sentBy(
+        proxy,
+        later.run(page, () => Effect.void),
+      ),
+      2,
+      2,
+    );
     // However long the page is, a read is one call.
     yield* Effect.promise(() =>
       page.playwright.evaluate(() =>

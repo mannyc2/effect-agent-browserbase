@@ -62,8 +62,7 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
    * heading is that control's or heading's, and an element is left out when one inside it
    * matches too: the smallest element showing the text is found, not each one around it.
    */
-  const find = (request: FindRequest) => {
-    if (refs.next < request.firstRef) refs.next = request.firstRef;
+  const matched = (request: FindRequest) => {
     const { at } = request;
     const matches = matching.compile(request);
     const byText = request.text !== null;
@@ -151,30 +150,39 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
         },
       );
 
-    const found = entries
-      .filter((entry) => entry.matched)
-      .map((entry) => ({
-        ref: refFor(entry.element),
-        subject: {
-          role: entry.role,
-          name: named(entry),
-          tag: entry.element.tagName.toLowerCase(),
-          context: placed(entry),
-        },
-        box: {
-          x: Math.round(entry.rect.x),
-          y: Math.round(entry.rect.y),
-          width: Math.round(entry.rect.width),
-          height: Math.round(entry.rect.height),
-        },
-        inViewport: inView(entry.rect),
-        state: stateOf(entry.element, entry.role),
-      }));
+    return { entries: entries.filter((entry) => entry.matched), named, placed };
+  };
+
+  const find = (request: FindRequest) => {
+    if (refs.next < request.firstRef) refs.next = request.firstRef;
+    const { entries, named, placed } = matched(request);
+
+    const found = entries.map((entry) => ({
+      ref: refFor(entry.element),
+      subject: {
+        role: entry.role,
+        name: named(entry),
+        tag: entry.element.tagName.toLowerCase(),
+        context: placed(entry),
+      },
+      box: {
+        x: Math.round(entry.rect.x),
+        y: Math.round(entry.rect.y),
+        width: Math.round(entry.rect.width),
+        height: Math.round(entry.rect.height),
+      },
+      inViewport: inView(entry.rect),
+      state: stateOf(entry.element, entry.role),
+    }));
 
     return { found, nextRef: refs.next };
   };
 
-  return { find, isControl, stateOf };
+  /** The elements `find` would find, in tree order, with no refs given. */
+  const elementsOf = (request: FindRequest) =>
+    matched(request).entries.map((entry) => entry.element);
+
+  return { find, elementsOf, isControl, stateOf };
 };
 
 export type Subjects = ReturnType<typeof subjects>;
