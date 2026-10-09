@@ -36,8 +36,11 @@ echo '{ "private": true, "type": "module" }' > "$consumer/package.json"
 names=(effect-browser effect-browserbase effect-browser-human-strokes effect-agent-browser)
 archived=()
 for name in "${names[@]}"; do archived+=("$archives/$name-$version.tgz"); done
+# Until the pinned @yielded/agent is on npm, the repository overrides it with a pack, which the
+# consumer installs too.
+yielded="$(node -p "require('$root/package.json').overrides?.['@yielded/agent'] ?? ''")"
 npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund \
-  "${archived[@]}" "typescript@$(pin typescript)" "@types/node@$(pin @types/node)"
+  "${archived[@]}" ${yielded:+"$yielded"} "typescript@$(pin typescript)" "@types/node@$(pin @types/node)"
 
 # Every entry point the packages export, as a consumer would import it.
 mapfile -t entries < <(cd "$consumer" && node -e '
