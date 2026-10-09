@@ -34,6 +34,12 @@ jobs:
         id: tag
         run: |
           set -euo pipefail
+          # Workspace overrides are not inherited by npm consumers. The cutover can use the
+          # pinned upstream archive in CI, but a release must resolve its peer from npm.
+          jq -e '(.overrides // {}) | has("@yielded/agent") | not' package.json >/dev/null || {
+            echo "Remove the temporary @yielded/agent override and verify the npm release before releasing." >&2
+            exit 1
+          }
           test "$GITHUB_REF_TYPE" = tag || { echo "Dispatch this on a version tag, not a branch." >&2; exit 1; }
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_REF_NAME is not on main." >&2; exit 1; }
           for dir in packages/browser packages/browserbase packages/human-strokes packages/agent-browser; do
