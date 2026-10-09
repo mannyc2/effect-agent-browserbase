@@ -43,6 +43,9 @@ export const make = Effect.fnUntraced(function* (
     }),
     () =>
       Effect.sync(() => {
+        active = undefined;
+        cdp.off("Page.windowOpen", windowOpened);
+        playwright.off("popup", popup);
         Deferred.doneUnsafe(
           gone,
           Effect.fail(
@@ -53,9 +56,6 @@ export const make = Effect.fnUntraced(function* (
             }),
           ),
         );
-        active = undefined;
-        cdp.off("Page.windowOpen", windowOpened);
-        playwright.off("popup", popup);
       }),
   );
 

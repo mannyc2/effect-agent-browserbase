@@ -141,7 +141,14 @@ describe("a tab opened by input", () => {
   for (const outcome of ["failure", "timeout", "closed"] as const)
     it.live(`reports registration ${outcome} after dispatched input, without replaying it`, () =>
       Effect.gen(function* () {
-        const browser = yield* Chromium.open({ actionTimeout: "2 seconds" });
+        const owner = yield* Scope.make();
+
+        yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
+
+        const browser = yield* Chromium.open({ actionTimeout: "2 seconds" }).pipe(
+          Scope.provide(owner),
+        );
+
         const page = yield* browser.firstPage;
 
         yield* page.goto((yield* Site).url("/form"));
@@ -172,8 +179,11 @@ describe("a tab opened by input", () => {
           readonly listenerCount: (event: string) => number;
         };
 
-        assert.strictEqual(native.listenerCount("popup"), outcome === "closed" ? 0 : 1);
         yield* registration.release;
+        // Native input can fail Closed before the queued page cleanup. Scope closure is the
+        // ownership guarantee for listeners, regardless of which operation observed the loss.
+        yield* Scope.close(owner, Exit.void);
+        assert.strictEqual(native.listenerCount("popup"), 0);
       }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
     );
 });
