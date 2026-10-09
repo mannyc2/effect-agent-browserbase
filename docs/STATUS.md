@@ -325,7 +325,7 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 14,974                 | 11,064 → 15,773 | 129 → 169                 |
+| `effect-browser`               | 8,871 → 14,977                 | 11,064 → 15,889 | 129 → 169                 |
 | `effect-agent-browser`         | 935                            | 725             | 14                        |
 | `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,391     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
@@ -358,7 +358,10 @@ Without them, phase 1 leaves the package at 11,431 source lines, against a soft 
 11,000 through phase 4. `Moment.account` then added 48 source lines, 100 test lines and 1 export,
 net of `stillness`, which it took in. The cuts left to reach 11,000 would each drop a feature, so
 the ceiling is now 15,000 and checked by `ready` (`bun run size`): from here, a change that adds
-source deletes as much.
+source deletes as much. The wait for each tab an input opens to finish its registration,
+which reached `main` first, added 131 source lines and 108 test lines in place of this phase's own
+wait for the tab, 22 lines; sharing what the input actions, the judges' risks and failures built
+by hand wrote twice paid for it, with 106 source lines.
 
 ## Not rebuilt yet
 
