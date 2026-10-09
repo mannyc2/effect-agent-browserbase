@@ -590,7 +590,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("registers a tab that is busy while it opens", () =>
+  it.effect("registers a tab that is busy while it opens, before its click is done", () =>
     Effect.gen(function* () {
       const browser = yield* Browser;
       const page = yield* open("/opens-busy");
@@ -599,13 +599,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       yield* page.click(refOf(yield* page.snapshot(), "link", "Open a busy tab"));
 
       // Registration must not depend on the new tab's renderer answering in time.
-      const pages = yield* browser.pages.pipe(
-        Effect.repeat({
-          schedule: Schedule.spaced(Duration.millis(100)),
-          until: (open) => open.length > before,
-        }),
-        Effect.timeout(Duration.seconds(3)),
-      );
+      const pages = yield* browser.pages;
 
       const opened = pages.filter((other) => other.id !== page.id).at(-1);
 

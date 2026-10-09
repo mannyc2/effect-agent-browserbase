@@ -226,12 +226,6 @@ the first step it cannot take, with a `ReplayError` naming the step and why: `Mi
 ended on another site), or the step's `BrowserError`. Nothing is replayed automatically, and a plan
 of another version does not decode.
 
-A caller's own tools go in the set `tools` returns, and their calls share the batch's halt
-behavior. `done` and `give_up` end the run and stay the agent's own: a set that names either does
-not type-check. A failure of a tool with failure mode `"error"` reaches the model encoded by that
-tool's failure schema and marked as possibly effective; a call whose parameters fail validation
-never reaches its handler and answers as not executed.
-
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action, the
 resolved element, the page's URL and title, and the `facts` the page's structure establishes:
 `form-submit`, `cross-origin`, `download`, `upload`, `secret` (typing with `type` into a
@@ -381,7 +375,9 @@ waits a task and a frame in the page, and Chromium answers it only once a naviga
 asked for, by a link, a form or a handler's timer, has committed. A document that committed is then
 waited for until it is parsed, within 5 seconds. `pushState` and a 204 answer wait for nothing. A
 navigation a handler starts once a fetch answers comes too late for any wait; the next look sees
-it, and a picture never shows a document the page has left.
+it, and a picture never shows a document the page has left. A tab the input opens is discovered and
+registered before the action returns, within its action timeout. An unresolved opening fails with
+dispatched input, and closing the page or losing its browser wakes the wait with `Closed`.
 
 ## Presenting pages
 
