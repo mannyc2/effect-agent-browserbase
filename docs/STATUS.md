@@ -119,14 +119,17 @@ Agent, the renamed Effect Agent:
   changed and its frames, over one window of the host clock, which can end in the past, at a frame
   a delayed consumer airs late, and go on exactly where the last window ended; its events and
   frames cost no call and its changes one. A part that cannot be read is missing, with why, and
-  the window is still made; `Moment.stillness` says how long its page had been still at its end. A
+  the window is still made; `Moment.account` says what was still changing at its end, what had
+  settled, and how long its page had been still. A
   moment is a window that ends at a picture of the page now, and never fails because its picture,
   its changes or its outline did. `Moment.toPrompt` lays a moment out as one message for any
-  `effect/ai` call, leading with what changed, news first, and naming an action only as what a
+  `effect/ai` call, leading with what changed, news and what settled first, telling what kept
+  changing as still changing or settled since when, and naming an action only as what a
   change followed or where its effect is drawn, as on a canvas, a failed one only as failed; it
   says what it could not read, and why. Describing it is the caller's own `generateObject`,
-  `generateText` or `Chat` turn. Whether a model describes a page better from
-  changes than from steps is not yet measured: the paid narration run is phase 4's. The outline is
+  `generateText` or `Chat` turn. In the paid narration run, without the account a model told which
+  of two ticking prices still moved and which had stopped for both in 18 of 32 moments, and with it
+  in 29 (phase 4 below). The outline is
   opt-in (`snapshot: true`): in the first paired run, moments with and without it scored 61/80
   each on every task but `navigated`, where the outline's reused refs misled the model, and it
   doubled the tokens on `quote-dense`. Pages keep the screencast frames of the last 5 seconds
@@ -189,9 +192,9 @@ Agent, the renamed Effect Agent:
   there it also traces each DevTools command under the span that was open when it was sent. Hosted
   sessions carry their trial in Browserbase's user metadata, and connect through a relay in the
   bench that traces their commands the same way.
-- `bench` (private): nineteen tasks over canvas games, live charts, dense quote tables, orders,
-  navigation, forms, a board, menus, a catalogue and a market board whose prices tick, flash and
-  scroll out of view, graded against seeded page truth and captured evidence; an understand task's
+- `bench` (private): twenty-one tasks over canvas games, live charts, dense quote tables, orders,
+  navigation, forms, a board, menus, a catalogue and a market board whose prices tick, flash,
+  scroll out of view and keep ticking or stop, graded against seeded page truth and captured evidence; an understand task's
   page records its changes from before its setup. The six operate tasks' pages vary with the seed,
   and `--split eval` holds a family of seeds out for comparing arms. Trials run with separate
   browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics and a
@@ -270,8 +273,7 @@ and each becoming the next beta.
   action's input went reported to a model as not dispatched. It had no adversarial review of its
   own. Its beta, `0.3.0-beta.3`, is prepared in the changelog and the package versions, and is not
   tagged.
-- **Phase 4, contexts and follow-ups, is built, but for `Moment.account`,** which waits for the
-  paid narration run, not yet authorized. Stored contexts are durable across processes:
+- **Phase 4, contexts and follow-ups, is built.** Stored contexts are durable across processes:
   `ContextLease` replaces the process-wide record of writers, `verifyContext` reads a login back,
   `attach` resumes a session from another process, and `supervise({ keep })` leaves a session
   running past its scope for the next supervisor to adopt. Its hosted checks, on 8 October, used 3
@@ -290,7 +292,16 @@ and each becoming the next beta.
   picture restores. A page's pictures also go one at a time, since two crops at once left the
   page's view at the first one's size. Expectations have landed: an attempt checks what an action
   is for before it acts, and after an action that failed once its input went, so a repeat after a
-  `Timeout` or a reconnect sends nothing where the effect came. The release hygiene left from
+  `Timeout` or a reconnect sends nothing where the effect came. `Moment.account` has landed,
+  after the paid narration run on 8 October showed what moments left out. On a market board where
+  two prices ticked and the seed stopped either, both or neither 3 s before the moment, the bench's
+  `board-flux` asks `openai/gpt-6-luna` which still moves and at what the others settled, and
+  `board-caption` asks for a narrator's caption, graded in code. Without the account the model
+  had both prices' states right in 18 of 32 moments, and named 19 of 64 states wrongly; with it,
+  29 of 32 and 1 of 64. Captions told a still-moving price as moving for 1 of 39 such prices
+  without it and 15 of 39 with it, and quoted the rest as a settled figure, as the bench's
+  narrator, asked for numbers, does; with the outline, the alternative, the states got worse, 13
+  of 32 wrong in 16 moments. The run's 160 calls cost $0.084. The release hygiene left from
   earlier is done too:
   - `effect` is now a `~4.0.0` peer, while the packages rely on modules that Effect marks unstable;
     [RELEASING.md](RELEASING.md) has the policy.
@@ -313,7 +324,7 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 14,926                 | 11,064 → 15,686 | 129 → 168                 |
+| `effect-browser`               | 8,871 → 14,974                 | 11,064 → 15,786 | 129 → 169                 |
 | `effect-agent-browser`         | 935                            | 725             | 14                        |
 | `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,391     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |
@@ -343,7 +354,8 @@ test lines, most of them tests of promises that planted bugs broke, and `waitFor
 which phase 3's simplify pass then took out with `waitForText` itself. Expectations added 310
 source lines, 258 test lines and 9 exports: `Expect`, and the wait it asks the page for.
 Without them, phase 1 leaves the package at 11,431 source lines, against a soft ceiling of about
-11,000 through phase 4.
+11,000 through phase 4. `Moment.account` then added 48 source lines, 100 test lines and 1 export,
+net of `stillness`, which it took in.
 
 ## Not rebuilt yet
 

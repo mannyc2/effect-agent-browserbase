@@ -509,8 +509,34 @@ article h2{font-size:16px;margin:0 0 6px}
   };
   paint();
   const now = () => performance.timeOrigin + performance.now();
-  window.__bench = { rows, change: null, notice: null, changedAt: null, shownAt: null, hiddenAt: null, scrolledAt: null };
+  window.__bench = { rows, change: null, notice: null, changedAt: null, shownAt: null, hiddenAt: null, scrolledAt: null, churns: [] };
+  const moves = __benchStream(0xb0a6), timers = [];
   window.__benchBoard = {
+    // Two prices of different assets start ticking, each on its own clock, and the seed chooses
+    // which of them \`settle()\` stops for good: one, both or neither.
+    churn: () => {
+      while (__bench.churns.length < 2) {
+        const row = pick(rows);
+        if (__bench.churns.some((churn) => churn.ticker === row.ticker)) continue;
+        const churn = { ticker: row.ticker, table: row.table, settles: pushes() < 0.5, first: row.price, price: row.price, ticks: 0, stoppedAt: null };
+        __bench.churns.push(churn);
+        timers.push(setInterval(() => {
+          const step = unit(row.price);
+          const move = Math.max(step, row.price * (0.0002 + moves() * 0.0008));
+          row.price = round(row.price + (moves() < 0.5 ? -move : move), step);
+          churn.price = row.price; churn.ticks++;
+          document.getElementById("p" + rows.indexOf(row)).textContent = money(row.price);
+        }, 300 + Math.floor(pushes() * 600)));
+      }
+    },
+    settle: () => {
+      __bench.churns.forEach((churn, index) => {
+        if (!churn.settles) return;
+        clearInterval(timers[index]);
+        churn.stoppedAt = now();
+      });
+      __benchSettled(paint);
+    },
     tick: () => {
       const row = pick(rows), before = row.price, step = unit(before);
       const move = Math.max(3 * step, before * (0.0008 + pushes() * 0.0032));
@@ -757,6 +783,18 @@ export const BoardTruth = Schema.Struct({
   shownAt: Schema.NullOr(Schema.Finite),
   hiddenAt: Schema.NullOr(Schema.Finite),
   scrolledAt: Schema.NullOr(Schema.Finite),
+  /** Prices that `churn()` set ticking, and whether and when `settle()` stopped each. */
+  churns: Schema.Array(
+    Schema.Struct({
+      ticker: Schema.String,
+      table: Schema.String,
+      settles: Schema.Boolean,
+      first: Schema.Finite,
+      price: Schema.Finite,
+      ticks: Schema.Int,
+      stoppedAt: Schema.NullOr(Schema.Finite),
+    }),
+  ),
 });
 
 export const NavigationTruth = Schema.Struct({

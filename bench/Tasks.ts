@@ -330,7 +330,7 @@ export const operate = <A, I>(spec: {
 const after = (frame: Frame, frameAfter: number) =>
   frame.timestamp !== undefined && frame.timestamp >= frameAfter;
 
-const understand = <A, I extends Record<string, unknown>>(spec: {
+const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
   readonly name: string;
   readonly summary: string;
   readonly start: string;
@@ -352,8 +352,10 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly instructions: string;
   readonly answer: Schema.Codec<A, I>;
   /** What the moment shows, read from the page's truth as it is captured. */
-  readonly expected: (page: Page) => Effect.Effect<A, BrowserError | FixtureUnreadable>;
-  readonly grade: (answer: A, expected: A) => Grade;
+  readonly expected: (page: Page) => Effect.Effect<E, BrowserError | FixtureUnreadable>;
+  readonly grade: (answer: A, expected: E) => Grade;
+  /** The scripted solution's answer, where the truth is not one; it must pass. */
+  readonly solve?: (expected: E) => A;
 }): Task => {
   const prepare = (options: TrialOptions & { readonly arm?: Arm | undefined }) =>
     Effect.gen(function* () {
@@ -488,11 +490,12 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
     scripted: (options = {}) =>
       Effect.gen(function* () {
         const { detail, expected } = yield* prepare(options);
+        const answer = spec.solve?.(expected);
 
         return {
-          pass: true,
+          pass: answer === undefined || spec.grade(answer, expected).pass,
           detail: `${detail}; truth ${JSON.stringify(expected)}`,
-          answer: expected,
+          answer: answer ?? expected,
           steps: 0,
           actions: 0,
           usage: noUsage,
@@ -1092,7 +1095,7 @@ const boardAnswer = (page: Page) =>
   );
 
 /** Push a tick or an alert through the board's feed, as a live page receives one. */
-export const feed = (page: Page, push: "tick" | "flash") =>
+export const feed = (page: Page, push: "tick" | "flash" | "churn" | "settle") =>
   Effect.promise(() =>
     page.playwright.evaluate(
       (name) =>
@@ -1224,6 +1227,191 @@ const boardScroll = (ticks: boolean) =>
     grade: gradeBoard,
   });
 
+type Churn = (typeof BoardTruth.Type)["churns"][number];
+
+const FluxAnswer = Schema.Struct({
+  changes: Schema.Array(
+    Schema.Struct({
+      asset: Schema.String,
+      state: Schema.Literals(["still changing", "settled"]),
+      price: Schema.NullOr(Schema.Finite),
+    }),
+  ),
+});
+
+type FluxAnswer = typeof FluxAnswer.Type;
+
+const sameAsset = (phrase: string, churn: Churn) =>
+  sameSet(assetsIn(phrase.toUpperCase()), assetsIn(churn.ticker));
+
+/**
+ * Grades which ticking prices a model says are still changing and which settled, and at what:
+ * each churned price must be listed once by its asset, in its state, a settled one at its price,
+ * and nothing else listed.
+ */
+export const gradeFlux = (answer: FluxAnswer, churns: ReadonlyArray<Churn>): Grade => {
+  const wrong = churns.flatMap((churn) => {
+    const told = answer.changes.filter((change) => sameAsset(change.asset, churn));
+    const state = churn.settles ? "settled" : "still changing";
+
+    if (told.length === 0) return [`missed ${churn.ticker}`];
+    if (told.some((change) => change.state !== state)) return [`${churn.ticker} not ${state}`];
+    if (churn.settles && !told.every((change) => samePrice(change.price, churn.price)))
+      return [`${churn.ticker} price`];
+
+    return [];
+  });
+
+  const extra = answer.changes.filter(
+    (change) => !churns.some((churn) => sameAsset(change.asset, churn)),
+  );
+
+  if (extra.length > 0) wrong.push(`reported ${extra.map((change) => change.asset).join(", ")}`);
+
+  return {
+    pass: wrong.length === 0,
+    detail: `${wrong.length === 0 ? "" : `wrong: ${wrong.join(", ")}; `}answered ${JSON.stringify(answer)}, expected ${JSON.stringify(churns)}`,
+  };
+};
+
+/** Words that tell a price as still moving, and words that tell it as at rest. */
+const moving =
+  /\b(?:keeps?|keeping|continu\w*|fluctuat\w*|ticking|flicker\w*|oscillat\w*|bounc\w*|swing\w*|churn\w*|jitter\w*|volatil\w*|updating|moving|changing|live|choppy|wobbl\w*|ongoing|repeatedly|constantly)\b/i;
+
+const resting =
+  /\b(?:settl\w*|held|holds?|holding|steady|steadied|stabili[sz]\w*|stable|stopped|stops|unchanged|flat|paused|halted|landed|stays?|stayed|remain\w*)\b/i;
+
+/**
+ * What a caption says about each asset it names: the words from each mention to the next, a
+ * mention followed only by "and" sharing what follows. What it says of every asset is apart: the
+ * words before the first mention, and those after a mention that speak of several, such as "both".
+ */
+export const spans = (caption: string) => {
+  const words = caption.split(/\s+/).filter((word) => word !== "");
+  const codes = words.map((word) => assetsIn(word)[0]);
+  const starts = codes.flatMap((code, index) => (code === undefined ? [] : [index]));
+  const about = new Map<string, Array<string>>();
+  const general = [words.slice(0, starts[0] ?? words.length).join(" ")];
+
+  starts.forEach((start, index) => {
+    const end = starts[index + 1] ?? words.length;
+    const after = words.slice(start + 1, end);
+    const shared = after.every((word) => /^(?:and|or|&|both|plus|,)$/i.test(word));
+    const text = [...words.slice(start, end), ...(shared ? words.slice(end) : [])].join(" ");
+    const code = codes[start] ?? "";
+
+    if (/\b(?:both|prices|quotes|all)\b/i.test(after.join(" "))) general.push(after.join(" "));
+    about.set(code, [...(about.get(code) ?? []), text]);
+  });
+
+  return { about, general: general.join(" ") };
+};
+
+/**
+ * Grades a narrator's caption of churning prices in code. It misstates a settled price where its
+ * own words say it moves and not that it rests, and a moving one where they say it rests and not
+ * that it moves, or give it a figure while neither they nor what the caption says of every price
+ * say it moves. It tells a price it names in a way that is not a misstatement.
+ */
+export const gradeCaption = (
+  { caption }: typeof Caption.Type,
+  churns: ReadonlyArray<Churn>,
+): Grade => {
+  const { about, general } = spans(caption);
+
+  const verdicts = churns.map((churn) => {
+    const texts = about.get(assetsIn(churn.ticker)[0] ?? "") ?? [];
+
+    const misstated = texts.some((text) =>
+      churn.settles
+        ? moving.test(text) && !resting.test(text)
+        : !moving.test(text) &&
+          (resting.test(text) || (numbersIn(text).length > 0 && !moving.test(general))),
+    );
+
+    return `${churn.ticker} ${churn.settles ? "settled" : "moving"}: ${texts.length === 0 ? "missed" : misstated ? "misstated" : "told"}`;
+  });
+
+  return {
+    pass:
+      verdicts.some((verdict) => verdict.endsWith("told")) &&
+      !verdicts.some((verdict) => verdict.endsWith("misstated")),
+    detail: `${verdicts.join(", ")}; answered ${JSON.stringify(caption)}, expected ${JSON.stringify(churns)}`,
+  };
+};
+
+/**
+ * Two prices tick on their own clocks for 4 seconds, then the seed's choice of them stops, and the
+ * moment is taken 3 seconds later, over 5 seconds as a narrator's is: one price still changing and
+ * one settled, both, or neither. `board-flux` asks which is which; `board-caption` asks for the
+ * narrator's caption, which `gradeCaption` holds to the same truth.
+ */
+const boardChurn = <A, I extends Record<string, unknown>>(spec: {
+  readonly name: string;
+  readonly summary: string;
+  readonly instructions: string;
+  readonly answer: Schema.Codec<A, I>;
+  readonly grade: (answer: A, churns: ReadonlyArray<Churn>) => Grade;
+  readonly solve: (churns: ReadonlyArray<Churn>) => A;
+}) =>
+  understand({
+    ...spec,
+    start: routes.board,
+    setup: (page) =>
+      Effect.gen(function* () {
+        yield* Effect.sleep("700 millis");
+        yield* feed(page, "churn");
+        yield* Effect.sleep("4 seconds");
+        yield* feed(page, "settle");
+        yield* Effect.sleep("3 seconds");
+      }),
+    capture: { frames: 3, windowMillis: 5000 },
+    minimumSpanMillis: () => Effect.succeed(3000),
+    covers: (frames, page) =>
+      truth(page, BoardTruth).pipe(
+        Effect.map((board) => {
+          const stopped = board.churns.find((churn) => churn.stoppedAt !== null)?.stoppedAt;
+
+          return stopped === undefined || stopped === null
+            ? undefined
+            : startsBefore(frames, stopped, "settling");
+        }),
+      ),
+    expected: (page) => truth(page, BoardTruth).pipe(Effect.map((board) => board.churns)),
+  });
+
+const boardFlux = boardChurn({
+  name: "board-flux",
+  summary:
+    "Tell which ticking prices are still changing at the moment and which settled, and at what",
+  instructions:
+    "These screenshots and notes cover the last few seconds of a market board. List every price that changed in that time, by its asset: whether it is still changing at the moment or has settled, and, if it has settled, the price it settled at. If no price changed, list none.",
+  answer: FluxAnswer,
+  grade: gradeFlux,
+  solve: (churns): FluxAnswer => ({
+    changes: churns.map(({ ticker, settles, price }) => ({
+      asset: ticker,
+      state: settles ? "settled" : "still changing",
+      price: settles ? price : null,
+    })),
+  }),
+});
+
+const boardCaption = boardChurn({
+  name: "board-caption",
+  summary: "Caption the same moment as a narrator does, without misstating what moves or rests",
+  instructions: narration,
+  answer: Caption,
+  grade: gradeCaption,
+  solve: (churns) => ({
+    caption: churns
+      .map(({ ticker, settles, price }) =>
+        settles ? `${ticker} settled at $${price}` : `${ticker} keeps changing`,
+      )
+      .join(" while "),
+  }),
+});
+
 export const tasks: ReadonlyArray<Task> = [
   casinoPlay,
   casinoMoment,
@@ -1241,4 +1429,6 @@ export const tasks: ReadonlyArray<Task> = [
   boardFlash,
   boardScroll(true),
   boardScroll(false),
+  boardFlux,
+  boardCaption,
 ];

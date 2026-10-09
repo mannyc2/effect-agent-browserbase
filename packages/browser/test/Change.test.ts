@@ -187,12 +187,13 @@ describe("the change record's history", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// A moment's account: news before what keeps changing, whatever the changes.
+// A moment's account: what settled before what is still changing, whatever the changes.
 
 const Told = Schema.Struct({
   count: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 })),
   earlier: Schema.Boolean,
   startedAt: Schema.Int.check(Schema.isBetween({ minimum: 5000, maximum: 9900 })),
+  lasted: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 400 })),
 });
 
 const textOf = (prompt: Prompt.Prompt) =>
@@ -276,7 +277,7 @@ describe("a moment's account", () => {
   });
 
   it.prop(
-    "tells news before what keeps changing",
+    "tells news, and what settled, before what was still changing",
     {
       told: Arbitrary.schema(
         Schema.Array(Told).check(Schema.isMinLength(1), Schema.isMaxLength(12)),
@@ -284,12 +285,12 @@ describe("a moment's account", () => {
     },
     ({ told }) => {
       const changes = told.map(
-        ({ count, earlier, startedAt }, index) =>
+        ({ count, earlier, startedAt, lasted }, index) =>
           new Change({
             kind: "text",
             subject: new Subject({ role: null, name: "", tag: "span", context: {} }),
             startedAt,
-            at: startedAt + 50,
+            at: Math.min(startedAt + lasted, 10_000),
             before: `before-${index}`,
             after: `after-${index}`,
             count,
@@ -297,36 +298,30 @@ describe("a moment's account", () => {
           }),
       );
 
-      const text = textOf(
-        Moment.toPrompt(
-          new Moment.Moment({
-            page: "p1",
-            since: 5000,
-            until: 10_000,
-            frames: [],
-            events: [],
-            changes: new Changes({
-              document: 0,
-              from: 0,
-              until: 10_000,
-              cursor: 0,
-              dropped: 0,
-              changes,
-            }),
-            missing: [],
-          }),
-        ),
-      );
+      const moment = new Moment.Moment({
+        page: "p1",
+        since: 5000,
+        until: 10_000,
+        frames: [],
+        events: [],
+        changes: new Changes({
+          document: 0,
+          from: 0,
+          until: 10_000,
+          cursor: 0,
+          dropped: 0,
+          changes,
+        }),
+        missing: [],
+      });
+
+      const text = textOf(Moment.toPrompt(moment));
+      const { changing } = Moment.account(moment);
 
       const line = (index: number) => text.indexOf(`"after-${index}"`);
 
-      const news = told.flatMap((one, index) =>
-        one.count === 1 && !one.earlier ? [line(index)] : [],
-      );
-
-      const flux = told.flatMap((one, index) =>
-        one.count > 1 || one.earlier ? [line(index)] : [],
-      );
+      const news = changes.flatMap((one, index) => (changing.includes(one) ? [] : [line(index)]));
+      const flux = changes.flatMap((one, index) => (changing.includes(one) ? [line(index)] : []));
 
       assert.isTrue(
         news.every((at) => at !== -1 && flux.every((later) => at < later)),

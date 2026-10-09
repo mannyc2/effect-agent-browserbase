@@ -5,16 +5,18 @@
  * on it (`Change`), and its screencast frames. A `Window` holds the three from `since` to `until`,
  * and says why a part it could not read is missing rather than fail. `Page.window` takes one, which
  * can end in the past, at a frame a delayed consumer airs late, so that a line written now tells
- * what its viewers will see; `stillness` says how long a window's page had been still at its end.
+ * what its viewers will see. Its `account` says what was so at its end: how long the page had been
+ * still, which of its changes were still under way, and which had settled.
  *
  * A `Moment` is a window that ends at a picture of the page now: `capture` takes the picture, then
  * the window up to it, and on request the page's outline. `toPrompt` turns a moment into one user
  * message for any `effect/ai` call: a structured answer from `LanguageModel.generateObject`, a
  * caption from `generateText`, or one turn of a `Chat` that follows moment after moment. It leads
- * with what changed, news before what keeps changing, and names an action as what a change
- * followed; as a step where changes followed it but none names it, or where its effect is drawn
- * rather than written, as on a canvas, which only the screenshots show; and claims nothing of what
- * changed where the record did not see, or of a part it could not read, which it names with why.
+ * with what changed, news and what settled before what was still changing, as its account tells
+ * them apart, and names an action as what a change followed; as a step where changes followed it
+ * but none names it, or where its effect is drawn rather than written, as on a canvas, which only
+ * the screenshots show; and claims nothing of what changed where the record did not see, or of a
+ * part it could not read, which it names with why.
  *
  * Frames come from a running screencast, as far back as the browser's `frameHistory` keeps them.
  * A moment's picture is the newest frame if it was painted after the page's latest input and at
@@ -159,27 +161,62 @@ export const capture = Effect.fn("Moment.capture")(function* (
 const recordOf = ({ changes }: Window) =>
   changes !== undefined && changes.from < changes.until ? changes : undefined;
 
+/** What a window says of its page at its end: what was still in flux, and what had settled. */
+export interface Account {
+  /**
+   * How long, in milliseconds, the page had been still at the end: since the last change in view
+   * its record shows, or the last paint its screencast frames show, or else since the window, or
+   * its record, began. Undefined where neither could tell, with no record of the window and no
+   * painted frame: a screenshot shows the page, not when it last changed. Frames show paint only
+   * while a capture runs, and the record does not see a canvas, so a canvas that keeps drawing
+   * with no capture running reads as still.
+   */
+  readonly stillFor: number | undefined;
+  /**
+   * The changes still under way at the end: what kept changing, more than once in the window or
+   * already before it, and changed again within twice its own pace before the end.
+   */
+  readonly changing: ReadonlyArray<Change>;
+  /** Every other change, which shows what it settled at. */
+  readonly settled: ReadonlyArray<Change>;
+}
+
+/** Whether a change was still under way at `until`, by its own pace. */
+const underWay = (change: Change, until: number) => {
+  const pace =
+    change.count > 1
+      ? (change.at - change.startedAt) / (change.count - 1)
+      : change.earlier === undefined
+        ? undefined
+        : change.startedAt - change.earlier;
+
+  return pace !== undefined && until - change.at < 2 * pace;
+};
+
 /**
- * How long, in milliseconds, the window's page had been still at its end: since the last change in
- * view its record shows, or the last paint its screencast frames show, or else since the window,
- * or its record, began. Undefined where neither could tell, with no record of the window and no
- * painted frame: a screenshot shows the page, not when it last changed. Frames show paint only
- * while a capture runs, and the record does not see a canvas, so a canvas that keeps drawing with
- * no capture running reads as still.
+ * An account of the window's page at its end: how long it had been still, and which of its
+ * changes were still under way and which had settled. A window whose record saw none of it has
+ * neither.
  */
-export const stillness = (window: Window): number | undefined => {
+export const account = (window: Window): Account => {
   const record = recordOf(window);
+  const changes = record?.changes ?? [];
 
   const stirred = [
-    ...(record?.changes ?? []).flatMap((change) => (change.kind === "title" ? [] : [change.at])),
+    ...changes.flatMap((change) => (change.kind === "title" ? [] : [change.at])),
     ...window.frames.flatMap((frame) =>
       frame.timing._tag === "BrowserPaint" ? [frame.hostTime] : [],
     ),
   ];
 
-  return record === undefined && stirred.length === 0
-    ? undefined
-    : window.until - Math.max(window.since, record?.from ?? window.since, ...stirred);
+  return {
+    stillFor:
+      record === undefined && stirred.length === 0
+        ? undefined
+        : window.until - Math.max(window.since, record?.from ?? window.since, ...stirred),
+    changing: changes.filter((change) => underWay(change, window.until)),
+    settled: changes.filter((change) => !underWay(change, window.until)),
+  };
 };
 
 const seconds = (moment: Moment, at: number) => `${((at - moment.until) / 1000).toFixed(1)}s`;
@@ -240,11 +277,19 @@ const maxLines = 24;
 
 /**
  * The changes as lines, news first, and the actions they name; cells of one column that changed
- * together as one line.
+ * together as one line. What kept changing says whether it still was at the moment, by its account.
  */
 const changed = (moment: Moment, record: Changes) => {
   const actions = moment.events.filter((event): event is Action => event._tag === "Action");
   const named = new Set<Action>();
+  const changing = new Set(account(moment).changing);
+
+  const state = (change: Change) =>
+    changing.has(change)
+      ? ", still changing at the moment"
+      : change.count > 1 || change.earlier !== undefined
+        ? `, settled since ${seconds(moment, change.at)}`
+        : "";
 
   // The action whose input a change followed: one that ran while the input arrived, give or take
   // the clock's mapping, so input the library did not send names no action.
@@ -274,19 +319,21 @@ const changed = (moment: Moment, record: Changes) => {
 
   for (const [first, ...cells] of columns.values())
     if (first !== undefined && cells.length >= 2) {
+      const still = [first, ...cells].filter((cell) => changing.has(cell)).length;
+
       for (const cell of [first, ...cells]) collapsed.add(cell);
       lines.push({
         at: first.startedAt,
-        rank: 3,
-        text: `${cells.length + 1} cells in column ${quoted(first.subject.context.column)}${where({ heading: first.subject.context.heading })} changed, such as ${describe(first, true)}`,
+        rank: still > 0 ? 3 : 2,
+        text: `${cells.length + 1} cells in column ${quoted(first.subject.context.column)}${where({ heading: first.subject.context.heading })} changed, such as ${describe(first, true)}${still > 0 ? `, ${still} still changing at the moment` : ""}`,
       });
     }
   for (const change of record.changes)
     if (!collapsed.has(change))
       lines.push({
         at: change.startedAt,
-        rank: change.count > 1 || change.earlier !== undefined ? 3 : 2,
-        text: describe(change) + cause(change),
+        rank: changing.has(change) ? 3 : 2,
+        text: describe(change) + cause(change) + state(change),
       });
 
   return { lines, named };
@@ -299,7 +346,7 @@ const parts = new Map([
 ]);
 
 /** The moment's changes and events as lines, most notable first when its changes are recorded. */
-const account = (moment: Moment): ReadonlyArray<string> => {
+const happened = (moment: Moment): ReadonlyArray<string> => {
   const record = recordOf(moment);
 
   const { lines, named } =
@@ -386,7 +433,8 @@ const account = (moment: Moment): ReadonlyArray<string> => {
 
 /**
  * The moment as one user message: the page's outline when the moment has one, what changed, most
- * notable first, with the actions that the changes followed, that changes followed though none
+ * notable first, what kept changing told as still changing at the moment or settled since when, by
+ * its account, with the actions that the changes followed, that changes followed though none
  * names them, or that drew what only the screenshots show, what could not be read and why, and its
  * frames captioned with their times, the last one "the moment" where it is the picture at its end.
  * Give a model its task with `Prompt.setSystem`, and add what the caller knows about the page as
@@ -409,7 +457,7 @@ export const toPrompt = (moment: Moment): Prompt.Prompt => {
             "",
             ...(moment.snapshot === undefined ? [] : [moment.snapshot.rendered, ""]),
             `${recordOf(moment) === undefined ? "What happened" : "What changed, most notable first"} (seconds before the moment, over ${((moment.until - moment.since) / 1000).toFixed(1)}s):`,
-            ...account(moment),
+            ...happened(moment),
             ...(count === 0
               ? []
               : [
