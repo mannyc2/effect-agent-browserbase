@@ -84,8 +84,10 @@ settled, as the paid narration run found moments did not.
   once its document is parsed. A busy browser tracked it after the click was done, in 88 of 128
   clicks under parallel load, so `browser.pages` and the page's events could miss it, and
   `effect-agent-browser`'s look after the action stayed on the old tab and did not say one opened.
-  Chromium tells the page's session of the window before the click is done, and the wait for the
-  tab is a second at most, since one that closed as it opened is never tracked.
+  Chromium tells the page's session of the window before the click is done, and the action waits
+  for that tab's own registration within its action timeout. An opening that never becomes a tab
+  fails with its input dispatched, and closing the page or losing its browser ends the wait as
+  `Closed`.
 - A change in the same tick as the input it followed is that input's, as `Change.cause` says. A
   busy page runs a press and its release back to back, so the press can have the change's own time:
   a menu a click opened was then no input's doing, and a dialog its item opened was the menu

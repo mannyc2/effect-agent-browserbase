@@ -8,6 +8,12 @@ package. Ordinary CI never publishes,
 and preparing or testing a release does not authorize publishing, tagging or changing account
 settings.
 
+An unreleased cutover may use a commit-pinned upstream archive through the repository's
+`@yielded/agent` override. It can merge after CI passes, but the publish workflow rejects that
+override before building, including in a dry run: npm consumers do not inherit workspace
+overrides. Before a release, remove the override once the required version is on npm, refresh
+`bun.lock`, and verify the actual npm dependency with CI and the clean-consumer check.
+
 ## One-time setup
 
 The owner does this once, in npm and GitHub settings.
