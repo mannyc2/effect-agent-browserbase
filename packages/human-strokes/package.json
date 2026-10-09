@@ -1,6 +1,6 @@
 {
   "name": "effect-browser-human-strokes",
-  "version": "0.3.0-beta.2",
+  "version": "0.3.0-beta.3",
   "description": "Optional recorded human pointer motion for effect-browser.",
   "license": "(MIT AND CC-BY-4.0)",
   "repository": {
@@ -45,7 +45,7 @@
   },
   "peerDependencies": {
     "effect": "^4.0.0",
-    "effect-browser": "^0.3.0-beta.0"
+    "effect-browser": "^0.3.0-beta.3"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

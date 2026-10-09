@@ -577,7 +577,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       if (ref === undefined) return yield* Effect.die("the form has no Next page link");
       yield* page.click(ref);
-      yield* page.waitForText("The next page");
+      yield* page.waitFor({ text: "The next page" });
       const moment = yield* Moment.capture(page, { snapshot: true });
 
       const click = moment.events.find(

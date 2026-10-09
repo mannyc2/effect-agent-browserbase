@@ -113,7 +113,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     press: (keys, options) => input.press(keys, options),
     scroll: (options) => input.scroll(options),
     select: input.select,
-    waitForText: reading.waitForText,
     waitFor: reading.waitFor,
     ready: Ready.make(page, bridge, capture),
     screencast: capture.stream,

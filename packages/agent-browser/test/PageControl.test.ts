@@ -3,7 +3,7 @@ import { assert, layer } from "@effect/vitest";
 import type { BrowserUse } from "@yielded/agent";
 import { Duration, Effect, Layer } from "effect";
 import { Browser, make as makeBrowser } from "effect-browser/Browser";
-import { PolicyDenied } from "effect-browser/BrowserError";
+import { BrowserError, PolicyDenied, Timeout } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
 import type * as Page from "effect-browser/Page";
 import * as Policy from "effect-browser/Policy";
@@ -137,6 +137,31 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       });
 
       assert.deepStrictEqual([blind.completed, blind.observation], [1, null]);
+    }),
+  );
+
+  it.effect("reports a failure after its input went as unknown, which may have taken effect", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      const late: Page.Page = {
+        ...page,
+        click: () =>
+          Effect.fail(
+            new BrowserError({
+              operation: "click",
+              reason: new Timeout({ millis: 10_000 }),
+              dispatched: true,
+            }),
+          ),
+      };
+
+      const { actions } = yield* PageControl.make({ page: late });
+      const seen = yield* actions.observe;
+      const sent = yield* actions.act([{ kind: "click", ref: refOf(seen, "Submit") }]);
+
+      assert.deepStrictEqual([sent.completed, sent.dispatch], [0, "unknown"]);
+      assert.include(sent.error ?? "", "may have taken effect");
     }),
   );
 
