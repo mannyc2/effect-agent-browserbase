@@ -53,6 +53,29 @@ const finite = (...values: ReadonlyArray<number | undefined>) =>
 
 const named = (target: Target) => (typeof target === "string" ? target : `${target.x},${target.y}`);
 
+/** A click's options, once its counts are finite. */
+const clickable = (options: ClickOptions) =>
+  finite(options.clickCount, options.holdMillis)
+    ? Effect.void
+    : failWith("click", new InvalidRequest({ detail: "clickCount and holdMillis must be finite" }));
+
+/** The keys a press sends, once they and its options are valid. */
+const pressed = (keys: string, options: PressOptions) => {
+  const parts = Keys.parts(keys);
+
+  if (!finite(options.times, options.holdMillis))
+    return failWith("press", new InvalidRequest({ detail: "times and holdMillis must be finite" }));
+  if (parts === undefined)
+    return failWith(
+      "press",
+      new InvalidRequest({
+        detail: `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`,
+      }),
+    );
+
+  return Effect.succeed(parts);
+};
+
 const click = (input: Parts) => {
   const { settings } = input.page;
   const { perform, preparePolicy, targetFor, moveTo, sendMouse, flush, mark, settle } = input;
@@ -69,23 +92,16 @@ const click = (input: Parts) => {
         },
       },
       settings.actionTimeout,
-      Effect.suspend(() =>
-        finite(clickOptions.clickCount, clickOptions.holdMillis)
-          ? preparePolicy("click", { target: typeof target === "string" ? target : undefined }, [
-              target,
-            ])
-          : failWith(
-              "click",
-              new InvalidRequest({ detail: "clickCount and holdMillis must be finite" }),
-            ),
+      Effect.suspend(() => clickable(clickOptions)).pipe(
+        Effect.andThen(
+          preparePolicy("click", { target: typeof target === "string" ? target : undefined }, [
+            target,
+          ]),
+        ),
       ),
       (marks, approval) =>
         Effect.gen(function* () {
-          if (!finite(clickOptions.clickCount, clickOptions.holdMillis))
-            return yield* failWith(
-              "click",
-              new InvalidRequest({ detail: "clickCount and holdMillis must be finite" }),
-            );
+          yield* clickable(clickOptions);
           const resolved = yield* targetFor("click", target, approval, marks);
           const { point } = resolved;
           const button = clickOptions.button ?? "left";
@@ -400,44 +416,19 @@ const press = (input: Parts) => {
       "press",
       { target: keys, options: { times: pressOptions.times, holdMillis: pressOptions.holdMillis } },
       settings.actionTimeout,
-      Effect.suspend(() => {
-        if (!finite(pressOptions.times, pressOptions.holdMillis))
-          return failWith(
+      Effect.suspend(() => pressed(keys, pressOptions)).pipe(
+        Effect.flatMap((parts) =>
+          preparePolicy(
             "press",
-            new InvalidRequest({ detail: "times and holdMillis must be finite" }),
-          );
-        const combination = Keys.normalize(keys);
-
-        return combination === undefined
-          ? failWith(
-              "press",
-              new InvalidRequest({
-                detail: `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`,
-              }),
-            )
-          : preparePolicy(
-              "press",
-              { target: pressOptions.on, text: combination },
-              [pressOptions.on ?? null],
-              { keys: combination },
-            );
-      }),
+            { target: pressOptions.on, text: parts.join("+") },
+            [pressOptions.on ?? null],
+            { keys: parts.join("+") },
+          ),
+        ),
+      ),
       (marks, approval) =>
         Effect.gen(function* () {
-          if (!finite(pressOptions.times, pressOptions.holdMillis))
-            return yield* failWith(
-              "press",
-              new InvalidRequest({ detail: "times and holdMillis must be finite" }),
-            );
-          const parts = Keys.parts(keys);
-
-          if (parts === undefined)
-            return yield* failWith(
-              "press",
-              new InvalidRequest({
-                detail: `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`,
-              }),
-            );
+          const parts = yield* pressed(keys, pressOptions);
           const times = Math.max(1, Math.min(50, pressOptions.times ?? 1));
           const hold = pressOptions.holdMillis ?? 0;
           const activates = parts.at(-1) === "Enter" || parts.at(-1) === "Space";

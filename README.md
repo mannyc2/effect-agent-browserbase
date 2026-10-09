@@ -227,7 +227,8 @@ tools.
 - `Stage` is the source of a live output: `present(page, { at })` switches it between pages, in one
   session or across two, overlapping their captures, and stamps when each switch took effect.
 - After input, a page settles in one call, a task and a frame, which spans any navigation the input
-  asked for, and then waits for a committed document to be parsed; there is no fixed sleep.
+  asked for, and then waits for a committed document to be parsed and a tab it opened to be
+  tracked; there is no fixed sleep.
   Printable US text uses key events; other text uses Unicode insertion.
 - Events, frame arrivals and moments share the owning browser’s host monotonic clock in milliseconds.
   `Browser.now` reads that clock. These stamps measure elapsed time, not calendar dates.

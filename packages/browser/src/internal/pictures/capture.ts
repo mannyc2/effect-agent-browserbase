@@ -10,7 +10,7 @@ import { undispatched } from "../page/context.ts";
 import { type Estimate, toHostTime, uncertaintyAt } from "./clock.ts";
 import type { NativeFrame, Transport } from "./transport.ts";
 
-interface Size {
+export interface Size {
   readonly width: number;
   readonly height: number;
 }

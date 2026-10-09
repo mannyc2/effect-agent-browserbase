@@ -7,7 +7,7 @@ import { Duration, Effect, Exit, Option, Ref } from "effect";
 import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
 import { Action, type ActionOptions, Subject } from "../../BrowserEvent.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
-import type { PageContext } from "../page/context.ts";
+import { failWith, type PageContext, undispatched } from "../page/context.ts";
 import { Correlation } from "../page/lane.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
 import type { Dispatch } from "./dispatch.ts";
@@ -73,13 +73,7 @@ export interface Call {
 }
 
 const timedOut = (operation: string, timeout: Duration.Duration) =>
-  Effect.fail(
-    new BrowserError({
-      operation,
-      reason: new Timeout({ millis: Duration.toMillis(timeout) }),
-      dispatched: false,
-    }),
-  );
+  failWith(operation, new Timeout({ millis: Duration.toMillis(timeout) }));
 
 /**
  * Fail `effect` with `Timeout` once `timeout` has passed, and as much later again as `presented`
@@ -236,20 +230,13 @@ export const make = (page: PageContext, sender: Dispatch) => {
 
               // A hold lasts as long as this span; a judge's model call is its child.
               yield* guard(plan.request).pipe(
-                Effect.mapError(
-                  (reason) => new BrowserError({ operation: name, reason, dispatched: false }),
-                ),
+                Effect.mapError((reason) => undispatched(name, reason)),
                 Effect.timeoutOrElse({
                   duration: settings.policyTimeout,
                   orElse: () =>
-                    Effect.fail(
-                      new BrowserError({
-                        operation: name,
-                        reason: new PolicyTimeout({
-                          millis: Duration.toMillis(settings.policyTimeout),
-                        }),
-                        dispatched: false,
-                      }),
+                    failWith(
+                      name,
+                      new PolicyTimeout({ millis: Duration.toMillis(settings.policyTimeout) }),
                     ),
                 }),
                 span("Page.guard"),

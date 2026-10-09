@@ -16,7 +16,7 @@
  *
  * @since 0.3.0
  */
-import { Cause, Context, Duration, Effect, Result, Schema } from "effect";
+import { Cause, Context, Duration, Effect, Record, Result, Schema } from "effect";
 import { type AiError, Decision, DecisionModel, LanguageModel, Prompt } from "effect/ai";
 
 import { PolicyDenied } from "./BrowserError.ts";
@@ -139,12 +139,7 @@ const Reading = Schema.Struct({
   reason: Schema.String.annotate({
     description: "What the input would do and whether the task asks for it, in one sentence",
   }),
-  financial: probability(`the input ${covers.financial}`),
-  account: probability(`the input ${covers.account}`),
-  access: probability(`the input ${covers.access}`),
-  deletion: probability(`the input ${covers.deletion}`),
-  communication: probability(`the input ${covers.communication}`),
-  secret: probability(`the input ${covers.secret}`),
+  ...Record.map(covers, (cover) => probability(`the input ${cover}`)),
   requested: probability("the user's task asks for what the input does"),
 });
 
@@ -179,14 +174,7 @@ export const reviewer = Effect.fnUntraced(function* (
       }).pipe(Effect.provideService(LanguageModel.LanguageModel, model));
 
       return new Judgement({
-        risks: {
-          financial: unit(value.financial),
-          account: unit(value.account),
-          access: unit(value.access),
-          deletion: unit(value.deletion),
-          communication: unit(value.communication),
-          secret: unit(value.secret),
-        },
+        risks: Record.map(covers, (_, risk) => unit(value[risk])),
         ...(task === undefined ? {} : { requested: unit(value.requested) }),
         reason: value.reason,
       });
@@ -199,12 +187,7 @@ const question = (statement: string) =>
 const decisions = Decision.make({
   input: Review,
   decisions: {
-    financial: question(`The input ${covers.financial}.`),
-    account: question(`The input ${covers.account}.`),
-    access: question(`The input ${covers.access}.`),
-    deletion: question(`The input ${covers.deletion}.`),
-    communication: question(`The input ${covers.communication}.`),
-    secret: question(`The input ${covers.secret}.`),
+    ...Record.map(covers, (cover) => question(`The input ${cover}.`)),
     requested: question("The user's task asks for what the input does."),
   },
 });
@@ -224,14 +207,7 @@ export const decider: Effect.Effect<Judge, never, DecisionModel.DecisionModel> =
         const { answers } = yield* model.decide(decisions, { input: review(request, task) });
 
         return new Judgement({
-          risks: {
-            financial: answers.financial.probability,
-            account: answers.account.probability,
-            access: answers.access.probability,
-            deletion: answers.deletion.probability,
-            communication: answers.communication.probability,
-            secret: answers.secret.probability,
-          },
+          risks: Record.map(covers, (_, risk) => answers[risk].probability),
           ...(task === undefined ? {} : { requested: answers.requested.probability }),
         });
       })) satisfies Judge;

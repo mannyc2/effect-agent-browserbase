@@ -54,32 +54,20 @@ export const make = (page: PageContext) => {
     const button = event.button ?? "left";
 
     // Construct boundary data before dispatch: validation must never abandon the native reply.
+    const ButtonEvent = event.type === "mousePressed" ? PointerPressed : PointerReleased;
+
     const track =
-      event.type === "mousePressed" && button !== "none"
-        ? new PointerPressed({
-            at,
-            page: id,
-            ...point,
-            button,
-            clickCount: event.clickCount ?? 1,
-          })
-        : event.type === "mouseReleased" && button !== "none"
-          ? new PointerReleased({
+      (event.type === "mousePressed" || event.type === "mouseReleased") && button !== "none"
+        ? new ButtonEvent({ at, page: id, ...point, button, clickCount: event.clickCount ?? 1 })
+        : event.type === "mouseWheel"
+          ? new WheelScrolled({
               at,
               page: id,
               ...point,
-              button,
-              clickCount: event.clickCount ?? 1,
+              dx: event.deltaX ?? 0,
+              dy: event.deltaY ?? 0,
             })
-          : event.type === "mouseWheel"
-            ? new WheelScrolled({
-                at,
-                page: id,
-                ...point,
-                dx: event.deltaX ?? 0,
-                dy: event.deltaY ?? 0,
-              })
-            : undefined;
+          : undefined;
 
     const response = send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 

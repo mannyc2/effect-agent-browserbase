@@ -415,6 +415,7 @@ describe("init scripts", () => {
 
       yield* named.click(link?.ref ?? "");
 
+      // The click is done once the browser tracks the tab it opened.
       const popup = (yield* browser.pages).at(-1) as Page;
 
       assert.notStrictEqual(popup, named);

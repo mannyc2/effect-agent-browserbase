@@ -20,7 +20,7 @@ export interface ConditionRequest {
 export type ConditionResult = { readonly met: boolean } | { readonly invalid: string };
 
 export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: Texts) => {
-  const { clean, isDisabled, isHtml, isInput, isSelect, isTextArea, refFor } = names;
+  const { clean, isDisabled, isHtml, isInput, isSelect, isTextArea, refFor, textOf } = names;
   const { visible } = walked;
   const { stateOf } = subjects;
   const { shown } = texts;
@@ -112,21 +112,17 @@ export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: 
     );
   };
 
-  const spaced = (value: string) => value.replace(/\s+/g, " ").trim();
-
   // Whether the condition holds now: what the selector matches, or the body, and shows, with the
   // text when one is asked, case and all.
   const holds = (request: ConditionRequest): ConditionResult => {
     const roots = request.selector === null ? [document.body] : rootsOf(request.selector);
 
     if ("invalid" in roots) return roots;
-    const text = request.text === null ? null : spaced(request.text);
+    const text = request.text === null ? null : clean(request.text, Infinity);
 
     const showing = roots.filter(
       (element) =>
-        visible(element) &&
-        (text === null ||
-          spaced(isHtml(element) ? element.innerText : (element.textContent ?? "")).includes(text)),
+        visible(element) && (text === null || clean(textOf(element), Infinity).includes(text)),
     );
 
     return {
