@@ -33,8 +33,9 @@ import {
   Stream,
 } from "effect";
 
-import { BrowserError, consequence, InvalidRequest, Timeout } from "./BrowserError.ts";
+import { type BrowserError, consequence, InvalidRequest, Timeout } from "./BrowserError.ts";
 import type { CaptureStats, Frame, ScreencastOptions } from "./Frame.ts";
+import { failWith } from "./internal/page/context.ts";
 import { internalsOf } from "./internal/page/page.ts";
 import type { Page } from "./Page.ts";
 
@@ -98,11 +99,10 @@ export const make = Effect.fn("Stage.make")(function* (options: Options = {}) {
   const waited = Duration.fromInput(options.firstFrame ?? Duration.seconds(5));
 
   if (Option.isNone(waited) || !Duration.isPositive(waited.value))
-    return yield* new BrowserError({
-      operation: "stage",
-      reason: new InvalidRequest({ detail: "firstFrame must be a positive duration" }),
-      dispatched: false,
-    });
+    return yield* failWith(
+      "stage",
+      new InvalidRequest({ detail: "firstFrame must be a positive duration" }),
+    );
   const firstFrame = waited.value;
   const settings = { quality: options.quality, size: options.size };
   const output = yield* PubSub.sliding<Frame>(16);
@@ -156,14 +156,7 @@ export const make = Effect.fn("Stage.make")(function* (options: Options = {}) {
     ).pipe(
       Effect.timeoutOrElse({
         duration: firstFrame,
-        orElse: () =>
-          Effect.fail(
-            new BrowserError({
-              operation: "present",
-              reason: new Timeout({ millis: Duration.toMillis(firstFrame) }),
-              dispatched: false,
-            }),
-          ),
+        orElse: () => failWith("present", new Timeout({ millis: Duration.toMillis(firstFrame) })),
       }),
     );
 

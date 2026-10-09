@@ -233,12 +233,7 @@ const setup = Effect.fnUntraced(function* (
       return ++sequence;
     },
     recentEvents: Effect.sync(() => [...track]),
-    openings: yield* Openings.make(
-      playwright,
-      cdp,
-      () => Effect.void,
-      () => "page",
-    ),
+    openings: yield* Openings.make(playwright, cdp, new WeakMap(), () => "page"),
     url: targetInfo.url,
     untilLost: (reply) => reply,
     focused: Effect.void,

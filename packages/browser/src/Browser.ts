@@ -22,9 +22,9 @@ import {
   Semaphore,
   type Stream,
 } from "effect";
-import type { BrowserContext, CDPSession, Dialog, Page as PlaywrightPage } from "playwright-core";
+import type { BrowserContext, Dialog, Page as PlaywrightPage } from "playwright-core";
 
-import { BrowserError, Failed, InvalidRequest, Limit, type Closed } from "./BrowserError.ts";
+import { type BrowserError, Failed, InvalidRequest, Limit } from "./BrowserError.ts";
 import {
   type BrowserEvent,
   DialogShown,
@@ -249,13 +249,10 @@ const watchLoss = Effect.fnUntraced(function* (
   yield* Effect.addFinalizer(() => Effect.sync(() => context.off("close", onClose)));
   if (context.browser()?.isConnected() === false) onClose();
 
-  return {
-    lostBy: () => lostBy,
-    lost: Deferred.await(lost),
-    lose,
-    untilLost,
-    native: nativeCalls(() => lostBy),
-  };
+  const native = <A>(operation: string, run: () => Promise<A>) =>
+    call(operation, run, () => lostBy ?? "page");
+
+  return { lostBy: () => lostBy, lost: Deferred.await(lost), lose, untilLost, native };
 });
 
 /**
@@ -303,7 +300,7 @@ const followOpened = Effect.fnUntraced(function* (
   register: (playwright: PlaywrightPage) => Effect.Effect<Page.Page, BrowserError>,
   publish: (event: BrowserEvent) => number,
   now: () => number,
-  registrations: WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>,
+  registrations: Openings.Registrations,
 ) {
   const opened = yield* Queue.unbounded<PlaywrightPage>();
 
@@ -389,11 +386,7 @@ const pageBudget = (
 
   const room = (limit: number) =>
     Effect.gen(function* () {
-      const refused = new BrowserError({
-        operation: "newPage",
-        reason: new Limit({ maxPages: limit }),
-        dispatched: false,
-      });
+      const refused = undispatched("newPage", new Limit({ maxPages: limit }));
 
       if ((yield* FailFast) && full(limit)) return yield* refused;
       yield* Effect.gen(function* () {
@@ -432,29 +425,6 @@ const sentNow = <A>(sent: Promise<A>) => {
 
   return sent;
 };
-
-const registrationOf = (
-  registrations: WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>,
-  popup: PlaywrightPage,
-) => {
-  const done = registrations.get(popup);
-
-  return done === undefined
-    ? failWith("newPage", new Failed({ detail: "the popup has no registration" }))
-    : Deferred.await(done);
-};
-
-const pageOpenings = (
-  playwright: PlaywrightPage,
-  cdp: CDPSession,
-  registrations: WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>,
-  closedBy: () => Closed["cause"],
-) => Openings.make(playwright, cdp, (popup) => registrationOf(registrations, popup), closedBy);
-
-const nativeCalls =
-  (lostBy: () => DisconnectCause | undefined) =>
-  <A>(operation: string, run: () => Promise<A>) =>
-    call(operation, run, () => lostBy() ?? "page");
 
 /**
  * Build the service over a context the provider owns. The provider closes the context; this only
@@ -495,7 +465,7 @@ export const make = Effect.fn("Browser.make")(function* (
   );
 
   const registry = new Map<PlaywrightPage, Page.Page>();
-  const registrations = new WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>();
+  const registrations: Openings.Registrations = new WeakMap();
   const registering = yield* Semaphore.make(1);
   // The pages' scopes close after the browser is marked released, so what fails as they close
   // says why.
@@ -561,7 +531,7 @@ export const make = Effect.fn("Browser.make")(function* (
             mapping,
             publish,
             recentEvents: eventsOf(timeline.recent, id),
-            openings: yield* pageOpenings(playwright, cdp, registrations, closedBy),
+            openings: yield* Openings.make(playwright, cdp, registrations, closedBy),
             focused: call("focus", () => focusing, closedBy).pipe(Effect.asVoid),
             paging: (operation) => call(operation, () => paging, closedBy).pipe(Effect.asVoid),
             closedBy,
