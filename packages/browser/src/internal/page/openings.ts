@@ -7,7 +7,7 @@ import { BrowserError, Closed, Failed, type Reason } from "../../BrowserError.ts
 /** How the browser's registration of each tab it was told of ended, once it has. */
 export type Registrations = WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>;
 
-interface Mark {
+export interface Mark {
   windows: number;
   readonly registrations: Array<Effect.Effect<void, BrowserError>>;
   changed: Deferred.Deferred<void>;
