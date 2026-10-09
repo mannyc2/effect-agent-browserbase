@@ -62,7 +62,7 @@ The owner does this once, in npm and GitHub settings.
   Move it in the release that needs a newer one.
 - **`@yielded/agent`** is one exact version in `effect-agent-browser`, because each Yielded beta may
   change the ports that `effect-agent-browser` implements. Its README's install line names that
-  version.
+  version. It becomes a caret range once Yielded Agent leaves beta.
 - **`playwright-core`** is `^1.63.0`.
 
 ## Cut a release
@@ -94,8 +94,9 @@ The owner does this once, in npm and GitHub settings.
 The clean-consumer check is `tools/check-packed.sh`. It installs the archives outside the
 repository, with the peers npm picks for their ranges, and has TypeScript check every entry point's
 declarations with `skipLibCheck: false` and Node import each one: `bun run ready` cannot see a
-declaration or an import that only the workspace satisfies. Run it before tagging: without
-arguments it builds and packs the packages itself, under `$TMPDIR`.
+declaration or an import that only the workspace satisfies. CI runs it on every PR, after `ready`;
+run it before tagging too: without arguments it builds and packs the packages itself, under
+`$TMPDIR`.
 
 The tag must be on `main` and name the version all four packages carry. A prerelease
 `x.y.z-alpha.N`, `-beta.N` or `-rc.N` goes to the dist-tag of that name; only a plain `x.y.z` goes

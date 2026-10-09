@@ -25,7 +25,8 @@
  */
 import { Cause, Duration, Effect, Exit, Option, Schedule } from "effect";
 
-import { BrowserError, InvalidRequest } from "./BrowserError.ts";
+import { type BrowserError, InvalidRequest } from "./BrowserError.ts";
+import { undispatched } from "./internal/page/context.ts";
 import { type Internals, internalsOf } from "./internal/page/page.ts";
 import type { FindQuery, Page } from "./Page.ts";
 
@@ -79,12 +80,7 @@ export interface Attempt {
   ) => Effect.Effect<Outcome, BrowserError>;
 }
 
-const refused = (detail: string) =>
-  new BrowserError({
-    operation: "expect",
-    reason: new InvalidRequest({ detail }),
-    dispatched: false,
-  });
+const refused = (detail: string) => undispatched("expect", new InvalidRequest({ detail }));
 
 const internalsFor = (page: Page): Effect.Effect<Internals, BrowserError> => {
   const internals = internalsOf(page);

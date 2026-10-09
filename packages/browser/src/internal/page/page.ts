@@ -67,11 +67,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const { capture } = pictures;
   const changes = Changes.make(page, bridge, pictures.estimate);
   const titles = lane.shared<string>("title", true);
-
-  const viewports = lane.shared<{ readonly width: number; readonly height: number }>(
-    "viewport",
-    true,
-  );
+  const viewports = lane.shared<Effect.Success<Page["viewport"]>>("viewport", true);
 
   // What the page's parts already know, asking it nothing: its documents as its own session saw
   // them, the newest frame, and the viewport's text as last read since the document began.

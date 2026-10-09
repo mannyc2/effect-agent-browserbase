@@ -2,7 +2,10 @@
 import { Deferred, Effect, Exit } from "effect";
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
-import { BrowserError, Closed } from "../../BrowserError.ts";
+import { BrowserError, Closed, Failed, type Reason } from "../../BrowserError.ts";
+
+/** How the browser's registration of each tab it was told of ended, once it has. */
+export type Registrations = WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>;
 
 export interface Mark {
   windows: number;
@@ -13,9 +16,12 @@ export interface Mark {
 export const make = Effect.fnUntraced(function* (
   playwright: PlaywrightPage,
   cdp: CDPSession,
-  registered: (popup: PlaywrightPage) => Effect.Effect<void, BrowserError>,
+  registrations: Registrations,
   closedBy: () => Closed["cause"],
 ) {
+  const failed = (reason: Reason) =>
+    Exit.fail(new BrowserError({ operation: "newPage", reason, dispatched: false }));
+
   let active: Mark | undefined;
   const gone = Deferred.makeUnsafe<never, BrowserError>();
 
@@ -27,7 +33,13 @@ export const make = Effect.fnUntraced(function* (
     if (active === undefined) return;
     // Playwright emits the context's page event first, so its owner already has this exact
     // popup's registration. A window notification alone has no target id and cannot name it.
-    active.registrations.push(registered(opened));
+    const registered = registrations.get(opened);
+
+    active.registrations.push(
+      registered === undefined
+        ? failed(new Failed({ detail: "the popup has no registration" }))
+        : Deferred.await(registered),
+    );
     Deferred.doneUnsafe(active.changed, Exit.void);
     active.changed = Deferred.makeUnsafe<void>();
   };
@@ -46,16 +58,7 @@ export const make = Effect.fnUntraced(function* (
         active = undefined;
         cdp.off("Page.windowOpen", windowOpened);
         playwright.off("popup", popup);
-        Deferred.doneUnsafe(
-          gone,
-          Effect.fail(
-            new BrowserError({
-              operation: "newPage",
-              reason: new Closed({ cause: closedBy() }),
-              dispatched: false,
-            }),
-          ),
-        );
+        Deferred.doneUnsafe(gone, failed(new Closed({ cause: closedBy() })));
       }),
   );
 

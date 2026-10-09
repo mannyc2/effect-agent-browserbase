@@ -600,7 +600,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       // Registration must not depend on the new tab's renderer answering in time.
       const pages = yield* browser.pages;
-
       const opened = pages.filter((other) => other.id !== page.id).at(-1);
 
       assert.strictEqual(pages.length, before + 1);

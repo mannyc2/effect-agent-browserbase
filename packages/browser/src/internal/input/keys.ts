@@ -77,9 +77,6 @@ export const parts = (keys: string): ReadonlyArray<string> | undefined => {
   return out;
 };
 
-/** `"ctrl+a"` becomes `"Control+a"`; returns undefined for something that is not a key. */
-export const normalize = (keys: string): string | undefined => parts(keys)?.join("+");
-
 interface Description {
   readonly code: string;
   readonly keyCode: number;
