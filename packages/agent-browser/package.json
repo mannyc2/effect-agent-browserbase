@@ -1,0 +1,62 @@
+{
+  "name": "effect-agent-browser",
+  "version": "0.3.0-beta.2",
+  "description": "effect-browser pages as Yielded Agent's browser ports and tools.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
+    "directory": "packages/agent-browser"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": {
+      "@effect-browser/source": "./src/index.ts",
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./BrowserTools": {
+      "@effect-browser/source": "./src/BrowserTools.ts",
+      "types": "./dist/BrowserTools.d.mts",
+      "default": "./dist/BrowserTools.mjs"
+    },
+    "./PageControl": {
+      "@effect-browser/source": "./src/PageControl.ts",
+      "types": "./dist/PageControl.d.mts",
+      "default": "./dist/PageControl.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --run"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0",
+    "@types/node": "26.1.2",
+    "@yielded/agent": "0.1.0-beta.168",
+    "effect": "4.0.0",
+    "effect-browser": "workspace:*",
+    "playwright-core": "1.63.0",
+    "typescript": "7.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+    "vite-plus": "1.1.0",
+    "vitest": "5.0.3"
+  },
+  "peerDependencies": {
+    "@yielded/agent": "0.1.0-beta.168",
+    "effect": "^4.0.0",
+    "effect-browser": "^0.3.0-beta.2"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  }
+}

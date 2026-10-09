@@ -176,29 +176,11 @@
       }
     },
     {
-      "files": ["**/packages/browser/src/Tools.ts"],
-      "rules": {
-        "eslint/max-lines-per-function": [
-          "error",
-          { "max": 226, "skipBlankLines": true, "skipComments": true }
-        ]
-      }
-    },
-    {
       "files": ["**/packages/browser/src/internal/input/perform.ts"],
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
           { "max": 186, "skipBlankLines": true, "skipComments": true }
-        ]
-      }
-    },
-    {
-      "files": ["**/packages/browser/src/Agent.ts"],
-      "rules": {
-        "eslint/max-lines-per-function": [
-          "error",
-          { "max": 161, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },
@@ -218,7 +200,7 @@
       "rules": {
         "eslint/max-lines-per-function": [
           "error",
-          { "max": 181, "skipBlankLines": true, "skipComments": true }
+          { "max": 170, "skipBlankLines": true, "skipComments": true }
         ]
       }
     },

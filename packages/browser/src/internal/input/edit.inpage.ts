@@ -94,6 +94,19 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
     return { ok: true, detail: describe(element), secret: isSecret(element) };
   };
 
+  /** Focus any element that takes focus, such as a link or a button, for a key pressed on it. */
+  const focusOn = (ref: string): EditResult => {
+    const element = lookup(ref);
+
+    if (element === undefined) return { error: `${ref} is not on the page any more`, stale: true };
+    if (isDisabled(element)) return { error: `${ref} is disabled` };
+    if (isHtml(element)) element.focus();
+
+    return activeElement() === element
+      ? { ok: true, detail: describe(element) }
+      : { error: `${ref} is ${describe(element)}, which does not take focus` };
+  };
+
   const select = (ref: string, values: ReadonlyArray<string>): EditResult => {
     const element = lookup(ref);
 
@@ -122,7 +135,7 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
     return { ok: true, detail: chosen.map((option) => clean(option.text, 40)).join(", ") };
   };
 
-  return { focus, select, typeable };
+  return { focus, focusOn, select, typeable };
 };
 
 export type Edit = ReturnType<typeof edit>;

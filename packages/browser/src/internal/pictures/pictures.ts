@@ -41,6 +41,18 @@ export const jpegSize = (bytes: Uint8Array): Size | undefined => {
   return undefined;
 };
 
+/** Read a PNG's dimensions from its header chunk. */
+export const pngSize = (bytes: Uint8Array): Size | undefined => {
+  if (bytes.length < 24 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47)
+    return undefined;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+};
+
+/** The format a new picture is taken in. */
+export type Format = "jpeg" | "png";
+
 // The part of `Page.getLayoutMetrics` a clip needs: the visual viewport's place in the document and
 // its pinch scale, and the content's size in device and CSS pixels, whose ratio is the device's.
 const LayoutMetrics = Schema.Struct({
@@ -199,39 +211,43 @@ const camera = (
           ),
     );
 
-  const decoded = (operation: string, data: Uint8Array) => {
-    const size = jpegSize(data);
+  const decoded = (operation: string, data: Uint8Array, format: Format) => {
+    const size = format === "png" ? pngSize(data) : jpegSize(data);
 
     return size === undefined
-      ? failWith(operation, new Failed({ detail: "the browser's picture is not a JPEG" }))
-      : Effect.succeed(new Image({ data, mediaType: "image/jpeg", ...size }));
+      ? failWith(
+          operation,
+          new Failed({ detail: `the browser's picture is not a ${format.toUpperCase()}` }),
+        )
+      : Effect.succeed(new Image({ data, mediaType: `image/${format}`, ...size }));
   };
 
-  const jpeg = (
+  const shot = (
     operation: string,
+    format: Format,
     quality: number,
     clip?: Size & { readonly x: number; readonly y: number; readonly scale: number },
   ) =>
     native(operation, () =>
       send("Page.captureScreenshot", {
-        format: "jpeg",
-        quality,
+        format,
+        ...(format === "jpeg" ? { quality } : {}),
         ...(clip === undefined ? {} : { clip }),
       }),
     ).pipe(
       alone,
       untilPainted,
-      Effect.flatMap(({ data }) => decoded(operation, Buffer.from(data, "base64"))),
+      Effect.flatMap(({ data }) => decoded(operation, Buffer.from(data, "base64"), format)),
     );
 
   // Playwright's own picture, taken on the session where it emulates the viewport.
-  const emulatedJpeg = (operation: string, quality: number, crop?: Region) =>
+  const emulatedShot = (operation: string, format: Format, quality: number, crop?: Region) =>
     native(
       operation,
       () =>
         playwright.screenshot({
-          type: "jpeg",
-          quality,
+          type: format,
+          ...(format === "jpeg" ? { quality } : {}),
           scale: "css",
           timeout: actionMillis,
           ...(crop === undefined ? {} : { clip: crop }),
@@ -240,16 +256,16 @@ const camera = (
     ).pipe(
       alone,
       untilPainted,
-      Effect.flatMap((data) => decoded(operation, data)),
+      Effect.flatMap((data) => decoded(operation, data, format)),
     );
 
-  return (operation: string, quality: number, crop?: Region) =>
+  return (operation: string, quality: number, crop?: Region, format: Format = "jpeg") =>
     Effect.gen(function* () {
       const known = viewport.knownViewport();
       let whole: Image | undefined;
 
       if (crop === undefined && ratio === 1) {
-        whole = yield* jpeg(operation, quality);
+        whole = yield* shot(operation, format, quality);
         if (whole.width === known?.width && whole.height === known.height) return whole;
       }
       // Where Playwright emulates the viewport, on its own session, its own picture restores it.
@@ -258,7 +274,7 @@ const camera = (
       if (emulated !== null) {
         if (whole !== undefined) ratio = whole.width / emulated.width;
 
-        return yield* capture.excluding(emulatedJpeg(operation, quality, crop));
+        return yield* capture.excluding(emulatedShot(operation, format, quality, crop));
       }
 
       const [metrics] = yield* Effect.all(
@@ -275,7 +291,7 @@ const camera = (
 
       ratio = Number.isFinite(measured) && measured > 0 ? measured : 1;
       if (crop === undefined && ratio === 1) {
-        const image = whole ?? (yield* jpeg(operation, quality));
+        const image = whole ?? (yield* shot(operation, format, quality));
 
         viewport.remember(image);
 
@@ -289,7 +305,7 @@ const camera = (
       // A crop on this session draws its frames at the crop's own size, so only those leave the
       // capture, and the page's own keep flowing.
       return yield* capture.excluding(
-        jpeg(operation, quality, {
+        shot(operation, format, quality, {
           x: pageX + rect.x,
           y: pageY + rect.y,
           width: Math.floor(rect.width / scale + 1e-3),
@@ -395,16 +411,22 @@ export const make = Effect.fnUntraced(function* (
   // action in flight and reuses only a frame painted after the page's latest input.
   const screenshot = (options: ScreenshotOptions = {}) =>
     screenshots(
-      JSON.stringify([millisOf(options.maxAge ?? defaultMaxAge), options.clip, options.quality]),
+      JSON.stringify([
+        millisOf(options.maxAge ?? defaultMaxAge),
+        options.clip,
+        options.quality,
+        options.format,
+      ]),
       Effect.gen(function* () {
+        // Screencast frames are JPEGs, so a PNG is always new.
         const reused =
-          options.clip === undefined
+          options.clip === undefined && options.format !== "png"
             ? yield* reusable("screenshot", { maxAge: options.maxAge, after: "input" })
             : Option.none<Frame>();
 
         const image = Option.isSome(reused)
           ? reused.value.image
-          : yield* picture("screenshot", options.quality ?? 80, options.clip);
+          : yield* picture("screenshot", options.quality ?? 80, options.clip, options.format);
 
         yield* Effect.annotateCurrentSpan({ source: sourceOf(reused), bytes: image.data.length });
 

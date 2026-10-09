@@ -13,13 +13,13 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as Agent from "effect-browser/Agent";
 import type { Browser } from "effect-browser/Browser";
 import { BrowserError } from "effect-browser/BrowserError";
 import { BrowserbaseError } from "effect-browserbase/BrowserbaseError";
 import { AiError } from "effect/ai";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { isUnanswered } from "./Arms.ts";
 import { type Account, type Calls, Endpoint, type Halt, noCalls, noTiming } from "./Budget.ts";
 import { FixtureUnreadable } from "./Sites.ts";
 
@@ -183,8 +183,6 @@ const infrastructure = (reason: Reason): Classification => ({
   pass: null,
 });
 
-const isAgentError = Schema.is(Agent.AgentError);
-
 // Reasons the model's own decoded output caused: an answer or tool arguments that do not parse
 // or fit their schema, or a tool that does not exist. A provider envelope that does not decode
 // is not among them.
@@ -221,10 +219,15 @@ export const classify = (
   if (Option.isNone(found)) return infrastructure("defect");
   const error = found.value;
 
-  if (isAgentError(error))
+  if (isUnanswered(error))
     return {
       status: "graded",
-      reason: error.reason._tag === "StepLimit" ? "step-limit" : "gave-up",
+      reason:
+        error._tag === "StepLimit"
+          ? "step-limit"
+          : error._tag === "GaveUp"
+            ? "gave-up"
+            : "invalid-output",
       pass: false,
     };
   if (

@@ -3,17 +3,17 @@
 // grades against the page's own truth, and has a scripted solution that uses the library alone, to
 // show the task can be done and graded without a model.
 import { Deferred, Duration, Effect, Fiber, Option, Schedule, Schema, Stream } from "effect";
-import type * as Agent from "effect-browser/Agent";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
+import * as Presentation from "effect-browser/Presentation";
 import type { Snapshot } from "effect-browser/Snapshot";
 import { type AiError, LanguageModel, Prompt, type Response } from "effect/ai";
 
 import * as Arms from "./Arms.ts";
-import type { Arm } from "./Arms.ts";
+import type { Arm, Usage } from "./Arms.ts";
 import type { Trace } from "./Recording.ts";
 import {
   BoardTruth,
@@ -52,12 +52,14 @@ export interface Outcome extends Grade {
   readonly steps: number;
   /** Tool calls the model made, `done` and `give_up` included; 0 for an understand task. */
   readonly actions: number;
-  readonly usage: Agent.Usage;
+  readonly usage: Usage;
 }
 
 export interface TrialOptions {
   /** The fixture seed, recorded by the runner so a failed trial can be reproduced. */
   readonly seed?: number;
+  /** Perform the input for viewers, through a presenter's view of the page, as `--humanize` asks. */
+  readonly humanize?: boolean | undefined;
   /** Receives the agent's turns and the moments shown to a model, such as for a recording. */
   readonly trace?: ((entry: Trace) => Effect.Effect<void>) | undefined;
 }
@@ -65,8 +67,11 @@ export interface TrialOptions {
 export interface ModelOptions<E> extends TrialOptions {
   /** How the model sees the page and acts on it. Defaults to arm 5, the library's default. */
   readonly arm?: Arm | undefined;
-  /** Runs after every model call with that call's usage. Failing stops the task, as a spent budget does. */
-  readonly onUsage: (usage: Agent.Usage) => Effect.Effect<void, E>;
+  /**
+   * Runs with an understand task's model call's usage, and with an operate task's total once its
+   * run ends. Failing fails the task.
+   */
+  readonly onUsage: (usage: Usage) => Effect.Effect<void, E>;
   /**
    * Caption an operate task's page this often while its agent works, from moments, through
    * `trace`. A caption reads what the screen showed; it neither steers nor grades the agent.
@@ -154,8 +159,8 @@ export interface Task {
     options: ModelOptions<E>,
   ) => Effect.Effect<
     Outcome,
-    AiError.AiError | BrowserError | Agent.AgentError | EvidenceIncomplete | FixtureUnreadable | E,
-    Browser | LanguageModel.LanguageModel
+    AiError.AiError | BrowserError | Arms.OperateError | EvidenceIncomplete | FixtureUnreadable | E,
+    Browser | Arms.Requirements
   >;
   readonly scripted: (
     options?: TrialOptions,
@@ -168,25 +173,28 @@ export interface Task {
  */
 export const frameHistory = Duration.seconds(30);
 
-const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
+const noUsage: Usage = { inputTokens: 0, outputTokens: 0 };
 
-const usageOf = (usage: Response.Usage): Agent.Usage => ({
+const usageOf = (usage: Response.Usage): Usage => ({
   inputTokens: usage.inputTokens.total ?? 0,
   outputTokens: usage.outputTokens.total ?? 0,
   cachedInputTokens: usage.inputTokens.cacheRead ?? 0,
 });
 
-/** Serve the bench pages for the rest of the scope, and open `path` in the first tab. */
-const open = (path: string, seed = 0, pages: Readonly<Record<string, string>> = {}) =>
+/**
+ * Serve the bench pages for the rest of the scope, and open `path` in the first tab: the page
+ * itself, or a presenter's view of it, whose input glides, types and scrolls at a person's pace.
+ */
+const open = (path: string, options: TrialOptions, pages: Readonly<Record<string, string>> = {}) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
 
-    yield* serve(browser, seed, pages);
+    yield* serve(browser, options.seed ?? 0, pages);
     const page = yield* browser.firstPage;
 
     yield* page.goto(`${origin}${path}`);
 
-    return page;
+    return options.humanize === true ? (yield* Presentation.make()).view(page) : page;
   });
 
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -267,7 +275,7 @@ export const operate = <A, I>(spec: {
   prompt: spec.prompt,
   withModel: (options) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed, spec.pages);
+      const page = yield* open(spec.start, options, spec.pages);
       let actions = 0;
 
       const stopNarrating = yield* Deferred.make<void>();
@@ -277,17 +285,17 @@ export const operate = <A, I>(spec: {
           ? undefined
           : yield* Effect.forkScoped(narrate(page, options.narrate, stopNarrating, options));
 
-      const result = yield* Arms.operate(options.arm ?? 5, spec.prompt, {
+      const result = yield* Arms.operate(options.arm ?? 5, page, spec.prompt, {
         answer: spec.answer,
         maxSteps: spec.maxSteps,
         onStep: (step) => {
           actions += step.calls.length;
 
-          return (options.trace?.({ _tag: "Step", step }) ?? Effect.void).pipe(
-            Effect.andThen(options.onUsage(step.usage)),
-          );
+          return options.trace?.({ _tag: "Step", step }) ?? Effect.void;
         },
       });
+
+      yield* options.onUsage(result.usage);
 
       // The answer is in: the narrator finishes the caption it is writing, and starts no other.
       yield* Deferred.succeed(stopNarrating, undefined);
@@ -307,7 +315,7 @@ export const operate = <A, I>(spec: {
     }).pipe(Effect.scoped),
   scripted: (options = {}) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed, spec.pages);
+      const page = yield* open(spec.start, options, spec.pages);
       const answer = yield* spec.solve(page);
 
       const grade = yield* spec
@@ -349,7 +357,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
 }): Task => {
   const prepare = (options: TrialOptions & { readonly arm?: Arm | undefined }) =>
     Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed);
+      const page = yield* open(spec.start, options);
 
       if (spec.beforeCapture !== undefined) yield* spec.beforeCapture(page);
 

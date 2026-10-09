@@ -105,6 +105,12 @@ export const FailFast = Context.Reference<boolean>("effect-browser/internal/page
   defaultValue: () => false,
 });
 
+/** The id a caller gives the actions it asks for, which each records as its `correlation`. */
+export const Correlation = Context.Reference<string | undefined>(
+  "effect-browser/internal/page/Correlation",
+  { defaultValue: () => undefined },
+);
+
 /** A shared read in flight: its epoch, its result once it ends, and how many callers await it. */
 interface Flight<A> {
   readonly epoch: number;

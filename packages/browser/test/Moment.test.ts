@@ -65,6 +65,7 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
       below: 0,
       viewport: { width: 800, height: 600 },
       scroll: { y: 0, height: 600 },
+      controls: [],
     }),
     events: [
       new Action({
@@ -95,7 +96,7 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
         document: 2,
         sameDocument: false,
       }),
-      new DialogShown({ at: 9500, page: "p1", kind: "alert", message: "Paid" }),
+      new DialogShown({ at: 9500, page: "p1", kind: "alert", message: "Paid", answer: "accepted" }),
     ],
     missing: [],
   });
@@ -277,13 +278,17 @@ const byTime = (left: number, right: number) => left - right;
 
 /** Events at these times, oldest first, every third a pointer press of the presentation track. */
 const eventsAt = (at: ReadonlyArray<number>) =>
-  at
-    .toSorted(byTime)
-    .map((at, index) =>
-      index % 3 === 2
-        ? new PointerPressed({ at, page: "p1", x: 1, y: 1, button: "left", clickCount: 1 })
-        : new DialogShown({ at, page: "p1", kind: "alert", message: `${index}` }),
-    );
+  at.toSorted(byTime).map((at, index) =>
+    index % 3 === 2
+      ? new PointerPressed({ at, page: "p1", x: 1, y: 1, button: "left", clickCount: 1 })
+      : new DialogShown({
+          at,
+          page: "p1",
+          kind: "alert",
+          message: `${index}`,
+          answer: "accepted",
+        }),
+  );
 
 const framesAt = (at: ReadonlyArray<number>) =>
   at.toSorted(byTime).map((at, index) => shot(at, index % 256));

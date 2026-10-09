@@ -1,7 +1,8 @@
 # Repository guide
 
-Three packages and a bench in one Bun workspace: `packages/browser` (`effect-browser`),
-`packages/browserbase` (`effect-browserbase`), the optional `packages/human-strokes`
+Four packages and a bench in one Bun workspace: `packages/browser` (`effect-browser`),
+`packages/browserbase` (`effect-browserbase`), `packages/agent-browser` (`effect-agent-browser`, its pages
+as Yielded Agent's browser ports and tools), the optional `packages/human-strokes`
 (`effect-browser-human-strokes`, MIT code with CC BY 4.0 stroke data) and the private `bench`. Read
 `README.md`, `CONTRIBUTING.md` and the neighbouring tests before editing; `docs/STATUS.md` is the
 current state.
@@ -17,9 +18,10 @@ current state.
 - A failure stays a failure: never fold one into a success value or a log line, except for
   cleanup in a finalizer. Concurrent work belongs to a scope and has a bound; no module-level
   state. A lifecycle's state is one tagged union changed in one place, not a set of flags.
-- `effect-browser` depends on `effect` and `playwright-core` only; `effect-browserbase` and
-  `effect-browser-human-strokes` reach it only through its public entry points. Tests stay in their
-  package's `test/`.
+- `effect-browser` depends on `effect` and `playwright-core` only; `effect-browserbase`,
+  `effect-agent-browser` and `effect-browser-human-strokes` reach it only through its public entry
+  points. Agents run on Yielded Agent (`@yielded/agent`), which only `effect-agent-browser` and the
+  bench depend on. Tests stay in their package's `test/`.
 - Fix a lint finding or Effect diagnostic rather than suppress it. `bun run fmt` formats;
   `oxlint -c lint/.oxlintrc.json --fix <files>` fixes the stylistic rules `fmt` leaves alone.
 - `bun run ready` is the gate CI runs. Check its exit code, not piped output.

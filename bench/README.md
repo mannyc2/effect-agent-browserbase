@@ -47,7 +47,7 @@ tools against `dev`, the default, and compare arms on `eval`.
 | `policy-find`    | operate    | Find the returns policy behind header menus that open on hover and report its reference         |
 | `catalog-buy`    | operate    | Add the cheapest tent for two in stock, from a catalogue across three pages, to the cart        |
 
-An operate task gives a model the browser tools (`Agent.run`). An understand task brings the page to
+An operate task gives a Yielded agent the browser tools. An understand task brings the page to
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call:
 `LanguageModel.generateObject` over `Moment.toPrompt`, with the task's question as the system
 message. Capture starts before the scripted setup, and multi-frame tasks check the
@@ -64,9 +64,10 @@ to cover its paying cascades, rather than asking the model to count transitions 
 pictures, and its capture is incomplete if two consecutive frames are 1,800 ms (one cascade) or
 more apart. The jump task's first frame must precede the jump, and its control's frames must all
 precede any jump. Half the chart seeds drift up and half down, so a constant trend answer cannot
-pass. Operate tasks in the default arm receive an outline and screenshot once per turn; calls within a
-turn halt on the first failure. `browser_zoom` adds requested viewport crops to that observation;
-pixel clicks return the element under the requested point. Runs without a model still use the free
+pass. Operate tasks run a Yielded agent with `effect-agent-browser`'s tools: in the default arm, it
+sees a screenshot before each turn and reads the outline with `observe` and after each `act`;
+`zoom` adds requested viewport crops before the next turn, and pixel clicks name the element under
+the requested point. Runs without a model still use the free
 scripted solutions. Runs allow input by default; a caller's `Browser.Options.guard` can deny or
 hold input and navigation without a user-facing confirmation prompt. Typing keeps its
 pacing over delayed connections. `--humanize` runs a trial through a presenter's views of its
@@ -277,25 +278,25 @@ the answer said, so an order placed and then reported inside a sentence counts t
 grade. Each record keeps it as `onPage`, so a report counts format-only failures both ways until
 answers are judged rather than matched.
 
-| Arm | Operate tasks                                                                                                                                             | Understand tasks                               |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 1   | Per-action outline: every action's receipt carries a fresh outline; pictures come only from `browser_screenshot`; no batching hint and no `browser_zoom`  | The moment with its outline                    |
-| 2   | Vision first: a screenshot after each batch and no outline; pixel targets and `browser_zoom`; no `browser_snapshot`, `browser_select` or waiting for text | As arm 5                                       |
-| 5   | `Agent.run`, the default: an outline and a screenshot after each batch                                                                                    | `Moment.capture` as it is: frames and timeline |
+| Arm | Operate tasks                                                                                                                                | Understand tasks                               |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | Yielded's tools alone: `observe`, one action per `act` with the next outline, and its control tools; no pictures and no pointer tools        | The moment with its outline                    |
+| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits | As arm 5                                       |
+| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                          | `Moment.capture` as it is: frames and timeline |
 
-Arm 5 is the default. Arms 1 and 2 run in the bench's own loop over the public `Tools`
-(`Arms.ts`), because `Agent.run` cannot replace its observation, its tools or its system prompt.
-The loop keeps `Agent.run`'s rules: a turn's calls halt on the first failure or on `done`, the
-latest three pictures stay in the conversation, and a response that cannot be read goes back to
-the model. Arm 1 keeps the halt too, although the tools ran every call before batching. Arms 3
-(parsed frames), 4 (a local grounder) and 6 (vision-native computer use) are not built.
+Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
+tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
+`maxSteps` turns and eight tool calls a turn, and calls run one at a time. The tools are pinned to
+the task's page, so none offers `select_tab`. A run's steps come from its events. A streamed model
+request is sent and charged as one completion, so the budget sees every call. Arms 3 (parsed
+frames), 4 (a local grounder) and 6 (vision-native computer use) are not built.
 
 ```sh
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
   bun run bench run --model openai/gpt-6-luna --task checkout --arm 1 --arm 2 --arm 5 --trials 20
 ```
 
-The first paired run, on 2026-10-06, used `openai/gpt-6-luna` (medium reasoning for operate tasks,
+The first paired run, on 2026-10-06, before the agent ran on Yielded, used `openai/gpt-6-luna` (medium reasoning for operate tasks,
 none for understand tasks) with seed 1: 20 trials of each operate task per arm in local Chromium,
 5 on Browserbase, and 10 of each understand task in arms 2 and 5, for $0.91 in all. Every trial
 was graded. The operate pages did not vary with the seed then, so a task's trials repeated one

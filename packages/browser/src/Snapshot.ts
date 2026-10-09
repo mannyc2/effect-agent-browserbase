@@ -9,6 +9,26 @@
  */
 import { Schema } from "effect";
 
+/** A control the outline shows, as a value: its ref, what it is and what it holds. */
+export class Control extends Schema.Class<Control>("effect-browser/Control")({
+  ref: Schema.String,
+  /** Its role, such as `button` or `textbox`, or `clickable` for an element without one. */
+  kind: Schema.String,
+  /** Its accessible name. */
+  name: Schema.String,
+  /** What it holds: a field's text, `••••` for a secret one, or a select's chosen labels. */
+  value: Schema.String,
+  /** A select's option labels, at most 64. */
+  options: Schema.optional(Schema.Array(Schema.String)),
+  /** How many options a select has, when it has options. */
+  optionCount: Schema.optional(Schema.Int),
+  disabled: Schema.optional(Schema.Boolean),
+  /** Whether it is checked, for what can be checked. */
+  checked: Schema.optional(Schema.Boolean),
+  /** True for a field that takes typed text. */
+  editable: Schema.optional(Schema.Boolean),
+}) {}
+
 export class Snapshot extends Schema.Class<Snapshot>("effect-browser/Snapshot")({
   url: Schema.String,
   title: Schema.String,
@@ -24,6 +44,8 @@ export class Snapshot extends Schema.Class<Snapshot>("effect-browser/Snapshot")(
   below: Schema.Finite,
   viewport: Schema.Struct({ width: Schema.Finite, height: Schema.Finite }),
   scroll: Schema.Struct({ y: Schema.Finite, height: Schema.Finite }),
+  /** The controls the outline shows, in its order. */
+  controls: Schema.Array(Control),
 }) {
   /** The snapshot as one block of text for a model: header, outline and what was left out. */
   get rendered(): string {
@@ -57,6 +79,11 @@ export interface SnapshotOptions {
   readonly full?: boolean | undefined;
   /** Keep only lines containing this text (case-insensitive). */
   readonly query?: string | undefined;
+  /**
+   * Read only inside the elements this CSS selector matches, such as `form` or `#results`. A
+   * selector that matches nothing reads nothing; one that is not CSS is an `InvalidRequest`.
+   */
+  readonly within?: string | undefined;
   /** Bound on the outline's length. Defaults to 12,000 characters. */
   readonly maxChars?: number | undefined;
 }

@@ -66,6 +66,12 @@ export const make = (
     }),
   );
 
+  // The current entry's title is the one the page last set, and empty where it set none, so no
+  // address stands in for it. The browser answers it, whatever the page's script is doing.
+  const title = native("title", () => send("Page.getNavigationHistory")).pipe(
+    Effect.map(({ entries, currentIndex }) => entries[currentIndex]?.title ?? ""),
+  );
+
   const noPrevious = failWith("back", new NotFound({ target: "a previous page in this tab" }));
 
   const prepareBack = Effect.gen(function* () {
@@ -173,5 +179,5 @@ export const make = (
     ),
   );
 
-  return { goto, back, reload };
+  return { goto, back, reload, title };
 };

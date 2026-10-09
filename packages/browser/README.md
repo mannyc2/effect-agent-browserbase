@@ -1,9 +1,10 @@
 # effect-browser
 
 Browser automation for [Effect](https://effect.website) agents, over Playwright: page control, a
-compact page outline for models, screencast frames, `effect/ai` browser tools, an agent loop, a
-record of what visibly changed on a page, windows over a page's events, changes and frames, and
-moments, an account in pictures and words of what a page showed and what changed on it.
+compact page outline for models, screencast frames, a record of what visibly changed on a page,
+windows over a page's events, changes and frames, and moments, an account in pictures and words of
+what a page showed and what changed on it. An agent drives its pages through
+[`effect-agent-browser`](../agent-browser), with Yielded Agent's browser tools.
 
 ```sh
 npm install effect-browser@beta effect playwright-core
@@ -21,57 +22,37 @@ browser and, on SIGINT, exit before any finalizer runs, are off. Run the program
 the browser closes with its scope. A signal that ends the process outright still takes Chromium
 with it, since its pipe closes, but leaves Playwright's temporary profile behind.
 
-| Module         | What it holds                                                                        |
-| -------------- | ------------------------------------------------------------------------------------ |
-| `Browser`      | The `Browser` service: tabs, recent events and the Playwright context                |
-| `Chromium`     | A local Chromium as a `Browser` layer                                                |
-| `Cdp`          | Any DevTools endpoint as a `Browser` layer                                           |
-| `Page`         | One tab: navigation, reads, screenshots, input, waits and the screencast             |
-| `Snapshot`     | The model-readable outline of a page, with refs for its controls                     |
-| `Frame`        | A screencast frame                                                                   |
-| `BrowserEvent` | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end       |
-| `Motion`       | A bounded pointer planner, as a value, and the tuned sigma-lognormal one             |
-| `Presentation` | Input performed for viewers: a presenter, and its views of pages                     |
-| `Stage`        | The source of a live output, switched between pages and stamped                      |
-| `BrowserError` | Typed failures, whether input reached the page first, and what each leaves           |
-| `Tools`        | The `effect/ai` browser toolkit                                                      |
-| `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
-| `Policy`       | Judges that read what an input means, and a guard that acts on them unattended       |
-| `Change`       | What visibly changed on a page over a window, element by element                     |
-| `Moment`       | A page's events, changes and frames over a window; a moment, laid out as a prompt    |
-| `Plan`         | A walk recorded from a page's events, replayed on a fresh page by subject            |
-| `Supervisor`   | A browser kept open across losses and session ends, as generations                   |
+| Module         | What it holds                                                                     |
+| -------------- | --------------------------------------------------------------------------------- |
+| `Browser`      | The `Browser` service: tabs, recent events and the Playwright context             |
+| `Chromium`     | A local Chromium as a `Browser` layer                                             |
+| `Cdp`          | Any DevTools endpoint as a `Browser` layer                                        |
+| `Page`         | One tab: navigation, reads, screenshots, input, waits and the screencast          |
+| `Snapshot`     | The model-readable outline of a page, with refs for its controls                  |
+| `Frame`        | A screencast frame                                                                |
+| `BrowserEvent` | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end    |
+| `Motion`       | A bounded pointer planner, as a value, and the tuned sigma-lognormal one          |
+| `Presentation` | Input performed for viewers: a presenter, and its views of pages                  |
+| `Stage`        | The source of a live output, switched between pages and stamped                   |
+| `BrowserError` | Typed failures, whether input reached the page first, and what each leaves        |
+| `Policy`       | Judges that read what an input means, and a guard that acts on them unattended    |
+| `Change`       | What visibly changed on a page over a window, element by element                  |
+| `Moment`       | A page's events, changes and frames over a window; a moment, laid out as a prompt |
+| `Plan`         | A walk recorded from a page's events, replayed on a fresh page by subject         |
+| `Supervisor`   | A browser kept open across losses and session ends, as generations                |
 
-`Agent.run` batches each turn's tool calls in order, halting on the first failure or a completed
-`done` / `give_up`. Skipped calls receive a not-executed result. A malformed `done` answer can
-be corrected on the next turn. A response whose model output cannot be read, one calling a tool
-that does not exist or with arguments that are not JSON, runs none of its calls: the model is told
-so, and the turn counts as a step. `onStep` reports it with `rejected` set. A reply that the
-provider's client cannot decode is not the model's to correct and ends the run with its `AiError`.
+A snapshot outlines the viewport, or the whole page, with a ref such as `e12` on each control, and
+lists those controls as values, `Snapshot.Control`: each one's ref, kind, name and what it holds,
+a select's options, and whether it is disabled, checked or takes typed text. `within` reads only
+inside the elements a CSS selector matches, and `query` keeps the lines that hold some text.
+`Page.waitFor` waits, in one call the page answers as it comes, until what a selector matches
+shows, hides or is enabled, with some text if asked. `press` takes `on`, a ref it focuses before the
+first key, such as a link only the keyboard reaches. `Change.describe` tells a change in the words
+a moment uses. The actions a call performs record a caller's id as their `correlation` when it runs
+under `Page.correlate(id)`, such as a model's tool call.
 
-`Agent.run` fails with `AgentError | AiError | BrowserError | E`: how the agent ended (`StepLimit`,
-`GaveUp` or `Refused`), the model's provider, the browser, or `E`, what `onStep` fails with. An
-added tool's failure goes back to the model rather than ending the run. The run needs the
-`Browser`, a `LanguageModel`, the added tools' handlers and whatever `onStep` uses. A caller that
-spells out the options writes `Agent.Options<E, Extra, R>`, with `R`, `onStep`'s services, last.
-
-The model gets one outline and screenshot at the start and after each turn. `observation` selects
-`"outline"`, `"screenshot"`, or `"both"` (the default). When the current page cannot be observed,
-the model is told why and the run goes on; when no page can be had at all, as after the browser
-closed, the run fails with that `BrowserError` instead of calling the model again. The turn
-before it is still reported to `onStep`, and an answer it gave with `done` is still returned. `Page.observe` returns that observation as
-a schema value: what it could read, with `missing` saying why the rest could not, which the model
-is told too. It fails only when nothing asked for could be read. `Tools.make` returns receipts. A caller writing its own loop spreads a fresh
-`yield* tools.batch` into each `generateText` call: it carries the toolkit with the same ordered,
-halting execution and the `concurrency: 1` that `effect/ai` needs to keep calls in order.
-`Tools.batch` does the same for any toolkit with handlers. After the batch, the caller observes
-the current `tools.page` and drains `tools.takeZooms` into that same observation message.
-
-`browser_zoom` captures a region in viewport CSS pixels when the tool runs. Requested crops arrive
-with the next observation even in outline mode, labeled with their tab's number and viewport origin.
-At most eight crops may await an observation. `Page.zoom` exposes the same capture as a `Zoom`
-schema value with `region` and `image`; crop pixel coordinates need the region's origin added before
-using them as click coordinates.
+`Page.zoom` captures a region in viewport CSS pixels as a `Zoom` schema value with `region` and `image`;
+crop pixel coordinates need the region's origin added before using them as click coordinates.
 
 `Page.click` returns a `ResolvedTarget` captured before input: the requested point, element label,
 role, accessible name, context, cursor and link target. Pixel targeting resolves through the page
@@ -239,14 +220,6 @@ the first step it cannot take, with a `ReplayError` naming the step and why: `Mi
 ended on another site), or the step's `BrowserError`. Nothing is replayed automatically, and a plan
 of another version does not decode.
 
-Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
-merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
-share the batch's halt behavior. `done` and `give_up` end the run and stay the agent's own: a
-toolkit that names either does not type-check.
-A failure of a tool with failure mode `"error"` reaches the model encoded by that tool's failure
-schema and marked as possibly effective; a call whose parameters fail validation never reaches its
-handler and answers as not executed.
-
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action, the
 resolved element, the page's URL and title, and the `facts` the page's structure establishes:
 `form-submit`, `cross-origin`, `download`, `upload`, `secret` (typing with `type` into a
@@ -308,14 +281,13 @@ const browser = Layer.unwrap(
 );
 ```
 
-The task comes from `Policy.Task`, which `Agent.run` provides to its inputs; elsewhere, provide it
-yourself, or risky input is denied for want of one. A judge sees the task, the action, the typed
+The task comes from `Policy.Task`, which `effect-agent-browser`'s tools provide to their inputs
+from the run's `task`; elsewhere, provide it yourself, or risky input is denied for want of one. A judge sees the task, the action, the typed
 text and the facts as trusted, and the page's text only as evidence. It never sees the agent's own
 words. A judgement only adds to structure: a `secret` fact counts whatever the judge reads. A judge
 that fails or exceeds `timeout` (30 seconds) leaves the input unjudged. `make` then denies the input
 if it has any fact, with the judge's failure as the `PolicyDenied` cause, and lets an input without
-facts, such as a same-origin link, go ahead. `Agent.run` ends with a `Refused` reason after three
-refusals in a row. Through `@effect/ai-openrouter` 4.0.0, structured output needs
+facts, such as a same-origin link, go ahead. Through `@effect/ai-openrouter` 4.0.0, structured output needs
 `strictJsonSchema: true` in the model's config, or OpenRouter drops the response format and every
 review fails to decode.
 
@@ -397,7 +369,9 @@ waits a task and a frame in the page, and Chromium answers it only once a naviga
 asked for, by a link, a form or a handler's timer, has committed. A document that committed is then
 waited for until it is parsed, within 5 seconds. `pushState` and a 204 answer wait for nothing. A
 navigation a handler starts once a fetch answers comes too late for any wait; the next look sees
-it, and a picture never shows a document the page has left.
+it, and a picture never shows a document the page has left. A tab the input opens is discovered and
+registered before the action returns, within its action timeout. An unresolved opening fails with
+dispatched input, and closing the page or losing its browser wakes the wait with `Closed`.
 
 ## Presenting pages
 
@@ -467,9 +441,9 @@ miss a final paint, so a frame is only ever as current as its age. No read reuse
 before the page's current document began, when the page's own session saw its main frame commit
 it: a page that keeps painting while the next document loads would otherwise leave its own frames
 the newest when the navigation returns. Otherwise a new screenshot is
-taken, which `frame` returns as a `Screenshot`-timed frame. `observe` takes a screenshot and a
-`Moment`'s picture uses `after: "input"`, so a stopped capture, a lost final paint or later input
-never presents older paint as the page an action left.
+taken, which `frame` returns as a `Screenshot`-timed frame. A screenshot, which the agent's
+observations take, and a `Moment`'s picture use `after: "input"`, so a stopped capture, a lost
+final paint or later input never presents older paint as the page an action left.
 
 A new picture goes on the page's own protocol session. Where a device pixel is a CSS pixel and
 nothing is cropped, it is one `Page.captureScreenshot`; a crop, or another device pixel ratio, adds
@@ -572,9 +546,11 @@ counting the page's documents from 0, the one it had when the browser began trac
 after the `Navigated` that began the document; `DialogShown`; and `PageClosed`, by the
 page or because it crashed. A document count belongs to the page within one `Browser`, and starts
 again on a new connection. Each frame carries the document it followed and the page's address. A
-tab the site opened that the library could not track is `PageUntracked`. Chromium announces a
-title change only with the next change of address, so there is no title event: read `page.title`
-when `Navigated` or `PageLoaded` says the page moved.
+tab the site opened that the library could not track is `PageUntracked`. A tab a page opened names
+it as its `opener`, and the opener's events hold its opening. Chromium announces a title change
+only with the next change of address, so there is no title event: read `page.title` when
+`Navigated` or `PageLoaded` says the page moved. The browser answers it, in one call that a busy
+page cannot hold up, and an untitled page's is empty.
 
 The browser's own end is one `Disconnected`, and `browser.disconnected` completes with its cause:
 `connection`, `session`, at or after the provider's `expiresAt`, which `SessionEnding` announces,
@@ -682,7 +658,7 @@ outcome, `Settled` or `Unconfirmed`, and `Kept`, so time open is a subtraction o
 Pages don't carry over from one generation to the next. `effect-browserbase`'s
 `Browserbase.supervise` supervises hosted sessions, and with `keep` adopts the one it kept.
 
-Every module is also an entry point, such as `effect-browser/Agent`. The
+Every module is also an entry point, such as `effect-browser/Page`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.
 
 ## Tracing
@@ -703,24 +679,21 @@ const Observability = Otlp.layerFromConfig({ resource: { serviceName: "my-agent"
 );
 
 program.pipe(
-  Effect.provide([Chromium.layer(), Model]),
+  Effect.provide([Chromium.layer(), OpenRouter]),
   Effect.provide(Observability),
   Effect.runPromise,
 );
 ```
 
-`Agent.run` carries OpenTelemetry's GenAI agent attributes, its steps and its token usage. Each step
-is an `Agent.step` span around its model call (`effect/ai`'s `LanguageModel.generateText`, whose
-provider request is its HTTP child), its tool calls and the observation after them. A tool call is a
-`Tools.<name>` span with the GenAI tool attributes; `effect/ai` runs tool calls inside the model
-call's span, so read a model call's own time from its HTTP child. Every page operation is a
+The agent's turns, model calls and tool calls are Yielded's spans, with OpenTelemetry's GenAI
+attributes. Every page operation is a
 `Page.<name>` span, such as `Page.click`, `Page.type` or `Page.navigate`, with what its `Action`
 records except text: the target, the subject's role, name and tag, whether input was dispatched,
 `queuedMillis` spent waiting for its turn and the page's replies, and a failure's reason as
 `error.type`. A read that shared another's work says so in `shared`: `joined` or `kept`.
 `Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
-`Page.observe`, `Page.snapshot`, `Page.find`, `Page.text`, `Page.title`, `Page.viewport`,
+`Page.snapshot`, `Page.find`, `Page.text`, `Page.title`, `Page.viewport`,
 `Page.screenshot` and `Page.frame` (with
 `source`: a reused screencast `frame` or a new `screenshot`), `Page.zoom`, `Page.ready` and the
 other waits are spans, as are `Plan.replay` and `Plan.locate`, and so is each round trip to the
@@ -735,8 +708,8 @@ host's with three probes, each a `Page.evaluate` of `clock`, and records the fas
 probe's `roundTripMillis`: the round trip to the browser, plus any wait behind the page's own work.
 One that runs alongside a capture shows its failure only there.
 
-Spans never carry typed text. A tool span keeps a browser tool's parameters with `text` replaced by
-`redacted`, and only the names of any other tool's parameters, which may hold anything; a script
-round trip is named by its function alone. `Page.evaluate` spans are at `Trace` level and the phases
+Page spans never carry typed text, and a script round trip is named by its function alone. A tool
+call's parameters, which hold what a model typed, are Yielded's to record, under its own telemetry
+and redaction. `Page.evaluate` spans are at `Trace` level and the phases
 inside an action at `Debug`: set `Tracer.MinimumTraceLevel` to `"Info"` to keep only the coarser
 spans.

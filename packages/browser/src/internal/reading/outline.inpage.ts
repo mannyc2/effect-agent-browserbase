@@ -4,8 +4,9 @@
  */
 import { Schema } from "effect";
 
-import type { Snapshot } from "../../Snapshot.ts";
+import type { Control, Snapshot } from "../../Snapshot.ts";
 import type { addresses } from "../page/url.ts";
+import type { Controls } from "./controls.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
@@ -14,25 +15,35 @@ import type { Walk } from "./walk.inpage.ts";
 export interface SnapshotRequest {
   readonly full: boolean;
   readonly query: string | null;
+  /** A CSS selector: only what is inside the elements it matches is read. */
+  readonly within: string | null;
   readonly maxChars: number;
   readonly firstRef: number;
 }
 
-/** The outline as a `Snapshot` reads it, and the next ref the page may give. */
-export interface SnapshotResult {
-  readonly snapshot: typeof Snapshot.Encoded;
-  readonly nextRef: number;
-}
+/**
+ * The outline as a `Snapshot` reads it, and the next ref the page may give, or why `within` is not
+ * a selector.
+ */
+export type SnapshotResult =
+  | { readonly snapshot: typeof Snapshot.Encoded; readonly nextRef: number }
+  | { readonly invalid: string };
 
 /** The rule every address the library reports goes by, which a link's address goes by too. */
 type Url = ReturnType<typeof addresses>;
 
-export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: Texts, url: Url) => {
-  const { clean, containers, isFrame, isInput, isSelect, isTextArea, nameOf, refFor, refs } = names;
-  const { roleOf, textOf } = names;
+export const outline = (
+  names: Names,
+  walked: Walk,
+  subjects: Subjects,
+  texts: Texts,
+  controlling: Controls,
+  url: Url,
+) => {
+  const { clean, containers, isFrame, nameOf, refFor, refs, roleOf, textOf } = names;
   const { visit } = walked;
-  const { isControl, stateOf } = subjects;
-  const { cut, shown } = texts;
+  const { isControl } = subjects;
+  const { cut } = texts;
 
   const textBlocks =
     /^(?:P|LI|TD|TH|DT|DD|LABEL|SPAN|BLOCKQUOTE|FIGCAPTION|CAPTION|PRE|STRONG|EM|B|I|SMALL|TIME|CODE|LEGEND)$/;
@@ -47,34 +58,6 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
     const label = element.closest("label");
 
     return label !== null && label.control !== null;
-  };
-
-  // The states that hold, in the order `stateOf` gives them, after a heading's level.
-  const states = (element: Element, role: string | null): string => {
-    const { level, ...flags } = stateOf(element, role);
-    const held = Object.entries(flags).flatMap(([name, value]) => (value === true ? [name] : []));
-
-    return [...(level === undefined ? [] : [`level=${level}`]), ...held]
-      .map((name) => ` [${name}]`)
-      .join("");
-  };
-
-  const valueOf = (element: Element): string => {
-    if (isSelect(element)) {
-      const selected = Array.from(element.selectedOptions, (option) => clean(option.text, 40));
-
-      const options = Array.from(element.options)
-        .slice(0, 12)
-        .map((option) => clean(option.text, 40));
-
-      const more = element.options.length > 12 ? ` +${element.options.length - 12} more` : "";
-
-      return ` value=${JSON.stringify(selected.join(", "))} options=${JSON.stringify(options.join(" | ") + more)}`;
-    }
-    // The model sees what it typed, but never what a secret field holds.
-    const value = isInput(element) || isTextArea(element) ? shown(element, true) : undefined;
-
-    return value === undefined || value === "" ? "" : ` value=${JSON.stringify(clean(value, 80))}`;
   };
 
   const hrefOf = (element: Element): string => {
@@ -102,11 +85,15 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
   }
 
   const snapshot = (request: SnapshotRequest): SnapshotResult => {
+    const roots = request.within === null ? [null] : controlling.rootsOf(request.within);
+
+    if ("invalid" in roots) return roots;
     if (refs.next < request.firstRef) refs.next = request.firstRef;
     const width = window.innerWidth;
     const height = window.innerHeight;
     const query = request.query === null ? null : request.query.toLowerCase();
     const lines: Array<string> = [];
+    const controls: Array<typeof Control.Encoded> = [];
     let above = 0;
     let below = 0;
 
@@ -147,10 +134,10 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
 
       const line =
         placement(rect) === "in"
-          ? `${kind}${name === "" ? "" : ` ${JSON.stringify(name)}`} [ref=${refFor(element)}]${states(element, role)}${valueOf(element)}${hrefOf(element)}${box}`
+          ? `${kind}${name === "" ? "" : ` ${JSON.stringify(name)}`} [ref=${refFor(element)}]${controlling.states(element, role)}${controlling.valueOf(element)}${hrefOf(element)}${box}`
           : kind;
 
-      emit(depth, line, rect);
+      if (emit(depth, line, rect)) controls.push(controlling.controlOf(element, role, kind, name));
       if (isFrame(element)) {
         const body = element.contentDocument?.body;
 
@@ -180,7 +167,7 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
       if (role === "heading") {
         emit(
           depth,
-          `heading ${JSON.stringify(nameOf(element, role))}${states(element, role)}`,
+          `heading ${JSON.stringify(nameOf(element, role))}${controlling.states(element, role)}`,
           rect,
         );
 
@@ -228,22 +215,22 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
       };
     };
 
+    const visitor = {
+      enter,
+      admit: (child: Element, place: Place) =>
+        !place.controls || child.matches(nested) || child.querySelector(nested) !== null,
+      outside: count,
+    };
+
     // Inside the viewport, a subtree out of view is skipped whole and counted as one part.
-    visit(
-      null,
-      !request.full,
-      { depth: 0, insidePointer: false, controls: false },
-      {
-        enter,
-        admit: (child, place) =>
-          !place.controls || child.matches(nested) || child.querySelector(nested) !== null,
-        outside: count,
-      },
-    );
+    for (const root of roots)
+      visit(root, !request.full, { depth: 0, insidePointer: false, controls: false }, visitor);
+
+    const outlined = cut(lines.join("\n"), request.maxChars);
 
     return {
       snapshot: {
-        ...cut(lines.join("\n"), request.maxChars),
+        ...outlined,
         url: location.href,
         title: document.title,
         above,
@@ -253,6 +240,8 @@ export const outline = (names: Names, walked: Walk, subjects: Subjects, texts: T
           y: Math.round(window.scrollY),
           height: Math.round(document.documentElement.scrollHeight),
         },
+        // Only the controls whose lines were kept.
+        controls: controls.filter((control) => outlined.text.includes(`[ref=${control.ref}]`)),
       },
       nextRef: refs.next,
     };

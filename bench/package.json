@@ -1,7 +1,7 @@
 {
   "name": "bench",
   "private": true,
-  "description": "Benchmarks for effect-browser: can a model operate and understand canvas games, charts and forms?",
+  "description": "Benchmarks for effect-browser and its Yielded agent tools: can a model operate and understand canvas games, charts and forms?",
   "type": "module",
   "scripts": {
     "bench": "node --conditions=@effect-browser/source bench.ts",
@@ -14,7 +14,9 @@
     "@effect/platform-node": "4.0.0",
     "@effect/vitest": "4.0.0",
     "@types/node": "26.1.2",
+    "@yielded/agent": "0.1.0-beta.168",
     "effect": "4.0.0",
+    "effect-agent-browser": "workspace:*",
     "effect-browser": "workspace:*",
     "effect-browserbase": "workspace:*",
     "playwright-core": "1.63.0",

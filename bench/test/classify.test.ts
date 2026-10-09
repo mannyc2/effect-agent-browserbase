@@ -1,10 +1,10 @@
 // One outcome policy for both runners: which exits are graded answers and which are not.
 import { assert, describe, it } from "@effect/vitest";
 import { Cause, Effect, Exit } from "effect";
-import { AgentError, GaveUp, StepLimit } from "effect-browser/Agent";
 import { BrowserError, Closed } from "effect-browser/BrowserError";
 import { AiError } from "effect/ai";
 
+import { GaveUp, StepLimit, Unanswered } from "../Arms.ts";
 import { type Calls, emptyAccounting, ledger, noCalls } from "../Budget.ts";
 import { classify, EvidenceIncomplete, notAdmitted, tally } from "../Trial.ts";
 
@@ -47,7 +47,7 @@ describe("classify", () => {
         Exit.fail(
           aiError(
             new AiError.ToolParameterValidationError({
-              toolName: "browser_click",
+              toolName: "click_at",
               description: "not JSON",
             }),
           ),
@@ -57,18 +57,20 @@ describe("classify", () => {
       { status: "graded", reason: "invalid-output", pass: false },
     );
     assert.deepStrictEqual(
-      classify(
-        Exit.fail(new AgentError({ reason: new StepLimit({ steps: 3 }), steps: 3 })),
-        answered,
-      ),
+      classify(Exit.fail(new StepLimit({ detail: "the run used its 3 turns" })), answered),
       { status: "graded", reason: "step-limit", pass: false },
     );
+    assert.deepStrictEqual(classify(Exit.fail(new GaveUp({ reason: "blocked" })), answered), {
+      status: "graded",
+      reason: "gave-up",
+      pass: false,
+    });
     assert.deepStrictEqual(
       classify(
-        Exit.fail(new AgentError({ reason: new GaveUp({ reason: "blocked" }), steps: 2 })),
+        Exit.fail(new Unanswered({ detail: "mixed a completion with other calls" })),
         answered,
       ),
-      { status: "graded", reason: "gave-up", pass: false },
+      { status: "graded", reason: "invalid-output", pass: false },
     );
   });
 

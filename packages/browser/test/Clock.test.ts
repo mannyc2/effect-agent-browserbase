@@ -65,7 +65,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       yield* page.goto((yield* Site).url("/form"));
       yield* page.click({ x: 20, y: 20 });
-      const observation = yield* page.observe();
+      const observation = yield* page.state;
       const events = yield* browser.recentEvents;
       const actions = events.filter((event) => event._tag === "Action");
 

@@ -53,7 +53,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const viewport = Viewport.make(page, bridge);
   const input = Actions.make(page, bridge, viewport);
   const pictures = yield* Pictures.make(page, bridge, viewport);
-  const reading = yield* Reading.make(page, bridge, () => pictures.screenshot());
+  const reading = yield* Reading.make(page, bridge);
   const navigation = Navigation.make(page, input.perform, input.preparePolicy);
   const { capture } = pictures;
   const changes = Changes.make(page, bridge, pictures.estimate);
@@ -86,10 +86,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     id,
     playwright,
     url: Effect.sync(() => Url.redact(playwright.url())),
-    title: titles("", native("title", () => playwright.title()).pipe(within("title"))).pipe(
-      span("Page.title"),
-      owned,
-    ),
+    title: titles("", navigation.title.pipe(within("title"))).pipe(span("Page.title"), owned),
     goto: navigation.goto,
     back: navigation.back,
     reload: navigation.reload,
@@ -104,7 +101,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       span("Page.viewport"),
       owned,
     ),
-    observe: reading.observe,
     find: reading.find,
     text: reading.text,
     changes,
@@ -118,6 +114,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     scroll: (options) => input.scroll(options),
     select: input.select,
     waitForText: reading.waitForText,
+    waitFor: reading.waitFor,
     ready: Ready.make(page, bridge, capture),
     screencast: capture.stream,
     captureStats: pictures.captureStats,

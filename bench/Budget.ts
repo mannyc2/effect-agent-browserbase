@@ -1,8 +1,20 @@
 // Paid model calls for both runners: one admission ledger, the budgeted OpenRouter client and the
 // pinned endpoint whose bounds every reservation uses.
 import { Generated, OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
-import { Cause, Clock, Config, Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
-import { AiError, type LanguageModel } from "effect/ai";
+import {
+  Cause,
+  Clock,
+  Config,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { AiError, type LanguageModel, Model } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
 import * as Diagnostics from "./Diagnostics.ts";
@@ -463,7 +475,7 @@ export type Account = Effect.Success<Budget["account"]>;
 // listed $0.20 that would exclude the pinned endpoint. Fifteen digits recover the decimal.
 const perMillion = (perToken: number) => String(Number((perToken * 1e6).toPrecision(15)));
 
-const unbudgeted = "the bench budgets only non-streaming chat completions";
+const unbudgeted = "the bench budgets only chat completions";
 
 const refused = (method: string) =>
   Effect.fail(
@@ -485,9 +497,52 @@ const refusingClient = Generated.make(
   ),
 );
 
+type Completion = Generated.SendChatCompletionRequest200;
+
+type Chunk = typeof Generated.ChatStreamingResponse.fields.data.Type;
+
 /**
- * Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding.
- * Streaming, decisions and the raw generated client have no admission, so they are refused.
+ * A whole completion as the one chunk of a stream, so a run that streams, as an agent's does, is
+ * sent and charged as one that does not, and the adapter reads it as a stream that sent
+ * everything at once.
+ */
+const asChunk = (completion: Completion): Chunk => ({
+  id: completion.id,
+  model: completion.model,
+  created: completion.created,
+  object: "chat.completion.chunk",
+  choices: completion.choices.map(({ index, finish_reason, message }) => ({
+    index,
+    finish_reason,
+    delta: {
+      role: "assistant",
+      content:
+        typeof message.content === "string" || message.content === null
+          ? message.content
+          : message.content?.flatMap((item) => (item.type === "text" ? [item.text] : [])).join(""),
+      ...(message.reasoning === undefined ? {} : { reasoning: message.reasoning }),
+      ...(message.reasoning_details === undefined
+        ? {}
+        : { reasoning_details: message.reasoning_details }),
+      ...(message.tool_calls === undefined
+        ? {}
+        : {
+            tool_calls: message.tool_calls.map((call, order) => ({
+              index: order,
+              id: call.id,
+              type: call.type,
+              function: call.function,
+            })),
+          }),
+    },
+  })),
+  ...(completion.usage === undefined ? {} : { usage: completion.usage }),
+});
+
+/**
+ * Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding. A
+ * stream is asked as one completion, charged alike; decisions and the raw generated client have
+ * no admission, so they are refused.
  */
 export const budgetedClient = (
   client: OpenRouterClient.Service,
@@ -498,11 +553,8 @@ export const budgetedClient = (
     readonly outputParameter?: "max_tokens" | "max_completion_tokens";
     readonly provider?: string;
   },
-): OpenRouterClient.Service => ({
-  client: refusingClient,
-  createDecisions: () => refused("createDecisions"),
-  createChatCompletionStream: () => refused("createChatCompletionStream"),
-  createChatCompletion: (request) =>
+): OpenRouterClient.Service => {
+  const createChatCompletion: OpenRouterClient.Service["createChatCompletion"] = (request) =>
     account
       .run(
         client.createChatCompletion({
@@ -551,8 +603,19 @@ export const budgetedClient = (
               })
             : error,
         ),
-      ),
-});
+      );
+
+  return {
+    client: refusingClient,
+    createDecisions: () => refused("createDecisions"),
+    createChatCompletion,
+    createChatCompletionStream: (request) =>
+      Effect.map(createChatCompletion(request), ([completion, response]) => [
+        response,
+        Stream.make(asChunk(completion)),
+      ]),
+  };
+};
 
 /** What a run's requests need from the pinned endpoint. */
 export interface Needs {
@@ -693,7 +756,11 @@ export const modelRunner = (options: {
       );
 
     const withModel = <A, E, R>(
-      effect: Effect.Effect<A, E, R | LanguageModel.LanguageModel>,
+      effect: Effect.Effect<
+        A,
+        E,
+        R | LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName
+      >,
       reasoning: Reasoning,
       account: Account,
     ) => {
@@ -721,7 +788,14 @@ export const modelRunner = (options: {
         config: { reasoning: { effort: reasoning }, strictJsonSchema: true },
       }).pipe(Layer.provide(client));
 
-      return effect.pipe(Effect.provide(languageModel));
+      // Yielded's runtime names the model it runs on.
+      const named = Layer.mergeAll(
+        languageModel,
+        Layer.succeed(Model.ProviderName, "openrouter"),
+        Layer.succeed(Model.ModelName, options.model),
+      );
+
+      return effect.pipe(Effect.provide(named));
     };
 
     return { ...budget, endpoint, withModel };

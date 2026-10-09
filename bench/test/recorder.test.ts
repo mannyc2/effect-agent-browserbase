@@ -9,7 +9,6 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import * as Chromium from "effect-browser/Chromium";
 
-import * as Presented from "../Presented.ts";
 import * as Recorder from "../Recorder.ts";
 import { plain, Recording } from "../Recording.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
@@ -26,15 +25,8 @@ const record = Effect.fnUntraced(function* (name: string, humanize: boolean) {
   const recorder = yield* Recorder.make(directory);
 
   const outcome = yield* recorder
-    .around(task.scripted({ seed: 23, trace: recorder.trace }))
-    .pipe(
-      Effect.provide(
-        humanize
-          ? Presented.layer(Chromium.layer({ frameHistory }))
-          : Chromium.layer({ frameHistory }),
-        { local: true },
-      ),
-    );
+    .around(task.scripted({ seed: 23, trace: recorder.trace, humanize }))
+    .pipe(Effect.provide(Chromium.layer({ frameHistory }), { local: true }));
 
   yield* recorder.finish({
     task: { name: task.name, kind: task.kind, summary: task.summary, prompt: task.prompt },

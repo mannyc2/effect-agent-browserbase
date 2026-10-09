@@ -8,6 +8,7 @@ import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
 import { Action, type ActionOptions, Subject } from "../../BrowserEvent.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
 import type { PageContext } from "../page/context.ts";
+import { Correlation } from "../page/lane.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
 import type { Dispatch } from "./dispatch.ts";
 import type { Approval, PolicyPlan } from "./guard.ts";
@@ -118,7 +119,6 @@ export const make = (page: PageContext, sender: Dispatch) => {
   ): Effect.Effect<A, BrowserError> =>
     Effect.gen(function* () {
       const startedAt = now();
-      const sendsInput = info.input ?? true;
       const sent = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
       const acted = yield* Ref.make<Pick<Action, "subject" | "to" | "box">>({});
@@ -156,7 +156,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
       const admit = input.idle.pipe(
         Effect.tap(() =>
           Effect.sync(() => {
-            estimate = sendsInput ? mapping.latest() : undefined;
+            estimate = (info.input ?? true) ? mapping.latest() : undefined;
           }),
         ),
       );
@@ -183,7 +183,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
               }),
               // The finalizer only submits missing releases. It cannot wait forever for a
               // disconnected peer; the page retains those replies and gates its next action.
-              Effect.ensuring(run.close),
+              Effect.ensuring(run.close.pipe(Effect.andThen(page.openings.clear))),
             ),
           ),
         );
@@ -294,6 +294,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
               startedAt,
               page: id,
               name,
+              correlation: yield* Correlation,
               target: info.target,
               options: Exit.isSuccess(exit) ? info.options : undefined,
               subject,

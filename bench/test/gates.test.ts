@@ -3,30 +3,26 @@
 // reports the right answer without doing the work fails, while work reported in the wrong form
 // still counts on the page. No model is called.
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Stream } from "effect";
+import { Effect } from "effect";
 import * as Chromium from "effect-browser/Chromium";
-import { LanguageModel, type Prompt, type Response } from "effect/ai";
+import type { Prompt } from "effect/ai";
 
 import { tasks } from "../Catalog.ts";
 import { frameHistory } from "../Tasks.ts";
 import { isolatedTrial } from "../Trial.ts";
+import { call, finish, modelOf, scripted, textOf } from "./scripted.ts";
 
 /** An agent that reports this answer at once, without looking at the page. */
 const reports = (answer: unknown) =>
-  Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: () =>
-        Effect.succeed([
-          { type: "tool-call", id: "call-1", name: "done", params: { answer } },
-          {
-            type: "finish",
-            reason: "tool-calls",
-            usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
-          },
-        ]),
-      streamText: () => Stream.empty,
-    }),
+  modelOf(() =>
+    Effect.succeed([
+      { type: "tool-call", id: "call-1", name: "done", params: { answer } },
+      {
+        type: "finish",
+        reason: "tool-calls",
+        usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
+      },
+    ]),
   );
 
 const browser = Chromium.layer({ frameHistory });
@@ -65,51 +61,9 @@ describe("operate tasks", () => {
     );
 });
 
-/** The text a model was shown: instructions, the page's outline and tool results. */
-const shown = (prompt: Prompt.Prompt) =>
-  prompt.content
-    .flatMap((message) =>
-      message.role === "system"
-        ? [message.content]
-        : message.content.flatMap((part) =>
-            part.type === "text"
-              ? [part.text]
-              : part.type === "tool-result"
-                ? [JSON.stringify(part.result)]
-                : [],
-          ),
-    )
-    .join("\n");
-
-/** A model that answers each call with the next turn of `script`, given what it was shown. */
-const scripted = (script: ReadonlyArray<(text: string) => ReadonlyArray<Response.PartEncoded>>) => {
-  let turn = 0;
-
-  return Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: (options) =>
-        Effect.suspend(() => {
-          const next = script[turn];
-
-          turn += 1;
-
-          return next === undefined
-            ? Effect.die(`no turn ${turn} in the script`)
-            : Effect.succeed([...next(shown(options.prompt))]);
-        }),
-      streamText: () => Stream.empty,
-    }),
-  );
-};
-
-const finish: Response.PartEncoded = {
-  type: "finish",
-  reason: "tool-calls",
-  usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
-};
-
-const refIn = (text: string, pattern: RegExp) => pattern.exec(text)?.[1] ?? "missing";
+// A ref from an observation, which a tool's result quotes with its quotes escaped.
+const refIn = (prompt: Prompt.Prompt, pattern: RegExp) =>
+  pattern.exec(textOf(prompt))?.[1] ?? "missing";
 
 describe("work reported in the wrong form", () => {
   it.live("fails the grade but counts on the page", () =>
@@ -125,39 +79,30 @@ describe("work reported in the wrong form", () => {
       ).pipe(
         Effect.provide(
           scripted([
-            (text) => [
-              {
-                type: "tool-call",
-                id: "call-1",
-                name: "browser_click",
-                params: { ref: refIn(text, /radio "Buy" \[ref=(e\d+)\]/) },
-              },
-              {
-                type: "tool-call",
-                id: "call-2",
-                name: "browser_type",
-                params: { ref: refIn(text, /textbox "\w+ \(BTC\)" \[ref=(e\d+)\]/), text: "0.25" },
-              },
-              {
-                type: "tool-call",
-                id: "call-3",
-                name: "browser_click",
-                params: { ref: refIn(text, /button "\w+ order" \[ref=(e\d+)\]/) },
-              },
+            () => [call("observe", {}), finish],
+            (prompt) => [
+              call("act", {
+                actions: [
+                  { kind: "click", ref: refIn(prompt, /radio \\"Buy\\" \[ref=(e\d+)\]/) },
+                  {
+                    kind: "fill",
+                    ref: refIn(prompt, /textbox \\"\w+ \(BTC\)\\" \[ref=(e\d+)\]/),
+                    value: "0.25",
+                  },
+                  { kind: "click", ref: refIn(prompt, /button \\"\w+ order\\" \[ref=(e\d+)\]/) },
+                ],
+              }),
               finish,
             ],
-            (text) => [
-              {
-                type: "tool-call",
-                id: "call-4",
-                name: "done",
-                params: {
-                  answer: { orderId: `Order ${/ORD-\d+/.exec(text)?.[0] ?? "none"} was filled.` },
+            (prompt) => [
+              call("done", {
+                answer: {
+                  orderId: `Order ${/ORD-\d+/.exec(textOf(prompt))?.[0] ?? "none"} was filled.`,
                 },
-              },
+              }),
               finish,
             ],
-          ]),
+          ]).layer,
         ),
       );
 

@@ -2,13 +2,13 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Layer, Schema, Stream } from "effect";
+import { Duration, Effect, Exit, Layer, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
-import { LanguageModel, type Prompt, type Response } from "effect/ai";
+import type { LanguageModel, Model, Prompt, Response } from "effect/ai";
 
 import { noCalls } from "../Budget.ts";
 import {
@@ -22,16 +22,11 @@ import {
 } from "../Sites.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
 import { classify } from "../Trial.ts";
+import { modelOf } from "./scripted.ts";
 
 /** A model that answers every call with the same parts. */
 const answering = (parts: ReadonlyArray<Response.PartEncoded>) =>
-  Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: () => Effect.succeed([...parts]),
-      streamText: () => Stream.empty,
-    }),
-  );
+  modelOf(() => Effect.succeed([...parts]));
 
 const usage = { inputTokens: { total: 1200 }, outputTokens: { total: 40 } };
 
@@ -57,7 +52,10 @@ const taskNamed = (name: string) => {
   return task;
 };
 
-const run = (name: string, model: Layer.Layer<LanguageModel.LanguageModel>) =>
+const run = (
+  name: string,
+  model: Layer.Layer<LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName>,
+) =>
   taskNamed(name)
     .withModel({ seed: 23, onUsage: () => Effect.void })
     .pipe(Effect.provide(Layer.merge(Chromium.layer({ frameHistory }), model)));
@@ -142,23 +140,21 @@ const describeWith = (
         page.frame(options).pipe(Effect.tap((frame) => Effect.sync(() => currents.push(frame)))),
     };
 
-    const model = yield* LanguageModel.make({
-      generateText: (options) =>
-        // The scripted model reads the fixture it describes; a failure there is the test's own.
-        Effect.gen(function* () {
-          prompts.push(options.prompt);
-          frameAfter = (yield* truth(page, FrameTruth)).frameAfter;
-          const value = yield* answer(page);
+    const model = modelOf((options) =>
+      // The scripted model reads the fixture it describes; a failure there is the test's own.
+      Effect.gen(function* () {
+        prompts.push(options.prompt);
+        frameAfter = (yield* truth(page, FrameTruth)).frameAfter;
+        const value = yield* answer(page);
 
-          const parts: Array<Response.PartEncoded> = [
-            { type: "text", text: JSON.stringify(value) },
-            { type: "finish", reason: "stop", usage },
-          ];
+        const parts: Array<Response.PartEncoded> = [
+          { type: "text", text: JSON.stringify(value) },
+          { type: "finish", reason: "stop", usage },
+        ];
 
-          return parts;
-        }).pipe(Effect.orDie),
-      streamText: () => Stream.empty,
-    });
+        return parts;
+      }).pipe(Effect.orDie),
+    );
 
     const outcome = yield* taskNamed(name)
       .withModel({ seed: options.seed ?? 23, onUsage: () => Effect.void })
@@ -167,7 +163,7 @@ const describeWith = (
           Browser,
           Browser.of({ ...browser, firstPage: Effect.succeed(observed) }),
         ),
-        Effect.provideService(LanguageModel.LanguageModel, model),
+        Effect.provide(model),
       );
 
     return {

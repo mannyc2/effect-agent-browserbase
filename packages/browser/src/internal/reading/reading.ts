@@ -1,32 +1,34 @@
 /**
- * Reading a page: its outline with refs, the elements a query finds, the text it shows, and an
- * observation that pairs the outline with a picture. Each read takes its turn on the page and
- * shares its work with identical reads, as `lane.ts` describes. The viewport's text as it was last
- * read is kept, for `Page.state`.
+ * Reading a page: its outline with refs, the elements a query finds and the text it shows. Each
+ * read takes its turn on the page and shares its work with identical reads, as `lane.ts`
+ * describes. The viewport's text as it was last read is kept, for `Page.state`.
  */
-import { Duration, Effect, Option, Ref, Result, Schema } from "effect";
+import { Duration, Effect, Ref, Schema } from "effect";
 
-import { type BrowserError, InvalidRequest, NotFound, StaleRef } from "../../BrowserError.ts";
-import type { Image } from "../../Frame.ts";
-import {
-  type FindQuery,
-  Found,
-  Observation,
-  type ObservationMode,
-  Text,
-  type TextOptions,
-} from "../../Page.ts";
+import { InvalidRequest, NotFound, StaleRef, Timeout } from "../../BrowserError.ts";
+import { type FindQuery, Found, Text, type TextOptions, type WaitCondition } from "../../Page.ts";
 import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import * as Url from "../page/url.ts";
+import type { ConditionRequest } from "./controls.inpage.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
 import type { SnapshotRequest } from "./outline.inpage.ts";
 import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
 
-// What `snapshot` and `find` read back, each with the next ref the page may give.
-const SnapshotResult = Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite });
+// What `snapshot` and `find` read back, each with the next ref the page may give, and why a
+// snapshot's selector is not CSS.
+const SnapshotResult = Schema.Union([
+  Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite }),
+  Schema.Struct({ invalid: Schema.String }),
+]);
+
 const FindResults = Schema.Struct({ found: Schema.Array(Found), nextRef: Schema.Finite });
+
+const ConditionResult = Schema.Union([
+  Schema.Struct({ met: Schema.Boolean }),
+  Schema.Struct({ invalid: Schema.String }),
+]);
 
 // A pattern crosses into the page as its source and flags.
 const wanted = (value: string | RegExp | undefined): Wanted | null =>
@@ -36,21 +38,7 @@ const wanted = (value: string | RegExp | undefined): Wanted | null =>
       ? value
       : { source: value.source, flags: value.flags };
 
-// One part of an observation: how its read went, or nothing when it was not asked for.
-const part = <A>(asked: boolean, read: () => Effect.Effect<A, BrowserError>) =>
-  asked ? Effect.asSome(Effect.result(read())) : Effect.succeedNone;
-
-const succeeded = <A>(part: Option.Option<Result.Result<A, BrowserError>>) =>
-  Option.getOrUndefined(Option.flatMap(part, Result.getSuccess));
-
-const failed = <A>(part: Option.Option<Result.Result<A, BrowserError>>) =>
-  Option.toArray(Option.flatMap(part, Result.getFailure));
-
-export const make = Effect.fnUntraced(function* (
-  page: PageContext,
-  bridge: Bridge,
-  screenshot: () => Effect.Effect<Image, BrowserError>,
-) {
+export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Bridge) {
   const { now, span, owned, within, lane } = page;
   const { evaluate } = bridge;
   // Refs count up across the page's documents, so one never names two elements.
@@ -65,6 +53,7 @@ export const make = Effect.fnUntraced(function* (
     const asked = {
       full: snapshotOptions.full ?? false,
       query: snapshotOptions.query ?? null,
+      within: snapshotOptions.within ?? null,
       maxChars: snapshotOptions.maxChars ?? 12_000,
     };
 
@@ -77,6 +66,8 @@ export const make = Effect.fnUntraced(function* (
           Effect.flatMap(decodeWith("snapshot", SnapshotResult)),
         );
 
+        if ("invalid" in result)
+          return yield* failWith("snapshot", new InvalidRequest({ detail: result.invalid }));
         const { text, truncated, url } = result.snapshot;
 
         yield* counted(result.nextRef);
@@ -155,37 +146,6 @@ export const make = Effect.fnUntraced(function* (
     ).pipe(span("Page.text", { scope: scope === "viewport" ? "viewport" : "ref" }), owned);
   };
 
-  // What could be read, each part apart, and why the rest could not; a failure only when nothing
-  // asked for could be read.
-  const observe = (
-    observeOptions: {
-      readonly mode?: ObservationMode;
-      readonly full?: boolean;
-      readonly maxChars?: number;
-    } = {},
-  ) =>
-    Effect.all(
-      [
-        part(observeOptions.mode !== "screenshot", () =>
-          snapshot({ full: observeOptions.full, maxChars: observeOptions.maxChars }),
-        ),
-        part(observeOptions.mode !== "outline", () => screenshot()),
-      ],
-      { concurrency: 2 },
-    ).pipe(
-      Effect.flatMap(([outline, picture]) => {
-        const read = { snapshot: succeeded(outline), image: succeeded(picture) };
-        const missing = [...failed(outline), ...failed(picture)];
-        const [first] = missing;
-
-        return read.snapshot === undefined && read.image === undefined && first !== undefined
-          ? Effect.fail(first)
-          : Effect.succeed(new Observation({ ...read, missing, at: now() }));
-      }),
-      span("Page.observe", { mode: observeOptions.mode ?? "both" }),
-      owned,
-    );
-
   // One call, which the page answers once `find` matches the text or at the deadline. It follows the
   // action in flight, as a read does, but holds no later one back while it waits, and it waits on
   // in a document that replaces the one it began in.
@@ -225,11 +185,45 @@ export const make = Effect.fnUntraced(function* (
       );
   };
 
+  // One call, as `waitForText` is, which the page answers once the condition holds or at the
+  // deadline.
+  const waitFor = (condition: WaitCondition, timeout: Duration.Input = Duration.seconds(10)) => {
+    const request: ConditionRequest = {
+      selector: condition.selector ?? null,
+      text: condition.text ?? null,
+      state: condition.state ?? "visible",
+    };
+
+    // JSON has no infinity; the deadline here ends a wait without one in any case.
+    const millis = Math.min(Duration.toMillis(timeout), Number.MAX_SAFE_INTEGER);
+    const unmet = () => failWith("waitFor", new Timeout({ millis }));
+
+    const look = evaluate("waitFor", scriptCall("waitUntil", request, millis)).pipe(
+      Effect.flatMap(decodeWith("waitFor", ConditionResult)),
+      Effect.flatMap((result) =>
+        "invalid" in result
+          ? failWith("waitFor", new InvalidRequest({ detail: result.invalid }))
+          : result.met
+            ? Effect.void
+            : unmet(),
+      ),
+    );
+
+    return lane
+      .read("waitFor")(Effect.void)
+      .pipe(
+        Effect.andThen(Effect.retry(look, { while: contextGone })),
+        Effect.timeoutOrElse({ duration: timeout, orElse: unmet }),
+        span("Page.waitFor", { state: request.state }),
+        owned,
+      );
+  };
+
   /** The viewport's text as it was last read, if after `since`, as a document began. */
   const viewedSince = (since: number) =>
     viewed !== undefined && viewed.at > since ? viewed : undefined;
 
-  return { snapshot, find, text, observe, waitForText, viewedSince };
+  return { snapshot, find, text, waitForText, waitFor, viewedSince };
 });
 
 export type Reading = Effect.Success<ReturnType<typeof make>>;

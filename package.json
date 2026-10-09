@@ -36,7 +36,8 @@
   "overrides": {
     "@effect/platform-node-shared": "4.0.0",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
-    "vitest": "5.0.3"
+    "vitest": "5.0.3",
+    "@yielded/agent": "https://raw.githubusercontent.com/mannyc2/effect-agent-browserbase/1c40d56a631ea0a041577d9736a7484e3d0f4b62/yielded-agent-0.1.0-beta.168.tgz"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

@@ -2,30 +2,25 @@
 // gives one seed's right answer on another seed's page fails, so no constant answer passes a task
 // and each grader reads what the page holds. No model is called.
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Stream } from "effect";
+import { Effect } from "effect";
 import * as Chromium from "effect-browser/Chromium";
-import { LanguageModel } from "effect/ai";
 
 import { tasks } from "../Catalog.ts";
 import { frameHistory } from "../Tasks.ts";
 import { isolatedTrial } from "../Trial.ts";
+import { modelOf } from "./scripted.ts";
 
 /** A describer that gives this answer, whatever it is shown. */
 const says = (answer: unknown) =>
-  Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: () =>
-        Effect.succeed([
-          { type: "text", text: JSON.stringify(answer) },
-          {
-            type: "finish",
-            reason: "stop",
-            usage: { inputTokens: { total: 1200 }, outputTokens: { total: 40 } },
-          },
-        ]),
-      streamText: () => Stream.empty,
-    }),
+  modelOf(() =>
+    Effect.succeed([
+      { type: "text", text: JSON.stringify(answer) },
+      {
+        type: "finish",
+        reason: "stop",
+        usage: { inputTokens: { total: 1200 }, outputTokens: { total: 40 } },
+      },
+    ]),
   );
 
 const browser = Chromium.layer({ frameHistory });

@@ -22,9 +22,9 @@ import {
   Semaphore,
   type Stream,
 } from "effect";
-import type { BrowserContext, Dialog, Page as PlaywrightPage } from "playwright-core";
+import type { BrowserContext, CDPSession, Dialog, Page as PlaywrightPage } from "playwright-core";
 
-import { BrowserError, Failed, InvalidRequest, Limit } from "./BrowserError.ts";
+import { BrowserError, Failed, InvalidRequest, Limit, type Closed } from "./BrowserError.ts";
 import {
   type BrowserEvent,
   DialogShown,
@@ -38,6 +38,7 @@ import {
 } from "./BrowserEvent.ts";
 import { call, failWith, type Settings, undispatched } from "./internal/page/context.ts";
 import { FailFast } from "./internal/page/lane.ts";
+import * as Openings from "./internal/page/openings.ts";
 import * as PageImpl from "./internal/page/page.ts";
 import * as Url from "./internal/page/url.ts";
 import * as BrowserClock from "./internal/pictures/clock.ts";
@@ -248,7 +249,13 @@ const watchLoss = Effect.fnUntraced(function* (
   yield* Effect.addFinalizer(() => Effect.sync(() => context.off("close", onClose)));
   if (context.browser()?.isConnected() === false) onClose();
 
-  return { lostBy: () => lostBy, lost: Deferred.await(lost), lose, untilLost };
+  return {
+    lostBy: () => lostBy,
+    lost: Deferred.await(lost),
+    lose,
+    untilLost,
+    native: nativeCalls(() => lostBy),
+  };
 });
 
 /**
@@ -265,12 +272,11 @@ const listen = (
 ) => {
   const dialog = (shown: Dialog) => {
     const kind = shown.type();
+    const answer = kind === "alert" || kind === "beforeunload" ? "accepted" : "dismissed";
+    const message = shown.message().slice(0, 500);
 
-    publish(new DialogShown({ at: now(), page, kind, message: shown.message().slice(0, 500) }));
-
-    const answer = kind === "alert" || kind === "beforeunload" ? shown.accept() : shown.dismiss();
-
-    answer.catch(() => undefined);
+    publish(new DialogShown({ at: now(), page, kind, message, answer }));
+    (answer === "accepted" ? shown.accept() : shown.dismiss()).catch(() => undefined);
   };
 
   return Effect.acquireRelease(
@@ -297,10 +303,12 @@ const followOpened = Effect.fnUntraced(function* (
   register: (playwright: PlaywrightPage) => Effect.Effect<Page.Page, BrowserError>,
   publish: (event: BrowserEvent) => number,
   now: () => number,
+  registrations: WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>,
 ) {
   const opened = yield* Queue.unbounded<PlaywrightPage>();
 
   const onPage = (playwright: PlaywrightPage) => {
+    registrations.set(playwright, Deferred.makeUnsafe<void, BrowserError>());
     Queue.offerUnsafe(opened, playwright);
   };
 
@@ -315,7 +323,19 @@ const followOpened = Effect.fnUntraced(function* (
   context.on("page", onPage);
   yield* Effect.addFinalizer(() => Effect.sync(() => context.off("page", onPage)));
   yield* Queue.take(opened).pipe(
-    Effect.flatMap((playwright) => register(playwright).pipe(Effect.catch(untracked(playwright)))),
+    Effect.flatMap((playwright) =>
+      register(playwright).pipe(
+        Effect.asVoid,
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            const done = registrations.get(playwright);
+
+            if (done !== undefined) Deferred.doneUnsafe(done, exit);
+          }),
+        ),
+        Effect.catch(untracked(playwright)),
+      ),
+    ),
     Effect.forever,
     Effect.forkScoped,
   );
@@ -330,10 +350,15 @@ const releaseNative = (clock: Clock.Clock) => (run: () => Promise<unknown>) =>
     Effect.ignore,
   );
 
-/** A page's own events among the browser's retained ones, oldest first. */
+/** A page's own events among the browser's retained ones, and the openings of tabs it opened. */
 const eventsOf = (recent: Effect.Effect<ReadonlyArray<RecordedEvent>>, page: string) =>
   Effect.map(recent, (records) =>
-    records.flatMap(({ event }) => ("page" in event && event.page === page ? [event] : [])),
+    records.flatMap(({ event }) =>
+      ("page" in event && event.page === page) ||
+      (event._tag === "PageOpened" && event.opener === page)
+        ? [event]
+        : [],
+    ),
   );
 
 /** A script as its documents run it: everywhere, or as a block where its `match` allows. */
@@ -408,6 +433,29 @@ const sentNow = <A>(sent: Promise<A>) => {
   return sent;
 };
 
+const registrationOf = (
+  registrations: WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>,
+  popup: PlaywrightPage,
+) => {
+  const done = registrations.get(popup);
+
+  return done === undefined
+    ? failWith("newPage", new Failed({ detail: "the popup has no registration" }))
+    : Deferred.await(done);
+};
+
+const pageOpenings = (
+  playwright: PlaywrightPage,
+  cdp: CDPSession,
+  registrations: WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>,
+  closedBy: () => Closed["cause"],
+) => Openings.make(playwright, cdp, (popup) => registrationOf(registrations, popup), closedBy);
+
+const nativeCalls =
+  (lostBy: () => DisconnectCause | undefined) =>
+  <A>(operation: string, run: () => Promise<A>) =>
+    call(operation, run, () => lostBy() ?? "page");
+
 /**
  * Build the service over a context the provider owns. The provider closes the context; this only
  * tracks its pages and events, for as long as the surrounding scope is open. Each page's protocol
@@ -439,7 +487,7 @@ export const make = Effect.fn("Browser.make")(function* (
   if (info.expiresAt !== undefined)
     publish(new SessionEnding({ at: now(), expiresAt: info.expiresAt }));
 
-  const { lostBy, lost, lose, untilLost } = yield* watchLoss(
+  const { lostBy, lost, lose, untilLost, native } = yield* watchLoss(
     context,
     info.expiresAt,
     clock,
@@ -447,13 +495,11 @@ export const make = Effect.fn("Browser.make")(function* (
   );
 
   const registry = new Map<PlaywrightPage, Page.Page>();
+  const registrations = new WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>();
   const registering = yield* Semaphore.make(1);
   // The pages' scopes close after the browser is marked released, so what fails as they close
   // says why.
   const pagesScope = yield* Scope.fork(yield* Scope.Scope);
-
-  const native = <A>(operation: string, run: () => Promise<A>) =>
-    call(operation, run, () => lostBy() ?? "page");
 
   const release = releaseNative(clock);
   const budget = pageBudget(maxPages, () => registry.size, settings.actionTimeout, clock);
@@ -515,6 +561,7 @@ export const make = Effect.fn("Browser.make")(function* (
             mapping,
             publish,
             recentEvents: eventsOf(timeline.recent, id),
+            openings: yield* pageOpenings(playwright, cdp, registrations, closedBy),
             focused: call("focus", () => focusing, closedBy).pipe(Effect.asVoid),
             paging: (operation) => call(operation, () => paging, closedBy).pipe(Effect.asVoid),
             closedBy,
@@ -536,7 +583,14 @@ export const make = Effect.fn("Browser.make")(function* (
           };
 
           registry.set(playwright, page);
-          publish(new PageOpened({ at: now(), page: id, url: Url.redact(targetInfo.url) }));
+          publish(
+            new PageOpened({
+              at: now(),
+              page: id,
+              url: Url.redact(targetInfo.url),
+              opener: targetInfo.openerId,
+            }),
+          );
           yield* listen(playwright, id, publish, now, { close, crash });
           if (playwright.isClosed()) close();
 
@@ -552,7 +606,7 @@ export const make = Effect.fn("Browser.make")(function* (
   // runs, and they cost no call per document.
   for (const script of options.initScripts ?? [])
     yield* native("initScripts", () => context.addInitScript({ content: scoped(script) }));
-  yield* followOpened(context, register, publish, now);
+  yield* followOpened(context, register, publish, now, registrations);
   for (const existing of context.pages()) yield* register(existing);
 
   const pages = Effect.sync(() => [...registry.values()]);

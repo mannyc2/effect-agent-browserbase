@@ -1,7 +1,8 @@
 # Changelog
 
 Each release lists what changed since the release before it. From 0.3 on, `effect-browser`,
-`effect-browserbase` and `effect-browser-human-strokes` are released together at one version.
+`effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
+`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
 ## Unreleased
 
@@ -18,9 +19,33 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   the action timeout whoever gives up, and one that ends after all its callers gave up serves the
   next caller to ask the same within an action timeout, until the page's next action or document.
   An action stops the reads nobody awaits rather than wait for them.
-- `Observation.missing`: `observe` gives what it could read, with why each part it could not read
-  is missing, and fails only when it could read nothing asked for. `Agent.run` tells the model
-  what an observation is missing.
+- `effect-agent-browser` returns, rebuilt: `effect-browser` pages as Yielded Agent's browser ports,
+  and the tools an agent drives them by. `PageControl` implements `BrowserActions` and
+  `BrowserControl` over a page, pinned to it, or over a browser's tabs, which it follows as `follow`
+  says: `"select"`, the default, makes a tab an action opened current without bringing it to front,
+  so the page on air and an operator's view stay where they are; `"front"` also brings it to front;
+  `"never"` keeps the current tab. An observation is the page's outline with its controls as values;
+  one after an action begins with what followed it, a dialog and how the browser answered it, where
+  the page went, a tab it opened and up to three changes its input caused. Every action result says
+  whether its input reached the browser, and nothing is retried. `BrowserTools.make()` gives an
+  agent Yielded's tools over those ports, but `screenshot` and `respond_dialog`, and pointer tools
+  of its own for what has no ref: `click_at`, `hover`, `drag`, `type_text`, `press_keys`, `zoom`,
+  `wait_still` and `back`. Before each turn the model sees a screenshot of the current tab and the
+  crops it asked for, as context the run never keeps, so only the current picture is ever in a
+  request. The input policy's judge reads the run's `task`.
+- `Snapshot.controls`, the controls an outline shows as values: each one's ref, kind, name and
+  what it holds, a select's options, and whether it is disabled, checked or takes typed text.
+  `SnapshotOptions.within` reads only inside the elements a CSS selector matches.
+- `Page.waitFor({ selector, state, text })`, in one call the page answers as it comes: until what a
+  selector matches shows, hides or is enabled, with some text if asked, or `Timeout`.
+- `PressOptions.on`, a ref that `press` focuses before its first key, such as a link only the
+  keyboard reaches.
+- `ScreenshotOptions.format: "png"`, a new picture as a PNG.
+- `Change.describe`, a change in the words a moment tells it.
+- `Page.correlate(id)` gives the actions an effect performs a caller's id, which each `Action`
+  records as `correlation`.
+- `PageOpened.opener`, the page that opened a tab, whose own events and windows now hold the tab's
+  opening; and `DialogShown.answer`, how a dialog was answered.
 - `Browser.Options.maxPages`, with the new reason `Limit`: at that many open pages, those a site
   opened included, `newPage` waits within the action timeout for one to close, then fails `Limit`,
   or fails at once under `Page.failFast`.
@@ -99,8 +124,10 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   4.8 minutes at 70 ms. Typing key by key, as a presenter's view does, checks that the field still
   has focus before each space, which could press a button, and after its last key, rather than
   before every key.
-- `title` and `viewport` read in the page's turn, within the action timeout; `title` used to wait
-  for a busy page without bound.
+- `viewport` reads in the page's turn, within the action timeout. `title` is the browser's record
+  of the document's title, in one call that a page busy with a script cannot hold up, and empty for
+  an untitled page; it used to wait for a busy page without bound, and a connection that dropped
+  meanwhile made it empty rather than fail.
 - The wait after input has no fixed sleep. After a click, a key, a submit or a scroll, the page gets
   a task and a frame, in one call, which also spans any navigation the input asked for, as a link,
   a form or a handler's timer does; a document that committed meanwhile is waited for until it is
@@ -139,7 +166,13 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 - Reads wait for the action in flight on their page: a snapshot, `find`, `text`, `changes`, a
   picture or a zoom no longer runs while an action is changing the page, and an action waits for
   the reads before it.
-- `Observation` carries `missing`, and `observe` succeeds with what it could read.
+- `Agent` and `Tools` leave `effect-browser`, and with them `effect/ai`'s `Chat` as the agent loop:
+  an agent runs on Yielded Agent, with `effect-agent-browser`'s tools. `effect-browser` itself has
+  no agent code and no Yielded dependency.
+- `Page.observe`, `Page.Observation` and `Page.ObservationMode` are gone: what an agent sees of a
+  page is `effect-agent-browser`'s.
+- `DialogShown` has `answer`, which a program that builds one must give, and `Snapshot` has
+  `controls`.
 - Under a guard, plain typing sends no key events: the text arrives in one insertion once its field
   is approved, so a page listening for key events sees none.
 - Each page has its own pointer, where its own last move left it; a glide on a page starts there,

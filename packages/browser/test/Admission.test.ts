@@ -590,10 +590,9 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
   const createSession = context.newCDPSession.bind(context);
   const gate = Promise.withResolvers<void>();
   let stalled: unknown;
-  let blind: unknown;
 
   // Input replies for one page can be withheld after Chromium runs the input, as a stalled
-  // renderer or transport would, and another page can fail its pictures.
+  // renderer or transport would.
   context.newCDPSession = async (target) => {
     const cdp = await createSession(target);
     const send = cdp.send.bind(cdp);
@@ -601,9 +600,7 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
     const observed: CDPSession["send"] = (method, params) =>
       target === stalled && method.startsWith("Input.")
         ? send(method, params).then((value) => gate.promise.then(() => value))
-        : target === blind && method === "Page.captureScreenshot"
-          ? Promise.reject(new Error("this page takes no pictures"))
-          : send(method, params);
+        : send(method, params);
 
     cdp.send = observed;
 
@@ -617,9 +614,6 @@ const browserWith = Effect.fnUntraced(function* (options: Options) {
     browser,
     stall: (page: Page) => {
       stalled = page.playwright;
-    },
-    blind: (page: Page) => {
-      blind = page.playwright;
     },
   };
 });
@@ -803,31 +797,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("observes what it can, and says why the rest is missing", () =>
+    // A renderer busy with its own script answers nothing; the browser answers for its title.
+    it.effect("reads a title that a busy page cannot hold up", () =>
       Effect.gen(function* () {
-        const { browser, blind } = yield* browserWith({});
-        const page = yield* browser.newPage(blank);
-
-        blind(page);
-        const observed = yield* page.observe();
-
-        assert.include(observed.snapshot?.text ?? "", "Text");
-        assert.isUndefined(observed.image);
-        assert.deepStrictEqual(
-          observed.missing.map((error) => error.operation),
-          ["screenshot"],
-        );
-        // Nothing asked for could be read, so the observation fails.
-        const error = yield* Effect.flip(page.observe({ mode: "screenshot" }));
-
-        assert.strictEqual(error.operation, "screenshot");
-      }),
-    );
-
-    // A renderer busy with its own script answers nothing; `title` waited for it, without bound.
-    it.effect("bounds a title read by the action timeout", () =>
-      Effect.gen(function* () {
-        const { browser } = yield* browserWith({ actionTimeout: "500 millis" });
+        const { browser } = yield* browserWith({ actionTimeout: "5 seconds" });
         const page = yield* browser.newPage(blank);
 
         yield* Effect.promise(() =>
@@ -839,10 +812,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             }, 0);
           }),
         );
-        const { exit, millis } = yield* elapsed(Effect.flip(page.title));
+        const { exit, millis } = yield* elapsed(page.title);
 
-        assert.isTrue(Exit.isSuccess(exit) && exit.value.reason._tag === "Timeout");
-        assert.isBelow(millis, 2000);
+        assert.isTrue(Exit.isSuccess(exit) && exit.value === "Blank");
+        assert.isBelow(millis, 1000);
       }),
     );
   },

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The packed-archive check: install the three packed packages in a clean consumer, as one from npm
+# The packed-archive check: install the four packed packages in a clean consumer, as one from npm
 # would be, and check what that consumer gets. TypeScript, with `skipLibCheck: false`, checks the
 # declarations of every entry point, and Node imports each one. `bun run ready` cannot see either:
 # in the workspace every package resolves from its source.
@@ -25,7 +25,7 @@ if [ $# -gt 0 ]; then
   archives="$(cd "$1" && pwd)"
 else
   archives="$work/archives"
-  for dir in browser browserbase human-strokes; do
+  for dir in browser browserbase human-strokes agent-browser; do
     (cd "$root/packages/$dir" && bun run build > /dev/null && bun pm pack --destination "$archives" --quiet > /dev/null)
   done
 fi
@@ -33,11 +33,14 @@ fi
 consumer="$work/consumer"
 mkdir "$consumer"
 echo '{ "private": true, "type": "module" }' > "$consumer/package.json"
-names=(effect-browser effect-browserbase effect-browser-human-strokes)
+names=(effect-browser effect-browserbase effect-browser-human-strokes effect-agent-browser)
 archived=()
 for name in "${names[@]}"; do archived+=("$archives/$name-$version.tgz"); done
+# Until the pinned @yielded/agent is on npm, the repository overrides it with a pack, which the
+# consumer installs too.
+yielded="$(node -p "require('$root/package.json').overrides?.['@yielded/agent'] ?? ''")"
 npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund \
-  "${archived[@]}" "typescript@$(pin typescript)" "@types/node@$(pin @types/node)"
+  "${archived[@]}" ${yielded:+"$yielded"} "typescript@$(pin typescript)" "@types/node@$(pin @types/node)"
 
 # Every entry point the packages export, as a consumer would import it.
 mapfile -t entries < <(cd "$consumer" && node -e '
@@ -63,7 +66,19 @@ cat > "$consumer/tsconfig.json" << 'EOF'
 }
 EOF
 
-"$consumer/node_modules/.bin/tsc" -p "$consumer/tsconfig.json"
+# Yielded Agent's own declarations do not pass `skipLibCheck: false`: its memory modules, as
+# published in 0.1.0-beta.167 too, name types they never declare. Only an error in another file
+# fails the check. TypeScript 7 colours its errors even into a pipe, which would hide every
+# `error TS` line from the filter, so they come plain. With noEmit, its diagnostic exit is 1;
+# fatal exits and output other than these diagnostics and their indented continuations fail.
+checked="$("$consumer/node_modules/.bin/tsc" -p "$consumer/tsconfig.json" --pretty false 2>&1)" && compiler_status=0 || compiler_status=$?
+if [ "$compiler_status" -ne 0 ]; then
+  errors="$(printf '%s\n' "$checked" | grep 'error TS' || true)"
+  if [ "$compiler_status" -ne 1 ]; then printf '%s\n' "$checked" >&2; exit "$compiler_status"; fi
+  ours="$(printf '%s\n' "$checked" | grep -vE '^[^(]*node_modules/@yielded/agent/[^()]+\([0-9]+,[0-9]+\): error TS[0-9]+:|^[[:space:]]|^$' || true)"
+  if [ -z "$errors" ] || [ -n "$ours" ]; then printf '%s\n' "$checked" >&2; exit 1; fi
+  echo "Yielded Agent's own declarations have $(printf '%s\n' "$errors" | grep -c 'error TS') errors; none is in these packages."
+fi
 (cd "$consumer" && node --input-type=module -e "$(printf 'await import("%s");\n' "${entries[@]}")")
 echo "The ${#entries[@]} entry points of ${names[*]} $version typecheck and load in a clean consumer."
 rm -rf "$work"

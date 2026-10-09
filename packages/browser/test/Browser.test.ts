@@ -74,6 +74,120 @@ const holdRenderer = (page: Page, millis: number) =>
     }, millis),
   ).pipe(Effect.andThen(Effect.sleep("150 millis")));
 
+/** Hold the owner's actual popup registration, after Playwright has announced that exact tab. */
+const holdPopupRegistration = Effect.fnUntraced(function* (browser: Browser.Service, opener: Page) {
+  const createSession = browser.context.newCDPSession.bind(browser.context);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+
+  browser.context.newCDPSession = async (target) => {
+    if (target !== opener.playwright) {
+      entered.resolve();
+      await release.promise;
+    }
+
+    return createSession(target);
+  };
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      release.resolve();
+      browser.context.newCDPSession = createSession;
+    }),
+  );
+
+  return {
+    entered: Effect.promise(() => entered.promise),
+    release: Effect.sync(() => release.resolve()),
+    fail: Effect.sync(() => release.reject(new Error("popup registration refused"))),
+  };
+});
+
+describe("a tab opened by input", () => {
+  it.live("is tracked before the input ends, even with slow registration and evicted events", () =>
+    Effect.gen(function* () {
+      const browser = yield* Chromium.open({ eventHistory: 1 });
+      const page = yield* browser.firstPage;
+
+      yield* page.goto((yield* Site).url("/form"));
+      const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
+      const registration = yield* holdPopupRegistration(browser, page);
+      const clicking = yield* Effect.forkChild(page.click(link?.ref ?? ""));
+
+      yield* registration.entered;
+
+      // The previous implementation returned here before registration. A real popup taking over
+      // a second must still use the input's remaining deadline, regardless of event retention.
+      const ended = yield* Fiber.await(clicking).pipe(
+        Effect.asSome,
+        Effect.timeoutOrElse({
+          duration: "1250 millis",
+          orElse: () => Effect.succeedNone,
+        }),
+      );
+
+      assert.isTrue(Option.isNone(ended));
+      assert.strictEqual((yield* browser.pages).length, 1);
+      yield* registration.release;
+      yield* Fiber.join(clicking);
+      assert.strictEqual((yield* browser.pages).length, 2);
+      assert.strictEqual(
+        yield* (yield* browser.pages)[1]?.url ?? Effect.succeed(""),
+        (yield* Site).url("/next"),
+      );
+      assert.strictEqual((yield* browser.recentEvents).length, 1);
+    }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+  );
+
+  for (const outcome of ["failure", "timeout", "closed"] as const)
+    it.live(`reports registration ${outcome} after dispatched input, without replaying it`, () =>
+      Effect.gen(function* () {
+        const owner = yield* Scope.make();
+
+        yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
+
+        const browser = yield* Chromium.open({ actionTimeout: "2 seconds" }).pipe(
+          Scope.provide(owner),
+        );
+
+        const page = yield* browser.firstPage;
+
+        yield* page.goto((yield* Site).url("/form"));
+        const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
+        const registration = yield* holdPopupRegistration(browser, page);
+        const clicking = yield* Effect.forkChild(Effect.flip(page.click(link?.ref ?? "")));
+
+        yield* registration.entered;
+        if (outcome === "failure") yield* registration.fail;
+        if (outcome === "closed") yield* page.close;
+
+        const error = yield* Fiber.join(clicking).pipe(
+          Effect.timeout(outcome === "closed" ? "1 second" : "3 seconds"),
+        );
+
+        assert.strictEqual(
+          error.reason._tag,
+          { failure: "Failed", timeout: "Timeout", closed: "Closed" }[outcome],
+        );
+        assert.strictEqual(
+          error.reason._tag === "Closed" ? error.reason.cause : undefined,
+          outcome === "closed" ? "page" : undefined,
+        );
+        assert.isTrue(error.dispatched);
+        assert.strictEqual(browser.context.pages().length, outcome === "closed" ? 1 : 2);
+
+        const native = page.playwright as typeof page.playwright & {
+          readonly listenerCount: (event: string) => number;
+        };
+
+        yield* registration.release;
+        // Native input can fail Closed before the queued page cleanup. Scope closure is the
+        // ownership guarantee for listeners, regardless of which operation observed the loss.
+        yield* Scope.close(owner, Exit.void);
+        assert.strictEqual(native.listenerCount("popup"), 0);
+      }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+    );
+});
+
 describe("a page's name", () => {
   // Positional ids would shift here: the page after the one closed would take its number.
   it.live("is its target id, the same on every connection, closing one in between", () =>
@@ -135,10 +249,14 @@ describe("a loss", () => {
       yield* holdRenderer(page, 2000);
       const reading = yield* Effect.forkChild(Effect.flip(page.text()));
       const navigating = yield* Effect.forkChild(Effect.flip(other.goto(site.url("/late"))));
+      const titling = yield* Effect.forkChild(page.title);
 
       yield* Effect.sleep("100 millis");
       proxy.drop();
       assert.strictEqual(yield* browser.disconnected, "connection");
+      // The browser answers a title whatever the page's script is doing, so the busy page held up
+      // nothing, and the drop never stood in for its title with an empty one.
+      assert.strictEqual(yield* Fiber.join(titling), "one");
 
       for (const [error, dispatched] of [
         [yield* Fiber.join(reading), false],
@@ -297,16 +415,9 @@ describe("init scripts", () => {
 
       yield* named.click(link?.ref ?? "");
 
-      const popup = yield* browser.pages.pipe(
-        Effect.map((open) => open.at(-1)),
-        Effect.repeat({
-          schedule: Schedule.spaced("20 millis"),
-          until: (newest) => newest !== undefined && newest !== named,
-        }),
-        Effect.timeout("5 seconds"),
-        Effect.map((newest) => newest as Page),
-      );
+      const popup = (yield* browser.pages).at(-1) as Page;
 
+      assert.notStrictEqual(popup, named);
       yield* Effect.promise(() => popup.playwright.waitForLoadState("domcontentloaded"));
       assert.match(popup.playwright.url(), /^http:\/\/localhost:\d+\/next$/);
       assert.deepStrictEqual(yield* marks(popup), ["localhost", true]);
