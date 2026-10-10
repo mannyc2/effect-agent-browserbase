@@ -2,7 +2,7 @@
 
 A stand-in for `@yielded/agent@0.1.0-beta.168` until upstream publishes it to npm. Keep this
 branch while a published `effect-agent-browser` release's README sends consumers here, as
-`0.3.0-beta.4`'s does: deleting it would leave the pinned commit unreachable. The address below is
+`0.3.0-beta.5`'s does: deleting it would leave the pinned commit unreachable. The address below is
 pinned to commit `1c40d56a631ea0a041577d9736a7484e3d0f4b62`, so a later commit here changes
 nothing it serves.
 
