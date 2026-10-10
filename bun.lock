@@ -8,7 +8,7 @@
         "@effect/tsgo": "0.51.0",
         "@stylistic/eslint-plugin": "5.10.0",
         "@types/node": "26.1.2",
-        "effect": "4.0.0",
+        "effect": "4.0.2",
         "oxfmt": "0.72.0",
         "oxlint": "1.82.0",
         "oxlint-tsgolint": "7.0.2001",
@@ -22,13 +22,13 @@
     "bench": {
       "name": "bench",
       "devDependencies": {
-        "@effect/ai-openrouter": "4.0.0",
-        "@effect/ai-typesafe": "4.0.0",
-        "@effect/platform-node": "4.0.0",
-        "@effect/vitest": "4.0.0",
+        "@effect/ai-openrouter": "4.0.2",
+        "@effect/ai-typesafe": "4.0.2",
+        "@effect/platform-node": "4.0.2",
+        "@effect/vitest": "4.0.2",
         "@types/node": "26.1.2",
         "@yielded/agent": "0.1.0-beta.168",
-        "effect": "4.0.0",
+        "effect": "4.0.2",
         "effect-agent-browser": "workspace:*",
         "effect-browser": "workspace:*",
         "effect-browserbase": "workspace:*",
@@ -43,13 +43,13 @@
     "demos": {
       "name": "demos",
       "dependencies": {
-        "effect": "4.0.0",
+        "effect": "4.0.2",
         "effect-browser": "workspace:*",
         "react": "19.3.0",
         "react-dom": "19.3.0",
       },
       "devDependencies": {
-        "@effect/vitest": "4.0.0",
+        "@effect/vitest": "4.0.2",
         "@types/node": "26.1.2",
         "@types/react": "19.3.0",
         "@types/react-dom": "19.3.0",
@@ -65,10 +65,10 @@
       "name": "effect-agent-browser",
       "version": "0.3.0-beta.5",
       "devDependencies": {
-        "@effect/vitest": "4.0.0",
+        "@effect/vitest": "4.0.2",
         "@types/node": "26.1.2",
         "@yielded/agent": "0.1.0-beta.168",
-        "effect": "4.0.0",
+        "effect": "4.0.2",
         "effect-browser": "workspace:*",
         "playwright-core": "1.63.0",
         "typescript": "7.0.2",
@@ -86,9 +86,9 @@
       "name": "effect-browser",
       "version": "0.3.0-beta.5",
       "devDependencies": {
-        "@effect/vitest": "4.0.0",
+        "@effect/vitest": "4.0.2",
         "@types/node": "26.1.2",
-        "effect": "4.0.0",
+        "effect": "4.0.2",
         "playwright-core": "1.63.0",
         "typescript": "7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
@@ -104,9 +104,9 @@
       "name": "effect-browserbase",
       "version": "0.3.0-beta.5",
       "devDependencies": {
-        "@effect/vitest": "4.0.0",
+        "@effect/vitest": "4.0.2",
         "@types/node": "26.1.2",
-        "effect": "4.0.0",
+        "effect": "4.0.2",
         "effect-browser": "workspace:*",
         "playwright-core": "1.63.0",
         "typescript": "7.0.2",
@@ -124,9 +124,9 @@
       "name": "effect-browser-human-strokes",
       "version": "0.3.0-beta.5",
       "devDependencies": {
-        "@effect/vitest": "4.0.0",
+        "@effect/vitest": "4.0.2",
         "@types/node": "26.1.2",
-        "effect": "4.0.0",
+        "effect": "4.0.2",
         "effect-browser": "workspace:*",
         "playwright-core": "1.63.0",
         "typescript": "7.0.2",
@@ -159,11 +159,11 @@
 
     "@cacheable/utils": ["@cacheable/utils@2.5.0", "", { "dependencies": { "hashery": "^1.5.1", "keyv": "^5.6.0" } }, "sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA=="],
 
-    "@effect/ai-openrouter": ["@effect/ai-openrouter@4.0.0", "", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-FlQHomqreGlC/Fj1vfTyk3kZ5MD+Be5rjEumFshtnGsmi+bE1uRDbHjdbAbVitpDQJGQKRxqwhPMOfgF6J3Gfw=="],
+    "@effect/ai-openrouter": ["@effect/ai-openrouter@4.0.2", "", { "peerDependencies": { "effect": "^4.0.2" } }, "sha512-OUUIehB6TC81GS3Kge9Fy2ML1gY+VH04MBNSh33F3dSkt9tnfw/JSo4cGfk1jUhuR7GRDBIgoztlYhj2ViwSuA=="],
 
-    "@effect/ai-typesafe": ["@effect/ai-typesafe@4.0.0", "", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-TbInR017yf4KFAYD1jTSr9pkQrob1+9UNyW6KKRHHGfmD8j121f41fOf+60RJ7IIBl/XOUAURC8/Mj7aWkGZtg=="],
+    "@effect/ai-typesafe": ["@effect/ai-typesafe@4.0.2", "", { "peerDependencies": { "effect": "^4.0.2" } }, "sha512-ZOtVLS5pJSQYVG8srgHrshRcA9yRKv12ALGx/On/2KwCswmUdWjuUaXJqEeWdkBf+3NwXhsdq84Q0M5U8AL7yA=="],
 
-    "@effect/platform-node": ["@effect/platform-node@4.0.0", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0", "undici": "^8.11.2" }, "peerDependencies": { "effect": "^4.0.0", "redis": ">=5.0.0 <7.0.0" } }, "sha512-/L+4MUbl8FejPKLHLROYSOebvHnfixkP8KiblSD/DE5uH5xENZBHaux4nH6XMnRP+lr8ajpEJFS8sUrmmxFJeQ=="],
+    "@effect/platform-node": ["@effect/platform-node@4.0.2", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.2", "undici": "^8.11.2" }, "peerDependencies": { "effect": "^4.0.2", "redis": ">=5.0.0 <7.0.0" } }, "sha512-RWesXBQStnFHdD465gR5thFKgXO7FSyCKRZ56nWXB7PedNVzr8vV0nb/3MULLdri493sMz/b/pmGBTb6K8cBjQ=="],
 
     "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.22.0" }, "peerDependencies": { "effect": "^4.0.0" } }, "sha512-VBXHJU9UXVZPdQGGDRjGXpo+TpOzRwZuMrdKAtIxi1qwcRftmacZ1zTgIrzBa0Z2RA2KVkoOecQUsTlt/nJZhw=="],
 
@@ -183,7 +183,7 @@
 
     "@effect/tsgo-win32-x64": ["@effect/tsgo-win32-x64@0.51.0", "", { "os": "win32", "cpu": "x64" }, "sha512-sO2Ngbdxn6DrDdSCItXu/J5ha7PgFGyY7U1qJ4VzMyovazguiVJfkExskZ174Qa+ltPWZIGHFY/QdVZwHepOTw=="],
 
-    "@effect/vitest": ["@effect/vitest@4.0.0", "", { "peerDependencies": { "effect": "^4.0.0", "vitest": ">=5.0.0 <6.0.0" } }, "sha512-kGElCPFGtP+CgMCwV/HjJWqtE3zYo6I1+8MSA54l+EI24lPU9p2Efa+TBp1jfkg9j711KKzEqgSAy3VzTsb76Q=="],
+    "@effect/vitest": ["@effect/vitest@4.0.2", "", { "peerDependencies": { "effect": "^4.0.2", "vitest": ">=5.0.0 <6.0.0" } }, "sha512-Zb72nu7iUy3rNdBp9J1Xu5oUQGwJ8cOYsUwmYgujj88aqyvASRDjOS01SjlcPViqf77csduetKdCJTVndMNfzw=="],
 
     "@eslint-community/eslint-utils": ["@eslint-community/eslint-utils@4.10.1", "", { "dependencies": { "eslint-visitor-keys": "^3.4.3" }, "peerDependencies": { "eslint": "^6.0.0 || ^7.0.0 || >=8.0.0" } }, "sha512-cuadcxVFE8sDK6iWJbs8Sn0av2Nrh2QSGQhVlBW9AaAHqHwjWsZHT8LJ4hFGPh7ASBV2deFdM7H/DPjulmh8rg=="],
 
@@ -523,7 +523,7 @@
 
     "dom-accessibility-api": ["dom-accessibility-api@0.5.16", "", {}, "sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg=="],
 
-    "effect": ["effect@4.0.0", "", {}, "sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ=="],
+    "effect": ["effect@4.0.2", "", {}, "sha512-YeYnLqSFrL4+tCOXRrfNP03w8FILoF/wDl+ukraJAGzXrjcS383W7LAAvGBbLatEyktmLxRq+9xJinx7QzXW5A=="],
 
     "effect-agent-browser": ["effect-agent-browser@workspace:packages/agent-browser"],
 
