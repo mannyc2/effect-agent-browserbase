@@ -230,9 +230,9 @@ describe("a page's name", () => {
 });
 
 describe("a loss", () => {
-  // The connection drops while a read waits on a busy page and a navigation on a server that
-  // answers late. Playwright never answers the read, on the library's own session, and fails the
-  // navigation as each page closes, before the context does.
+  // The connection drops while a read waits on a busy page and a navigation awaits a response.
+  // Playwright never answers the read, on the library's own session, and fails the navigation
+  // as each page closes, before the context does.
   it.live("of the connection fails each page Closed by the connection, as one Disconnected", () =>
     Effect.gen(function* () {
       const site = yield* Site;
@@ -246,17 +246,26 @@ describe("a loss", () => {
         .screencast()
         .pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
 
+      const requested = Promise.withResolvers<void>();
+
+      // Leave this real request pending until the connection drops; no elapsed delay proves that
+      // navigation has started, or that another native request has already been acknowledged.
+      yield* Effect.promise(() =>
+        browser.context.route(site.url("/late"), () => requested.resolve()),
+      );
       yield* holdRenderer(page, 2000);
       const reading = yield* Effect.forkChild(Effect.flip(page.text()));
-      const navigating = yield* Effect.forkChild(Effect.flip(other.goto(site.url("/late"))));
-      const titling = yield* Effect.forkChild(page.title);
 
-      yield* Effect.sleep("100 millis");
+      proxy.hold = (command) => (command.method === "Page.getNavigationHistory" ? 250 : 0);
+      // The browser answers a title while the renderer is busy, but transport can exceed 100 ms.
+      // Wait for its actual answer before cutting the connection.
+      assert.strictEqual(yield* page.title.pipe(Effect.timeout("1 second")), "one");
+      assert.isUndefined(reading.pollUnsafe());
+      const navigating = yield* Effect.forkChild(Effect.flip(other.goto(site.url("/late"))));
+
+      yield* Effect.promise(() => requested.promise).pipe(Effect.timeout("1 second"));
       proxy.drop();
       assert.strictEqual(yield* browser.disconnected, "connection");
-      // The browser answers a title whatever the page's script is doing, so the busy page held up
-      // nothing, and the drop never stood in for its title with an empty one.
-      assert.strictEqual(yield* Fiber.join(titling), "one");
 
       for (const [error, dispatched] of [
         [yield* Fiber.join(reading), false],
