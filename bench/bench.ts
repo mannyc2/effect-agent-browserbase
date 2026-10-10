@@ -6,7 +6,10 @@ import { Cause, Console, Effect } from "effect";
 import { CliError, Command } from "effect/cli";
 
 import * as Contract from "./contract.ts";
+import * as Cue from "./cue.ts";
+import * as Handover from "./handover.ts";
 import * as Judges from "./judges.ts";
+import * as Operator from "./operator.ts";
 import * as Report from "./Report.ts";
 import * as Run from "./run.ts";
 
@@ -14,7 +17,15 @@ Command.make("bench").pipe(
   Command.withDescription(
     "Graded browser tasks for effect-browser: scripted solutions for free, models behind opt-ins.",
   ),
-  Command.withSubcommands([Run.command, Report.command, Judges.command, Contract.command]),
+  Command.withSubcommands([
+    Run.command,
+    Report.command,
+    Judges.command,
+    Contract.command,
+    Handover.command,
+    Cue.command,
+    Operator.command,
+  ]),
   Command.run({ version: "0.3" }),
   // The command line explains its own usage errors. Anything else prints only what the bench
   // itself wrote, since a provider's error can embed URLs or account ids.
