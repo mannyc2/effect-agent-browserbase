@@ -38,6 +38,8 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   page: Schema.String,
   /** The page's browser session: its provider's session id, as `Browser.Service.id` gives it. */
   session: Schema.String,
+  /** Owning Browser connection; document counters restart on adoption or reattachment. */
+  connection: Schema.String.check(Schema.isNonEmpty()),
   data: Schema.Uint8Array,
   timing: Schema.Union([BrowserPaint, Screenshot]),
   receivedAt: Schema.Finite,

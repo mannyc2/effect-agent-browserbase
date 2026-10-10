@@ -246,7 +246,12 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     page.paging(operation).pipe(Effect.map(() => documents));
 
   /** What a frame that arrives now shows: its session, the page's current document and address. */
-  const frameTag = () => ({ session: page.session, document: documents, url });
+  const frameTag = () => ({
+    session: page.session,
+    connection: page.connection,
+    document: documents,
+    url,
+  });
 
   /** The document the main frame's latest commit of `loader` began, if this session counted it. */
   const documentOf = (loader: string) => loaders.get(loader);

@@ -6,6 +6,10 @@ what a page showed, and what changed on it, over a window of time, ready for a m
 [Yielded Agent](https://github.com/yielded-dev/agent), whose browser ports `effect-agent-browser`
 implements over these pages.
 
+Sessions, scoped input authority, resumable action receipts and cued presentation compose into
+watched browsing and operator-assisted workflows. The library owns browser lifetimes and failure
+evidence; applications own their decisions and durable business records.
+
 | Package                                                  | What it is                                                         |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
 | [`effect-browser`](packages/browser)                     | The browser, its pages and moments, over Playwright                |
@@ -21,8 +25,11 @@ implements over these pages.
 The browser core also owns [leased generations](packages/browser/README.md#supervising-browser-generations):
 scoped work and application resources, bounded handover and explicit revocation, with hosted
 construction through `Browserbase.supervise({ build })`. The consumer keeps its editorial policy,
-account decisions and durable business journal. [STATUS.md](docs/STATUS.md) distinguishes released
-capabilities from the next release and its remaining hosted checks.
+account decisions and durable business journal. [Compiled composition examples](docs/COMPOSITION.md)
+show watched preparation and event-driven presentation, plus a separate operator-assisted workflow
+runner that refuses unresolved consequential input. Connection identity and one host clock keep
+frame and generation evidence interpretable across reattachment. [STATUS.md](docs/STATUS.md)
+distinguishes released capabilities from remaining hosted checks.
 
 ## An agent in a local Chromium
 
@@ -78,8 +85,9 @@ program.pipe(Effect.provide([Chromium.layer(), OpenRouter]), Effect.runPromise);
 
 ## The same agent on Browserbase
 
-Swap the `Browser` layer. The session is created when the layer is built and released when it is
-released, so billing stops then rather than at the session's timeout:
+Swap the `Browser` layer. The session is created when the layer is built; closing its scope asks
+the provider to release it. A confirmed `Settled` outcome establishes that the session ended;
+`Unconfirmed` preserves uncertainty and can mean billing continues until the provider timeout:
 
 ```ts
 import { Browserbase, BrowserbaseClient, ContextLease } from "effect-browserbase";

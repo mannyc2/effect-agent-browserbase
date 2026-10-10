@@ -39,6 +39,7 @@ import {
 } from "./BrowserEvent.ts";
 import * as Gate from "./internal/input/gate.ts";
 import { call, failWith, type Settings, undispatched } from "./internal/page/context.ts";
+import * as Identity from "./internal/page/identity.ts";
 import { FailFast } from "./internal/page/lane.ts";
 import * as Openings from "./internal/page/openings.ts";
 import * as PageImpl from "./internal/page/page.ts";
@@ -142,6 +143,8 @@ export interface CaptureSource {
 export interface Service {
   /** The provider's session id, or a local id. */
   readonly id: string;
+  /** Fresh for this connection, even when reattaching the same provider session and page. */
+  readonly connection: string;
   readonly provider: string;
   /** When the provider ends the session on its own, as a hosted session's timeout does. */
   readonly expiresAt: DateTime.Utc | undefined;
@@ -488,6 +491,7 @@ export const make = Effect.fn("Browser.make")(function* (
   options: Options = {},
 ) {
   const clock = yield* Clock.Clock;
+  const connection = yield* Identity.make;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   const { settings, eventHistory, maxPages } = yield* settingsOf(options);
   // Measured on first need: the first capture of any page measures it, and input never waits.
@@ -560,6 +564,7 @@ export const make = Effect.fn("Browser.make")(function* (
           const page = yield* PageImpl.make({
             id,
             session: info.id,
+            connection,
             url: targetInfo.url,
             playwright,
             cdp,
@@ -641,6 +646,7 @@ export const make = Effect.fn("Browser.make")(function* (
 
   const service: Service = {
     id: info.id,
+    connection,
     provider: info.provider,
     expiresAt: info.expiresAt,
     now: Effect.sync(now),
