@@ -122,6 +122,12 @@ longer than `quietMillis` between phases reads as still. On the slot machine fix
 connection stalled for 450 to 900 ms toward either end while the reels spun, none of 132 waits
 ended early, where all 36 did before.
 
+`Page.ready({ still: "content", quietMillis })` instead observes a full interval without visible
+recorded DOM changes. It starts the recorder itself and starts the interval again in each new
+document; navigation retries share the original timeout. Canvas animation can continue while DOM
+content is ready. This does not prove pixel or screencast stillness and inherits the change
+recorder's limits for canvas, SVG, frames, shadow content and values changed only by scripts.
+
 `Page.changes({ since, until })` says what visibly changed on a page over a window, in one call to
 the page, element by element, as a `Change`: text that changed, appeared, disappeared or came and
 went (`brief`), a field's value, or the title. Each says what it showed at the window's start and
@@ -225,8 +231,37 @@ A step recorded at a point presses the same place within the element found, brou
 first, and only when a press there reaches that element, not something over it. Replay stops at
 the first step it cannot take, with a `ReplayError` naming the step and why: `Missing`,
 `Ambiguous`, `Drifted` (nothing with the subject's role and name repeats its context, or the walk
-ended on another site), or the step's `BrowserError`. Nothing is replayed automatically, and a plan
-of another version does not decode.
+did not arrive at the recorded site), the step's `BrowserError`, or `Uncertain`. Arrival waits
+are bounded by `arrival` (five seconds by default), including redirects after an action. A zero
+wait makes one read without polling; that read retains the page operation's own timeout.
+Each `Action` now records its ending address, so a bounded event history can still record the site
+of later actions after its earlier navigation has expired.
+
+`Plan.take(page, plan, index)` takes one step and returns a `Receipt`: the step index, host-clock
+`startedAt` and `at`, and `taken`, `verified` or `skipped`. `Plan.replay` returns those receipts;
+a `ReplayError` includes completed receipts and a serializable `stopped` value with the next step
+and whether its input is `unsent` or `unknown`. Resume with `{ from: error.stopped }`. A numeric
+index means fresh input, so never convert an unresolved stopping point into a number to retry it.
+An interrupted call remains interrupted. Persist that a step has begun **before** calling it;
+a missing receipt, including after a process restart, is `Stopped({ step, input: "unknown" })`.
+The consumer owns that durable journal and the decision to reconcile a consequential operation.
+
+An optional `Step.expect` checks `Checked`, `Appeared`, `Gone` or `Navigated` before input and
+waits for it afterward. `verified` means the specified observation held; it is not a transaction
+receipt from the target service. Keep the receipt with its plan to interpret that evidence.
+`Checked` can converge a checkbox click to a desired boolean.
+Unknown non-repeatable input is never automatically sent again: only a positive check explicitly
+marked `durable: true` permits continuation. This is the author's assertion of a lasting,
+uniquely scoped read-back, such as a saved order receipt. A toast or an intermediate URL cannot
+justify it. A negative or failed durable check still leaves the operation uncertain.
+Navigation, hover, scroll, selection and replacement typing without submission can be repeated;
+back, reload, insertion, presses, drags and ordinary clicks cannot. `Plan.repeatable(step)` says
+which applies. `Plan.restore(page, plan, { upTo, inputs })` reconstructs earlier steps on a fresh
+page using those same rules and refuses unresolved commitments. `upTo` is exclusive.
+
+`Plan.Plan.new(steps)` selects the stored version: recordings without expected checks remain
+version 1; checks require version 2. Both decode, with version and contents validated together.
+Old 0.2 plans and unknown versions do not decode.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action, the
 resolved element, the page's URL and title, and the `facts` the page's structure establishes:

@@ -159,6 +159,8 @@ export class Action extends Schema.TaggedClass<Action>()("Action", {
   startedAt: Schema.Finite,
   page: Schema.String,
   name: Schema.String,
+  /** The address when the action ended; absent in events recorded by older releases. */
+  url: Schema.optional(Schema.String),
   correlation: Schema.optional(Schema.String),
   target: Schema.optional(Schema.String),
   options: Schema.optional(ActionOptions),

@@ -4,6 +4,19 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## Unreleased
+
+- Plans expose `take`, receipts, stopping points and restoration. Expected checks skip input
+  already satisfied; unknown consequential input requires positive durable read-back and is
+  never automatically resent. The consumer owns its begun-step journal and reconciliation.
+- Recorded-site arrival has a bounded wait, and completed actions carry their address even when
+  a bounded event history has forgotten the earlier navigation. Plans with expected checks use
+  version 2; ordinary recordings retain version 1.
+- `Page.ready({ still: "content", quietMillis })` observes recorded DOM quiet while canvas paint
+  can continue. Repeated document commits restart the observation within the original deadline.
+- The source ceiling now counts code with lint's rule, excluding comments and blank lines, with
+  the accepted ceiling of 11,000 and the existing deletion rule for changes crossing it.
+
 ## 0.3.0-beta.6
 
 - Replay resolves a recorded press's subject before sending its keys, so another field's focus

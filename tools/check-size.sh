@@ -27,4 +27,4 @@ if [ "$lines" -gt "$ceiling" ]; then
   echo "effect-browser's source is $lines code lines, over its ceiling of $ceiling: delete as much as the change adds." >&2
   exit 1
 fi
-echo "effect-browser's source is $lines code lines, of an $ceiling-code-line ceiling."
+echo "effect-browser's source is $lines code lines, of a $ceiling-code-line ceiling."
