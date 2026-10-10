@@ -404,6 +404,55 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
     return yield* Effect.acquireRelease(browser.newPage(), (page) => Effect.ignore(page.close));
   });
 
+  // Regression at 0366e08: replay dropped a press's subject and sent keys to current focus.
+  it.effect("replays a targeted press on its recorded field despite different focus", () =>
+    Effect.gen(function* () {
+      const recording = yield* fresh;
+
+      const address = `data:text/html,${encodeURIComponent(`
+        <h1>Keyboard targets</h1><input aria-label="A" autofocus><input aria-label="B">
+        <script>document.addEventListener("keydown", event => {
+          if (event.key === "Enter") document.body.dataset.truth = event.target.ariaLabel;
+        });</script>`)}`;
+
+      yield* recording.goto(address);
+      yield* Effect.promise(() => recording.playwright.getByLabel("A").focus());
+      yield* recording.press("Enter", { on: yield* ref(recording, { name: "B" }) });
+      assert.strictEqual(yield* truthOf(recording), "B");
+      const plan = Plan.fromEvents(yield* recording.recentEvents);
+      const replayed = yield* fresh;
+
+      yield* Plan.replay(replayed, plan);
+      assert.strictEqual(yield* truthOf(replayed), "B");
+    }),
+  );
+
+  // Regression at 0366e08: typing into focus recorded no replace option, then replay selected all.
+  it.effect("replays focus typing as insertion while retaining the field's existing text", () =>
+    Effect.gen(function* () {
+      const recording = yield* fresh;
+      const address = `data:text/html,${encodeURIComponent('<input aria-label="Text" value="before ">')}`;
+
+      yield* recording.goto(address);
+      yield* Effect.promise(() => recording.playwright.getByLabel("Text").focus());
+      yield* Effect.promise(() => recording.playwright.getByLabel("Text").press("End"));
+      yield* recording.type("after");
+      assert.strictEqual(
+        yield* Effect.promise(() => recording.playwright.getByLabel("Text").inputValue()),
+        "before after",
+      );
+      const plan = Plan.fromEvents(yield* recording.recentEvents);
+      const replayed = yield* fresh;
+
+      yield* Plan.replay(replayed, plan, { inputs: { text: "after" } });
+      // Chromium focuses a fresh field at its start; replay preserves text, not an unrecorded caret.
+      assert.strictEqual(
+        yield* Effect.promise(() => replayed.playwright.getByLabel("Text").inputValue()),
+        "afterbefore ",
+      );
+    }),
+  );
+
   it.effect("says a walk that ends on another site drifted", () =>
     Effect.gen(function* () {
       const site = yield* DriftSite;

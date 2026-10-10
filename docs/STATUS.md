@@ -2,6 +2,11 @@
 
 ## 0.3
 
+The `0.3.0-beta.6` release candidate fixes recorded presses replaying on the wrong focused field
+and insertion typing replacing existing text. Local Chromium regressions reproduce both defects
+before the fixes. The Browserbase fake also serves Live View and retains session create settings;
+these tests establish the fake/client contract, not hosted behavior.
+
 0.3 is a rewrite of the 0.2 set on stable Effect 4.0.0 and `effect/ai`, with agents on Yielded
 Agent, the renamed Effect Agent:
 
@@ -387,9 +392,8 @@ README says, in an npm project and in a Bun workspace with the isolated linker, 
 copy of each runtime package, locked the archive's integrity, and loaded all 27 of their entry
 points.
 
-`effect-browser-human-strokes` `0.3.0-beta.5` is not published: npm gave the workflow no credential
-for it (`ENEEDAUTH`), since the package has no trusted publisher yet. Once its entry is added, as
-[RELEASING.md](RELEASING.md) says, dispatching the same tag again publishes it and skips the rest.
+`effect-browser-human-strokes` `0.3.0-beta.5` is published with provenance too. Its first publish
+failed with `ENEEDAUTH`; rerunning the publish job reused the checked archives and completed it.
 
 `v0.3.0-beta.4` (`312ecf8`) was tagged but not published: a fix to `Page.waitFor` came after it,
 and release tags cannot move. `0.2.0-beta.9` was the release before, on 2 October 2026.

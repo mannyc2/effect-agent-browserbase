@@ -48,8 +48,9 @@ The owner does this once, in npm and GitHub settings.
    The workflow publishes with `npm publish`, so tick it under allowed actions: an entry created
    after 3 September 2026 allows only `npm stage publish` until you do. `effect-browser`,
    `effect-browserbase` and `effect-agent-browser` have this entry: the workflow published them
-   in `0.3.0-beta.5`. `effect-browser-human-strokes` has none yet: npm refused its publish with
-   `ENEEDAUTH`. npm does not test an entry when it is saved, so its next release is the test.
+   in `0.3.0-beta.5`. `effect-browser-human-strokes` initially failed with `ENEEDAUTH`, then
+   published from the retained archives when that release's publish job was rerun. All four
+   packages now have a working trusted publisher.
 
 3. **Protect the `npm` environment.** In the repository's **Settings → Environments**, the `npm`
    environment (it exists from 0.2) should have the owner as a required reviewer, and its
@@ -113,8 +114,8 @@ run it before tagging too: without arguments it builds and packs the packages it
 
 The tag must be on `main` and name the version all four packages carry. A prerelease
 `x.y.z-alpha.N`, `-beta.N` or `-rc.N` goes to the dist-tag of that name; only a plain `x.y.z` goes
-to `latest`. Packages publish in dependency order, `effect-browser-human-strokes` last until this
-workflow has published it once, and a version already on npm is skipped, so
+to `latest`. Packages publish in dependency order, `effect-browser-human-strokes` last, and a
+version already on npm is skipped, so
 dispatching the same tag again finishes an interrupted release. A published version cannot be
 replaced; fix a bad one with a new version.
 

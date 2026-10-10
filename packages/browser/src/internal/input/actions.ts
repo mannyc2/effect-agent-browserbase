@@ -275,7 +275,10 @@ const typeText = (input: Parts) => {
       "type",
       {
         target: typeOptions.into,
-        options: { replace: typeOptions.replace, submit: typeOptions.submit },
+        options: {
+          replace: typeOptions.into === undefined ? false : typeOptions.replace,
+          submit: typeOptions.submit,
+        },
         text,
         secret: true,
       },
