@@ -256,8 +256,8 @@ and each becoming the next beta.
   it first, and a release as released; a wait for a still screen holds through a stall on the
   capture connection; an address withholds each credential's value and keeps what it is about, the
   outline's links too, and replay goes to an address it withheld only where told; and a lost
-  create's session is found by its own nonce and ended. Its beta, `0.3.0-beta.2`, is prepared in
-  the changelog and the package versions, and is not tagged.
+  create's session is found by its own nonce and ended. Its beta, `0.3.0-beta.2`, was never
+  published; `0.3.0-beta.5` carries it.
 - **Phase 3, concurrency and presentation, is built.** Per-page admission has landed: the
   browser-wide input lock is gone, reads follow the action in flight and keep their work, a wait
   fails `Busy`, pages have a budget, and guarded typing approves its field once. So have the stage,
