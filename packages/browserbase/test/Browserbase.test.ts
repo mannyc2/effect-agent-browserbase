@@ -23,7 +23,11 @@ import { TestClock } from "effect/testing";
 import { chromium } from "playwright-core";
 
 import * as Browserbase from "../src/Browserbase.ts";
-import { BrowserbaseClient, layer as clientLayer } from "../src/BrowserbaseClient.ts";
+import {
+  BrowserbaseClient,
+  layer as clientLayer,
+  type SessionOptions,
+} from "../src/BrowserbaseClient.ts";
 import { BrowserbaseError } from "../src/BrowserbaseError.ts";
 import * as ContextLease from "../src/ContextLease.ts";
 import * as TestBrowserbase from "../src/testing/TestBrowserbase.ts";
@@ -390,6 +394,101 @@ describe("BrowserbaseClient", () => {
           ],
         );
       }),
+  );
+});
+
+describe("TestBrowserbase", () => {
+  it.effect("serves redacted Live View links for a known session through the client", () =>
+    Effect.gen(function* () {
+      const client = yield* BrowserbaseClient;
+      const fake = yield* TestBrowserbase.TestBrowserbase;
+      const { id } = yield* client.createSession();
+      const live = yield* client.liveView(id, { expiresInSeconds: 600 });
+
+      assert.isTrue(Redacted.isRedacted(live.debuggerFullscreenUrl));
+      assert.isTrue(Redacted.isRedacted(live.debuggerUrl));
+      assert.include(Redacted.value(live.debuggerFullscreenUrl), id);
+      assert.include(Redacted.value(live.debuggerUrl), id);
+      assert.deepStrictEqual(live.pages, []);
+      assert.include(yield* fake.requests, `GET /v1/sessions/${id}/debug?expiresIn=600`);
+    }).pipe(Effect.provide(TestBrowserbase.layer())),
+  );
+
+  it.effect("refuses Live View for unknown and malformed session ids", () =>
+    Effect.gen(function* () {
+      const client = yield* BrowserbaseClient;
+
+      assert.strictEqual(
+        yield* reasonOf(client.liveView("00000000-0000-4000-8000-000000000099")),
+        "NotFound",
+      );
+      assert.strictEqual(yield* reasonOf(client.liveView("unknown")), "InvalidRequest");
+    }).pipe(Effect.provide(TestBrowserbase.layer())),
+  );
+
+  it.effect("keeps all create settings without adding defaults to the requested options", () =>
+    Effect.gen(function* () {
+      const client = yield* BrowserbaseClient;
+      const fake = yield* TestBrowserbase.TestBrowserbase;
+      const { id } = yield* client.createContext();
+
+      const options: SessionOptions = {
+        projectId: "test-project",
+        extensionId: "test-extension",
+        timeout: 120,
+        keepAlive: true,
+        region: "eu-central-1",
+        proxies: [
+          { type: "browserbase", geolocation: { country: "DE", state: "BE", city: "Berlin" } },
+          { type: "external", server: "https://proxy.test", domainPattern: "*.example.test" },
+          { type: "none", domainPattern: "internal.test" },
+        ],
+        userMetadata: { test: { sequence: 1 } },
+        browserSettings: {
+          context: { id, persist: true },
+          viewport: { width: 1280, height: 720 },
+          blockAds: true,
+          solveCaptchas: false,
+          recordSession: false,
+          logSession: false,
+          verified: true,
+          os: "linux",
+          allowedDomains: ["example.test"],
+          ignoreCertificateErrors: true,
+        },
+      };
+
+      const created = yield* client.createSession(options);
+
+      yield* client.createSession();
+      yield* client.createSession({ proxies: true });
+      const sessions = yield* fake.sessions;
+
+      assert.deepStrictEqual(
+        sessions.map((session) => session.options),
+        [options, {}, { proxies: true }],
+      );
+      assert.strictEqual(created.region, options.region);
+      assert.strictEqual((yield* client.getSession(created.id)).region, options.region);
+      assert.strictEqual((yield* client.listSessions())[0]?.region, options.region);
+    }).pipe(Effect.provide(TestBrowserbase.layer())),
+  );
+
+  it.effect("refuses malformed create settings without creating a default session", () =>
+    Effect.gen(function* () {
+      const client = yield* BrowserbaseClient;
+      const fake = yield* TestBrowserbase.TestBrowserbase;
+
+      assert.strictEqual(
+        yield* reasonOf(
+          client.createSession({
+            browserSettings: { viewport: { width: Number.NaN, height: 720 } },
+          }),
+        ),
+        "InvalidRequest",
+      );
+      assert.deepStrictEqual(yield* fake.sessions, []);
+    }).pipe(Effect.provide(TestBrowserbase.layer())),
   );
 });
 

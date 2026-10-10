@@ -255,7 +255,11 @@ const take = (
     case "reload":
       return page.reload;
     case "press":
-      return page.press(step.target ?? "", options);
+      return step.subject === undefined
+        ? page.press(step.target ?? "", options)
+        : Effect.flatMap(locate(page, step.subject), ({ ref }) =>
+            page.press(step.target ?? "", { ...options, on: ref }),
+          );
     case "click":
       return aim(page, step.subject, step.point, step.box).pipe(
         Effect.flatMap((at) => page.click(at, options)),

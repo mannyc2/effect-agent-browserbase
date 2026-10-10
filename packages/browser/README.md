@@ -217,7 +217,9 @@ it is under one, and its label and heading read the same or found as words in or
 element left once the recorded one has gone, such as Alice's "Remove" after Bob's, drifts rather
 than stands in. The rest rank by how much they read the same; a tie is `Ambiguous`, since there is
 no ordinal. Text typed into whatever had focus went into the focused field, which the action
-records as its subject, so replay types into that field wherever focus has gone; and text first
+records as its subject, so replay inserts into that field wherever focus has gone, retaining its
+existing text. Caret positions are not recorded: insertion uses the field's caret when focused.
+A press recorded on a subject resolves and focuses it before sending keys. Text first
 typed into a secret field is typed only into one. An element step never falls back to coordinates.
 A step recorded at a point presses the same place within the element found, brought into view
 first, and only when a press there reaches that element, not something over it. Replay stops at

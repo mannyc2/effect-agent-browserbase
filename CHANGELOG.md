@@ -4,6 +4,14 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.6
+
+- Replay resolves a recorded press's subject before sending its keys, so another field's focus
+  cannot redirect them. Typing into focus records insertion explicitly, preserving existing text
+  when replay locates the field again. Caret positions are not recorded.
+- The Browserbase test fake serves Live View for known sessions and retains complete create
+  settings for assertions through its test handle.
+
 ## 0.3.0-beta.5
 
 The first 0.3 release on npm. `0.3.0-beta.0` to `0.3.0-beta.4` were prepared but never published,

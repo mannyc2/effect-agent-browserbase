@@ -266,10 +266,12 @@ under the real `BrowserbaseClient`, so the client and `Browserbase` run as they 
 Browserbase, for free. Sessions run until released or until their timeout on the Effect `Clock`, so
 `TestClock` ends them. A `Script` loses a create, whose session it can list only `listedAfter` a
 while, leaves a release pending, refuses it, or fails status reads, in turn. `connectUrl` gives
-each session a DevTools address, such as a local Chromium's. It keeps sessions and stored contexts
-only, and fails a test that calls anything else; `sessions` tells each session's status, user
-metadata, releases asked, whether it was kept alive, and the stored context it loaded and whether
-it saves to it. Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase
+each session a DevTools address, such as a local Chromium's. It keeps sessions and stored contexts,
+and supplies synthetic Live View links for known session ids, with an empty page list. It does not
+model link expiry or Browserbase's Live View behavior after a session ends. Other endpoints fail
+the test. `sessions` tells each session's status, its original create `options` without provider
+defaults, user metadata, releases asked, whether it was kept alive, and the stored context it
+loaded and whether it saves to it. Its ids are UUIDs, as Browserbase's are, and it answers each id shape as Browserbase
 does: it refuses a session id of any other shape, where it answers an unknown well-formed one as
 not found. `BrowserbaseContract.checks` are what this package relies on Browserbase to do, each an
 Effect over `BrowserbaseClient`; the fake passes them. Its answers also have the shapes
