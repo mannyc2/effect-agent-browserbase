@@ -6,12 +6,14 @@
  * frame. So a canvas mounted blank, or a spinner alone, is still loading. A screen that only says
  * "Loading…" in words reads as ready, and a WebGL canvas drawn once, without keeping its drawing,
  * reads as blank. Asked for a quiet spell, where the page's changes are recorded, nothing in view
- * may have changed for that long either. After input, it waits a task and a frame. See
- * `names.inpage.ts` for what a page-side part may use.
+ * may have changed for that long either. Content mode starts and refreshes the recorder and
+ * observes a full quiet interval from its first check in each document. After input, it waits a
+ * task and a frame. See `names.inpage.ts` for what a page-side part may use.
  */
 import { Schema } from "effect";
 
 import type { History } from "../timeline/history.inpage.ts";
+import type { Recorder } from "../timeline/record.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
 import type { Walk } from "./walk.inpage.ts";
 
@@ -31,7 +33,7 @@ export const ReadinessSchema = Schema.Array(
 
 export type Readiness = typeof ReadinessSchema.Type;
 
-export const ready = (walked: Walk, texts: Texts, kept: History) => {
+export const ready = (walked: Walk, texts: Texts, kept: History, recorder: Recorder) => {
   const { inView, visible } = walked;
   // A canvas is read through a small copy: reading it directly would give it a context of ours.
   let copy: OffscreenCanvasRenderingContext2D | null | undefined;
@@ -86,7 +88,7 @@ export const ready = (walked: Walk, texts: Texts, kept: History) => {
   };
 
   // In a frame, before it is drawn: a canvas drawn every frame still holds its drawing then.
-  const check = (quietMillis: number): Promise<Readiness> =>
+  const check = (quietMillis: number, observed: number): Promise<Readiness> =>
     painted().then((paints) => {
       const waiting: Array<Readiness[number]> = [];
 
@@ -113,7 +115,10 @@ export const ready = (walked: Walk, texts: Texts, kept: History) => {
       if (document.fonts.status !== "loaded") waiting.push("fonts");
       if (showing(document.querySelectorAll("[aria-busy=true]")).length > 0) waiting.push("busy");
       if (!content()) waiting.push("content");
-      if (kept.changing() > performance.timeOrigin + performance.now() - quietMillis)
+      if (
+        Math.max(observed, kept.changing()) >
+        performance.timeOrigin + performance.now() - quietMillis
+      )
         waiting.push("changing");
 
       return waiting;
@@ -123,11 +128,16 @@ export const ready = (walked: Walk, texts: Texts, kept: History) => {
    * Check until the page is ready, or for `millis`, and say what it is still waiting for; with
    * `quietMillis`, until nothing the record saw in view has changed for that long, too.
    */
-  const wait = async (millis: number, quietMillis = 0): Promise<Readiness> => {
+  const wait = async (millis: number, quietMillis = 0, contentOnly = false): Promise<Readiness> => {
     const until = performance.now() + millis;
+    let observed = contentOnly ? undefined : Number.NEGATIVE_INFINITY;
 
     for (;;) {
-      const waiting = await check(quietMillis);
+      if (contentOnly) {
+        recorder.start();
+        if (kept.begun()) observed ??= performance.timeOrigin + performance.now();
+      }
+      const waiting = await check(quietMillis, observed ?? Number.POSITIVE_INFINITY);
 
       if (waiting.length === 0 || performance.now() >= until) return waiting;
       const { promise, resolve } = Promise.withResolvers<void>();

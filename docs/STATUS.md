@@ -2,7 +2,15 @@
 
 ## 0.3
 
-The `0.3.0-beta.6` release candidate fixes recorded presses replaying on the wrong focused field
+The `0.3.0-beta.7` release candidate adds resumable plan steps with receipts, serialized stopping points, durable
+expected-effect read-back, bounded arrival and content readiness. A missing receipt after
+cancellation or restart stays unknown: the library never automatically repeats unresolved
+consequential input. A positive transient notice is not evidence for recovering a lost reply.
+Local Chromium proves checkbox convergence, cancellation evidence, durable recovery across a
+new page, redirect bounds and content readiness during canvas animation and navigation; these
+are browser contracts, not proof of a particular site's durable transaction semantics.
+
+Published `0.3.0-beta.6` fixes recorded presses replaying on the wrong focused field
 and insertion typing replacing existing text. Local Chromium regressions reproduce both defects
 before the fixes. The Browserbase fake also serves Live View and retains session create settings;
 these tests establish the fake/client contract, not hosted behavior.

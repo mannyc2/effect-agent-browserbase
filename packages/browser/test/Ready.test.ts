@@ -110,6 +110,89 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
       }),
     );
+
+    // Accepted stage 2, L1: paint never becomes quiet, although the visible DOM does.
+    it.effect(
+      "observes content quiet from its first read and after changes, while canvas paints",
+      () =>
+        Effect.gen(function* () {
+          const page = yield* blank;
+
+          yield* show(
+            page,
+            `<p id=p>Initial</p><canvas id=c width=400 height=200></canvas>
+<script>
+  const g = c.getContext("2d");
+  function draw(now) { g.fillStyle = "hsl(" + now % 360 + ",80%,50%)"; g.fillRect(0,0,400,200); requestAnimationFrame(draw); }
+  requestAnimationFrame(draw);
+</script>`,
+          );
+          const started = performance.now();
+
+          yield* page.ready({ still: "content", quietMillis: 200, timeout: Duration.seconds(2) });
+          assert.isAtLeast(performance.now() - started, 200);
+          yield* evaluate(page, () => {
+            for (const after of [100, 200, 300])
+              setTimeout(() => {
+                document.querySelector("p")!.textContent = String(after);
+                document.body.dataset.changed = String(performance.now());
+              }, after);
+          });
+          yield* page.ready({ still: "content", quietMillis: 200, timeout: Duration.seconds(2) });
+
+          const observed = yield* evaluate(page, () => ({
+            text: document.querySelector("p")!.textContent,
+            quiet: performance.now() - Number(document.body.dataset.changed),
+          }));
+
+          assert.strictEqual(observed.text, "300");
+          assert.isAtLeast(observed.quiet, 200);
+        }),
+    );
+
+    // L1 exposed the second commit failing Runtime.evaluate instead of restarting readiness.
+    it.effect("restarts content quiet across repeated commits within the original deadline", () =>
+      Effect.gen(function* () {
+        const page = yield* (yield* Browser).newPage();
+
+        yield* Effect.promise(() =>
+          page.playwright.route("https://ready.test/**", (route) => {
+            const url = new URL(route.request().url());
+            const hop = Number(url.pathname.slice(1));
+            const ending = hop === 2 && url.search === "";
+            const next = `setTimeout(() => location.href = "/${hop + 1}${url.search}", 100)`;
+
+            return route.fulfill({
+              contentType: "text/html",
+              body: `<main ${ending ? "" : 'aria-busy="true"'}><h1>${hop}</h1></main>
+<script>window.arrived = performance.now(); ${ending ? "" : hop === 0 ? `window.start = () => { ${next} }` : next}</script>`,
+            });
+          }),
+        );
+        yield* page.goto("https://ready.test/0");
+        yield* evaluate(page, () => (window as unknown as { start: () => void }).start());
+        yield* page.ready({ still: "content", quietMillis: 250, timeout: Duration.seconds(2) });
+        assert.strictEqual(yield* page.url, "https://ready.test/2");
+        assert.isAtLeast(
+          yield* evaluate(
+            page,
+            () => performance.now() - (window as unknown as { arrived: number }).arrived,
+          ),
+          250,
+        );
+        yield* page.goto("https://ready.test/0?endless");
+        yield* evaluate(page, () => (window as unknown as { start: () => void }).start());
+        const started = performance.now();
+
+        assert.strictEqual(
+          yield* reason(
+            page.ready({ still: "content", quietMillis: 250, timeout: Duration.millis(700) }),
+          ),
+          "Timeout",
+        );
+        assert.isBelow(performance.now() - started, 1500);
+      }),
+    );
   },
 );
 

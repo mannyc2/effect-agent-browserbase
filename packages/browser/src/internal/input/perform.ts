@@ -9,6 +9,7 @@ import { Action, type ActionOptions, Subject } from "../../BrowserEvent.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
 import { failWith, type PageContext, undispatched } from "../page/context.ts";
 import { Correlation } from "../page/lane.ts";
+import { redact } from "../page/url.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
 import type { Dispatch } from "./dispatch.ts";
 import type { Approval, PolicyPlan } from "./guard.ts";
@@ -281,6 +282,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
               startedAt,
               page: id,
               name,
+              url: redact(page.playwright.url()),
               correlation: yield* Correlation,
               target: info.target,
               options: Exit.isSuccess(exit) ? info.options : undefined,

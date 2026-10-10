@@ -296,10 +296,26 @@ describe("Plan.fromEvents", () => {
     const encoded = Schema.encodeSync(Plan.Plan)(plan);
 
     assert.deepStrictEqual(Schema.decodeSync(Plan.Plan)(encoded), plan);
-    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version: 2 })));
+    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version: 3 })));
     assert.isTrue(
       Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ steps: [{ id: "a", run: [] }] })),
     );
+  });
+
+  it("emits version 2 only for expected effects, refusing them inside a version 1 payload", () => {
+    const step = new Plan.Step({
+      action: "click",
+      url: "https://example.com/orders",
+      expect: { _tag: "Appeared", query: { text: "Order 42" }, durable: true },
+    });
+
+    const plan = Plan.Plan.new([step]);
+    const encoded = Schema.encodeSync(Plan.Plan)(plan);
+
+    assert.strictEqual(encoded.version, 2);
+    assert.deepStrictEqual(Schema.decodeSync(Plan.Plan)(encoded), plan);
+    assert.isTrue(Exit.isFailure(Schema.decodeExit(Plan.Plan)({ ...encoded, version: 1 })));
+    assert.strictEqual(Schema.encodeSync(Plan.Plan)(Plan.Plan.new([])).version, 1);
   });
 });
 
@@ -404,6 +420,22 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
     return yield* Effect.acquireRelease(browser.newPage(), (page) => Effect.ignore(page.close));
   });
 
+  it.effect("keeps action arrival addresses after a 16-event history loses its navigation", () =>
+    Effect.gen(function* () {
+      const site = yield* DriftSite;
+      const browser = yield* Chromium.open({ eventHistory: 16 });
+      const page = yield* browser.newPage(site.url("/news"));
+
+      for (let index = 0; index < 20; index++) yield* page.press("Shift");
+      const events = yield* page.recentEvents;
+      const steps = Plan.fromEvents(events).steps;
+
+      assert.isFalse(events.some((event) => event._tag === "Navigated"));
+      assert.isAbove(steps.length, 0);
+      assert.isTrue(steps.every((step) => step.url === site.url("/news")));
+    }),
+  );
+
   // Regression at 0366e08: replay dropped a press's subject and sent keys to current focus.
   it.effect("replays a targeted press on its recorded field despite different focus", () =>
     Effect.gen(function* () {
@@ -503,7 +535,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
 
       assert.deepStrictEqual(
         [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
-        [1, "InvalidRequest"],
+        [0, "InvalidRequest"],
       );
       assert.strictEqual(yield* unaddressed.url, "about:blank");
 
@@ -523,7 +555,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
 
       assert.deepStrictEqual(
         [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
-        [1, "InvalidRequest"],
+        [0, "InvalidRequest"],
       );
       assert.strictEqual(yield* page.url, "about:blank");
     }),
