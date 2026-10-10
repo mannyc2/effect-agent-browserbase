@@ -4,6 +4,19 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.10
+
+- `Stage.cue` starts capture during preparation. Its scope abandons an unused cue; `commit`
+  transfers capture ownership to the stage when the event happens. Commits preserve arrival
+  order, wait for old-page input through outstanding acknowledgements, and require a current
+  first frame at the actual cut. `Presented.latency` includes time spent waiting to switch.
+- `Stage.shown({ hold })` distinguishes paint, confirmed stillness, uncertain capture silence and
+  loss. It confirms a quiet frame against fresh page and capture replies; stale document paint,
+  pending acknowledgements, capture failure and continuous paint cannot claim stillness.
+- Local Chromium and scripted transport regressions cover ownership, cancellation, ordering,
+  delayed old-document frames and input barriers. Hosted two-capture capacity remains unproven
+  until the included-hour H1 experiment runs.
+
 ## 0.3.0-beta.9
 
 - `Browser.suspend({ drain })` drains admitted input through each operation's record and native

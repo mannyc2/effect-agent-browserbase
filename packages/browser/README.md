@@ -433,9 +433,8 @@ const program = Effect.gen(function* () {
   const stage = yield* Stage.make({ quality: 80 });
   const presenter = yield* Presentation.make();
   const page = yield* (yield* Browser).newPage("https://example.com");
-  const shown = yield* stage.present(page); // Presented { page, at, latency }
-
   yield* stage.frames.pipe(Stream.runForEach(encode), Effect.forkScoped);
+  const shown = yield* stage.present(page); // Presented { page, at, latency }
   yield* presenter.view(page).click("e12"); // glides, then clicks, as a person would
 });
 ```
@@ -451,17 +450,53 @@ the glide as soon as a target is known, as when it appears in a model's streamed
 view's next action completes it if it acts on that target, and stops it where it is otherwise. An
 aim records no action, and does nothing under an input guard.
 
-A stage is one per live output. `present(page, { at })` switches it at `at`, host monotonic
-milliseconds on the frame clock, or at once: it starts the new page's capture ahead, waits for its
-first frame, then for input already under way on the old page, and turns, stopping the old capture
-after. The captures overlap, within a session as across two: on Browserbase, two captures in one
-session ran together at the frame rate of one, where stopping first left 250 to 295 ms dark.
-`Presented.at` is when the switch took effect, no earlier than the frames it followed or the new
-page's first, and `latency` how long after `at`. A first frame that does not come in time fails
-`present` with `Timeout`, and the old page stays. A capture that fails restarts on its page while the
-page and its browser stand. A still page sends no frames until it changes, so a switch's first frame
-can be older than the frames before it. A delay line, a liveness rule, redaction and repeating a
-held frame stay the application's.
+A stage is one per live output. `stage.cue(page)` starts capture now; `cue.ready` waits for a
+current frame, and `cue.commit({ at })` switches on the host time of an event that actually
+happened. Preparing belongs to the caller's scope; once committed, capture belongs to the stage.
+Closing an abandoned cue stops its capture. `present(page, { at })` is the convenience for cueing
+and committing in one call.
+
+```ts
+// Inside a scoped program: lineSent yields Some(hostTime) when the line goes out, or None if dropped.
+const cue = yield * stage.cue(page);
+yield * cue.ready;
+const sent = yield * lineSent;
+if (Option.isSome(sent)) yield * cue.commit({ at: sent.value });
+```
+
+Commits serialize in call order. A switch waits until `at` and for admitted old-page input and
+its native replies, keeping new old-page input queued through the cut. Reads and capture continue.
+The consumer can stop performance between `Plan.take` steps for a clean cut. Interruption before
+the switch changes nothing and leaves the cue usable. A committed switch keeps ownership through
+outgoing capture cleanup, even if its caller is interrupted then.
+
+`Presented.at` records when the switch took effect, no earlier than the event, the incoming frame
+or the last frame shown; `latency` is its delay after the requested `at`. `firstFrame` bounds a
+wait for current paint (5 seconds by default). Old-page input admission, drain and the final frame
+wait are also bounded by that browser's `navigationTimeout`. Failure before the cut leaves the
+old output in place. An old document's frame cannot satisfy a new document's readiness; paint-time
+uncertainty must place it after the document commit. A cue joining an existing quiet capture can
+use that capture's current frame without waiting for invented new paint.
+
+`stage.shown({ hold: "1 second" })` describes the output without inventing new frames:
+
+- `Painted` carries a frame when it is published to the output.
+- `Still` follows a quiet interval only after a fresh page/capture round trip, with no pending
+  capture acknowledgement, the same active capture and current document, and no newer frame.
+- `Stalled` says silence could not be confirmed. A timeout is uncertainty, not stillness.
+- `Gone` says the page or browser is lost. It is emitted once for that feed, with nothing more
+  until another page is committed.
+
+`hold` must be finite and positive. Continuous paint restarts the silence interval. A failed
+capture can restart while its page/browser still stands, but old paint cannot pass for a new
+capture's first frame. These guarantees depend on Chromium reporting its paint; they do not
+prove that every canvas update was delivered. `frames` remains the paint-only stream with bounded
+reader queues, so subscribe before presenting to receive the first image. The consumer owns
+encoding, redaction, slates and any repetition of a confirmed held image.
+
+Local Chromium verifies preparation, ownership, input barriers and evidence. Earlier hosted
+capture measurements do not establish these cued-presentation contracts: the H1 overlap/load
+probe remains unrun until included Browserbase allowance is verified.
 
 `Browser.now`, event stamps, frame `receivedAt` and a window's bounds share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.

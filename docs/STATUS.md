@@ -2,6 +2,14 @@
 
 ## 0.3
 
+The `0.3.0-beta.10` release adds cued presentation: `Stage.cue` prepares capture, and its
+`commit` switches on the event while retaining old-page input authority through the cut.
+Prepared cues belong to their calling scopes; committed capture belongs to the stage.
+Commits preserve arrival order and report queue and input wait in their latency. `Stage.shown`
+reports `Painted`, confirmed `Still`, uncertain `Stalled`, and `Gone` with current-frame checks
+across navigation and capture failure. Local Chromium covers these contracts; hosted concurrent
+capture capacity remains unproven until the included-hour H1 experiment runs.
+
 The `0.3.0-beta.9` release adds scoped browser input suspension. It drains each
 admitted operation through its record and outstanding native replies, refuses later writes as
 `Suspended` and leaves reads/capture available. Nested scopes share authority until the last one
@@ -22,8 +30,8 @@ The lifecycle model, scripted provider tests and local Chromium cover admission,
 revocation, finalizer ordering and rotation. The Browserbase fake covers client sequencing and
 persisted-writer refusal. They do not establish hosted save timing, physical session overlap or
 billing. [H2](HOSTED_CHECKS.md), persisted rotation with a live hold and storage read-back, is
-prepared but unrun until included-hour allowance is verified. Cued
-presentation, connection identity and the composition examples remain later delivery stages.
+prepared but unrun until included-hour allowance is verified. Connection identity and the
+composition examples remain the final delivery stage.
 
 Published `0.3.0-beta.7` adds resumable plan steps with receipts, serialized stopping points, durable
 expected-effect read-back, bounded arrival and content readiness. A missing receipt after

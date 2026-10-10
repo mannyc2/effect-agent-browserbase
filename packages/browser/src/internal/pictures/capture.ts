@@ -2,13 +2,27 @@
  * One CDP screencast per page, with bounded transport replies and per-reader loss accounting.
  * Native callbacks own synchronous bookkeeping; the page scope owns startup and teardown.
  */
-import { Clock, Deferred, Duration, Effect, Exit, Option, Queue, Semaphore, Stream } from "effect";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Queue,
+  type Scope,
+  Semaphore,
+  Stream,
+} from "effect";
 
 import { type BrowserError, InvalidRequest } from "../../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../../Frame.ts";
 import { undispatched } from "../page/context.ts";
 import { type Estimate, toHostTime, uncertaintyAt } from "./clock.ts";
+import { tally } from "./counts.ts";
 import type { NativeFrame, Transport } from "./transport.ts";
+
+export { countsKept } from "./counts.ts";
 
 export interface Size {
   readonly width: number;
@@ -70,6 +84,16 @@ interface Generation {
 }
 
 export interface Controller {
+  /** Acquire a running capture now; its stream waits independently for the first frame. */
+  readonly open: (options?: ScreencastOptions) => Effect.Effect<
+    {
+      readonly stream: Stream.Stream<Frame, BrowserError>;
+      /** Current before this reader subscribed, never duplicated in its stream. */
+      readonly current: Frame | undefined;
+    },
+    BrowserError,
+    Scope.Scope
+  >;
   readonly stream: (options?: ScreencastOptions) => Stream.Stream<Frame, BrowserError>;
   readonly latest: Effect.Effect<Option.Option<Frame>>;
   readonly recent: Effect.Effect<ReadonlyArray<Frame>>;
@@ -78,6 +102,10 @@ export interface Controller {
   readonly active: Effect.Effect<boolean>;
   /** Once every frame the running capture's connection sent before now has arrived. */
   readonly sync: Effect.Effect<void, BrowserError>;
+  /** This exact frame still belongs to the active capture and its current document. */
+  readonly current: (frame: Frame) => boolean;
+  /** Confirm this exact frame remains current after the capture connection's round trip. */
+  readonly confirm: (frame: Frame) => Effect.Effect<boolean, BrowserError>;
   /** Run a clipped or scaled picture of the page, keeping what it draws out of the capture. */
   readonly excluding: <A, E, R>(
     picture: Effect.Effect<A, E, R>,
@@ -104,96 +132,6 @@ const sameSize = (left: Size, right: Size) =>
 const sameShape = (image: Size, device: Size) =>
   Math.abs(image.width * device.height - image.height * device.width) <
   device.width + device.height;
-
-// Paint-time gaps between consecutive delivered frames.
-const paintGaps = () => {
-  let count = 0;
-  let totalMillis = 0;
-  let minMillis: number | null = null;
-  let maxMillis: number | null = null;
-  let lastMillis: number | null = null;
-
-  return {
-    add: (gap: number) => {
-      count++;
-      totalMillis += gap;
-      minMillis = minMillis === null ? gap : Math.min(minMillis, gap);
-      maxMillis = maxMillis === null ? gap : Math.max(maxMillis, gap);
-      lastMillis = gap;
-    },
-    snapshot: () => ({ count, totalMillis, minMillis, maxMillis, lastMillis }),
-  };
-};
-
-const none = () => ({
-  received: 0,
-  accepted: 0,
-  late: 0,
-  missingTimestamp: 0,
-  foreignSize: 0,
-  duringPictures: 0,
-  lost: 0,
-});
-
-type Counted = keyof ReturnType<typeof none>;
-
-/** How far back a window of capture counts can reach. */
-export const countsKept = Duration.minutes(1);
-
-/**
- * A capture's counts and paint gaps over its page's life, and each with when it happened on the
- * owner's clock for the latest minute, so a window of them can be read.
- */
-const tally = (now: () => number) => {
-  const totals = none();
-  const gaps = paintGaps();
-
-  let recent: Array<{
-    readonly at: number;
-    readonly counted: Counted | "gap";
-    readonly n: number;
-  }> = [];
-
-  let oldest = 0;
-
-  const note = (counted: Counted | "gap", n: number) => {
-    const at = now();
-
-    recent.push({ at, counted, n });
-    while ((recent[oldest]?.at ?? at) < at - Duration.toMillis(countsKept)) oldest++;
-    // Shed what is out of reach once it is half the log.
-    if (oldest > recent.length / 2) {
-      recent = recent.slice(oldest);
-      oldest = 0;
-    }
-  };
-
-  return {
-    count: (counted: Counted, n = 1) => {
-      totals[counted] += n;
-      note(counted, n);
-    },
-    gap: (millis: number) => {
-      gaps.add(millis);
-      note("gap", millis);
-    },
-    /** Lifetime counts, or those of the latest `windowMillis`, at most a minute. */
-    read: (windowMillis?: number) => {
-      if (windowMillis === undefined) return { ...totals, gaps: gaps.snapshot() };
-      const counts = none();
-      const windowed = paintGaps();
-      const since = now() - windowMillis;
-
-      for (const { at, counted, n } of recent.slice(oldest)) {
-        if (at < since) continue;
-        if (counted === "gap") windowed.add(n);
-        else counts[counted] += n;
-      }
-
-      return { ...counts, gaps: windowed.snapshot() };
-    },
-  };
-};
 
 // Another capture's frames last only as long as it does; a run of frames that lasts longer is
 // the page's own.
@@ -457,6 +395,71 @@ const synced = (
   );
 };
 
+const confirmation =
+  (
+    read: () => {
+      readonly generation: Generation | undefined;
+      readonly replies: number;
+    },
+    current: Controller["current"],
+    why: (failure: BrowserError) => Effect.Effect<never, BrowserError>,
+    error: (cause: unknown) => BrowserError,
+  ): Controller["confirm"] =>
+  (frame) =>
+    Effect.suspend(() => {
+      const { generation } = read();
+
+      if (generation === undefined) return Effect.succeed(false);
+
+      return synced(generation, why, error).pipe(
+        Effect.map(() => {
+          const after = read();
+
+          return after.generation === generation && after.replies === 0 && current(frame);
+        }),
+      );
+    });
+
+const isCurrent = (
+  frame: Frame,
+  generation: Generation | undefined,
+  latest: Option.Option<Frame>,
+) =>
+  generation !== undefined &&
+  generation.accepting &&
+  generation.failure === undefined &&
+  Option.getOrUndefined(latest) === frame &&
+  generation.transport.frameTag().document === frame.document;
+
+const currentFrame = (generation: Generation, latest: Option.Option<Frame>) =>
+  Option.getOrUndefined(Option.filter(latest, (frame) => isCurrent(frame, generation, latest)));
+
+/** One reader counts its own missed envelopes without hiding gaps inside stream chunks. */
+const frames = (
+  subscription: Queue.Queue<Envelope>,
+  baseline: number,
+  why: (failure: BrowserError) => Effect.Effect<never, BrowserError>,
+  missed: (count: number) => void,
+) => {
+  let previous = baseline;
+
+  // Pull one envelope at a time so taking a stream chunk cannot hide a slow reader's loss.
+  return Stream.fromEffectRepeat(
+    Queue.take(subscription).pipe(
+      Effect.flatMap((envelope) => {
+        if (envelope._tag === "Failure") return why(envelope.error);
+
+        return Effect.sync(() => {
+          if (envelope.sequence > previous + 1) missed(envelope.sequence - previous - 1);
+          previous = envelope.sequence;
+
+          return envelope.frame;
+        });
+      }),
+    ),
+  );
+};
+
 export const make = (options: Options) =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
@@ -476,6 +479,8 @@ export const make = (options: Options) =>
     // Frames delivered, which number them so that a reader can tell what it missed.
     let delivered = 0;
     const pictures = pictureWindows(now);
+
+    const current = (frame: Frame) => isCurrent(frame, generation, latest);
 
     // Frames that show the page go to the running capture's readers.
     const deliver = (frame: Frame, timestamp: number) => {
@@ -675,6 +680,7 @@ export const make = (options: Options) =>
           if (current.failure !== undefined)
             Queue.offerUnsafe(subscription, { _tag: "Failure", error: current.failure });
           const baseline = delivered;
+          const frame = currentFrame(current, latest);
 
           if (starting) {
             const { transport, quality, size } = current;
@@ -715,37 +721,20 @@ export const make = (options: Options) =>
             }
           }
 
-          return { current, subscription, baseline };
+          return { current, subscription, baseline, frame };
         }),
       );
 
-    const stream: Controller["stream"] = (screencast = {}) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          const lease = yield* Effect.acquireRelease(
-            acquire(screencast),
-            ({ current, subscription }) => lock.withPermits(1)(leave(current, subscription)),
-          );
-
-          let previous = lease.baseline;
-
-          // Pull one envelope at a time so taking a stream chunk cannot hide a slow reader's loss.
-          return Stream.fromEffectRepeat(
-            Queue.take(lease.subscription).pipe(
-              Effect.flatMap((envelope) => {
-                if (envelope._tag === "Failure") return why(envelope.error);
-
-                return Effect.sync(() => {
-                  if (envelope.sequence > previous + 1)
-                    counts.count("lost", envelope.sequence - previous - 1);
-                  previous = envelope.sequence;
-
-                  return envelope.frame;
-                });
-              }),
-            ),
-          );
-        }),
+    const open: Controller["open"] = (screencast = {}) =>
+      Effect.acquireRelease(acquire(screencast), ({ current, subscription }) =>
+        lock.withPermits(1)(leave(current, subscription)),
+      ).pipe(
+        Effect.map((lease) => ({
+          current: lease.frame,
+          stream: frames(lease.subscription, lease.baseline, why, (count) =>
+            counts.count("lost", count),
+          ),
+        })),
       );
 
     // The page's scope closes once the page has gone, when its browser's loss, if any, is known.
@@ -764,11 +753,20 @@ export const make = (options: Options) =>
     );
 
     return {
-      stream,
+      open,
+      stream: (options?: ScreencastOptions) =>
+        Stream.unwrap(Effect.map(open(options), ({ stream }) => stream)),
       latest: Effect.sync(() => latest),
       recent: Effect.sync(() => history),
       active: Effect.sync(() => generation?.accepting === true),
       sync: Effect.suspend(() => synced(generation, why, options.error)),
+      current,
+      confirm: confirmation(
+        () => ({ generation, replies: replies.size }),
+        current,
+        why,
+        options.error,
+      ),
       excluding: pictures.excluding,
       stats: (windowMillis?: number) =>
         Effect.sync(
