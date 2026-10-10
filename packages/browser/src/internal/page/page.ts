@@ -8,8 +8,10 @@
 import { type Effect as Eff, Effect, Option } from "effect";
 
 import type { BrowserError } from "../../BrowserError.ts";
+import type { Frame } from "../../Frame.ts";
 import { type Page, State } from "../../Page.ts";
 import * as Actions from "../input/actions.ts";
+import type { Controller } from "../pictures/capture.ts";
 import * as Pictures from "../pictures/pictures.ts";
 import * as Reading from "../reading/reading.ts";
 import * as Ready from "../reading/ready.ts";
@@ -24,8 +26,14 @@ import * as Viewport from "./viewport.ts";
 export interface Internals {
   /** The page's input, in any style. */
   readonly input: Actions.Input;
-  /** Completes once the input asked of the page so far has ended, failing `Busy` if it lasts. */
-  readonly inputEnded: Eff.Effect<void, BrowserError>;
+  /** Drain earlier input and retain a read turn through the effect; the whole wait is bounded. */
+  readonly afterInput: <A, E, R>(effect: Eff.Effect<A, E, R>) => Eff.Effect<A, E | BrowserError, R>;
+  /** Start capture now, independently of its first frame. The calling scope keeps it running. */
+  readonly capture: Controller["open"];
+  /** Current capture/document evidence, without waiting for acknowledgement or transport. */
+  readonly current: (frame: Frame) => boolean;
+  /** A current frame, with a fresh bounded answer from the page and capture sessions. */
+  readonly confirm: (frame: Frame) => Eff.Effect<boolean, BrowserError>;
   /** The page's documents so far, counted as `Navigated` counts them. */
   readonly document: () => number;
   /** Wait, in one call, until what a query finds is there, is not, or shows something else. */
@@ -87,6 +95,11 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     });
   });
 
+  const current = (frame: Frame) =>
+    capture.current(frame) &&
+    bridge.frameTag().document === frame.document &&
+    frame.hostTime - frame.timing.uncertaintyMillis > page.activity.documentAt;
+
   const assembled: Page = {
     id,
     playwright,
@@ -128,7 +141,22 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
 
   const internals: Internals = {
     input,
-    inputEnded: lane.read("inputEnded")(Effect.void).pipe(owned),
+    afterInput: (effect) =>
+      lane
+        .read(
+          "inputEnded",
+          page.settings.navigationTimeout,
+        )(Effect.andThen(input.perform.idle, effect))
+        .pipe(within("inputEnded", page.settings.navigationTimeout), owned),
+    capture: capture.open,
+    current,
+    confirm: (frame) =>
+      native("shown", () => page.protocol.send("Page.getFrameTree")).pipe(
+        Effect.flatMap(() => capture.confirm(frame)),
+        Effect.map((confirmed) => confirmed && current(frame)),
+        within("shown", "2 seconds"),
+        owned,
+      ),
     document: () => bridge.frameTag().document,
     until: reading.until,
   };
