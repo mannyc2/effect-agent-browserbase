@@ -4,7 +4,7 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
-## Unreleased (planned 0.3.0-beta.8)
+## 0.3.0-beta.8
 
 - `Supervisor<A>` owns per-generation values and scoped `use` work. Leases expose `ending` and
   transferable `retain` scopes; outgoing work drains for 30 seconds by default, then fails

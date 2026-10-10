@@ -2,7 +2,7 @@
 
 ## 0.3
 
-The next release, planned as `0.3.0-beta.8` and not yet published, adds leased generations:
+The `0.3.0-beta.8` release candidate adds leased generations:
 `Supervisor<A>.use`, scoped values, transferable retained scopes and a default 30-second
 handover. Loss and retirement revoke work immediately; cleanup precedes provider release.
 `Browserbase.supervise({ build })` builds each generation's application value. Exclusive
@@ -18,7 +18,7 @@ billing. [H2](HOSTED_CHECKS.md), persisted rotation with a live hold and storage
 prepared but unrun until included-hour allowance is verified. Scoped input suspension, cued
 presentation, connection identity and the composition examples remain later delivery stages.
 
-The `0.3.0-beta.7` release candidate adds resumable plan steps with receipts, serialized stopping points, durable
+Published `0.3.0-beta.7` adds resumable plan steps with receipts, serialized stopping points, durable
 expected-effect read-back, bounded arrival and content readiness. A missing receipt after
 cancellation or restart stays unknown: the library never automatically repeats unresolved
 consequential input. A positive transient notice is not evidence for recovering a lost reply.
