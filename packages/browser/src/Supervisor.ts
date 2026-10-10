@@ -210,6 +210,7 @@ const bounded = (input: Duration.Input, name: string) =>
 const waitFor = <A, H>(
   state: SubscriptionRef.SubscriptionRef<Lifecycle.State<A, H>>,
   wait: Duration.Duration,
+  clock: Clock.Clock,
   target?: number,
 ) => {
   const result = (resolution: Lifecycle.Resolution<A>) =>
@@ -229,7 +230,7 @@ const waitFor = <A, H>(
           Effect.timeoutOrElse({ duration: wait, orElse: () => Effect.fail(timedOut()) }),
         )
       : result(current);
-  });
+  }).pipe(Effect.provideService(Clock.Clock, clock));
 };
 
 /** Sleep until `before` ahead of `expiresAt`, but no sooner than halfway there from now. */
@@ -242,12 +243,21 @@ const untilRotation = (expiresAt: DateTime.Utc, before: Duration.Duration) =>
     }),
   );
 
+/** Native timers may wake a fraction early; a revocation must reach its monotonic deadline. */
+const until = (at: number, now: () => number): Effect.Effect<void> =>
+  Effect.suspend(() =>
+    now() >= at
+      ? Effect.void
+      : Effect.sleep(Duration.millis(Math.ceil(at - now()))).pipe(Effect.andThen(until(at, now))),
+  );
+
 /** Borrowed work and transferred scopes hold a generation until cleanup lets it go. */
 const leasing = <A>(
   state: SubscriptionRef.SubscriptionRef<State<A>>,
   apply: Apply<A>,
   waitTimeout: Duration.Duration,
   now: () => number,
+  clock: Clock.Clock,
 ) => {
   const borrow = (hold: Hold, wait: Duration.Duration) =>
     Effect.gen(function* () {
@@ -257,7 +267,7 @@ const leasing = <A>(
         const step = yield* apply({ _tag: "Hold", hold });
 
         if (step.borrowed !== undefined) return step.borrowed;
-        yield* waitFor(state, Duration.millis(Math.max(0, until - now()))).pipe(
+        yield* waitFor(state, Duration.millis(Math.max(0, until - now())), clock).pipe(
           Effect.interruptible,
         );
         if (now() >= until) return yield* timedOut();
@@ -454,7 +464,7 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
           return step;
         }),
       )
-      .pipe(Effect.uninterruptible);
+      .pipe(Effect.uninterruptible, Effect.provideService(Clock.Clock, clock));
 
   const perform = (step: Lifecycle.Step<Held<A | void>, Hold>): Effect.Effect<void> =>
     Effect.gen(function* () {
@@ -487,7 +497,7 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
 
             yield* Deferred.succeed(command.live.value.ending, ending);
             yield* Effect.forkIn(
-              Effect.sleep(Duration.millis(Math.max(0, ending.revokeAt - now()))).pipe(
+              until(ending.revokeAt, now).pipe(
                 Effect.andThen(
                   Effect.suspend(() => apply({ _tag: "Revoke", number: command.live.number })),
                 ),
@@ -533,7 +543,7 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
       ),
     );
 
-  const use = leasing(state, apply, waitTimeout, now);
+  const use = leasing(state, apply, waitTimeout, now, clock);
 
   const end = yield* Effect.cached(PubSub.publish(events, Exit.void));
 
@@ -558,14 +568,17 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
   yield* perform(started);
 
   return {
-    browser: Effect.map(waitFor(state, waitTimeout), (live) => live.value.opened.browser),
+    browser: Effect.map(waitFor(state, waitTimeout, clock), (live) => live.value.opened.browser),
     use,
     states: Stream.fromPubSubTake(events),
     rotate: apply({ _tag: "Rotate" }).pipe(
       Effect.flatMap(({ reply }) =>
         reply === undefined
           ? Effect.fail(retired())
-          : Effect.map(waitFor(state, waitTimeout, reply), (live) => live.value.opened.browser),
+          : Effect.map(
+              waitFor(state, waitTimeout, clock, reply),
+              (live) => live.value.opened.browser,
+            ),
       ),
     ),
     retire,

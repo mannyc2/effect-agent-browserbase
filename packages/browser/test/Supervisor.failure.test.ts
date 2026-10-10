@@ -21,6 +21,46 @@ const owner = Effect.gen(function* () {
 });
 
 describe("Supervisor failure ownership", () => {
+  it.live("keeps borrowing and rotation bounds on its owner clock under a caller TestClock", () =>
+    Effect.gen(function* () {
+      const waiting = yield* Supervisor.make({ open: Effect.never, waitTimeout: "20 millis" });
+
+      for (const request of [waiting.browser, waiting.rotate, waiting.use(() => Effect.void)]) {
+        const caller = yield* request.pipe(
+          Effect.provide(TestClock.layer()),
+          Effect.exit,
+          Effect.forkChild,
+        );
+
+        yield* Effect.sleep("80 millis");
+        assert.isDefined(
+          caller.pollUnsafe(),
+          "a caller's stopped clock cannot stop admission expiry",
+        );
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(caller)));
+      }
+
+      const released: Array<string> = [];
+      let number = 0;
+
+      const running = yield* Supervisor.make({
+        handover: "20 millis",
+        open: Effect.sync(() => ({
+          browser: browser(String(++number)),
+          value: undefined,
+          release: Effect.sync(() => void released.push(String(number))).pipe(
+            Effect.as(new Supervisor.Settled()),
+          ),
+        })),
+      });
+
+      yield* running.use((lease) => lease.retain);
+      yield* running.rotate.pipe(Effect.provide(TestClock.layer()));
+      yield* Effect.sleep("80 millis");
+      assert.strictEqual(released.length, 1, "manual rotation cannot freeze its revocation timer");
+    }),
+  );
+
   it.effect("refuses unbounded or negative handover before opening a provider", () =>
     Effect.gen(function* () {
       let opened = false;
