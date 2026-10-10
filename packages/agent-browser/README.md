@@ -5,8 +5,33 @@ browser ports, with the tools an agent drives them by. Yielded runs the agent: i
 budgets, approval, context and run events. This package gives that agent a browser.
 
 ```sh
-npm install effect-agent-browser@beta effect-browser@beta @yielded/agent@0.1.0-beta.168 effect playwright-core
+npm install effect-agent-browser@beta effect-browser@beta effect playwright-core
 ```
+
+The package peers on `@yielded/agent` `0.1.0-beta.168` exactly, which is not on npm yet, so npm
+alone cannot install it. Until it is, install the archive this release is checked with, as a
+dependency and as an override (for Bun, the override goes in the workspace root's
+`package.json`):
+
+```json
+{
+  "dependencies": {
+    "@yielded/agent": "https://raw.githubusercontent.com/mannyc2/effect-agent-browserbase/1c40d56a631ea0a041577d9736a7484e3d0f4b62/yielded-agent-0.1.0-beta.168.tgz"
+  },
+  "overrides": {
+    "@yielded/agent": "https://raw.githubusercontent.com/mannyc2/effect-agent-browserbase/1c40d56a631ea0a041577d9736a7484e3d0f4b62/yielded-agent-0.1.0-beta.168.tgz"
+  }
+}
+```
+
+Your lockfile then records its integrity, which is
+`sha512-wEvXIgLTR6nDpFglj/TDI3F2NWgNEhiyXaGaMsbM6vx2H9xFBx/Q90qCcnVRg12kcL4eptuMSZp4wE7YfLxTLw==`.
+The archive is not a release of Yielded Agent's: it is upstream's release candidate,
+[yielded-dev/agent#779](https://github.com/yielded-dev/agent/pull/779) at `36775000`, built by
+upstream's CI, under its MIT license, which it carries. Its only peer is `effect` `^4.0.0`, so it
+shares your one Effect. The release checks install it this way with npm, and with Bun's isolated
+linker, with no `--force` or `--legacy-peer-deps`. A release checked against `0.1.0-beta.168` from
+npm will say so here.
 
 | Module         | What it holds                                                                  |
 | -------------- | ------------------------------------------------------------------------------ |

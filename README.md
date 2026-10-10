@@ -15,8 +15,8 @@ implements over these pages.
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
 | [`demos`](demos) (private)                               | A site that replays recorded bench runs, graded                    |
 
-0.3 is not on npm yet. Until its first beta is published, `@beta` installs `0.2.0-beta.9`, whose
-API differs; [docs/STATUS.md](docs/STATUS.md) has the state.
+`effect-agent-browser` needs `@yielded/agent` `0.1.0-beta.168`, which is not on npm yet: its
+[README](packages/agent-browser/README.md) gives the archive to install in its place.
 
 ## An agent in a local Chromium
 

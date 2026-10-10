@@ -4,7 +4,12 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
-## 0.3.0-beta.4 (unreleased)
+## 0.3.0-beta.4
+
+The first 0.3 release on npm. `0.3.0-beta.0` to `0.3.0-beta.3` were prepared but never published,
+so this release also carries the changes their sections list. `effect-agent-browser` peers on
+`@yielded/agent` `0.1.0-beta.168`, which is not on npm yet: its README gives the archive, and its
+integrity, that consumers install in its place, as the release checks do.
 
 Contexts and follow-ups: stored contexts held through a `ContextLease` across processes, read back
 with `verifyContext`, and sessions resumed with `attach` or kept past their supervisor's scope;
@@ -111,7 +116,7 @@ settled, as the paid narration run found moments did not.
 - `Moment.toPrompt`'s text changed: a change that kept changing ends with whether it still was, and
   one that settled is told among the news, before what is still changing.
 
-## 0.3.0-beta.3 (unreleased)
+## 0.3.0-beta.3 (not published)
 
 Concurrency and presentation: each page admits its operations in a lane of its own, and reads
 keep their work; the stage, the presenter and the wait after input; windows over a page's three
@@ -264,7 +269,7 @@ tracks, with moments as windows and `page.state`; and agents on Yielded Agent, t
 - `Page.waitForText` is gone: `Page.waitFor({ text })` waits for text, in one call the page
   answers as the text comes, and fails `Timeout` rather than `NotFound` at its deadline.
 
-## 0.3.0-beta.2 (unreleased)
+## 0.3.0-beta.2 (not published)
 
 Identity and lifetime: pages named by their target ids, with a typed life story, the browser's
 loss and its cause, `consequence` and redacted addresses; `Supervisor`, with Browserbase releases
@@ -429,7 +434,7 @@ lead with.
   with it.
 - `Page` has a `changes` member, so a hand-made `Page` needs one.
 
-## 0.3.0-beta.1 (unreleased)
+## 0.3.0-beta.1 (not published)
 
 Cheaper pictures and reads, and replay: pictures and reads on each page's own counted protocol
 session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `Page.ready`.
@@ -556,7 +561,7 @@ session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `P
   the library, the bench or the demos read them. `Browser.make` takes no `contextOrigin`, and
   `Cdp.open` no second argument.
 
-## 0.3.0-beta.0
+## 0.3.0-beta.0 (not published)
 
 0.3 replaces the 0.2 set with a rewrite on Effect 4.0.0 and `effect/ai`. No 0.2 API carries over,
 and nothing translates 0.2 calls into 0.3 ones. [STATUS.md](docs/STATUS.md) says what 0.3 does, and
