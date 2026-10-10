@@ -108,8 +108,8 @@ const program = Effect.gen(function* () {
     build: ({ browser, session }) =>
       browser.firstPage.pipe(Effect.map((page) => ({ page, session }))),
   });
-  const text = yield* sessions.use(({ value }) => value.page.text());
   // `retire` releases every session; so does the scope's close.
+  return yield* sessions.use(({ value }) => value.page.text());
 });
 ```
 

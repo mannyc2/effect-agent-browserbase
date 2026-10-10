@@ -711,7 +711,7 @@ the shared acquisition. Browser-only providers can continue returning `{ browser
 `void` value. Pages and values do not carry over when a new generation opens.
 
 ```ts
-import { Effect, Exit, Scope } from "effect";
+import { Effect } from "effect";
 import * as Chromium from "effect-browser/Chromium";
 import * as Supervisor from "effect-browser/Supervisor";
 
@@ -736,21 +736,24 @@ errors stay ordinary work errors. `browser` still returns an unheld browser: use
 caller can tolerate that generation being released underneath it.
 
 A retained scope transfers a hold beyond the `use` call. Acquire anything that must travel with
-that hold in its scope, and close it when the receiver is finished:
+that hold in its scope, and close it when the receiver is finished. Within a scoped program with
+`browsers` as above and `Exit` and `Scope` imported from `effect`:
 
 ```ts
-const prepared = yield* browsers.use((lease) =>
-  Effect.gen(function* () {
-    const hold = yield* lease.retain;
-    const page = yield* Effect.acquireRelease(lease.browser.newPage(), (page) =>
-      page.close.pipe(Effect.ignore),
-    ).pipe(Scope.provide(hold));
+const prepared =
+  yield *
+  browsers.use((lease) =>
+    Effect.gen(function* () {
+      const hold = yield* lease.retain;
+      const page = yield* Effect.acquireRelease(lease.browser.newPage(), (page) =>
+        page.close.pipe(Effect.ignore),
+      ).pipe(Scope.provide(hold));
 
-    return { page, hold, ending: lease.ending };
-  }),
-);
+      return { page, hold, ending: lease.ending };
+    }),
+  );
 // Hand `prepared` to its next owner; that owner eventually lets it go.
-yield* Scope.close(prepared.hold, Exit.void);
+yield * Scope.close(prepared.hold, Exit.void);
 ```
 
 Rotation publishes `Draining` for the outgoing generation. It stays alive until its last hold
