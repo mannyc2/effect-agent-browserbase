@@ -8,11 +8,22 @@ package. Ordinary CI never publishes,
 and preparing or testing a release does not authorize publishing, tagging or changing account
 settings.
 
-An unreleased cutover may use a commit-pinned upstream archive through the repository's
-`@yielded/agent` override. It can merge after CI passes, but the publish workflow rejects that
-override before building, including in a dry run: npm consumers do not inherit workspace
-overrides. Before a release, remove the override once the required version is on npm, refresh
-`bun.lock`, and verify the actual npm dependency with CI and the clean-consumer check.
+## The Yielded archive
+
+`effect-agent-browser` peers on one exact `@yielded/agent`. While that version is not on npm, the
+repository overrides it with an archive pinned to a commit of the `vendor/yielded-agent` branch,
+and a release can go out with it. npm consumers do not inherit workspace overrides, so the
+package's README has them install the archive as a dependency and as an override, and gives its
+address and integrity. `tools/check-packed.sh` holds every PR and release to that: the override
+must be pinned to a commit, the README must give its address and the integrity `bun.lock` records,
+and an npm project and a Bun workspace with the isolated linker must install it as the README
+says, with no `--force` or `--legacy-peer-deps`, lock that integrity, and hold one copy each of
+`effect`, `effect-browser`, `@yielded/agent` and `playwright-core`.
+
+- Keep `vendor/yielded-agent` while a published release's README sends consumers to it.
+- Change the archive only in a PR that changes the override, `bun.lock` and the README together.
+- Once the version is on npm, the release checked against it drops the override, refreshes
+  `bun.lock` and removes the README's archive step.
 
 ## One-time setup
 
@@ -92,15 +103,18 @@ The owner does this once, in npm and GitHub settings.
    environment and publishes the archives the build job checked.
 
 The clean-consumer check is `tools/check-packed.sh`. It installs the archives outside the
-repository, with the peers npm picks for their ranges, and has TypeScript check every entry point's
-declarations with `skipLibCheck: false` and Node import each one: `bun run ready` cannot see a
-declaration or an import that only the workspace satisfies. CI runs it on every PR, after `ready`;
+repository twice: in an npm project, with the peers npm picks for their ranges, and in a Bun
+workspace with the isolated linker, whose application pins its peers, as the consumer does. Each
+installs again from its lockfile alone, and in each TypeScript checks every entry point's
+declarations with `skipLibCheck: false` and Node imports each one, Bun too in the workspace:
+`bun run ready` cannot see a declaration or an import that only the workspace satisfies. CI runs it on every PR, after `ready`;
 run it before tagging too: without arguments it builds and packs the packages itself, under
 `$TMPDIR`.
 
 The tag must be on `main` and name the version all four packages carry. A prerelease
 `x.y.z-alpha.N`, `-beta.N` or `-rc.N` goes to the dist-tag of that name; only a plain `x.y.z` goes
-to `latest`. Packages publish in dependency order, and a version already on npm is skipped, so
+to `latest`. Packages publish in dependency order, `effect-browser-human-strokes` last until this
+workflow has published it once, and a version already on npm is skipped, so
 dispatching the same tag again finishes an interrupted release. A published version cannot be
 replaced; fix a bad one with a new version.
 

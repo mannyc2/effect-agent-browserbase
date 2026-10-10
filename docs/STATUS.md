@@ -65,9 +65,10 @@ Agent, the renamed Effect Agent:
   policy and budgets, approval, context and run events. Its browser interface is on Yielded's
   `main` but not yet on npm: the package pins `@yielded/agent` `0.1.0-beta.168`, which upstream's
   pending release publishes. Until then the repository's `overrides` install a commit-pinned pack
-  of upstream's release candidate from this repository's `vendor/yielded-agent` branch for
-  development and CI. The source can merge with that pack; the publish workflow rejects the
-  override, so an npm release waits for the actual npm dependency and fresh consumer checks.
+  of upstream's release candidate from this repository's `vendor/yielded-agent` branch, and
+  consumers install the same pack as a dependency and an override, by the address and integrity
+  the package's README gives. The packed check installs it that way with npm and with Bun's
+  isolated linker, and holds each to that integrity and to one copy of each runtime package.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
 - Structured reads in one call to the page. `Page.find` returns the elements that a query of role,
@@ -379,10 +380,10 @@ The larger pieces left for later:
 
 The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` and
 `effect-agent-browser`, published on 2 October 2026 from tag `v0.2.0-beta.9` (`976d316`) on the
-`beta` dist-tag. 0.3 is not released. It will be released by plain npm trusted publishing from
-`.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase`,
-`effect-browser-human-strokes` and `effect-agent-browser`, once `@yielded/agent` `0.1.0-beta.168`
-is on npm; [RELEASING.md](RELEASING.md) has the steps, and
+`beta` dist-tag. 0.3's first release, `0.3.0-beta.4`, goes out by plain npm trusted publishing
+from `.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase`,
+`effect-browser-human-strokes` and `effect-agent-browser`, with `@yielded/agent` from the archive
+above until `0.1.0-beta.168` is on npm; [RELEASING.md](RELEASING.md) has the steps, and
 [CHANGELOG.md](../CHANGELOG.md) lists what each release changes. Before it publishes, the workflow
 installs the packed archives in a clean consumer, typechecks every entry point's declarations with
 `skipLibCheck: false` and imports each one, with `tools/check-packed.sh`, which CI runs on every PR
