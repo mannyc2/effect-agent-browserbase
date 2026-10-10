@@ -4,12 +4,21 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
-## 0.3.0-beta.4
+## 0.3.0-beta.5
 
-The first 0.3 release on npm. `0.3.0-beta.0` to `0.3.0-beta.3` were prepared but never published,
-so this release also carries the changes their sections list. `effect-agent-browser` peers on
-`@yielded/agent` `0.1.0-beta.168`, which is not on npm yet: its README gives the archive, and its
+The first 0.3 release on npm. `0.3.0-beta.0` to `0.3.0-beta.4` were prepared but never published,
+so this release also carries the changes their sections list. `v0.3.0-beta.4` was tagged, and
+release tags cannot move, so the fix below goes out as this version. `effect-agent-browser` peers
+on `@yielded/agent` `0.1.0-beta.168`, which is not on npm yet: its README gives the archive, and its
 integrity, that consumers install in its place, as the release checks do.
+
+### Changed
+
+- `Page.waitFor` with no selector waits on through a document that has no body yet, as a new
+  document has until its parser reaches one. It failed with a `TypeError` read on the page, so a
+  wait for text across a navigation could fail before the text came.
+
+## 0.3.0-beta.4 (tagged, not published)
 
 Contexts and follow-ups: stored contexts held through a `ContextLease` across processes, read back
 with `verifyContext`, and sessions resumed with `attach` or kept past their supervisor's scope;
@@ -97,9 +106,6 @@ settled, as the paid narration run found moments did not.
   busy page runs a press and its release back to back, so the press can have the change's own time:
   a menu a click opened was then no input's doing, and a dialog its item opened was the menu
   button's.
-- `Page.waitFor` with no selector waits on through a document that has no body yet, as a new
-  document has until its parser reaches one. It failed with a `TypeError` read on the page, so a
-  wait for text across a navigation could fail before the text came.
 
 ### Breaking
 

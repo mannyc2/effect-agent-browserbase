@@ -1,6 +1,6 @@
 {
   "name": "effect-browser",
-  "version": "0.3.0-beta.4",
+  "version": "0.3.0-beta.5",
   "description": "Effect browser sessions, page control, screencast and moments over Playwright and CDP.",
   "license": "MIT",
   "repository": {
