@@ -97,6 +97,9 @@ settled, as the paid narration run found moments did not.
   busy page runs a press and its release back to back, so the press can have the change's own time:
   a menu a click opened was then no input's doing, and a dialog its item opened was the menu
   button's.
+- `Page.waitFor` with no selector waits on through a document that has no body yet, as a new
+  document has until its parser reaches one. It failed with a `TypeError` read on the page, so a
+  wait for text across a navigation could fail before the text came.
 
 ### Breaking
 

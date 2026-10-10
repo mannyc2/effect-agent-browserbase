@@ -326,7 +326,7 @@ Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc 
 
 | Package                        | Source lines                   | Test lines      | Top-level exports         |
 | ------------------------------ | ------------------------------ | --------------- | ------------------------- |
-| `effect-browser`               | 8,871 → 14,977                 | 11,064 → 15,889 | 129 → 169                 |
+| `effect-browser`               | 8,871 → 14,978                 | 11,064 → 15,909 | 129 → 169                 |
 | `effect-agent-browser`         | 935                            | 725             | 14                        |
 | `effect-browserbase`           | 807 → 1,704, and 622 `testing` | 611 → 2,391     | 32 → 41, and 14 `testing` |
 | `effect-browser-human-strokes` | 309 → 298                      | 261 → 247       | 4 → 3                     |

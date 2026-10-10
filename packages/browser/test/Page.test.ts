@@ -550,6 +550,26 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("waits for text on a document that has no body yet", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      // A document has no body until its parser reaches one, as while a new document loads.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          document.body.remove();
+          setTimeout(() => {
+            const body = document.createElement("body");
+
+            body.textContent = "Arrived with the body";
+            document.documentElement.append(body);
+          }, 300);
+        }),
+      );
+      yield* page.waitFor({ text: "Arrived with the body" });
+    }),
+  );
+
   it.effect("goes back through frame-only history and refuses when there is nothing behind", () =>
     Effect.gen(function* () {
       const browser = yield* Browser;

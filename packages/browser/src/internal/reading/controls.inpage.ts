@@ -113,9 +113,10 @@ export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: 
   };
 
   // Whether the condition holds now: what the selector matches, or the body, and shows, with the
-  // text when one is asked, case and all.
+  // text when one is asked, case and all. A document has no body until its parser reaches one.
   const holds = (request: ConditionRequest): ConditionResult => {
-    const roots = request.selector === null ? [document.body] : rootsOf(request.selector);
+    const roots =
+      request.selector === null ? [document.body].filter(Boolean) : rootsOf(request.selector);
 
     if ("invalid" in roots) return roots;
     const text = request.text === null ? null : clean(request.text, Infinity);
