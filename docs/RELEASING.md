@@ -47,9 +47,9 @@ The owner does this once, in npm and GitHub settings.
 
    The workflow publishes with `npm publish`, so tick it under allowed actions: an entry created
    after 3 September 2026 allows only `npm stage publish` until you do. `effect-browser`,
-   `effect-browserbase` and `effect-agent-browser` were published by this workflow file in 0.2, so
-   they should already have this entry; check that it matches. npm does not test the entry when
-   it is saved, so the first release is the test.
+   `effect-browserbase` and `effect-agent-browser` have this entry: the workflow published them
+   in `0.3.0-beta.5`. `effect-browser-human-strokes` has none yet: npm refused its publish with
+   `ENEEDAUTH`. npm does not test an entry when it is saved, so its next release is the test.
 
 3. **Protect the `npm` environment.** In the repository's **Settings → Environments**, the `npm`
    environment (it exists from 0.2) should have the owner as a required reviewer, and its
@@ -126,3 +126,7 @@ archives in five packed consumers and kept recovery records on the `ts-release-p
 `effect-browserbase` and `effect-agent-browser` from `0.2.0-beta.0` to `0.2.0-beta.9`, the last
 from tag `v0.2.0-beta.9` (`976d316`). Before that, `effect-browserbase` and
 `effect-agent-browserbase` ended at `0.1.0-beta.104`. The code is in Git history at `1ed8259`.
+
+0.3 publishes from this workflow. Its first release, `0.3.0-beta.5`, went out from tag
+`v0.3.0-beta.5` (`3af967f`). `v0.3.0-beta.4` (`312ecf8`) is tagged but was never published, and
+the repository's rulesets keep `v*` tags from moving or being deleted.
