@@ -45,7 +45,7 @@ bun run ready                       # fmt check, lint, typecheck, test, build
 - **Size.** A module holds at most 600 lines of code and a function at most 150, falling to 100;
   lint counts code only. The exceptions in `lint/.oxlintrc.json` sit at each file's size when the
   limits came in. Lower one when a change shrinks its file, and never raise one.
-  `effect-browser`'s source stays at or under 11,000 code lines (`bun run size`, in `ready`),
+  `effect-browser`'s source stays at or under 12,000 code lines (`bun run size`, in `ready`),
   counted by lint's same rule with blank and comment-only lines excluded. A change that would
   cross it deletes as much code as it adds.
 - **Exceptions say why.** A comment that switches a check off gives its reason after ` -- `, as

@@ -2,6 +2,22 @@
 
 ## 0.3
 
+The next release, planned as `0.3.0-beta.8` and not yet published, adds leased generations:
+`Supervisor<A>.use`, scoped values, transferable retained scopes and a default 30-second
+handover. Loss and retirement revoke work immediately; cleanup precedes provider release.
+`Browserbase.supervise({ build })` builds each generation's application value. Exclusive
+persisted-context rotation drains and releases before acquiring; nonexclusive manual and timed
+rotation continue while older generations drain. The consumer owns overlap and billing policy,
+and `Unconfirmed` never asserts that a provider session ended. Generation events carry monotonic
+`hostTime` alongside wall-clock `at`.
+
+The lifecycle model, scripted provider tests and local Chromium cover admission, cancellation,
+revocation, finalizer ordering and rotation. The Browserbase fake covers client sequencing and
+persisted-writer refusal. They do not establish hosted save timing, physical session overlap or
+billing. [H2](HOSTED_CHECKS.md), persisted rotation with a live hold and storage read-back, is
+prepared but unrun until included-hour allowance is verified. Scoped input suspension, cued
+presentation, connection identity and the composition examples remain later delivery stages.
+
 The `0.3.0-beta.7` release candidate adds resumable plan steps with receipts, serialized stopping points, durable
 expected-effect read-back, bounded arrival and content readiness. A missing receipt after
 cancellation or restart stays unknown: the library never automatically repeats unresolved
@@ -41,9 +57,10 @@ Agent, the renamed Effect Agent:
   run on a capture connection of their own, a second, read-only connection to the session, so a
   frame never waits behind a large message on the one that drives the page; a provider supplies
   one through `Cdp.Options.capture`.
-- Sessions that survive: `Supervisor` keeps a browser open as generations from any provider,
-  reopening a lost one on a schedule, rotating ahead of a session's end (make before break, or
-  break first for sessions saving to one stored context), and stopping at once on `retire`. A
+- Sessions that survive: `Supervisor` keeps a browser open as leased generations from any provider,
+  with scoped application values, `use` work and transferable `retain` scopes. It reopens a lost
+  one on a schedule, rotates ahead of a session's end (overlap, or drain and release first for
+  sessions saving to one stored context), and revokes at once on `retire`. A
   failure the provider deems definite, such as a refused key, is `Down` at once with its cause,
   rather than hidden behind the schedule. Each generation's changes stream as `states`, with its
   release outcome last, a loss with its cause. `Browserbase.supervise` supervises hosted sessions,

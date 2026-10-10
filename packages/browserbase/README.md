@@ -7,8 +7,8 @@
 npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 ```
 
-- `Browserbase`: `open` and `layer` create a session and release it when their scope closes, so
-  billing stops then rather than at the session's timeout, and closing it waits for the release.
+- `Browserbase`: `open` and `layer` create a session and request its release when their scope
+  closes. Closing waits for the outcome; an `Unconfirmed` session may still run and bill.
   `attach` connects to a running session without taking ownership of it, as from another process:
   that is resume, of a session created with `keepAlive`. `supervise` keeps
   sessions open across losses and session ends, and with `keep`, past its own scope. `reconcile`
@@ -79,13 +79,25 @@ session outlives the process that opened it, for another to attach to.
 ## Supervised sessions
 
 `supervise` keeps a browser on Browserbase as `Supervisor` generations, each a new session made
-from `session`. A lost session is published at once, `Lost` with its cause, and replaced on the
-`reopen` schedule; the next session opens `rotateBefore` ahead of the current browser's
-`expiresAt`, or on `rotate`, before the current one is released. `states` reports each session's release outcome. Sessions that
-persist to a stored context are exclusive: a rotation releases the current session, and lets its
-save settle, before the next one opens. An open Browserbase refused, as for a bad key or an invalid
-request, is `Down` at once with its cause, since no new try mends it; everything else, a held
-context included, is tried again on the schedule.
+from `session`. Use `sessions.use` to hold a generation while working: its lease gives the
+`browser` and `value`, which is the `Session` unless `build` supplies an application value.
+`build(hosted)` runs in the generation's scope on every acquisition, including adoption; failed
+or cancelled construction closes that scope and releases the acquired session before retry.
+The [generic supervisor contract](../browser/README.md#supervising-browser-generations) describes
+`use`, transferable `retain` scopes, cancellation and stale-work refusal.
+
+Outgoing holds drain for `handover`, 30 seconds by default. A lost session revokes immediately and
+is replaced on `reopen`; `rotateBefore` and `rotate` keep their normal schedule while older
+nonexclusive generations drain. This can overlap more than two hosted sessions. The consumer
+owns its overlap and billing policy. `states` reports each generation's release outcome;
+`Unconfirmed` means the old session might still run even after local ownership ends.
+
+Sessions that persist to a stored context are exclusive: rotation first drains the current
+generation, releases its session and lets its save settle. If release is unconfirmed, the next
+writer reconciles the context and fails `ContextHeld` while the old writer cannot be confirmed
+ended. It does not silently create another writer. An open Browserbase refused, as for a bad key
+or an invalid request, is `Down` at once; everything else, a held context included, is tried again
+on the schedule.
 
 ```ts
 const program = Effect.gen(function* () {
@@ -93,11 +105,20 @@ const program = Effect.gen(function* () {
     session: { timeout: 6 * 60 * 60 },
     reopen: Schedule.exponential("1 second").pipe(Schedule.upTo({ duration: "5 minutes" })),
     rotateBefore: "20 minutes",
+    build: ({ browser, session }) =>
+      browser.firstPage.pipe(Effect.map((page) => ({ page, session }))),
   });
-  const browser = yield* sessions.browser;
+  const text = yield* sessions.use(({ value }) => value.page.text());
   // `retire` releases every session; so does the scope's close.
 });
 ```
+
+Keep pages that must close before provider release in a `use` or retained scope. Resources
+acquired by `build` live in the generation's scope, which closes after provider release.
+Generation `hostTime` uses the owning Effect clock; provider `createdAt` and `endedAt` are separate
+wall-clock evidence. Fake-provider ordering tests do not prove hosted context-save timing or
+billing. The included-hours-only [H2 recipe](../../docs/HOSTED_CHECKS.md) remains a hosted check to
+run after its allowance is verified.
 
 ### Keeping a session past the scope
 
@@ -107,6 +128,8 @@ name adopts that session, its pages and their ids with it, rather than creating 
 a restart of the process that owns the browser keeps its prepared pages and its signed-in state.
 It is off by default, and opt-in, because a kept session bills until something adopts and releases
 it, or until its own `timeout` ends it: set one that bounds what a forgotten session costs.
+Keeping revokes active work and closes retained and generation application scopes. The next
+supervisor rebuilds its value when it adopts the session; only the provider's browser state stays.
 
 - Each session is created with `keepAlive`, so it outlives its connection, and labelled
   `keptAs: <name>` in its user metadata, since Browserbase sets user metadata only at the create.

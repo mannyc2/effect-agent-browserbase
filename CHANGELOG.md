@@ -4,6 +4,24 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## Unreleased (planned 0.3.0-beta.8)
+
+- `Supervisor<A>` owns per-generation values and scoped `use` work. Leases expose `ending` and
+  transferable `retain` scopes; outgoing work drains for 30 seconds by default, then fails
+  `Superseded` after cleanup. Loss and retirement revoke immediately. Existing unheld `browser`
+  access remains available.
+- Exclusive rotation drains and releases before acquiring its replacement. Nonexclusive manual
+  and timed rotation continue while older generations drain; the consumer controls overlap.
+  Retained resources and work finalizers finish before provider release, and the generation's
+  scope closes last. `Unconfirmed` remains an honest provider-release outcome.
+- `Browserbase.supervise({ build })` constructs scoped application values; without it the lease's
+  value is its `Session`. Persisted contexts retain their exclusive writer and reconciliation
+  rules. Keeping a session closes application resources; adoption rebuilds its value.
+- Generation events add monotonic `hostTime` beside wall-clock `at`, and `Draining` joins the
+  lifecycle states. Local Chromium, lifecycle-model and fake-provider evidence cover library
+  behavior. Hosted persisted handover and save read-back remain unrun; the
+  [H2 recipe](docs/HOSTED_CHECKS.md) requires verified included Browserbase hours.
+
 ## 0.3.0-beta.7
 
 - Plans expose `take`, receipts, stopping points and restoration. Expected checks skip input
