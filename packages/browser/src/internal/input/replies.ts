@@ -3,7 +3,7 @@
  * Canceling a caller cannot cancel a protocol command already sent. The next action waits for
  * those replies, while a stopped run releases only held keys or buttons whose release was never submitted.
  */
-import { Data, Effect } from "effect";
+import { Context, Data, Effect } from "effect";
 
 import { maximumSamples } from "../../Motion.ts";
 
@@ -14,6 +14,10 @@ export class InputFailure extends Data.TaggedError("InputFailure")<{
 }> {}
 
 export interface Run {
+  /** A native call made by this operation: cancellation cannot cancel its actual reply. */
+  readonly track: <A>(reply: Promise<A>) => Promise<A>;
+  /** End ownership after the record and all this operation's native replies have settled. */
+  readonly afterIdle: (ended: () => void) => void;
   /** Reserve a complete stroke, including its releases, before sending its first event. */
   readonly reserve: (commands: number) => Effect.Effect<void, InputFailure>;
   /** Admit every sample before a motion starts its published clock; ordinary input stays bounded separately. */
@@ -29,6 +33,11 @@ export interface Run {
   /** Stop future input and submit missing releases without waiting indefinitely for replies. */
   readonly close: Effect.Effect<void>;
 }
+
+/** Native page calls join their operation's reply ownership, including script mutations. */
+export const Current = Context.Reference<Run | undefined>("effect-browser/internal/input/Current", {
+  defaultValue: () => undefined,
+});
 
 export const make = () => {
   const outstanding = new Set<Promise<void>>();
@@ -46,6 +55,42 @@ export const make = () => {
     let failure: InputFailure | undefined;
     let reserved = 0;
     let closed = false;
+    const observed = new WeakMap<Promise<unknown>, { input: boolean }>();
+    const endings = new Set<() => void>();
+
+    const track = <A>(response: Promise<A>, input = false): Promise<A> => {
+      const existing = observed.get(response);
+
+      if (existing !== undefined) {
+        existing.input ||= input;
+
+        return response;
+      }
+      const entry = { input };
+
+      observed.set(response, entry);
+
+      const reply = response
+        .then(
+          () => undefined,
+          (cause: unknown) => {
+            if (entry.input) failure ??= new InputFailure({ cause });
+          },
+        )
+        .then(() => {
+          pending.delete(reply);
+          outstanding.delete(reply);
+          if (pending.size === 0) {
+            for (const end of endings) end();
+            endings.clear();
+          }
+        });
+
+      pending.add(reply);
+      outstanding.add(reply);
+
+      return response;
+    };
 
     const requireOpen = Effect.suspend(() =>
       closed
@@ -70,21 +115,7 @@ export const make = () => {
         return;
       }
 
-      // Every rejection is observed immediately; a failure does not abandon later replies.
-      const reply = response.then(
-        () => {
-          pending.delete(reply);
-          outstanding.delete(reply);
-        },
-        (cause: unknown) => {
-          failure ??= new InputFailure({ cause });
-          pending.delete(reply);
-          outstanding.delete(reply);
-        },
-      );
-
-      pending.add(reply);
-      outstanding.add(reply);
+      void track(response, true);
     };
 
     const reserve = (commands: number, maximum: number, limit: number) =>
@@ -102,6 +133,11 @@ export const make = () => {
       });
 
     const run: Run = {
+      track,
+      afterIdle: (end) => {
+        if (pending.size === 0) end();
+        else endings.add(end);
+      },
       reserve: (commands) => reserve(commands, capacity, capacity),
       // A dense stroke cannot wait for replies midway without changing its published timing.
       // Its finite reservation also leaves room for the ordinary pool's already-owned releases.

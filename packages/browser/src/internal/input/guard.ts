@@ -150,8 +150,8 @@ export const make = (page: PageContext, bridge: Bridge) => {
       return { request, validate };
     });
 
-  // `mayHaveRun` hears of a failure the script may have started before: without its context or
-  // the library's API in it, the call never ran.
+  // `mayHaveRun` hears of a failure or interruption after the script may have started. A known
+  // missing context or API means it never ran; acquiring the context itself sends no mutation.
   const mutate = (
     operation: string,
     call: string,
@@ -161,6 +161,7 @@ export const make = (page: PageContext, bridge: Bridge) => {
     (approval === undefined ? current(operation) : Effect.succeed(approval.contextId)).pipe(
       Effect.flatMap((contextId) =>
         evaluateIn(operation, call, contextId).pipe(
+          Effect.onInterrupt(() => mayHaveRun),
           Effect.tapError((error) =>
             error.reason._tag === "Failed" &&
             /Cannot find context|__effectBrowser/i.test(error.reason.detail)

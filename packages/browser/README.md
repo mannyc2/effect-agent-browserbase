@@ -678,6 +678,33 @@ how long it waited and how many operations were ahead, and replies not answered 
 `Timeout`, as for a page that does not answer. `Page.failFast(effect)` runs operations that fail
 `Busy` at once instead of waiting. A policy hold leaves the page's turn free.
 
+`browser.suspend({ drain })` withholds library input on every tab for the current scope. It first
+drains operations already admitted, through their `Action` records and native acknowledgements.
+A canceled call may already have sent input: its unanswered reply still prevents a successful
+drain. New and queued writes fail `Suspended`, with `dispatched: false`, and record that refusal.
+Already-held authority refuses input before invoking an input guard; a guard already waiting is
+checked again at admission. Reads, captures and events continue.
+
+```ts
+yield *
+  Effect.gen(function* () {
+    const paused = yield* browser.suspend();
+    // An event reader can resume from paused.since; paused.at is host monotonic time.
+    const page = yield* browser.firstPage;
+    yield* page.screenshot();
+    yield* operatorDone;
+  }).pipe(Effect.scoped);
+// Input resumes after this scope, provided no other suspension still holds it.
+```
+
+Suspensions nest, including scopes closed out of order. `drain` defaults to `navigationTimeout`
+(30 seconds); zero acquires only when input is already idle. Waiters that join a drain share its
+first deadline. Expiry fails all those waiters with `Busy` and restores admission; cancellation
+abandons only that caller's claim. Browser loss fails acquisition with `Closed`. A failed
+acquisition leaves no suspension behind. The gate controls library actions and navigation;
+input from the provider's own viewer or direct native calls remains under the operator's control.
+The consumer owns the operator's decisions and any durable workflow journal.
+
 Reads keep their work. An identical read asked while one is in flight on the page, with no action
 asked between them, joins it, and costs no call of its own. Each read runs in the page's scope under
 the action timeout whoever gives up, so a caller's own `Effect.timeout` loses nothing: a read that
