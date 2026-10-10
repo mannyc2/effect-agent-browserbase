@@ -2,14 +2,14 @@
 
 ## 0.3
 
-The next release, planned as `0.3.0-beta.9`, adds scoped browser input suspension. It drains each
+The `0.3.0-beta.9` release adds scoped browser input suspension. It drains each
 admitted operation through its record and outstanding native replies, refuses later writes as
 `Suspended` and leaves reads/capture available. Nested scopes share authority until the last one
 closes. Local Chromium also verifies agent batches stop between operations without resending
 completed input. The hosted Live View handoff is unrun; provider behavior and included allowance
 remain separate from this native evidence.
 
-The `0.3.0-beta.8` release candidate adds leased generations:
+The `0.3.0-beta.8` release adds leased generations:
 `Supervisor<A>.use`, scoped values, transferable retained scopes and a default 30-second
 handover. Loss and retirement revoke work immediately; cleanup precedes provider release.
 `Browserbase.supervise({ build })` builds each generation's application value. Exclusive

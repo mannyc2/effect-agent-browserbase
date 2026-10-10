@@ -4,7 +4,7 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
-## Unreleased (planned 0.3.0-beta.9)
+## 0.3.0-beta.9
 
 - `Browser.suspend({ drain })` drains admitted input through each operation's record and native
   acknowledgements, then withholds library input across every tab for its scope. New and queued
