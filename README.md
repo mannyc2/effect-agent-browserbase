@@ -18,6 +18,12 @@ implements over these pages.
 `effect-agent-browser` needs `@yielded/agent` `0.1.0-beta.168`, which is not on npm yet: its
 [README](packages/agent-browser/README.md) gives the archive to install in its place.
 
+The browser core also owns [leased generations](packages/browser/README.md#supervising-browser-generations):
+scoped work and application resources, bounded handover and explicit revocation, with hosted
+construction through `Browserbase.supervise({ build })`. The consumer keeps its editorial policy,
+account decisions and durable business journal. [STATUS.md](docs/STATUS.md) distinguishes released
+capabilities from the next release and its remaining hosted checks.
+
 ## An agent in a local Chromium
 
 A [Yielded](https://github.com/yielded-dev/agent) agent runs the loop; `BrowserTools` gives it

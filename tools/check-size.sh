@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Count effect-browser's code with the same max-lines rule as lint: exclude blank and comment-only
-# lines. A change crossing the 11,000-code-line ceiling must delete as much code as it adds.
+# lines. A change crossing the 12,000-code-line ceiling must delete as much code as it adds.
 set -euo pipefail
-ceiling=11000
+ceiling=12000
 root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

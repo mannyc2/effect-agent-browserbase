@@ -5,6 +5,8 @@ import type { AddressInfo } from "node:net";
 
 import { assert, describe, it } from "@effect/vitest";
 import {
+  Context,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -26,6 +28,7 @@ import * as Browserbase from "../src/Browserbase.ts";
 import {
   BrowserbaseClient,
   layer as clientLayer,
+  type Session,
   type SessionOptions,
 } from "../src/BrowserbaseClient.ts";
 import { BrowserbaseError } from "../src/BrowserbaseError.ts";
@@ -1189,7 +1192,149 @@ const line = ({ number, state }: Supervisor.Generation) =>
     ? `${number} Closed ${state.released?._tag ?? "none"}`
     : `${number} ${state._tag}`;
 
+class BuildSetup extends Context.Service<BuildSetup, { readonly marker: string }>()(
+  "test/BuildSetup",
+) {}
+
 describe("Browserbase.supervise", () => {
+  it.live("gives each generation its provider Session when no builder is supplied", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const sessions: Supervisor.Supervisor<Session> = yield* Browserbase.supervise();
+
+        const value = yield* sessions.use((lease) =>
+          Effect.succeed({ session: lease.value, browser: lease.browser.id }),
+        );
+
+        assert.strictEqual(value.session.id, value.browser);
+        assert.strictEqual(value.session.id, (yield* ids)[0]);
+        yield* sessions.retire;
+      }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
+    }),
+  );
+
+  it.live(
+    "holds an exclusive generation and its built resources before releasing or creating its successor",
+    () =>
+      Effect.gen(function* () {
+        const connectUrl = yield* chromiumEndpoint;
+
+        yield* Effect.gen(function* () {
+          const closed: Array<string> = [];
+
+          const sessions = yield* Browserbase.supervise({
+            session: persisting("context-held-rotation"),
+            contextSettle: "10 millis",
+            handover: "30 seconds",
+            build: (hosted) =>
+              Effect.acquireRelease(
+                Effect.map(BuildSetup, ({ marker }) => ({ id: hosted.session.id, marker })),
+                ({ id }) => Effect.sync(() => void closed.push(id)),
+              ),
+          });
+
+          const first = yield* sessions.use((lease) =>
+            Effect.map(lease.retain, (hold) => ({ value: lease.value, hold })),
+          );
+
+          const rotating = yield* Effect.forkChild(sessions.rotate);
+
+          yield* sessions.states.pipe(
+            Stream.filter(({ state }) => state._tag === "Draining"),
+            Stream.runHead,
+          );
+          assert.deepStrictEqual(closed, []);
+          assert.deepStrictEqual(
+            (yield* kept).map(({ id, status, releases }) => [id, status, releases]),
+            [[first.value.id, "RUNNING", 0]],
+          );
+          assert.isUndefined(rotating.pollUnsafe());
+          assert.strictEqual(first.value.marker, "scoped setup");
+
+          yield* Scope.close(first.hold, Exit.void);
+          const next = yield* Fiber.join(rotating);
+
+          assert.deepStrictEqual(closed, [first.value.id]);
+          assert.notStrictEqual(next.id, first.value.id);
+          assert.isBelow(
+            (yield* asked).indexOf(`GET /v1/sessions/${first.value.id}`),
+            (yield* asked).lastIndexOf("POST /v1/sessions"),
+          );
+          yield* sessions.retire;
+          assert.deepStrictEqual(closed, [first.value.id, next.id]);
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(BuildSetup, { marker: "scoped setup" }),
+          Effect.provide(hostedFake({ connectUrl })),
+        );
+      }),
+  );
+
+  it.live(
+    "releases a kept session when its builder fails, after closing the builder's resources",
+    () =>
+      Effect.gen(function* () {
+        const connectUrl = yield* chromiumEndpoint;
+
+        yield* Effect.gen(function* () {
+          const atCleanup: Array<string> = [];
+
+          const sessions = yield* Browserbase.supervise({
+            keep: "build-failure",
+            reopen: Schedule.recurs(0),
+            build: () =>
+              Effect.acquireRelease(Effect.void, () =>
+                Effect.map(kept, (rows) => void atCleanup.push(rows[0]?.status ?? "missing")),
+              ).pipe(Effect.andThen(Effect.fail(null))),
+          });
+
+          const error = yield* Effect.flip(sessions.browser);
+
+          assert.strictEqual(error.reason, "down");
+          assert.strictEqual(error.cause, null);
+          assert.deepStrictEqual(atCleanup, ["RUNNING"]);
+          assert.deepStrictEqual(
+            (yield* kept).map(({ status, releases }) => [status, releases]),
+            [["COMPLETED", 1]],
+          );
+        }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
+      }),
+  );
+
+  it.live(
+    "releases a kept session and builder resources when retirement interrupts construction",
+    () =>
+      Effect.gen(function* () {
+        const connectUrl = yield* chromiumEndpoint;
+
+        yield* Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const closed: Array<string> = [];
+
+          const sessions = yield* Browserbase.supervise({
+            keep: "build-interrupted",
+            build: (hosted) =>
+              Effect.acquireRelease(Effect.void, () =>
+                Effect.sync(() => void closed.push(hosted.session.id)),
+              ).pipe(
+                Effect.andThen(Deferred.succeed(entered, undefined)),
+                Effect.andThen(Effect.never),
+              ),
+          });
+
+          yield* Deferred.await(entered);
+          yield* sessions.retire;
+          assert.deepStrictEqual(closed, [...(yield* ids)]);
+          assert.deepStrictEqual(
+            (yield* kept).map(({ status, releases }) => [status, releases]),
+            [["COMPLETED", 1]],
+          );
+        }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
+      }),
+  );
+
   it.effect("goes down at once, without trying again, when Browserbase refuses the key", () =>
     Effect.gen(function* () {
       const sessions = yield* Browserbase.supervise();
@@ -1271,11 +1416,11 @@ describe("Browserbase.supervise", () => {
 
         assert.deepStrictEqual(
           lines.filter((one) => one.startsWith("1 ")),
-          ["1 Opening", "1 Open", "1 Lost", "1 Closed Settled"],
+          ["1 Opening", "1 Open", "1 Lost", "1 Draining", "1 Closed Settled"],
         );
         assert.deepStrictEqual(
           lines.filter((one) => one.startsWith("2 ")),
-          ["2 Reopening", "2 Open", "2 Closed Settled"],
+          ["2 Reopening", "2 Open", "2 Draining", "2 Closed Settled"],
         );
         assert.deepStrictEqual(
           (yield* kept).map(({ status }) => status),
@@ -1327,7 +1472,7 @@ describe("Browserbase.supervise", () => {
 
         /** Run `use` on a supervisor keeping under "air", and give its states as lines too. */
         const keeping = <A, E>(
-          use: (sessions: Supervisor.Supervisor) => Effect.Effect<A, E, BrowserbaseClient>,
+          use: (sessions: Supervisor.Supervisor<Session>) => Effect.Effect<A, E, BrowserbaseClient>,
         ) =>
           Effect.gen(function* () {
             const sessions = yield* Browserbase.supervise({ keep: "air" });
@@ -1368,7 +1513,7 @@ describe("Browserbase.supervise", () => {
             }),
           );
 
-          assert.deepStrictEqual(lines, ["1 Opening", "1 Open", "1 Kept"]);
+          assert.deepStrictEqual(lines, ["1 Opening", "1 Open", "1 Draining", "1 Kept"]);
           assert.deepStrictEqual((yield* rows).slice(1), [
             ["COMPLETED", 1, true, "air"],
             ["RUNNING", 0, true, "air"],

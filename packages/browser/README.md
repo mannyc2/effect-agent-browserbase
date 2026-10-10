@@ -702,25 +702,93 @@ its first glide starts mid-viewport, and each later one where the one before end
 input on another tab does meanwhile. Every sent move updates the position, including a partially
 cancelled glide. A later viewport clamps the starting point to its bounds if necessary.
 
-`Supervisor.make` keeps a browser open across losses and session ends, as generations, each a new
-browser from the provider's `open`. Opens run in the supervisor's own scope, so a caller that stops
-waiting never interrupts a half-open browser. `browser` gives the current generation, waiting up to
-`waitTimeout` while one opens. A lost browser is published at once, `Lost` with its browser's
-`disconnected` cause, and the next one opens on the `reopen` schedule, which also retries a failed
-open until it gives up, unless the provider deems the failure `definite`, such as a refused key:
-then the generation is `Down` at once, with its cause, which `Unavailable` also gives anyone
-waiting, because a schedule would only hide a configuration error. `rotate`, or the time
-`rotateBefore` ahead of a generation's browser's `expiresAt`, opens the next generation before it
-releases the current one, unless generations are `exclusive`: then the current one is released
-first.
-`retire` stops reopening at once and releases what is open, asking the provider's `release` before
-it closes a generation's scope; closing the scope retires too, unless the supervisor `keep`s: then
-the generation serving is left running, `Kept`, its scope closed but its provider never asked to
-release it, for a provider whose scope only disconnects. `states` streams each generation's
-`Opening`, `Reopening`, `Open`, `Lost`, `Down`, `Closed`, the last with the provider's release
-outcome, `Settled` or `Unconfirmed`, and `Kept`, so time open is a subtraction of their stamps.
-Pages don't carry over from one generation to the next. `effect-browserbase`'s
-`Browserbase.supervise` supervises hosted sessions, and with `keep` adopts the one it kept.
+## Supervising browser generations
+
+`Supervisor.make` keeps a browser open across losses and session ends. Its `open` builds each
+generation in a scope of its own and can return `{ browser, value }`: the application's pages,
+tools or other resources belong to that generation. A caller that stops waiting never interrupts
+the shared acquisition. Browser-only providers can continue returning `{ browser }`, with a
+`void` value. Pages and values do not carry over when a new generation opens.
+
+```ts
+import { Effect } from "effect";
+import * as Chromium from "effect-browser/Chromium";
+import * as Supervisor from "effect-browser/Supervisor";
+
+const program = Effect.gen(function* () {
+  const browsers = yield* Supervisor.make({
+    open: Effect.gen(function* () {
+      const browser = yield* Chromium.open();
+      const page = yield* browser.firstPage;
+
+      return { browser, value: page };
+    }),
+  });
+  return yield* browsers.use(({ value: page }) => page.snapshot());
+});
+```
+
+`use(work, { wait })` atomically borrows the serving generation and runs `work` in a scope of its
+own. The lease gives its `generation`, `browser`, `value`, an `ending` notice and `retain`.
+`wait` defaults to `waitTimeout` (two minutes); zero either borrows immediately or fails
+`Unavailable`. Cancelling the caller closes its work scope and lets its hold go. Ordinary work
+errors stay ordinary work errors. `browser` still returns an unheld browser: use it only when the
+caller can tolerate that generation being released underneath it.
+
+A retained scope transfers a hold beyond the `use` call. Acquire anything that must travel with
+that hold in its scope, and close it when the receiver is finished. Within a scoped program with
+`browsers` as above and `Exit` and `Scope` imported from `effect`:
+
+```ts
+const prepared =
+  yield *
+  browsers.use((lease) =>
+    Effect.gen(function* () {
+      const hold = yield* lease.retain;
+      const page = yield* Effect.acquireRelease(lease.browser.newPage(), (page) =>
+        page.close.pipe(Effect.ignore),
+      ).pipe(Scope.provide(hold));
+
+      return { page, hold, ending: lease.ending };
+    }),
+  );
+// Hand `prepared` to its next owner; that owner eventually lets it go.
+yield * Scope.close(prepared.hold, Exit.void);
+```
+
+Rotation publishes `Draining` for the outgoing generation. It stays alive until its last hold
+closes or `handover` expires, 30 seconds by default. `ending` is the first notice that it stopped
+serving, with a `Superseded` reason and monotonic `revokeAt`; loss or retirement can revoke sooner.
+At revocation, `use` interrupts work still running, waits for its finalizers and fails
+`Superseded`. New `retain` calls refuse a revoked or releasing generation, and a retained scope
+cannot extend the deadline. Retained scopes and work scopes close before the provider's
+`release`; the generation's own scope closes last. Cleanup can therefore extend the time taken to
+finish revocation. `Superseded` does not say whether an input reached the site: use the action's
+receipt and plan stopping point to resolve that uncertainty.
+
+Nonexclusive `rotate`, including `rotateBefore` timed rotation, opens the next generation while
+old holds drain. Handover does not delay later rotations; multiple old generations can remain
+owned, so the consumer chooses its rotation and overlap budget. Calls share one acquisition in
+progress. Under `exclusive`, the current generation drains and finishes its provider release
+before acquisition starts. Call `rotate` outside `use` for a clean cut: an exclusive rotation
+inside `use` waits for its own hold to end or be revoked.
+
+A loss publishes `Lost` with the browser's `disconnected` cause and revokes its holds immediately.
+It reopens on `reopen`, which also retries an open failure until the schedule ends. A provider's
+`definite` failure goes `Down` at once, with the cause also available through `Unavailable`.
+`retire` revokes immediately, stops acquisition and waits for every generation to release.
+Closing the supervisor's scope does the same unless `keep` is set: then only the serving
+generation skips provider release, `Kept`; its application scopes still close. Other generations
+are released normally.
+
+`states` streams `Opening`, `Reopening`, `Open`, `Draining`, `Lost`, `Down`, `Closed` and `Kept`.
+`Closed.released` preserves `Settled` or `Unconfirmed`; the latter does not establish that a
+provider stopped the browser or its billing. `Generation.at` is wall-clock epoch milliseconds;
+`hostTime` and `revokeAt` are host monotonic milliseconds from the supervisor's Effect `Clock`.
+They can be compared with browser event and frame times when those use that same clock and host,
+not across processes or against a provider's wall-clock timestamps. A generation event is
+lifetime evidence, not proof that a frame was shown. `Browserbase.supervise` supplies hosted
+generations and, with `keep`, can adopt one it previously kept.
 
 Every module is also an entry point, such as `effect-browser/Page`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.

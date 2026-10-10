@@ -12,12 +12,14 @@ import * as Chromium from "../src/Chromium.ts";
 import * as Lifecycle from "../src/internal/supervisor/lifecycle.ts";
 import * as Supervisor from "../src/Supervisor.ts";
 
-type Phase = "opening" | "open" | "lost" | "ended";
+type Phase = "opening" | "open" | "draining" | "lost" | "ended";
 
 /** The runtime around the transition: its open fiber, watchers and releases, as plain records. */
 interface World {
   readonly exclusive: boolean;
-  state: Lifecycle.State<string>;
+  state: Lifecycle.State<string, number>;
+  now: number;
+  hold: number;
   opening: { readonly number: number; readonly after: number | undefined } | undefined;
   cancelling: boolean;
   retired: boolean;
@@ -36,10 +38,11 @@ interface World {
 /** Each change a generation makes after it began: the phases it can make it in, and the next. */
 const moves = {
   Open: [["opening"], "open"],
-  Lost: [["open"], "lost"],
+  Lost: [["open", "draining"], "lost"],
+  Draining: [["opening", "open", "lost", "draining"], "draining"],
   Down: [["opening"], "ended"],
-  Closed: [["opening", "open", "lost"], "ended"],
-  Kept: [["open"], "ended"],
+  Closed: [["opening", "draining", "lost"], "ended"],
+  Kept: [["draining"], "ended"],
 } satisfies Record<string, readonly [ReadonlyArray<Phase>, Phase]>;
 
 const advance = (world: World, number: number, state: Lifecycle.GenerationState) => {
@@ -64,9 +67,9 @@ const advance = (world: World, number: number, state: Lifecycle.GenerationState)
   known.phase = to;
 };
 
-const apply = (world: World, input: Lifecycle.Input<string>) => {
+const apply = (world: World, input: Lifecycle.Input<string, number>) => {
   const before = world.state;
-  const step = Lifecycle.transition(world.state, input, world.exclusive);
+  const step = Lifecycle.transition(world.state, input, world.exclusive, world.now);
 
   for (const [number, state] of step.events) advance(world, number, state);
   for (const command of step.commands)
@@ -75,12 +78,21 @@ const apply = (world: World, input: Lifecycle.Input<string>) => {
         assert.isUndefined(world.opening, "one open at a time");
         assert.isFalse(world.retired, "nothing opens once retired");
         assert.isAbove(command.number, world.newest, "generation numbers only grow");
+        if (!world.exclusive)
+          assert.isUndefined(command.after, "handover never delays a nonexclusive open");
         world.newest = command.number;
         world.opening = { number: command.number, after: command.after };
         break;
       case "Watch":
         world.watched.add(command.live.number);
         break;
+      case "Drain": {
+        const drain = step.state.draining.get(command.live.number);
+
+        assert.isDefined(drain, "ending is owned until release completes");
+        assert.deepStrictEqual(drain.ending, command.ending);
+        break;
+      }
       case "Release":
         assert.isTrue(world.opened.has(command.live.number), "only what opened is released");
         assert.isFalse(world.ordered.has(command.live.number), "each generation is released once");
@@ -88,6 +100,11 @@ const apply = (world: World, input: Lifecycle.Input<string>) => {
         world.ordered.add(command.live.number);
         world.releasing.add(command.live.number);
         world.watched.delete(command.live.number);
+        assert.isTrue(
+          step.state.draining.get(command.live.number)?.live.holds.size === 0 ||
+            command.ending.revokeAt <= world.now,
+          "G1: release starts after the last hold or revocation deadline",
+        );
         break;
       case "Leave":
         assert.strictEqual(input._tag, "Keep", "only keeping leaves one running");
@@ -98,6 +115,8 @@ const apply = (world: World, input: Lifecycle.Input<string>) => {
           "only the one serving is kept",
         );
         world.left.add(command.live.number);
+        world.releasing.add(command.live.number);
+        world.watched.delete(command.live.number);
     }
   world.state = step.state;
 
@@ -107,6 +126,39 @@ const apply = (world: World, input: Lifecycle.Input<string>) => {
     serving !== undefined && world.ordered.has(serving.number),
     "a released one never serves",
   );
+  for (const [number, drain] of step.state.draining) {
+    assert.notStrictEqual(serving?.number, number, "a draining generation never serves");
+    assert.isTrue(world.opened.has(number), "only opened generations drain");
+    if (drain._tag !== "Draining")
+      assert.isTrue(world.releasing.has(number), "release owns the generation until completion");
+  }
+  if (input._tag === "Hold") {
+    if (step.borrowed === undefined)
+      assert.strictEqual(step.state, before, "rejected holds do not publish a change");
+    else {
+      const live = Lifecycle.lookup(before, step.borrowed.number);
+
+      assert.isDefined(live);
+      assert.isFalse(live.holds.has(input.hold), "one hold is admitted once");
+      assert.isTrue(Lifecycle.lookup(step.state, live.number)?.holds.has(input.hold));
+      if (input.number === undefined)
+        assert.strictEqual(
+          before._tag !== "Retired" && before.serving?.number,
+          live.number,
+          "G2: use only borrows the serving generation",
+        );
+      else if (before.draining.has(live.number)) {
+        const drain = before.draining.get(live.number);
+
+        assert.isTrue(
+          drain?._tag === "Draining" && world.now < drain.ending.revokeAt,
+          "G2: retain never extends a deadline or a release",
+        );
+      }
+    }
+  }
+  if (input._tag === "Let")
+    assert.isFalse(Lifecycle.lookup(step.state, input.number)?.holds.has(input.hold) ?? false);
   if (world.retired) assert.strictEqual(step.state._tag, "Retired");
   if (world.exclusive)
     assert.isFalse(
@@ -125,7 +177,14 @@ const apply = (world: World, input: Lifecycle.Input<string>) => {
         { _tag: "Lost", number, cause: state.cause },
         "only the lost generation is lost, with its cause",
       );
-      assert.strictEqual(step.state._tag, "Opening", "a loss reopens at once");
+      if (before._tag !== "Retired" && before.serving?.number === number)
+        assert.strictEqual(step.state._tag, "Opening", "a serving loss reopens at once");
+      else
+        assert.strictEqual(
+          step.state._tag,
+          before._tag,
+          "an outgoing loss never replaces the successor",
+        );
     }
 
   const waiting = Lifecycle.resolve(step.state, undefined);
@@ -148,9 +207,9 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
   // is tried again changes nothing the transition sees. Exclusive ones try only once the
   // generation before has been released.
   if (opening !== undefined) {
-    const ready = opening.after === undefined || !world.releasing.has(opening.after);
+    const ready = opening.after === undefined || !world.state.draining.has(opening.after);
 
-    const tried = (input: Lifecycle.Input<string>) => () => {
+    const tried = (input: Lifecycle.Input<string, number>) => () => {
       if (world.exclusive)
         for (const number of world.opened)
           assert.isTrue(world.released.has(number), `${number} ended before the next tried`);
@@ -205,22 +264,42 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
         },
       ]);
   }
-  for (const number of world.releasing)
+  for (const number of world.releasing) {
+    if ((Lifecycle.lookup(world.state, number)?.holds.size ?? 0) > 0) continue;
     actions.push([
       `release ${number}`,
       () => {
         world.releasing.delete(number);
-        world.released.add(number);
+        if (!world.left.has(number)) world.released.add(number);
         apply(world, {
           _tag: "Released",
           number,
-          released:
-            number % 3 === 0
+          released: world.left.has(number)
+            ? undefined
+            : number % 3 === 0
               ? new Lifecycle.Unconfirmed({ detail: "running" })
               : new Lifecycle.Settled(),
         });
       },
     ]);
+  }
+  actions.push(["borrow", () => apply(world, { _tag: "Hold", hold: ++world.hold })]);
+  for (const number of world.opened) {
+    actions.push([
+      `retain ${number}`,
+      () => apply(world, { _tag: "Hold", number, hold: ++world.hold }),
+    ]);
+    for (const hold of Lifecycle.lookup(world.state, number)?.holds ?? [])
+      actions.push([`let ${number} ${hold}`, () => apply(world, { _tag: "Let", number, hold })]);
+  }
+  for (const number of world.state.draining.keys())
+    actions.push([`revoke ${number}`, () => apply(world, { _tag: "Revoke", number })]);
+  actions.push([
+    "tick",
+    () => {
+      world.now += 10_000;
+    },
+  ]);
   actions.push([
     "rotate",
     () => {
@@ -246,7 +325,8 @@ const retire = (world: World, keep: boolean) => {
 };
 
 // Callers and timers act less often than the runtime's own fibers, so runs reach deep states.
-const weight = (name: string) => (name === "rotate" ? 1 : /^(lose|due) /.test(name) ? 2 : 6);
+const weight = (name: string) =>
+  /^(rotate|borrow|retain)/.test(name) ? 1 : /^(lose|due|revoke)/.test(name) ? 2 : 6;
 
 const run = (
   choices: ReadonlyArray<number>,
@@ -254,11 +334,13 @@ const run = (
   retireAt: number,
   keep: boolean,
 ) => {
-  const started = Lifecycle.start<string>();
+  const started = Lifecycle.start<string, number>();
 
   const world: World = {
     exclusive,
     state: started.state,
+    now: 0,
+    hold: 0,
     opening: { number: 1, after: undefined },
     cancelling: false,
     retired: false,
@@ -292,7 +374,7 @@ const run = (
   if (!world.retired) retire(world, keep);
   for (let guard = 0; world.opening !== undefined || world.releasing.size > 0; guard++) {
     assert.isBelow(guard, 100, "a retired supervisor settles");
-    const actions = enabled(world).filter(([name]) => !/^(lose|due|rotate)/.test(name));
+    const actions = enabled(world).filter(([name]) => /^(cancel|let|release)/.test(name));
 
     (actions.find(([name]) => name === "cancel") ?? actions[0])?.[1]();
   }
@@ -379,9 +461,15 @@ describe("Supervisor", () => {
         "1 Opening",
         "1 Open",
         "1 Lost connection",
+        "1 Draining",
         "1 Closed Settled",
       ]);
-      assert.deepStrictEqual(of(lines, 2), ["2 Reopening", "2 Open", "2 Closed Settled"]);
+      assert.deepStrictEqual(of(lines, 2), [
+        "2 Reopening",
+        "2 Open",
+        "2 Draining",
+        "2 Closed Settled",
+      ]);
       assert.isBelow(lines.indexOf("1 Lost connection"), lines.indexOf("2 Reopening"));
     }),
   );
@@ -451,7 +539,7 @@ describe("Supervisor", () => {
       }).pipe(Effect.scoped, Effect.flatMap(Fiber.join));
 
       assert.deepStrictEqual(order, ["scope"]);
-      assert.deepStrictEqual(kept, ["1 Opening", "1 Open", "1 Kept"]);
+      assert.deepStrictEqual(kept, ["1 Opening", "1 Open", "1 Draining", "1 Kept"]);
       order.length = 0;
 
       // Retiring releases it all the same, the provider first, so what its scope holds goes last.
@@ -466,7 +554,7 @@ describe("Supervisor", () => {
       }).pipe(Effect.scoped, Effect.flatMap(Fiber.join));
 
       assert.deepStrictEqual(order, ["release", "scope"]);
-      assert.deepStrictEqual(retired, ["1 Opening", "1 Open", "1 Closed Settled"]);
+      assert.deepStrictEqual(retired, ["1 Opening", "1 Open", "1 Draining", "1 Closed Settled"]);
     }),
   );
 
