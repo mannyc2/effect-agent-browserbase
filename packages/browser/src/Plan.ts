@@ -93,7 +93,10 @@ export type Expected = typeof Expected.Type;
 /** One recorded step: the action, what it acted on, and what else it was asked. */
 export class Step extends Schema.Class<Step>("effect-browser/Plan/Step")({
   action: StepAction,
-  /** Where the page was once the step was done, as recorded; empty when unknown. */
+  /**
+   * The ending address, or a later recorded navigation before the next action began. Empty when
+   * unknown; a delayed navigation can be stronger arrival evidence than the action's ending URL.
+   */
   url: Schema.String,
   /** A navigation's requested address, or the keys a press pressed. */
   target: Schema.optional(Schema.String),
@@ -227,11 +230,13 @@ export const fromEvents = (events: Iterable<BrowserEvent>): Plan => {
     steps: steps.map((action, index) => {
       const drag = action.name === "drag" ? (action.target ?? "").split(" -> ") : undefined;
       const point = pointIn(drag === undefined ? action.target : drag[0]);
+      const until = steps[index + 1]?.startedAt ?? Number.POSITIVE_INFINITY;
+      const arrival = moves.findLast((move) => move.at > action.at && move.at <= until);
 
       // Only a navigation and a press keep their target: an address, or keys.
       return new Step({
         action: action.name,
-        url: action.url ?? before(steps[index + 1]?.startedAt ?? Number.POSITIVE_INFINITY),
+        url: arrival?.url ?? action.url ?? before(until),
         target: action.name === "navigate" || action.name === "press" ? action.target : undefined,
         subject: action.subject,
         to: action.to,
@@ -386,7 +391,10 @@ export interface ReplayOptions extends TakeOptions {
   readonly from?: number | Stopped | undefined;
 }
 
-/** Input that can be repeated without repeating a commitment. Back/reload can resubmit a form. */
+/**
+ * Input that can be repeated without repeating a commitment. `take` also validates a Checked
+ * target's boolean state before input. Back/reload can resubmit a form.
+ */
 export const repeatable = (step: Step): boolean =>
   ["navigate", "hover", "scroll", "select"].includes(step.action) ||
   (step.action === "type" &&
@@ -445,9 +453,10 @@ const checkEffect = (
     case "Checked":
       return step.subject === undefined
         ? Effect.fail(invalid("a checked effect needs a subject"))
-        : Effect.map(
-            locate(page, step.subject),
-            (found) => found.state.checked === expected.checked,
+        : Effect.flatMap(locate(page, step.subject), (found) =>
+            found.state.checked === undefined
+              ? Effect.fail(invalid("a checked effect needs a checkable subject"))
+              : Effect.succeed(found.state.checked === expected.checked),
           );
     case "Navigated":
       return Effect.map(page.state, (now) =>
@@ -614,7 +623,7 @@ const run = Effect.fnUntraced(function* (
 
     if (unfilled !== -1)
       return yield* new ReplayError({
-        step: unfilled,
+        step: start,
         input: "unsent",
         receipts,
         reason: invalid(`no text for the input "${plan.steps[unfilled]?.input ?? ""}"`),

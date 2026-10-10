@@ -138,6 +138,34 @@ describe("Plan step safety", () => {
     }),
   );
 
+  it.effect("resumes from the run start after a missing input preflight", () =>
+    Effect.gen(function* () {
+      const { page, dispatches } = scripted();
+
+      const plan = Plan.Plan.new([
+        new Plan.Step({ action: "navigate", target: "https://workflow.test/run", url: "" }),
+        new Plan.Step({ action: "type", subject, input: "text", url: "" }),
+      ]);
+
+      const error = yield* Plan.replay(page, plan, { settle: false }).pipe(Effect.flip);
+
+      assert.deepStrictEqual(dispatches, []);
+      assert.deepStrictEqual(error.receipts, []);
+
+      const receipts = yield* Plan.replay(page, plan, {
+        from: error.stopped,
+        inputs: { text: "memo" },
+        settle: false,
+      });
+
+      assert.deepStrictEqual(dispatches, ["navigate", "type"]);
+      assert.deepStrictEqual(
+        receipts.map(({ step }) => step),
+        [0, 1],
+      );
+    }),
+  );
+
   it.effect.prop(
     "never dispatches an unresolved consequential step, regardless of check evidence",
     {
@@ -228,6 +256,50 @@ describe("Plan step safety", () => {
         ),
       );
     }),
+  );
+
+  it.effect(
+    "refuses a Checked expectation on a target with no checked state before any input",
+    () =>
+      Effect.gen(function* () {
+        const { page, dispatches } = scripted();
+
+        const button: Page = {
+          ...page,
+          find: (query) =>
+            page
+              .find(query)
+              .pipe(
+                Effect.map((found) =>
+                  found.map(
+                    (target) =>
+                      new Found({ ...target, state: { disabled: false, focused: false } }),
+                  ),
+                ),
+              ),
+        };
+
+        const plan = Plan.Plan.new([
+          new Plan.Step({
+            action: "click",
+            subject,
+            url: "",
+            expect: { _tag: "Checked", checked: false },
+          }),
+        ]);
+
+        for (const at of [0, new Plan.Stopped({ step: 0, input: "unknown" })]) {
+          const error = yield* Plan.take(button, plan, at, { settle: false, arrival: 0 }).pipe(
+            Effect.flip,
+          );
+
+          assert.deepStrictEqual(dispatches, []);
+          assert.strictEqual(error.reason._tag, "BrowserError");
+          if (error.reason._tag === "BrowserError")
+            assert.strictEqual(error.reason.reason._tag, "InvalidRequest");
+          assert.strictEqual(error.input, typeof at === "number" ? "unsent" : "unknown");
+        }
+      }),
   );
 
   it.effect("bounds effect reads before dispatch, after dispatch, and during recovery", () =>
@@ -641,6 +713,31 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         assert.deepStrictEqual([error.reason._tag, error.input], ["Drifted", "unknown"]);
         assert.notStrictEqual(yield* late.url, expected);
+      }),
+    );
+
+    it.effect("retains a delayed recorded navigation before resuming the following step", () =>
+      Effect.gen(function* () {
+        const site = yield* workflow();
+        const expected = site.url.replace("127.0.0.1", "localhost") + "/done";
+        const recording = yield* open(site.url + "?delay=200");
+        const [continued] = yield* recording.find({ role: "button", name: "Continue" });
+
+        if (continued === undefined) return yield* Effect.die("missing Continue fixture");
+        yield* recording.click(continued.ref);
+        yield* Effect.promise(() => recording.playwright.waitForURL(expected));
+        yield* recording.press("Shift");
+        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const following = plan.steps.findIndex((step) => step.action === "press");
+        const replacement = yield* open(expected);
+
+        const receipt = yield* Plan.take(replacement, plan, following, {
+          settle: false,
+          arrival: "100 millis",
+        });
+
+        assert.strictEqual(receipt.outcome, "taken");
+        assert.strictEqual(plan.steps[following - 1]?.url, expected);
       }),
     );
   },

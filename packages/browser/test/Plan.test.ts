@@ -535,7 +535,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
 
       assert.deepStrictEqual(
         [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
-        [1, "InvalidRequest"],
+        [0, "InvalidRequest"],
       );
       assert.strictEqual(yield* unaddressed.url, "about:blank");
 
@@ -555,7 +555,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
 
       assert.deepStrictEqual(
         [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
-        [1, "InvalidRequest"],
+        [0, "InvalidRequest"],
       );
       assert.strictEqual(yield* page.url, "about:blank");
     }),
