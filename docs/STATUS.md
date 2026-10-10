@@ -319,7 +319,8 @@ and each becoming the next beta.
   at once. The ninth, every generation of a keeping supervisor adopting the session it kept, which
   made a rotation reopen the session it meant to leave, now fails a new test. Expectations had
   their own eleven, all failing. No adversarial review of the phase was run. Its beta,
-  `0.3.0-beta.4`, is prepared in the changelog and the package versions, and is not tagged.
+  `0.3.0-beta.4`, was tagged and not published: `0.3.0-beta.5` carries it, with a fix to
+  `Page.waitFor`.
 
 Size against the baseline at `ab326c1`: lines of each package's TypeScript (`wc -l`), with
 `src/testing` counted apart, and the `export` statements of its public modules.
@@ -380,7 +381,7 @@ The larger pieces left for later:
 
 The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` and
 `effect-agent-browser`, published on 2 October 2026 from tag `v0.2.0-beta.9` (`976d316`) on the
-`beta` dist-tag. 0.3's first release, `0.3.0-beta.4`, goes out by plain npm trusted publishing
+`beta` dist-tag. 0.3's first release, `0.3.0-beta.5`, goes out by plain npm trusted publishing
 from `.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase`,
 `effect-browser-human-strokes` and `effect-agent-browser`, with `@yielded/agent` from the archive
 above until `0.1.0-beta.168` is on npm; [RELEASING.md](RELEASING.md) has the steps, and

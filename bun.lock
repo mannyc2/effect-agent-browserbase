@@ -63,7 +63,7 @@
     },
     "packages/agent-browser": {
       "name": "effect-agent-browser",
-      "version": "0.3.0-beta.4",
+      "version": "0.3.0-beta.5",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
@@ -84,7 +84,7 @@
     },
     "packages/browser": {
       "name": "effect-browser",
-      "version": "0.3.0-beta.4",
+      "version": "0.3.0-beta.5",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
@@ -102,7 +102,7 @@
     },
     "packages/browserbase": {
       "name": "effect-browserbase",
-      "version": "0.3.0-beta.4",
+      "version": "0.3.0-beta.5",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
@@ -122,7 +122,7 @@
     },
     "packages/human-strokes": {
       "name": "effect-browser-human-strokes",
-      "version": "0.3.0-beta.4",
+      "version": "0.3.0-beta.5",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
