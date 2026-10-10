@@ -4,7 +4,7 @@
  */
 import { Schema } from "effect";
 
-import type { Control, Snapshot } from "../../Snapshot.ts";
+import { type Control, Snapshot } from "../../Snapshot.ts";
 import type { addresses } from "../page/url.ts";
 import type { Controls } from "./controls.inpage.ts";
 import type { Names } from "./names.inpage.ts";
@@ -25,9 +25,7 @@ export interface SnapshotRequest {
  * The outline as a `Snapshot` reads it, and the next ref the page may give, or why `within` is not
  * a selector.
  */
-export type SnapshotResult =
-  | { readonly snapshot: typeof Snapshot.Encoded; readonly nextRef: number }
-  | { readonly invalid: string };
+export type SnapshotResult = typeof SnapshotResultSchema.Encoded;
 
 /** The rule every address the library reports goes by, which a link's address goes by too. */
 type Url = ReturnType<typeof addresses>;
@@ -253,6 +251,11 @@ export const outline = (
 };
 
 export type Outline = ReturnType<typeof outline>;
+
+export const SnapshotResultSchema = Schema.Union([
+  Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite }),
+  Schema.Struct({ invalid: Schema.String }),
+]);
 
 export const ViewportResultSchema = Schema.Struct({
   width: Schema.Finite,

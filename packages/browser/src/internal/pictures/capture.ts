@@ -7,7 +7,7 @@ import { Clock, Deferred, Duration, Effect, Exit, Option, Queue, Semaphore, Stre
 import { type BrowserError, InvalidRequest } from "../../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../../Frame.ts";
 import { undispatched } from "../page/context.ts";
-import { type Estimate, toHostTime, uncertaintyAt } from "./clock.ts";
+import { type Estimate, monotonicMillis, toHostTime, uncertaintyAt } from "./clock.ts";
 import type { NativeFrame, Transport } from "./transport.ts";
 
 export interface Size {
@@ -275,7 +275,7 @@ const timed = (
       hostTime,
       uncertaintyMillis: uncertaintyAt(estimate, hostTime),
     }),
-    receivedAt: Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6,
+    receivedAt: monotonicMillis(options.clock),
     width: size.width,
     height: size.height,
     ...generation.transport.frameTag(),
@@ -343,7 +343,7 @@ const sizeFilter = (
       Queue.offerUnsafe(wake, undefined);
     };
 
-    const now = () => Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6;
+    const now = () => monotonicMillis(options.clock);
 
     const adopt = (adopted: Run) => {
       run = undefined;
@@ -471,7 +471,7 @@ export const make = (options: Options) =>
     let latest = Option.none<Frame>();
     let history: ReadonlyArray<Frame> = [];
     const keepMillis = Duration.toMillis(options.frameHistory);
-    const now = () => Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6;
+    const now = () => monotonicMillis(options.clock);
     const counts = tally(now);
     // Frames delivered, which number them so that a reader can tell what it missed.
     let delivered = 0;

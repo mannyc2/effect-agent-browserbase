@@ -444,7 +444,7 @@ export const make = Effect.fn("Browser.make")(function* (
   options: Options = {},
 ) {
   const clock = yield* Clock.Clock;
-  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  const now = () => BrowserClock.monotonicMillis(clock);
   const { settings, eventHistory, maxPages } = yield* settingsOf(options);
   // Measured on first need: the first capture of any page measures it, and input never waits.
   const mapping = BrowserClock.mapping(now);

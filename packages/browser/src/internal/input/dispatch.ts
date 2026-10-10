@@ -12,20 +12,19 @@ import {
   TextInserted,
   WheelScrolled,
 } from "../../BrowserEvent.ts";
+import type { Point } from "../../Motion.ts";
 import { type PageContext, reasonOf, undispatched } from "../page/context.ts";
 import * as BrowserClock from "../pictures/clock.ts";
 import type * as Replies from "./replies.ts";
 
-export type MouseEvent = {
+export interface MouseEvent extends Point {
   readonly type: "mouseMoved" | "mousePressed" | "mouseReleased" | "mouseWheel";
-  readonly x: number;
-  readonly y: number;
   readonly button?: "none" | "left" | "right" | "middle";
   readonly buttons?: number;
   readonly clickCount?: number;
   readonly deltaX?: number;
   readonly deltaY?: number;
-};
+}
 
 export const make = (page: PageContext) => {
   const { id, pointer, publish, now, noteInput, closedBy } = page;

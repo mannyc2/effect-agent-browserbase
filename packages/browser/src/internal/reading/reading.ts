@@ -11,27 +11,16 @@ import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import * as Url from "../page/url.ts";
-import type { ConditionRequest } from "./controls.inpage.ts";
+import { type ConditionRequest, ConditionResultSchema } from "./controls.inpage.ts";
 import type { Want } from "./expect.inpage.ts";
 import type { FindRequest, Wanted } from "./match.inpage.ts";
-import type { SnapshotRequest } from "./outline.inpage.ts";
+import { type SnapshotRequest, SnapshotResultSchema } from "./outline.inpage.ts";
 import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
 
-// What `snapshot` and `find` read back, each with the next ref the page may give, and why a
-// snapshot's selector is not CSS.
-const SnapshotResult = Schema.Union([
-  Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite }),
-  Schema.Struct({ invalid: Schema.String }),
-]);
-
+// What `find` reads back, with the next ref the page may give.
 const FindResults = Schema.Struct({ found: Schema.Array(Found), nextRef: Schema.Finite });
 
 const UntilResult = Schema.Struct({ met: Schema.Boolean, mark: Schema.String });
-
-const ConditionResult = Schema.Union([
-  Schema.Struct({ met: Schema.Boolean }),
-  Schema.Struct({ invalid: Schema.String }),
-]);
 
 // A pattern crosses into the page as its source and flags.
 const wanted = (value: string | RegExp | undefined): Wanted | null =>
@@ -76,7 +65,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
         const request: SnapshotRequest = { ...asked, firstRef: yield* Ref.get(nextRef) };
 
         const result = yield* evaluate("snapshot", scriptCall("snapshot", request)).pipe(
-          Effect.flatMap(decodeWith("snapshot", SnapshotResult)),
+          Effect.flatMap(decodeWith("snapshot", SnapshotResultSchema)),
         );
 
         if ("invalid" in result)
@@ -167,7 +156,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
     const unmet = () => failWith("waitFor", new Timeout({ millis }));
 
     const look = evaluate("waitFor", scriptCall("waitUntil", request, millis)).pipe(
-      Effect.flatMap(decodeWith("waitFor", ConditionResult)),
+      Effect.flatMap(decodeWith("waitFor", ConditionResultSchema)),
       Effect.flatMap((result) =>
         "invalid" in result
           ? failWith("waitFor", new InvalidRequest({ detail: result.invalid }))

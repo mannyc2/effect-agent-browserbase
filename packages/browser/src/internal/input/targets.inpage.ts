@@ -6,6 +6,7 @@
 import { Schema } from "effect";
 
 import { Box, SubjectContext } from "../../BrowserEvent.ts";
+import { Point } from "../../Motion.ts";
 import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Walk } from "../reading/walk.inpage.ts";
@@ -78,10 +79,7 @@ export const targets = (names: Names, walked: Walk, placing: ContextReader) => {
     };
   };
 
-  const point = (
-    target: string | { readonly x: number; readonly y: number },
-    scroll = true,
-  ): PointResult => {
+  const point = (target: string | Point, scroll = true): PointResult => {
     if (typeof target !== "string") {
       const { x, y } = target;
 
@@ -263,8 +261,7 @@ export const targets = (names: Names, walked: Walk, placing: ContextReader) => {
 export type Targets = ReturnType<typeof targets>;
 
 const ResolvedPointSchema = Schema.Struct({
-  x: Schema.Finite,
-  y: Schema.Finite,
+  ...Point.fields,
   element: Schema.String,
   tag: Schema.String,
   role: Schema.NullOr(Schema.String),
@@ -285,8 +282,7 @@ export const PointResultSchema = Schema.Union([
 
 export const ScrollPlanSchema = Schema.NullOr(
   Schema.Struct({
-    x: Schema.Finite,
-    y: Schema.Finite,
+    ...Point.fields,
     dx: Schema.Finite,
     dy: Schema.Finite,
   }),
