@@ -20,6 +20,9 @@ export const told = (error: BrowserError): string => {
     error.reason._tag === "Busy" && repeat === "safe"
       ? "Nothing was done while other work held the page: try it again."
       : "",
+    error.reason._tag === "Suspended"
+      ? "Nothing was sent. Wait for the input suspension to end before acting again."
+      : "",
     repeat === "check" ? "It may have taken effect: look at the page before you repeat it." : "",
   ]
     .filter((sentence) => sentence !== "")

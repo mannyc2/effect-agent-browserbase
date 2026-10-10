@@ -2,7 +2,7 @@
  * Performing one action: its turn on the page, the input guard's step, the input run that owns its
  * replies, and the action's record. Its deadline leaves out the time its style takes to show it.
  */
-import { Duration, Effect, Exit, Option, Ref } from "effect";
+import { Deferred, Duration, Effect, Exit, Option, Ref } from "effect";
 
 import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
 import { Action, type ActionOptions, Subject } from "../../BrowserEvent.ts";
@@ -97,10 +97,67 @@ const deadline =
       return Effect.raceFirst(effect, expiry);
     });
 
+/** An admitted operation stays owned through its Action and any unanswered native replies. */
+const admission = (page: PageContext, pending: Set<Deferred.Deferred<void>>, name: string) => {
+  let run: Replies.Run | undefined;
+  let end: (() => void) | undefined;
+
+  const enter = Effect.uninterruptible(
+    Effect.gen(function* () {
+      const released = page.inputGate === undefined ? undefined : yield* page.inputGate.enter(name);
+      const done = Deferred.makeUnsafe<void>();
+
+      pending.add(done);
+      end = () => {
+        const finish = () => {
+          released?.();
+          pending.delete(done);
+          Deferred.doneUnsafe(done, Exit.void);
+        };
+
+        if (run === undefined) finish();
+        else run.afterIdle(finish);
+      };
+    }),
+  );
+
+  return {
+    enter,
+    using: (current: Replies.Run) => {
+      run = current;
+    },
+    end: Effect.sync(() => end?.()),
+  };
+};
+
+/** Close a run on every exit while preserving its native replies for the page's next input. */
+const useRun = <A>(
+  page: PageContext,
+  sender: Dispatch,
+  name: string,
+  run: Replies.Run,
+  action: Effect.Effect<A, BrowserError>,
+) =>
+  action.pipe(
+    Effect.matchEffect({
+      onFailure: (error) =>
+        run.close.pipe(
+          Effect.andThen(sender.flush(name, run).pipe(Effect.ignore)),
+          Effect.andThen(Effect.fail(error)),
+        ),
+      onSuccess: (value) =>
+        run.close.pipe(Effect.andThen(sender.flush(name, run)), Effect.as(value)),
+    }),
+    // Cleanup submits missing releases; the page retains replies after caller interruption.
+    Effect.ensuring(run.close.pipe(Effect.andThen(page.openings.clear))),
+    Effect.provideService(Replies.Current, run),
+  );
+
 export const make = (page: PageContext, sender: Dispatch) => {
   const { id, settings, mapping, lane, publish, now, noteInput, span, owned } = page;
-  const { inputClocks, flush } = sender;
+  const { inputClocks } = sender;
   const input = Replies.make();
+  const admitted = new Set<Deferred.Deferred<void>>();
 
   // Record the whole operation, but never hold the page's turn or spend its action timeout while
   // a policy is waiting. Validation binds approval to the document and targets it saw.
@@ -127,6 +184,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
       let revealed = info.secret !== true;
       // The time the style has planned to show the input, which the deadline leaves out.
       let presented = 0;
+      const ticket = admission(page, admitted, name);
 
       const marks = {
         style,
@@ -160,27 +218,13 @@ export const make = (page: PageContext, sender: Dispatch) => {
         input.begin.pipe(
           // A capture can recalibrate while input is running. One run, including delayed cleanup
           // releases, keeps one mapping so epoch stamps cannot jump backwards during a stroke.
-          Effect.tap((run) =>
+          Effect.tap((current) =>
             Effect.sync(() => {
-              if (estimate !== undefined) inputClocks.set(run, estimate);
+              ticket.using(current);
+              if (estimate !== undefined) inputClocks.set(current, estimate);
             }),
           ),
-          Effect.flatMap((run) =>
-            action(run).pipe(
-              Effect.matchEffect({
-                onFailure: (error) =>
-                  run.close.pipe(
-                    Effect.andThen(flush(name, run).pipe(Effect.ignore)),
-                    Effect.andThen(Effect.fail(error)),
-                  ),
-                onSuccess: (value) =>
-                  run.close.pipe(Effect.andThen(flush(name, run)), Effect.as(value)),
-              }),
-              // The finalizer only submits missing releases. It cannot wait forever for a
-              // disconnected peer; the page retains those replies and gates its next action.
-              Effect.ensuring(run.close.pipe(Effect.andThen(page.openings.clear))),
-            ),
-          ),
+          Effect.flatMap((run) => useRun(page, sender, name, run, action(run))),
         );
 
       // How long its turn and the page's replies kept the action waiting, once it had both.
@@ -198,16 +242,19 @@ export const make = (page: PageContext, sender: Dispatch) => {
             name,
             timeout,
           )(
-            Effect.suspend(() =>
-              admit.pipe(
-                Effect.timeoutOrElse({
-                  duration: Duration.millis(
-                    Math.max(0, Duration.toMillis(timeout) - (now() - asked)),
+            ticket.enter.pipe(
+              Effect.andThen(
+                Effect.suspend(() =>
+                  admit.pipe(
+                    Effect.timeoutOrElse({
+                      duration: Duration.millis(
+                        Math.max(0, Duration.toMillis(timeout) - (now() - asked)),
+                      ),
+                      orElse: () => timedOut(name, timeout),
+                    }),
                   ),
-                  orElse: () => timedOut(name, timeout),
-                }),
+                ),
               ),
-            ).pipe(
               Effect.tap(() =>
                 Effect.sync(() => {
                   queuedMillis = Math.round(now() - asked);
@@ -221,7 +268,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
       const guard = settings.guard;
 
       // Only an approval needs binding: without a guard, input goes straight to the page.
-      const run =
+      const action =
         guard === undefined
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
@@ -257,7 +304,10 @@ export const make = (page: PageContext, sender: Dispatch) => {
       // Record the outcome even when the caller interrupts: its input may already be in the page.
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const exit = yield* Effect.exit(restore(run));
+          const exit = yield* Effect.exit(
+            restore((page.inputGate?.check(name) ?? Effect.void).pipe(Effect.andThen(action))),
+          );
+
           const dispatched = yield* Ref.get(sent);
           const point = yield* Ref.get(at);
           const { subject, to, box } = yield* Ref.get(acted);
@@ -315,10 +365,12 @@ export const make = (page: PageContext, sender: Dispatch) => {
 
           return yield* exit;
         }),
-      );
+      ).pipe(Effect.ensuring(ticket.end));
     }).pipe(span(`Page.${name}`, info.target === undefined ? {} : { target: info.target }), owned);
 
-  return perform;
+  return Object.assign(perform, {
+    idle: Effect.suspend(() => Effect.forEach(admitted, Deferred.await, { discard: true })),
+  });
 };
 
 export type Perform = ReturnType<typeof make>;

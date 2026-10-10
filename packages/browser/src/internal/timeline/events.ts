@@ -82,6 +82,7 @@ export const make = (capacity: number) => {
 
   return {
     publish,
+    sequence: () => sequence,
     recent: Effect.sync(() => records),
     stream,
     close: Effect.sync(() => {

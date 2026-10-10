@@ -1,7 +1,7 @@
 // The ports over a real Chromium page, called directly: no model.
 import { assert, layer } from "@effect/vitest";
 import type { BrowserUse } from "@yielded/agent";
-import { Duration, Effect, Layer } from "effect";
+import { Duration, Effect, Exit, Layer, Scope } from "effect";
 import { Browser, make as makeBrowser } from "effect-browser/Browser";
 import { BrowserError, PolicyDenied, Timeout } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
@@ -137,6 +137,38 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       });
 
       assert.deepStrictEqual([blind.completed, blind.observation], [1, null]);
+    }),
+  );
+
+  it.effect("cuts a batch between operations when browser input is suspended", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const page = yield* open("/form");
+      const hold = yield* Scope.fork(yield* Effect.scope);
+
+      const view: Page.Page = {
+        ...page,
+        type: (text, options) =>
+          page
+            .type(text, options)
+            .pipe(Effect.tap(() => browser.suspend({ drain: 0 }).pipe(Scope.provide(hold)))),
+      };
+
+      const { actions } = yield* PageControl.make({ page: view });
+      const seen = yield* actions.observe;
+
+      const result = yield* actions.act([
+        { kind: "fill", ref: refOf(seen, "Amount"), value: "25" },
+        { kind: "click", ref: refOf(seen, "Submit") },
+      ]);
+
+      assert.deepStrictEqual([result.completed, result.dispatch], [1, "not-dispatched"]);
+      assert.strictEqual(yield* outcome(page), "Not ordered");
+      yield* Scope.close(hold, Exit.void);
+      const continued = yield* actions.act([{ kind: "click", ref: refOf(seen, "Submit") }]);
+
+      assert.deepStrictEqual([continued.completed, continued.dispatch], [1, "acknowledged"]);
+      assert.strictEqual(yield* outcome(page), "Ordered 25 btc");
     }),
   );
 

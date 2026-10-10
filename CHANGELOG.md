@@ -4,6 +4,20 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## Unreleased (planned 0.3.0-beta.9)
+
+- `Browser.suspend({ drain })` drains admitted input through each operation's record and native
+  acknowledgements, then withholds library input across every tab for its scope. New and queued
+  writes fail `Suspended`, undispatched. Reads, capture and event observation continue.
+- Suspensions nest across independent scopes and share the first drain's bounded deadline.
+  Cancellation abandons only that claim; a failed drain leaves no held suspension. The returned
+  `Suspension` carries an event cursor and host time for the handoff interval.
+- A canceled script mutation now records potentially dispatched input even when its native reply
+  is still pending. Agent action batches stop between operations and report the refused operation
+  as not dispatched. Operator policy and durable workflow journals remain with the consumer.
+- Local Chromium and model tests cover these contracts. A hosted Live View handoff remains unrun
+  until included Browserbase allowance and a human operator are available.
+
 ## 0.3.0-beta.8
 
 - `Supervisor<A>` owns per-generation values and scoped `use` work. Leases expose `ending` and
