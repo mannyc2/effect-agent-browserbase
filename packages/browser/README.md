@@ -498,7 +498,15 @@ Local Chromium verifies preparation, ownership, input barriers and evidence. Ear
 capture measurements do not establish these cued-presentation contracts: the H1 overlap/load
 probe remains unrun until included Browserbase allowance is verified.
 
-`Browser.now`, event stamps, frame `receivedAt` and a window's bounds share host monotonic milliseconds
+`Browser.connection` is fresh for each constructed connection, including reattachment or adoption
+of the same provider session. Frames carry that connection alongside their provider `session`,
+`page` and `document`. Use `(connection, page, document)` to key document evidence: the provider's
+session and page IDs can survive reconnection, while document counters restart. A separate capture
+socket retains its owning browser's connection identity. Serialized frames now require a nonempty
+`connection`; older frame records must be interpreted with their original connection context,
+not assigned the identity of a new attachment.
+
+`Browser.now`, event stamps, frame `receivedAt`, generation `hostTime` and window bounds share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.
 Page operations also pace input and measure their deadlines on that clock, so a caller running
 under another `Clock`, such as a `TestClock`, cannot stall an action or a page's turns.
@@ -907,3 +915,7 @@ call's parameters, which hold what a model typed, are Yielded's to record, under
 and redaction. `Page.evaluate` spans are at `Trace` level and the phases
 inside an action at `Debug`: set `Tracer.MinimumTraceLevel` to `"Info"` to keep only the coarser
 spans.
+
+The compiled [composition examples](../../docs/COMPOSITION.md) demonstrate watched preparation,
+event-driven reveal and clean step cuts, and a separate operator-assisted runner with a
+consumer-owned durable journal. Their local Chromium scenarios make no model or hosted calls.

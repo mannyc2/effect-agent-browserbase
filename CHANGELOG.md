@@ -4,6 +4,21 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.11
+
+- Each `Browser.connection` is fresh on construction, including reattachment to the same provider
+  session and target. `Frame.connection` is required in serialized evidence; separate capture
+  sockets carry the owning browser's identity. Document counters remain local to that connection.
+- Frame reuse now checks document identity as well as paint-time and input bounds. A known old
+  document cannot pass because its calibrated paint timestamp looks newer. A native regression
+  plants that clock-domain mismatch and verifies the actual image pixels.
+- Generation events and frame evidence share the captured host clock across wall-clock changes
+  and caller clock overrides. Native reconnect tests cover both screenshots and screencast frames.
+- Compiled watched-browsing and operator-assisted workflow examples compose leases, input
+  suspension, cues and resumable steps. Their journals, editorial choices and account decisions
+  stay in consumer code. Local scenarios prove durable read-back recovery and refusal to resend
+  unknown commitments; hosted capture, persistence and Live View evidence remain separate.
+
 ## 0.3.0-beta.10
 
 - `Stage.cue` starts capture during preparation. Its scope abandons an unused cue; `commit`

@@ -2,6 +2,20 @@
 
 ## 0.3
 
+The `0.3.0-beta.11` release completes connection identity and the
+[compiled composition examples](COMPOSITION.md). `Browser.connection` and required
+`Frame.connection` distinguish evidence across reattachment; `(connection, page, document)` names
+one tracked document. Separate capture sockets retain their owning browser's identity. Frame
+reuse requires the current document even when a calibrated timestamp appears newer. Generation
+`hostTime`, frames and browser events use the captured host clock, preserving order when wall time
+changes or callers override their own clock.
+
+The watched example retains prepared pages, cues before send/drop events and cuts performance at
+step boundaries. The separate operator-assisted runner journals begun steps before input, suspends
+library writes during intervention, and requires positive durable read-back to recover unknown
+consequential input. Local Chromium covers both workflows and their failure paths. Editorial
+policy, account decisions and business journals remain consumer responsibilities.
+
 The `0.3.0-beta.10` release adds cued presentation: `Stage.cue` prepares capture, and its
 `commit` switches on the event while retaining old-page input authority through the cut.
 Prepared cues belong to their calling scopes; committed capture belongs to the stage.
@@ -30,8 +44,8 @@ The lifecycle model, scripted provider tests and local Chromium cover admission,
 revocation, finalizer ordering and rotation. The Browserbase fake covers client sequencing and
 persisted-writer refusal. They do not establish hosted save timing, physical session overlap or
 billing. [H2](HOSTED_CHECKS.md), persisted rotation with a live hold and storage read-back, is
-prepared but unrun until included-hour allowance is verified. Connection identity and the
-composition examples remain the final delivery stage.
+prepared but unrun until included-hour allowance is verified. Local evidence does not certify
+provider persistence, physical session overlap, capture capacity or billing.
 
 Published `0.3.0-beta.7` adds resumable plan steps with receipts, serialized stopping points, durable
 expected-effect read-back, bounded arrival and content readiness. A missing receipt after

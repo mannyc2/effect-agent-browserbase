@@ -64,6 +64,7 @@ const scripted = Effect.fnUntraced(function* (
       new Frame({
         page: id,
         session: "scripted",
+        connection: "fixture-connection",
         document: 0,
         url: "https://fixture.test",
         data: new Uint8Array(),

@@ -45,6 +45,8 @@ export interface MakeOptions {
   readonly id: string;
   /** The id of the browser's session, which its frames carry. */
   readonly session: string;
+  /** This tracking connection, distinct from the provider session and capture socket. */
+  readonly connection: string;
   /** The page's address when the browser began tracking it. */
   readonly url: string;
   readonly playwright: PlaywrightPage;

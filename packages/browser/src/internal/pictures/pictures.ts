@@ -324,7 +324,7 @@ const millisOf = (input: Duration.Input) =>
 // page that keeps painting while the next document loads leaves its own frames newest when the
 // navigation returns.
 const reuse =
-  (page: PageContext, viewport: Viewport, capture: Capture.Controller) =>
+  (page: PageContext, bridge: Bridge, viewport: Viewport, capture: Capture.Controller) =>
   (operation: string, options: FrameOptions) =>
     Effect.gen(function* () {
       const maxAge = millisOf(options.maxAge ?? defaultMaxAge);
@@ -342,6 +342,7 @@ const reuse =
         const earliest = frame.hostTime - frame.timing.uncertaintyMillis;
 
         return (
+          frame.document === bridge.frameTag().document &&
           page.now() - earliest <= maxAge &&
           earliest > activity.documentAt &&
           (options.after !== "input" || earliest > activity.inputAt) &&
@@ -397,7 +398,7 @@ export const make = Effect.fnUntraced(function* (
   });
 
   const picture = camera(page, bridge, viewport, capture);
-  const reusable = reuse(page, viewport, capture);
+  const reusable = reuse(page, bridge, viewport, capture);
   // Pictures in flight are shared, never kept: their callers say how old one may be.
   const screenshots = lane.shared<Image>("screenshot", false);
   const frames = lane.shared<Frame>("frame", false);

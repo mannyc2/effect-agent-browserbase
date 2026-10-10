@@ -39,6 +39,7 @@ const shot = (hostTime: number, byte: number) =>
   new Frame({
     page: "p1",
     session: "s1",
+    connection: "fixture-connection",
     data: new Uint8Array([0xff, 0xd8, byte]),
     timing: new Screenshot({ hostTime, uncertaintyMillis: 0 }),
     receivedAt: hostTime,

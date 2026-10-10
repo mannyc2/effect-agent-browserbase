@@ -47,7 +47,12 @@ const transport = Effect.fnUntraced(function* () {
           if (listening === on) listening = undefined;
         };
       },
-      frameTag: () => ({ session: "session", document, url: "https://fixture.test" }),
+      frameTag: () => ({
+        session: "session",
+        connection: "fixture-connection",
+        document,
+        url: "https://fixture.test",
+      }),
     })),
     calibrate: Effect.succeed({
       offsetMillis: 0,
