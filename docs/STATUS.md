@@ -1,6 +1,6 @@
 # Status
 
-## 0.3, unreleased
+## 0.3
 
 0.3 is a rewrite of the 0.2 set on stable Effect 4.0.0 and `effect/ai`, with agents on Yielded
 Agent, the renamed Effect Agent:
@@ -232,7 +232,7 @@ and each becoming the next beta.
   capture, and a capture's start has a deadline. So are the replay and readiness fixes: replay
   refuses the review's six drifts rather than act in the wrong place, `ready` waits out a loading
   screen in one call to the page, and a stalled connection no longer reads as a still screen. Its
-  beta, `0.3.0-beta.1`, is prepared in the changelog and the package versions, and is not tagged.
+  beta, `0.3.0-beta.1`, was never published; `0.3.0-beta.5` carries it.
 - **Phase 2, identity and lifetime, is built, with its review's fixes (#241, #242).**
   `Supervisor`, the Browserbase release outcomes and `effect-browserbase/testing` have landed, with
   the review's follow-up: a context whose session may still be saving to it is cleared by the next
@@ -272,8 +272,7 @@ and each becoming the next beta.
   wait, and killed the two of its fifteen planted bugs that the suite let through: a switch that
   turned on the stage while input on the old page was still under way, and a failure after an
   action's input went reported to a model as not dispatched. It had no adversarial review of its
-  own. Its beta, `0.3.0-beta.3`, is prepared in the changelog and the package versions, and is not
-  tagged.
+  own. Its beta, `0.3.0-beta.3`, was never published; `0.3.0-beta.5` carries it.
 - **Phase 4, contexts and follow-ups, is built.** Stored contexts are durable across processes:
   `ContextLease` replaces the process-wide record of writers, `verifyContext` reads a login back,
   `attach` resumes a session from another process, and `supervise({ keep })` leaves a session
@@ -379,16 +378,23 @@ The larger pieces left for later:
 
 ## Releases
 
-The latest release is `0.2.0-beta.9` of `effect-browser`, `effect-browserbase` and
-`effect-agent-browser`, published on 2 October 2026 from tag `v0.2.0-beta.9` (`976d316`) on the
-`beta` dist-tag. 0.3's first release, `0.3.0-beta.5`, goes out by plain npm trusted publishing
-from `.github/workflows/publish.yml`, as `effect-browser`, `effect-browserbase`,
-`effect-browser-human-strokes` and `effect-agent-browser`, with `@yielded/agent` from the archive
-above until `0.1.0-beta.168` is on npm; [RELEASING.md](RELEASING.md) has the steps, and
+`0.3.0-beta.5` of `effect-browser`, `effect-browserbase` and `effect-agent-browser` was published
+on 10 October 2026 from tag `v0.3.0-beta.5` (`3af967f`) on the `beta` dist-tag, by
+`.github/workflows/publish.yml` through npm trusted publishing, with provenance. Each archive npm
+serves has the integrity of the one the workflow checked. `effect-agent-browser` takes
+`@yielded/agent` from the archive above until `0.1.0-beta.168` is on npm. Installed from npm as its
+README says, in an npm project and in a Bun workspace with the isolated linker, the three held one
+copy of each runtime package, locked the archive's integrity, and loaded all 27 of their entry
+points.
+
+`effect-browser-human-strokes` `0.3.0-beta.5` is not published: npm gave the workflow no credential
+for it (`ENEEDAUTH`), since the package has no trusted publisher yet. Once its entry is added, as
+[RELEASING.md](RELEASING.md) says, dispatching the same tag again publishes it and skips the rest.
+
+`v0.3.0-beta.4` (`312ecf8`) was tagged but not published: a fix to `Page.waitFor` came after it,
+and release tags cannot move. `0.2.0-beta.9` was the release before, on 2 October 2026.
 [CHANGELOG.md](../CHANGELOG.md) lists what each release changes. Before it publishes, the workflow
-installs the packed archives in a clean consumer, typechecks every entry point's declarations with
-`skipLibCheck: false` and imports each one, with `tools/check-packed.sh`, which CI runs on every PR
-and which runs locally too.
+runs `tools/check-packed.sh`, which CI runs on every PR and which runs locally too.
 
 ## History
 
