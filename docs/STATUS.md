@@ -16,6 +16,12 @@ library writes during intervention, and requires positive durable read-back to r
 consequential input. Local Chromium covers both workflows and their failure paths. Editorial
 policy, account decisions and business journals remain consumer responsibilities.
 
+The [H1/H2/H3 commands](HOSTED_CHECKS.md) are executable, opt-in probes with bounded session
+admission and private evidence. Local runs validate the probe mechanisms, including the full
+five-minute two-capture schedule and an external operator stand-in. Hosted runs remain unperformed:
+included Browserbase allowance has not been verified, and H3 also requires a human operator.
+These probes do not make model calls or establish a billing boundary from an environment flag.
+
 The `0.3.0-beta.10` release adds cued presentation: `Stage.cue` prepares capture, and its
 `commit` switches on the event while retaining old-page input authority through the cut.
 Prepared cues belong to their calling scopes; committed capture belongs to the stage.
