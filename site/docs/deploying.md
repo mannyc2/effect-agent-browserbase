@@ -13,11 +13,67 @@ The build writes each page's markdown, `llms.txt`, `llms-full.txt`, `/api/v1/pag
 
 ## Deploy
 
+`bun run deploy` runs `alchemy deploy`, which builds the app and deploys the Worker and the bucket. `bun run upload -- polymarket` then puts `public/replays/polymarket/` into the bucket. The build on its own needs no account:
+
+:::Example
 ```sh
 cd site
-bun run deploy                 # alchemy deploy: builds the app and deploys the Worker and bucket
-bun run upload -- polymarket   # puts public/replays/polymarket/ into the bucket
+bun run build
+ls -1 dist dist/docs
 ```
+
+Run on 11 October 2026, it printed this, Vite's note about the size of the app's one script included:
+
+```text output
+$ vp build
+transforming...
+✓ 501 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   1.00 kB │ gzip:   0.59 kB
+dist/assets/index-Af68hcIh.css   38.30 kB │ gzip:   7.85 kB
+dist/assets/index-CpFJbfPY.js   503.43 kB │ gzip: 160.69 kB
+
+✓ built in 707ms
+[plugin builtin:vite-reporter]
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+
+dist:
+404.md
+api
+assets
+demo.html
+demo.md
+docs
+index.html
+index.md
+llms-full.txt
+llms.txt
+robots.txt
+try.html
+
+dist/docs:
+agent-tools.html
+agent-tools.md
+browserbase.html
+browserbase.md
+deploying.html
+deploying.md
+for-agents.html
+for-agents.md
+get-started.html
+get-started.md
+moments-and-narration.html
+moments-and-narration.md
+run-the-demo.html
+run-the-demo.md
+watched-browsing.html
+watched-browsing.md
+```
+:::
 
 Alchemy reads Cloudflare credentials from its profile (`alchemy profile edit --add Cloudflare`) or from `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The upload script reads those two variables, and its token needs R2 write access; it decodes the replay before it uploads anything. Replays stay out of git and out of the build: `bun run demo take` packs them into `public/replays/`, which the dev server serves and the upload script publishes.
 

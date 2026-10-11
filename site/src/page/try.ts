@@ -10,6 +10,7 @@ import { defineTaggedUnion } from "foldkit/schema";
 import { modifyFields } from "foldkit/struct";
 import { defineView } from "foldkit/submodel";
 
+import { ExampleTab, exampleView } from "../example.ts";
 import { LocalApi, RunnerStatus, TakeState } from "../local.ts";
 import { site } from "../pages.ts";
 
@@ -39,6 +40,7 @@ export const Model = Schema.Struct({
   maxUsdInput: Schema.String,
   take: Take,
   copy: Schema.Literals(["Idle", "Copied", "Failed"]),
+  setup: ExampleTab,
 });
 
 export type Model = typeof Model.Type;
@@ -58,6 +60,9 @@ export const Message = defineMessageUnion({
   FailedPollTake: { reason: Schema.String },
   ClickedCopyPrompt: {},
   CompletedCopyPrompt: { copied: Schema.Boolean },
+  SelectedSetupTab: { tab: ExampleTab },
+  ClickedCopySetup: {},
+  CompletedCopySetup: {},
 });
 
 export type Message = typeof Message.Type;
@@ -110,6 +115,30 @@ export const agentPrompt = [
   "Then run `bun run dev` in site/, open http://localhost:5173/try and record a take of the Polymarket demo.",
 ].join(" ");
 
+/** The commands that start a local runner, and what they printed when run on 11 October 2026. */
+const setup = {
+  commands: [
+    `git clone ${site.repository}`,
+    "cd effect-agent-browserbase",
+    "bun install",
+    "./node_modules/.bin/playwright-core install chromium",
+    "export OPENROUTER_API_KEY=…  EFFECT_BROWSER_BENCH_LIVE=1",
+    "cd site && bun run dev",
+  ].join("\n"),
+  caption:
+    "Run on Linux with Bun 1.4.2 on 11 October 2026. The install's tool patches, which print each binary's full path, are left out, and the download paths are shortened. Then open http://localhost:5173/try.",
+  output:
+    "Cloning into 'effect-agent-browserbase'...\nbun install v1.4.2 (744846f84)\n\n$ bun run patch:tsgo\n$ effect-tsgo patch --typescript --oxlint\n\n+ @effect/tsgo@0.51.0\n+ @stylistic/eslint-plugin@5.10.0\n+ @types/node@26.1.2\n+ effect@4.0.0\n+ oxfmt@0.72.0\n+ oxlint@1.82.0\n+ oxlint-tsgolint@7.0.2001\n+ playwright-core@1.63.0\n+ typescript@7.0.2\n+ vite@1.1.0\n+ vite-plus@1.1.0\n+ vitest@5.0.3\n\n450 packages installed [8.48s]\nDownloading Chrome for Testing 153.0.8010.12 (playwright chromium v1243) from https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux64/chrome-linux64.zip\nChrome for Testing 153.0.8010.12 (playwright chromium v1243) downloaded to ~/.cache/ms-playwright/chromium-1243\nDownloading FFmpeg (playwright ffmpeg v1011) from https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1011/ffmpeg-linux.zip\nFFmpeg (playwright ffmpeg v1011) downloaded to ~/.cache/ms-playwright/ffmpeg-1011\nDownloading Chrome Headless Shell 153.0.8010.12 (playwright chromium-headless-shell v1243) from https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux64/chrome-headless-shell-linux64.zip\nChrome Headless Shell 153.0.8010.12 (playwright chromium-headless-shell v1243) downloaded to ~/.cache/ms-playwright/chromium_headless_shell-1243\n$ vp dev\n[foldkit:devTools] MCP relay listening at ws://localhost:5173/__foldkit/devtools-mcp\n\n  VITE+ v1.1.0  \n\n  \u279c  Local:   http://localhost:5173/\n  \u279c  Network: use --host to expose\n",
+};
+
+export const CopySetup = Command.define("CopySetup", {
+  messages: [Message.CompletedCopySetup],
+  execute: Effect.tryPromise(() => navigator.clipboard.writeText(setup.commands)).pipe(
+    Effect.ignore,
+    Effect.as(Message.CompletedCopySetup()),
+  ),
+});
+
 export const CopyPrompt = Command.define("CopyPrompt", {
   messages: [Message.CompletedCopyPrompt],
   execute: Effect.tryPromise(() => navigator.clipboard.writeText(agentPrompt)).pipe(
@@ -127,6 +156,7 @@ export const init = (): Update.Return<Model, Message> => ({
     maxUsdInput: "0.50",
     take: Take.Idle(),
     copy: "Idle",
+    setup: "Code",
   },
   commands: [LoadStatus()],
 });
@@ -207,6 +237,9 @@ export const update = (model: Model, message: Message) =>
       }),
     }),
     ClickedCopyPrompt: () => ({ model, commands: [CopyPrompt()] }),
+    SelectedSetupTab: ({ tab }) => ({ model: modifyFields(model, { setup: () => tab }) }),
+    ClickedCopySetup: () => ({ model, commands: [CopySetup()] }),
+    CompletedCopySetup: () => ({ model }),
     CompletedCopyPrompt: ({ copied }) => ({
       model: modifyFields(model, { copy: () => (copied ? "Copied" : "Failed") }),
     }),
@@ -227,14 +260,10 @@ export const pollStream = (recording: boolean) =>
 
 type H = HtmlBuilder<Message>;
 
-const commandBlock = (h: H, lines: ReadonlyArray<string>) =>
+const pre = (h: H, text: string, tone: string) =>
   h.pre(
-    [
-      h.Class(
-        "overflow-x-auto rounded-lg bg-stone-950 px-4 py-3 font-mono text-[0.8125rem] leading-relaxed text-stone-100",
-      ),
-    ],
-    [h.code([], [lines.join("\n")])],
+    [h.Class(`overflow-x-auto px-4 py-3.5 font-mono text-[0.8125rem] leading-relaxed ${tone}`)],
+    [h.code([], [text])],
   );
 
 const remoteView = (model: Model, h: H): Html =>
@@ -247,15 +276,18 @@ const remoteView = (model: Model, h: H): Html =>
           "A take runs where the site runs. Start it on your machine and this page finds the local runner there, records a narrated take and opens it in the player.",
         ],
       ),
-      commandBlock(h, [
-        `git clone ${site.repository}`,
-        "cd effect-agent-browserbase",
-        "bun install",
-        "./node_modules/.bin/playwright-core install chromium",
-        "export OPENROUTER_API_KEY=…  EFFECT_BROWSER_BENCH_LIVE=1",
-        "cd site && bun run dev",
-        "# then open http://localhost:5173/try",
-      ]),
+      exampleView(
+        {
+          id: "try-setup",
+          tab: model.setup,
+          select: (tab) => Message.SelectedSetupTab({ tab }),
+          source: setup.commands,
+          copy: () => Message.ClickedCopySetup(),
+          code: pre(h, setup.commands, "text-stone-100"),
+          result: [h.p([], [setup.caption]), pre(h, setup.output, "text-stone-300")],
+        },
+        h,
+      ),
       h.div(
         [
           h.Class(

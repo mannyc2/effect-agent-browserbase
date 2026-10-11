@@ -78,12 +78,12 @@ describe("pageHtml", () => {
     const html = readFileSync(join(import.meta.dirname, "..", "index.html"), "utf8");
 
     const page = pageHtml(html, {
-      title: "Get started · effect-browser",
+      title: "Get started – effect-browser",
       summary: "Install & run",
       markdown: "/docs/get-started.md",
     });
 
-    assert.include(page, "<title>Get started · effect-browser</title>");
+    assert.include(page, "<title>Get started – effect-browser</title>");
     assert.include(page, 'content="Install &amp; run"');
     assert.include(page, 'type="text/markdown" href="/docs/get-started.md"');
   });

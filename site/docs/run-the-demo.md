@@ -4,32 +4,91 @@ The demo is a take you can record on your own machine: your Chromium, your OpenR
 
 ## Set up
 
+Clone the repository, install it and download the Chromium a take records in. A take makes model calls, so it also needs your OpenRouter key and an explicit opt-in.
+
+:::Example
 ```sh
 git clone https://github.com/mannyc2/effect-agent-browserbase
 cd effect-agent-browserbase
 bun install
 ./node_modules/.bin/playwright-core install chromium
-```
-
-A take makes model calls, so it needs a key and an explicit opt-in:
-
-```sh
 export OPENROUTER_API_KEY=…
 export EFFECT_BROWSER_BENCH_LIVE=1
 ```
 
+Run on Linux on 11 October 2026, it printed this, leaving out the two lines of the install's own setup script:
+
+```text output
+Cloning into 'effect-agent-browserbase'...
+bun install v1.4.2 (744846f84)
+
++ @effect/tsgo@0.51.0
++ @stylistic/eslint-plugin@5.10.0
++ @types/node@26.1.2
++ effect@4.0.0
++ oxfmt@0.72.0
++ oxlint@1.82.0
++ oxlint-tsgolint@7.0.2001
++ playwright-core@1.63.0
++ typescript@7.0.2
++ vite@1.1.0
++ vite-plus@1.1.0
++ vitest@5.0.3
+
+450 packages installed [8.48s]
+Downloading Chrome for Testing 153.0.8010.12 (playwright chromium v1243) from https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux64/chrome-linux64.zip
+Chrome for Testing 153.0.8010.12 (playwright chromium v1243) downloaded to ~/.cache/ms-playwright/chromium-1243
+Downloading FFmpeg (playwright ffmpeg v1011) from https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1011/ffmpeg-linux.zip
+FFmpeg (playwright ffmpeg v1011) downloaded to ~/.cache/ms-playwright/ffmpeg-1011
+Downloading Chrome Headless Shell 153.0.8010.12 (playwright chromium-headless-shell v1243) from https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux64/chrome-headless-shell-linux64.zip
+Chrome Headless Shell 153.0.8010.12 (playwright chromium-headless-shell v1243) downloaded to ~/.cache/ms-playwright/chromium_headless_shell-1243
+```
+:::
+
 ## Record a take
 
-Start the site and open the Try page:
+From `site/`, `bun run demo take` records a take; `--model`, `--max-usd`, `--every` and `--headed` change it. The take is packed into `public/replays/<id>/`, and `bun run dev` serves it at `/replay/<id>`. The dev server also serves the local runner the [Try page](/try) uses, which shows what a take still needs and records one with the model and cap you choose.
 
+:::Example
 ```sh
-cd site && bun run dev
-# open http://localhost:5173/try
+cd site
+bun run demo take --id polymarket-take5 --max-usd 0.5
 ```
 
-The page finds the local runner that `bun run dev` serves, shows what it still needs, and records a take with the model and cap you choose. When the take is packed, it opens in the player at `/replay/<id>`. From a terminal, `bun run demo take` in `site/` records the same take; `--model`, `--max-usd` and `--headed` change it.
+This is the featured take, recorded on 11 October 2026 and then moved to `public/replays/polymarket/`. It printed the lines below, with paths shortened and the agent's warnings about tool calls that failed and were handed back to it left out:
 
-The agent and the narrator run on one OpenRouter model; the voice is `openai/gpt-audio-mini`. The cap covers all three: every call reserves its worst case against it before it is sent, and settles to what it actually cost. The featured take ran two minutes on a cheap model: 35 model calls and 12 spoken lines for $0.09 in all, voice included.
+```text output
+$ node --conditions=@effect-browser/source demo/main.ts take --id "polymarket-take5" --max-usd "0.5"
+Take polymarket-take5: openai/gpt-6-luna, recording into ~/effect-agent-browserbase/.work/demo/2026-10-11T21-32-22-678Z-polymarket-take5
+graded pass answered, 185s, 44 model calls, $0.1049 known + $0.0000 unresolved
+3 of 3 reported markets match Polymarket's API, within 4 points. Which company has the best AI model end of October? (Google): reported 69.2%, Polymarket's API 69.3%; Which company has best AI model end of 2026? (Google): reported 43%, Polymarket's API 42.5%; What price will Bitcoin hit in October? (↑ 87,500): reported 54%, Polymarket's API 53.5%.
+  said: Hi, everyone. Polymarket is a prediction market where prices show the odds of possible outcomes. The agent will browse in view-only mode, check what’s trending, explore a topic, search, and open markets to see how their odds have moved. Let’s watch.
+  said: The prompt’s gone, and Brazil’s presidential race is front and center, with Flávio Bolsonaro at eighty-seven percent.
+  said: A live football market has taken its place, and San Francisco’s odds have slipped to fifty-four percent.
+  said: Politics is selected now, with midterms and presidential races in view; next, it can pick a market to inspect.
+  said: The AI search brings up Z.ai and Baidu model forecasts, both under one percent; it can choose one to inspect.
+  said: The full results page is open, with four hundred thirty-six matches; it can choose a market and check its chart.
+  said: That first AI forecast stands out, so it’s opening the October model question to see how its odds have moved.
+  said: Google leads at about sixty-nine percent, and the chart shows a sharp drop near October before recovering.
+  said: It’s on the market page now, and the chart’s settled back near seventy percent for Google.
+  said: The chart’s hovered near the end, with Google around seventy percent and Anthropic at thirty.
+  said: Google’s line stays near seventy percent, while Anthropic’s sits around thirty; I’ll move down to see what else this market shows.
+  said: The chart remains in view, so it hasn’t reached the details yet; we can keep looking for what’s below.
+  said: Now the outcome list is in view, and several other companies are below one percent.
+  said: The year-end chart shows Google at forty-three percent and Anthropic close behind at forty-two, with a sharp recent shift.
+  said: It’s reached the bottom of the company list, with Amazon still below one percent; next, we can inspect another market.
+  said: This Bitcoin market asks how high it’ll go in October; the chart climbs early, then drops sharply before recovering.
+  said: The strike list puts fifteen thousand at under one percent, while ninety-two thousand five hundred sits at twenty-two percent.
+  said: We’re farther down the strikes now, where ninety thousand is at thirty-five percent and eighty-seven thousand five hundred is just below.
+  said: That outcome is selected, and its order book is open; the yes price sits at fifty-four cents.
+  said: That lower strike is at fifty-four percent, down thirteen points; the order book shows asks at fifty-four cents.
+  said: That wraps up the run. The agent’s picks are Google at sixty-nine point two percent for the October AI model market, Google at forty-three percent for the end-of-twenty-twenty-six market, and the eighty-seven-thousand-five-hundred-dollar Bitcoin threshold at fifty-four percent. All three matched Polymarket’s public data. Thanks for watching.
+polymarket-take5: 6897 of 6897 frames, 198.4s, 21 of 21 lines spoken, in ~/effect-agent-browserbase/site/public/replays/polymarket-take5/
+Packed polymarket-take5: 21 lines spoken for $0.0102; the take cost $0.1152 in all.
+```
+:::
+
+The agent and the narrator run on one OpenRouter model; the voice is `openai/gpt-audio-mini`. The cap covers all three: every call reserves its worst case against it before it is sent, and settles to what it actually cost. The featured take ran just over three minutes on a cheap model: 44 model calls and 21 spoken lines for $0.12 in all, voice included.
 
 From the United States, Polymarket opens with a notice about trading from the US; the agent continues in view-only mode, which is all a reading take needs.
 

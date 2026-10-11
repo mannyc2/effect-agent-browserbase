@@ -1,11 +1,13 @@
 import { describe, expect, it as test } from "@effect/vitest";
 // The site's routes: which page a URL shows, the players a page starts, links to files and
 // headings, and what each page renders.
+import type * as Markdown from "@foldkit/markdown";
 import { Option } from "effect";
 import * as Scene from "foldkit/scene";
 import { Command, given, message, model, story } from "foldkit/story";
 import { fromString } from "foldkit/url";
 
+import { documentOf } from "../src/docs.ts";
 import {
   AppRoute,
   CopyCode,
@@ -19,6 +21,7 @@ import {
   view,
 } from "../src/main.ts";
 import * as Try from "../src/page/try.ts";
+import { pages } from "../src/pages.ts";
 import * as Player from "../src/player/player.ts";
 
 const at = (route: AppRoute) =>
@@ -26,6 +29,7 @@ const at = (route: AppRoute) =>
     route,
     players: {},
     tryPage: Try.init().model,
+    examples: {},
     notice: Option.none(),
     notices: 0,
   });
@@ -153,6 +157,20 @@ describe("view", () => {
     );
   });
 
+  test("a docs example shows its code, and what running it printed on request", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(at(AppRoute.Doc({ slug: "watched-browsing" }))),
+      Scene.expect(Scene.role("tab", { name: "Code" })).toHaveAttr("aria-selected", "true"),
+      Scene.expect(
+        Scene.text("on air, 1 ms after the time asked for", { exact: false }),
+      ).not.toExist(),
+      Scene.click(Scene.role("tab", { name: "Result" })),
+      Scene.expect(Scene.role("tab", { name: "Result" })).toHaveAttr("aria-selected", "true"),
+      Scene.expect(Scene.text("on air, 1 ms after the time asked for", { exact: false })).toExist(),
+    );
+  });
+
   test("an unknown docs page and an unknown path are not found", () => {
     Scene.scene(
       { update, view },
@@ -164,5 +182,40 @@ describe("view", () => {
       Scene.given(at(AppRoute.NotFound({ path: "/elsewhere" }))),
       Scene.expect(Scene.text("No page at /elsewhere.", { exact: false })).toExist(),
     );
+  });
+});
+
+/** The blocks in `blocks`, at any depth, outside `:::Example` directives, and the directives. */
+const outside = (
+  blocks: ReadonlyArray<Markdown.Block>,
+): ReadonlyArray<Markdown.Block | Markdown.Island> =>
+  blocks.flatMap((block) =>
+    block._tag === "Island"
+      ? block.name === "Example"
+        ? [block]
+        : outside(block.blocks)
+      : block._tag === "List"
+        ? block.items.flatMap((item) => outside(item.blocks))
+        : block._tag === "Blockquote"
+          ? outside(block.blocks)
+          : [block],
+  );
+
+const isOutput = (block: Markdown.Block) =>
+  block._tag === "CodeBlock" &&
+  Option.exists(block.maybeMeta, (meta) => meta.split(/\s+/).includes("output"));
+
+describe("docs", () => {
+  test("every code block is an example, followed by what running it printed", () => {
+    for (const page of pages) {
+      const blocks = outside(Option.getOrThrow(documentOf(page)).blocks);
+
+      expect(blocks.filter((block) => block._tag === "CodeBlock").map(() => page.slug)).toEqual([]);
+      for (const block of blocks)
+        if (block._tag === "Island") {
+          expect(block.blocks[0]?._tag, page.slug).toBe("CodeBlock");
+          expect(block.blocks.slice(1).some(isOutput), page.slug).toBe(true);
+        }
+    }
   });
 });

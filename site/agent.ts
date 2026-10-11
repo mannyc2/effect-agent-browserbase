@@ -11,9 +11,13 @@ import type { Plugin } from "vite";
 import { featuredReplay, markdownPathOf, type Page, pages, pathOf, site } from "./src/pages.ts";
 import { prefersMarkdown, replayMarkdown, serve } from "./src/serve.ts";
 
-/** A page's markdown as an agent reads it: islands become links to what they show. */
+/**
+ * A page's markdown as an agent reads it: islands become links to what they show, and an
+ * example is its code followed by its result, as the page's prose introduces it.
+ */
 export const agentMarkdown = (source: string) =>
   source
+    .replace(/^:::(Example)?[ \t]*\n/gm, "")
     .replace(/\]\((\/[^)\s#]*)(#[^)]*)?\)/g, (link, path: string, hash = "") => {
       const served = serve("GET", path, "text/markdown");
 
@@ -160,19 +164,19 @@ const entries = (): ReadonlyArray<{
 }> => [
   ...pages.map((page) => ({
     file: page.slug === "index" ? "index.html" : `docs/${page.slug}.html`,
-    title: page.slug === "index" ? site.name : `${page.title} · ${site.name}`,
+    title: page.slug === "index" ? site.name : `${page.title} – ${site.name}`,
     summary: page.summary,
     markdown: markdownPathOf(page),
   })),
   {
     file: "demo.html",
-    title: `Demo · ${site.name}`,
+    title: `Demo – ${site.name}`,
     summary: "An agent explores Polymarket while a narrator watches and speaks.",
     markdown: "/demo.md",
   },
   {
     file: "try.html",
-    title: `Try it · ${site.name}`,
+    title: `Try it – ${site.name}`,
     summary: "Record a narrated take of the demo on your own machine.",
     markdown: markdownPathOf({ slug: "run-the-demo" }),
   },

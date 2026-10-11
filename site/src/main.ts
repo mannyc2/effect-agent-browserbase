@@ -19,6 +19,7 @@ import {
   sectionsOf,
   withoutTitle,
 } from "./docs.ts";
+import { ExampleTab, exampleView } from "./example.ts";
 import * as Try from "./page/try.ts";
 import { featuredReplay, markdownPathOf, type Page, pages, pathOf, site } from "./pages.ts";
 import * as Player from "./player/player.ts";
@@ -35,6 +36,8 @@ export const Model = Schema.Struct({
   players: Schema.Record(Schema.String, Player.Model),
   /** Kept across pages, so a take keeps recording while the visitor reads. */
   tryPage: Try.Model,
+  /** Which side of each code example shows, by page and example; the code until chosen. */
+  examples: Schema.Record(Schema.String, ExampleTab),
   notice: Schema.Option(Schema.String),
   /** Counts notices, so an older notice's timer does not clear a newer one. */
   notices: Schema.Int,
@@ -54,6 +57,7 @@ export const Message = defineMessageUnion({
   GotTryMessage: { message: Try.Message },
   ClickedCopyMarkdown: { path: Schema.String },
   ClickedCopyCode: { text: Schema.String },
+  SelectedExampleTab: { key: Schema.String, tab: ExampleTab },
   CompletedCopy: { notice: Schema.String },
   ElapsedNotice: { notices: Schema.Int },
 });
@@ -165,6 +169,7 @@ export const init: Runtime.RoutingApplicationInit<Model, Message> = (url) =>
       route: AppRoute.Home(),
       players: {},
       tryPage: Try.init().model,
+      examples: {},
       notice: Option.none(),
       notices: 0,
     }),
@@ -242,6 +247,9 @@ export const update = (model: Model, message: Message) =>
     GotTryMessage: ({ message }) => foldTry(model, message),
     ClickedCopyMarkdown: ({ path }) => ({ model, commands: [CopyMarkdown({ path })] }),
     ClickedCopyCode: ({ text }) => ({ model, commands: [CopyCode({ text })] }),
+    SelectedExampleTab: ({ key, tab }) => ({
+      model: modifyFields(model, { examples: (examples) => ({ ...examples, [key]: tab }) }),
+    }),
     CompletedCopy: ({ notice }) => notify(model, notice),
     ElapsedNotice: ({ notices }) =>
       notices === model.notices
@@ -358,7 +366,10 @@ const footerView = (h: H): Html =>
           ),
         ],
         [
-          h.p([], [`${site.name} · MIT · built with Foldkit on Cloudflare`]),
+          h.p(
+            [],
+            [`${site.name} is MIT licensed, and this site is built with Foldkit on Cloudflare.`],
+          ),
           h.p(
             [h.Class("flex flex-wrap gap-x-4 gap-y-1")],
             [
@@ -425,7 +436,22 @@ const pageProse = (model: Model, page: Pick<Page, "slug">, h: H): Html =>
         withoutTitle(document),
         {
           replay: (id) => playerSlot(model, id, h),
-          copy: (text) => Message.ClickedCopyCode({ text }),
+          example: (index, source, code, result) => {
+            const key = `${page.slug}/${index}`;
+
+            return exampleView(
+              {
+                id: `example-${page.slug}-${index}`,
+                tab: Option.getOrElse(Record.get(model.examples, key), () => "Code" as const),
+                select: (tab) => Message.SelectedExampleTab({ key, tab }),
+                source,
+                copy: (text) => Message.ClickedCopyCode({ text }),
+                code,
+                result,
+              },
+              h,
+            );
+          },
         },
         h,
       ),
@@ -453,14 +479,6 @@ const cardsView = (h: H): Html =>
                 ),
               ],
               [
-                h.span(
-                  [
-                    h.Class(
-                      "text-[0.6875rem] font-semibold tracking-wide text-amber-700 uppercase dark:text-amber-400",
-                    ),
-                  ],
-                  [page.section],
-                ),
                 h.span([h.Class("font-semibold")], [page.title]),
                 h.span([h.Class("text-sm text-stone-600 dark:text-stone-400")], [page.summary]),
               ],
@@ -477,14 +495,6 @@ const homeView = (model: Model, h: H): Html =>
       h.section(
         [h.Class("flex flex-col items-start gap-5 pt-14 pb-10 sm:pt-20")],
         [
-          h.p(
-            [
-              h.Class(
-                "rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900 dark:bg-amber-400/15 dark:text-amber-300",
-              ),
-            ],
-            ["Effect · Playwright · Browserbase"],
-          ),
           h.h1(
             [h.Class("max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl")],
             ["Browser automation for Effect agents, built to be watched."],
@@ -521,10 +531,7 @@ const sidebarLinks = (current: string, h: H): ReadonlyArray<Html> =>
     h.div(
       [h.Class("flex flex-col gap-1")],
       [
-        h.p(
-          [h.Class("px-2 text-[0.6875rem] font-semibold tracking-wide text-stone-500 uppercase")],
-          [section],
-        ),
+        h.p([h.Class("px-2 text-sm font-semibold text-stone-900 dark:text-stone-100")], [section]),
         h.ul(
           [h.Class("flex flex-col")],
           pages
@@ -606,7 +613,7 @@ const docView = (model: Model, page: Page, h: H): Html => {
             [
               h.summary(
                 [h.Class("cursor-pointer px-4 py-2.5 text-sm font-medium")],
-                [`Docs · ${page.title}`],
+                ["All docs pages"],
               ),
               h.nav(
                 [h.AriaLabel("Docs"), h.Class("flex flex-col gap-4 px-2 pb-3")],
@@ -614,15 +621,7 @@ const docView = (model: Model, page: Page, h: H): Html => {
               ),
             ],
           ),
-          h.p(
-            [
-              h.Class(
-                "text-xs font-semibold tracking-wide text-amber-700 uppercase dark:text-amber-400",
-              ),
-            ],
-            [page.section],
-          ),
-          h.h1([h.Class("mt-1 text-3xl font-semibold tracking-tight sm:text-4xl")], [page.title]),
+          h.h1([h.Class("text-3xl font-semibold tracking-tight sm:text-4xl")], [page.title]),
           h.p([h.Class("mt-3 text-lg text-stone-600 dark:text-stone-400")], [page.summary]),
           h.div(
             [
@@ -665,11 +664,7 @@ const docView = (model: Model, page: Page, h: H): Html => {
                 [h.AriaLabel("On this page"), h.Class("sticky top-20 flex flex-col gap-2 text-sm")],
                 [
                   h.p(
-                    [
-                      h.Class(
-                        "text-[0.6875rem] font-semibold tracking-wide text-stone-500 uppercase",
-                      ),
-                    ],
+                    [h.Class("font-semibold text-stone-900 dark:text-stone-100")],
                     ["On this page"],
                   ),
                   ...sections.map((section) =>
@@ -691,18 +686,10 @@ const docView = (model: Model, page: Page, h: H): Html => {
   );
 };
 
-const intro = (h: H, eyebrow: string, title: string, lede: ReadonlyArray<Html | string>) =>
+const intro = (h: H, title: string, lede: ReadonlyArray<Html | string>) =>
   h.div(
     [h.Class("flex max-w-3xl flex-col gap-3 pt-10 pb-6")],
     [
-      h.p(
-        [
-          h.Class(
-            "text-xs font-semibold tracking-wide text-amber-700 uppercase dark:text-amber-400",
-          ),
-        ],
-        [eyebrow],
-      ),
       h.h1([h.Class("text-3xl font-semibold tracking-tight text-balance sm:text-4xl")], [title]),
       h.p([h.Class("text-base text-pretty text-stone-600 sm:text-lg dark:text-stone-400")], lede),
     ],
@@ -723,11 +710,12 @@ const demoView = (model: Model, h: H): Html =>
   h.div(
     [h.Class(container)],
     [
-      intro(h, "Demo", "An agent explores Polymarket while a narrator watches", [
-        "One take, recorded in a real Chromium: the agent browses on its own and reports three markets with their odds, a narrator says what each moment shows and a voice speaks its lines, and each market's odds are checked against Polymarket's public API. ",
-        inlineLink(h, "/docs/moments-and-narration", "How the narration works"),
-        " · ",
-        inlineLink(h, "/try", "Record your own take"),
+      intro(h, "An agent explores Polymarket", [
+        "An agent browses Polymarket on its own and comes back with three markets and their odds. A host watches the same screen and talks you through it, and afterwards each market's odds are checked against Polymarket's public API. Read ",
+        inlineLink(h, "/docs/moments-and-narration", "how the narration works"),
+        ", or ",
+        inlineLink(h, "/try", "record a take of your own"),
+        ".",
       ]),
       playerSlot(model, featuredReplay, h),
     ],
@@ -737,7 +725,7 @@ const replayView = (model: Model, id: string, h: H): Html =>
   h.div(
     [h.Class(container)],
     [
-      intro(h, "Replay", id, [
+      intro(h, `Replay ${id}`, [
         "A packed recording: video, narration, captions and the agent's steps. Its data is at ",
         inlineLink(h, `${Player.baseOf(id)}/replay.json`, "replay.json"),
         ".",
@@ -750,7 +738,7 @@ const tryView = (model: Model, h: H): Html =>
   h.div(
     [h.Class(container)],
     [
-      intro(h, "Try it", "Record a take on your machine", [
+      intro(h, "Record a take on your machine", [
         "Your Chromium, your model key, your spending cap. ",
         inlineLink(h, "/docs/run-the-demo", "What a take does and costs"),
       ]),
@@ -772,7 +760,7 @@ const notFoundView = (path: string, h: H): Html =>
   h.div(
     [h.Class(container)],
     [
-      intro(h, "404", "Nothing here", [
+      intro(h, "Nothing here", [
         `No page at ${path}. `,
         inlineLink(h, "/", "Go home"),
         " or ",
@@ -782,7 +770,7 @@ const notFoundView = (path: string, h: H): Html =>
     ],
   );
 
-const titled = (title: string) => (title === site.name ? site.name : `${title} · ${site.name}`);
+const titled = (title: string) => (title === site.name ? site.name : `${title} – ${site.name}`);
 
 export const view = (model: Model, h: H): Document => {
   const [title, body] = AppRoute.match(model.route, {

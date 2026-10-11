@@ -19,12 +19,48 @@ The page itself stays plain, and plain input never waits for a view. `view.aim(t
 
 `Stage` is the source of a live output. `stage.cue(page)` starts capture; `cue.ready` waits for a current frame; `cue.commit({ at })` switches on the host time of something that actually happened, such as a line going out. `stage.shown()` describes the output without inventing frames: `Painted`, `Still` (confirmed after a fresh round trip), `Stalled` (silence that could not be confirmed) or `Gone`.
 
+Here the output starts on one page, prepares another off air, and switches once it has painted:
+
+:::Example
 ```ts
-const cue = yield * stage.cue(page);
-yield * cue.ready;
-const sent = yield * lineSent; // Some(hostTime) when the line goes out
-if (Option.isSome(sent)) yield * cue.commit({ at: sent.value });
+import { Effect, Stream } from "effect";
+import { Browser, Chromium, Stage } from "effect-browser";
+
+const program = Effect.gen(function* () {
+  const browser = yield* Browser.Browser;
+  const stage = yield* Stage.make();
+
+  const home = yield* browser.firstPage;
+  yield* home.goto("https://example.com");
+  yield* stage.present(home);
+
+  // Prepare the next page off air, then switch when it has painted.
+  const next = yield* browser.newPage("https://news.ycombinator.com");
+  const cue = yield* stage.cue(next);
+  yield* cue.ready;
+  const presented = yield* cue.commit();
+
+  yield* Effect.log(`on air, ${presented.latency.toFixed(0)} ms after the time asked for`);
+
+  // What the output shows from then on: paint, or what a second without paint establishes.
+  yield* stage.shown({ hold: "1 second" }).pipe(
+    Stream.take(3),
+    Stream.runForEach((shown) => Effect.log(shown._tag)),
+  );
+}).pipe(Effect.scoped);
+
+program.pipe(Effect.provide(Chromium.layer()), Effect.runPromise);
 ```
+
+Run with `node stage.ts` on 11 October 2026. The switch landed a millisecond after the time asked for, and once Hacker News stopped painting, a second without paint was confirmed as still:
+
+```text output
+[20:26:10.695] INFO (#1): on air, 1 ms after the time asked for
+[20:26:10.710] INFO (#1): Painted
+[20:26:10.758] INFO (#1): Painted
+[20:26:12.698] INFO (#1): Still
+```
+:::
 
 ## Owned work
 

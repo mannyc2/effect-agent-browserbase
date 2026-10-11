@@ -1,6 +1,7 @@
 // The docs pages' markdown, compiled at build time by @foldkit/markdown, and how the site renders
-// it: prose styled for reading, headings that link to themselves, code blocks with a copy button,
-// and islands that place a live view, such as a replay's player, in the prose.
+// it: prose styled for reading, headings that link to themselves, code examples that show either
+// their code or what running it produced, and islands that place a live view, such as a replay's
+// player, in the prose.
 import * as Markdown from "@foldkit/markdown";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -76,10 +77,28 @@ export const sectionsOf = (document: Markdown.MarkdownDocument) =>
     block._tag === "Heading" && block.level === 2 ? [plainText(block.content)] : [],
   );
 
-export interface ProseConfig<Message> {
+/** Each example's code, in the order the page's `:::Example` directives come. */
+export const examplesOf = (document: Markdown.MarkdownDocument): ReadonlyArray<string> =>
+  islandsIn(document.blocks).flatMap((island) =>
+    island.name === "Example"
+      ? [island.blocks[0]?._tag === "CodeBlock" ? island.blocks[0].value : ""]
+      : [],
+  );
+
+export interface ProseConfig {
   readonly replay: (id: string) => Html;
-  readonly copy: (text: string) => Message;
+  /** The `index`th example: its code as text, the code's block, and the result's blocks. */
+  readonly example: (
+    index: number,
+    source: string,
+    code: Html,
+    result: ReadonlyArray<Html>,
+  ) => Html;
 }
+
+/** A code block's meta word that marks it as what a run printed rather than code to run. */
+const isOutput = (meta: Option.Option<string>) =>
+  Option.exists(meta, (words) => words.split(/\s+/).includes("output"));
 
 const headingClasses: Readonly<Record<number, string>> = {
   1: "text-3xl font-semibold tracking-tight",
@@ -90,12 +109,16 @@ const headingClasses: Readonly<Record<number, string>> = {
 /** A document as the site's prose. */
 export const prose = <Message>(
   document: Markdown.MarkdownDocument,
-  config: ProseConfig<Message>,
+  config: ProseConfig,
   h: HtmlBuilder<Message>,
-): Html =>
-  Markdown.view(document, {
+): Html => {
+  const sources = examplesOf(document);
+
+  return Markdown.view(document, {
     islands: Markdown.islandsFor(islandAttributes, {
       Replay: ({ id }) => h.div([h.Class("my-8")], [config.replay(id)]),
+      Example: (_, [code = h.empty, ...result], index) =>
+        config.example(index, sources[index] ?? "", code, result),
     }),
     views: {
       Heading: (heading, content) => {
@@ -141,33 +164,22 @@ export const prose = <Message>(
           ],
           [value],
         ),
-      CodeBlock: ({ value, maybeLanguage }) =>
-        h.div(
-          [h.Class("group relative my-6")],
+      CodeBlock: ({ value, maybeLanguage, maybeMeta }) =>
+        h.pre(
           [
-            h.pre(
-              [
-                h.Class(
-                  "overflow-x-auto rounded-xl bg-stone-950 px-4 py-3.5 font-mono text-[0.8125rem] leading-relaxed text-stone-100 ring-1 ring-stone-800",
-                ),
-                h.DataAttribute(
-                  "language",
-                  Option.getOrElse(maybeLanguage, () => "text"),
-                ),
-              ],
-              [h.code([], [value])],
+            h.Class(
+              `overflow-x-auto px-4 py-3.5 font-mono text-[0.8125rem] leading-relaxed ${
+                isOutput(maybeMeta)
+                  ? "break-words whitespace-pre-wrap text-stone-300"
+                  : "text-stone-100"
+              }`,
             ),
-            h.button(
-              [
-                h.Type("button"),
-                h.Class(
-                  "absolute top-2 right-2 rounded-md bg-stone-800 px-2 py-1 text-xs text-stone-300 opacity-0 transition group-hover:opacity-100 hover:bg-stone-700 focus:opacity-100",
-                ),
-                h.OnClick(config.copy(value)),
-              ],
-              ["Copy"],
+            h.DataAttribute(
+              "language",
+              Option.getOrElse(maybeLanguage, () => "text"),
             ),
           ],
+          [h.code([], [value])],
         ),
       List: (list, items) =>
         (list.isOrdered ? h.ol : h.ul)(
@@ -203,3 +215,4 @@ export const prose = <Message>(
           : h.td([h.Class("px-3 py-2 align-top")], content),
     },
   });
+};

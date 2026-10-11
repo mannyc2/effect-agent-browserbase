@@ -4,17 +4,38 @@ effect-browser runs on Effect 4 and Playwright's Chromium. An agent drives pages
 
 ## Install
 
+`effect-agent-browser` peers on `@yielded/agent` `0.1.0-beta.168` exactly, which is not on npm yet, so the install takes the archive its release is checked with, as a dependency and as an override; its [README](https://github.com/mannyc2/effect-agent-browserbase/tree/main/packages/agent-browser#readme) says where the archive comes from. Effect is pinned to 4.0.0, the version the packages are tested with.
+
+:::Example
 ```sh
-npm install effect-browser@beta effect-agent-browser@beta effect playwright-core
+mkdir top-story && cd top-story && npm init -y > /dev/null && npm pkg set type=module
+# Yielded Agent 0.1.0-beta.168 is not on npm yet: install the archive this release is checked with.
+YIELDED=https://raw.githubusercontent.com/mannyc2/effect-agent-browserbase/1c40d56a631ea0a041577d9736a7484e3d0f4b62/yielded-agent-0.1.0-beta.168.tgz
+npm pkg set "overrides[@yielded/agent]=$YIELDED"
+npm install "$YIELDED" effect-browser@beta effect-agent-browser@beta effect@4.0.0 @effect/ai-openrouter@4.0.0 playwright-core
 npx playwright-core install chromium
 ```
 
-`effect-agent-browser` peers on `@yielded/agent` `0.1.0-beta.168` exactly, which is not on npm yet. Its [README](https://github.com/mannyc2/effect-agent-browserbase/tree/main/packages/agent-browser#readme) gives the archive to install in its place, as a dependency and an override.
+Run on Linux with Node 24 and npm 11 on 11 October 2026:
+
+```text output
+added 6 packages, and audited 7 packages in 3s
+
+found 0 vulnerabilities
+Downloading Chrome for Testing 156.0.8078.4 (playwright chromium v1248) from https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-linux64.zip
+Chrome for Testing 156.0.8078.4 (playwright chromium v1248) downloaded to ~/.cache/ms-playwright/chromium-1248
+Downloading FFmpeg (playwright ffmpeg v1013) from https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1013/ffmpeg-linux.zip
+FFmpeg (playwright ffmpeg v1013) downloaded to ~/.cache/ms-playwright/ffmpeg-1013
+Downloading Chrome Headless Shell 156.0.8078.4 (playwright chromium-headless-shell v1248) from https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-headless-shell-linux64.zip
+Chrome Headless Shell 156.0.8078.4 (playwright chromium-headless-shell v1248) downloaded to ~/.cache/ms-playwright/chromium_headless_shell-1248
+```
+:::
 
 ## An agent in a local Chromium
 
-A Yielded agent runs the loop; `BrowserTools` gives it the browser tools over an effect-browser page. Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter:
+A Yielded agent runs the loop; `BrowserTools` gives it the browser tools over an effect-browser page. Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter. Save it as `agent.ts` in the same directory:
 
+:::Example
 ```ts
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
@@ -50,9 +71,14 @@ const program = Effect.gen(function* () {
 });
 
 const OpenRouter = Layer.mergeAll(
-  OpenRouterLanguageModel.layer({ model: "<model id>" }),
+  // Without strictJsonSchema, @effect/ai-openrouter 4.0.0 sends `strict: null`, OpenRouter drops
+  // the response format, and a structured answer comes back as prose.
+  OpenRouterLanguageModel.layer({
+    model: "openai/gpt-6-luna",
+    config: { strictJsonSchema: true },
+  }),
   Layer.succeed(Model.ProviderName, "openrouter"),
-  Layer.succeed(Model.ModelName, "<model id>"),
+  Layer.succeed(Model.ModelName, "openai/gpt-6-luna"),
 ).pipe(
   Layer.provide(OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") })),
   Layer.provide(FetchHttpClient.layer),
@@ -60,6 +86,25 @@ const OpenRouter = Layer.mergeAll(
 
 program.pipe(Effect.provide([Chromium.layer(), OpenRouter]), Effect.runPromise);
 ```
+
+Run with `OPENROUTER_API_KEY=… node agent.ts` on 11 October 2026. The model read the top story off the first screenshot, so the run took one model call:
+
+```text output
+[20:23:58.322] INFO (#1): {
+  title: 'Total Annihilation, rebuilt for modern computers',
+  points: 155
+} RunTotals {
+  modelCalls: 1,
+  inputTokens: 2944,
+  outputTokens: 58,
+  webSearchCalls: 0,
+  costMicrousd: 0,
+  usageStatus: 'complete',
+  pricingStatus: 'unknown',
+  unobservedModelCalls: 0
+}
+```
+:::
 
 ## What the agent sees
 

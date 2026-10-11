@@ -2,6 +2,9 @@
 
 `effect-browserbase` makes a [Browserbase](https://www.browserbase.com) session the same `Browser` a local Chromium is. Swap the layer; the agent, its tools and the narrator don't change.
 
+The program from [Get started](/docs/get-started), on a Browserbase session instead of a local Chromium:
+
+:::Example
 ```ts
 import { Browserbase, BrowserbaseClient, ContextLease } from "effect-browserbase";
 
@@ -13,6 +16,25 @@ const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
 
 program.pipe(Effect.provide([Hosted, OpenRouter]), Effect.runPromise);
 ```
+
+Run on 11 October 2026 with `npm install effect-browserbase@beta` added, and `BROWSERBASE_API_KEY` set. Browserbase lists the session, in us-west-2, as completed when the program ended:
+
+```text output
+[20:25:37.832] INFO (#1): {
+  title: 'Total Annihilation, rebuilt for modern computers',
+  points: 161
+} RunTotals {
+  modelCalls: 1,
+  inputTokens: 6161,
+  outputTokens: 55,
+  webSearchCalls: 0,
+  costMicrousd: 0,
+  usageStatus: 'complete',
+  pricingStatus: 'unknown',
+  unobservedModelCalls: 0
+}
+```
+:::
 
 ## Sessions you can account for
 
