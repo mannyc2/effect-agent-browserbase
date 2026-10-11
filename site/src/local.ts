@@ -23,12 +23,12 @@ export type RunnerStatus = typeof RunnerStatus.Type;
 /** What the runner printed, newest last, bounded. */
 const log = Schema.Array(Schema.String);
 
-export const TakeState = Schema.Union([
-  Schema.TaggedStruct("Running", { log }),
-  /** Packed under /replays/<replay>/, which the player loads. */
-  Schema.TaggedStruct("Packed", { log, replay: Schema.String }),
-  Schema.TaggedStruct("Failed", { log, reason: Schema.String }),
-]);
+/** A take's progress; a Packed take is under /replays/<replay>/, which the player loads. */
+export const TakeState = Schema.TaggedUnion({
+  Running: { log },
+  Packed: { log, replay: Schema.String },
+  Failed: { log, reason: Schema.String },
+});
 export type TakeState = typeof TakeState.Type;
 
 export class LocalRunner extends HttpApiGroup.make("LocalRunner")
