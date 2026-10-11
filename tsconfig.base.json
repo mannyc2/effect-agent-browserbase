@@ -75,6 +75,25 @@
                 "@effect/ai-typesafe"
               ]
             }
+          },
+          {
+            // The site is an application: its client calls the local runner through Effect's HTTP
+            // API module, and its demo runner is a command-line program that streams the voice.
+            "include": ["**/site/**/*.ts"],
+            "options": {
+              "allowedUnstableApis": [
+                "effect/ai",
+                "effect/Arbitrary",
+                "effect/cli",
+                "effect/encoding",
+                "effect/http",
+                "effect/http-api",
+                "effect/observability",
+                "effect/process",
+                "@effect/ai-openrouter",
+                "@effect/ai-typesafe"
+              ]
+            }
           }
         ]
       }
