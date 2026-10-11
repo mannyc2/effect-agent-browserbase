@@ -271,11 +271,14 @@ Agent, the renamed Effect Agent:
   page, whose streamed model requests are sent and charged as single completions. The bench is an `effect/cli` program (`run`, `report`, `judges`) on `Config` and
   `FileSystem`; its results are versioned Schema records, and a report states its estimand and
   tests arms with exact paired tests. Paid runs remain opt-in.
-- `demos` (private): a static site that replays bench runs recorded with `--record`: the
-  screencast as video, the planned pointer path, agent turns, a narrator's captions (`--narrate`)
-  and the pictures a model was shown, with each run's grade against the page's truth. Agent runs,
-  human-versus-raw input and scripted understanding replays are recorded; model comparisons and a
-  policy demo are not yet.
+- `site` (private): the docs site, a Foldkit app on Cloudflare deployed with Alchemy. Its pages are
+  markdown with replays placed in the prose, and each is also served as markdown for agents, with
+  `llms.txt`, `llms-full.txt` and a JSON index. The featured demo is one narrated take: an agent
+  explores Polymarket while a narrator captions moments of the page and a voice model speaks each
+  line, and the markets it reports are checked against Polymarket's API. The player shows the
+  screencast with the narration as audio and captions, the planned pointer path, the agent's steps
+  and the grade. `bun run dev` serves a local runner, so a visitor records their own take with
+  their key and cap; the site is not deployed yet.
 
 `effect-agent-browser` is rebuilt on Yielded Agent in place of the 0.2 adapter on Effect Agent,
 and 0.3's own loop on `effect/ai`'s `Chat` went with the move. The tests run against real local Chromium, a fake Browserbase API

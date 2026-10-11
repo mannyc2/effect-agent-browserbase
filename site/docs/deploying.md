@@ -6,20 +6,20 @@ The site is built on the CAFE stack: **C**loudflare, **A**lchemy, **F**oldkit an
 
 `site/alchemy.run.ts` declares two resources:
 
-- `Replays`, an R2 bucket holding packed replays under `<id>/`;
+- `Replays`, the R2 bucket `effect-browser-replays`, holding packed replays under `<id>/`;
 - `Site`, a `Cloudflare.Website.Foldkit` that builds the app with Vite and deploys it as static assets behind `src/worker.ts`, with the bucket bound as `REPLAYS`.
 
-The Worker answers three kinds of request. `/replays/*` comes from the bucket, with range requests so the video seeks. A page requested with `Accept: text/markdown` gets its markdown. Everything else is the app's assets, with unmatched paths served `index.html` so the app's router takes over.
+The build writes each page's markdown, `llms.txt`, `llms-full.txt`, `/api/v1/pages.json` and `robots.txt` beside the app, and one HTML entry per page whose head carries its title, summary and a `rel="alternate"` link to its markdown. The Worker runs first on page paths and `/replays/*`. A replay's files come from the bucket, with range requests so the video seeks. A page requested with `Accept: text/markdown` gets its markdown; requested as HTML, it gets a `Link` header naming its markdown. Everything else is the static build, and unmatched paths are served `index.html`, so the app's router takes over.
 
 ## Deploy
 
 ```sh
 cd site
 bun run deploy                 # alchemy deploy: builds the app and deploys the Worker and bucket
-bun upload.ts polymarket       # puts public/replays/polymarket/ into the bucket
+bun run upload -- polymarket   # puts public/replays/polymarket/ into the bucket
 ```
 
-Alchemy reads Cloudflare credentials from its profile (`alchemy profile edit --add Cloudflare`) or from `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Replays stay out of git: `bun run demo` packs them into `public/replays/`, which the dev server serves and the upload script publishes.
+Alchemy reads Cloudflare credentials from its profile (`alchemy profile edit --add Cloudflare`) or from `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The upload script reads those two variables, and its token needs R2 write access; it decodes the replay before it uploads anything. Replays stay out of git and out of the build: `bun run demo take` packs them into `public/replays/`, which the dev server serves and the upload script publishes.
 
 ## Locally
 

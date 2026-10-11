@@ -6,11 +6,12 @@ This site is written to be read by agents as well as people. Everything a page s
 
 - Every page is available as markdown at its URL plus `.md`: [/docs/get-started.md](/docs/get-started.md), and [/index.md](/index.md) for the home page.
 - Requesting a page's URL with `Accept: text/markdown` returns the same markdown.
+- A page served as HTML names its markdown in a `Link` header and in a `<link rel="alternate" type="text/markdown">` in its head.
 - [/llms.txt](/llms.txt) lists every page with a one-line summary and its markdown link.
 - [/llms-full.txt](/llms-full.txt) is every page in one file.
 - [/api/v1/pages.json](/api/v1/pages.json) lists the pages as JSON: slug, title, summary and both URLs.
 
-A replay embedded in a page appears in its markdown as links to the replay's data files.
+A replay embedded in a page appears in its markdown as links to the replay's data files, and `/replay/<id>.md` describes any replay. `robots.txt` allows all crawlers and signals `ai-train=yes, search=yes, ai-input=yes`.
 
 ## Replay data
 

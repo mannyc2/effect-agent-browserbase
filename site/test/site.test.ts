@@ -1,10 +1,10 @@
+import { describe, expect, it as test } from "@effect/vitest";
 // The site's routes: which page a URL shows, the players a page starts, links to files and
 // headings, and what each page renders.
 import { Option } from "effect";
 import * as Scene from "foldkit/scene";
 import { Command, given, message, model, story } from "foldkit/story";
 import { fromString } from "foldkit/url";
-import { describe, expect, it as test } from "@effect/vitest";
 
 import {
   AppRoute,

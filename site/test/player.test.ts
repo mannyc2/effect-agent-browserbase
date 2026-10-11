@@ -1,8 +1,8 @@
+import { describe, expect, it as test } from "@effect/vitest";
 // The replay player: a recording arriving, the visitor's controls and the video's own clock.
 import { Option } from "effect";
 import * as Scene from "foldkit/scene";
 import { Command, given, message, model, story } from "foldkit/story";
-import { describe, expect, it as test } from "@effect/vitest";
 
 import { Message } from "../src/player/message.ts";
 import {

@@ -1,8 +1,8 @@
+import { describe, expect, it as test } from "@effect/vitest";
 // The Try page: away from a visitor's machine it shows how to get the local runner; on it, it
 // records a take within the visitor's cap and follows it until the replay is packed.
 import * as Scene from "foldkit/scene";
 import { Command, given, message, model, story } from "foldkit/story";
-import { describe, expect, it as test } from "@effect/vitest";
 
 import { TakeState } from "../src/local.ts";
 import {
