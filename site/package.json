@@ -10,7 +10,8 @@
     "deploy": "alchemy deploy",
     "destroy": "alchemy destroy",
     "dev": "vp dev",
-    "test": "vp test --run"
+    "test": "vp test --run",
+    "upload": "node --conditions=@effect-browser/source upload.ts"
   },
   "dependencies": {
     "@effect/platform-browser": "4.0.0",

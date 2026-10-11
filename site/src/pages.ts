@@ -14,7 +14,6 @@ export interface Page {
 export const site = {
   name: "effect-browser",
   tagline: "Browser automation for Effect agents, built to be watched.",
-  origin: "https://effect-browser.dev",
   repository: "https://github.com/mannyc2/effect-agent-browserbase",
 } as const;
 

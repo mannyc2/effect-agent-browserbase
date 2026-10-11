@@ -129,6 +129,7 @@ const captionView = (model: Model, derived: Derived, h: H): Html => {
             "pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-6 text-center",
           ),
           h.AriaLive("off"),
+          h.DataAttribute("testid", "caption"),
         ],
         [
           h.span(

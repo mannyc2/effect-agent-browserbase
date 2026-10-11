@@ -263,6 +263,16 @@
       }
     },
     {
+      // The site's Story and Scene tests assert inside `story` and `scene` steps.
+      "files": ["**/site/test/**/*.ts"],
+      "rules": {
+        "vitest/expect-expect": [
+          "error",
+          { "assertFunctionNames": ["expect", "assert", "assert.*", "story", "Scene.scene"] }
+        ]
+      }
+    },
+    {
       // The bench's own program runs on Effect's platform: its configuration, files, child
       // processes, clock, randomness and console come from Effect's services.
       "files": ["**/bench/*.ts"],

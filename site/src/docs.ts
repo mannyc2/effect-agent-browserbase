@@ -112,7 +112,8 @@ export const prose = <Message>(
             h.a(
               [
                 h.Href(`#${id}`),
-                h.AriaLabel("Link to this section"),
+                h.AriaHidden(true),
+                h.Tabindex(-1),
                 h.Class("ml-2 text-stone-400 opacity-0 group-hover:opacity-100"),
               ],
               ["#"],

@@ -3,11 +3,20 @@ import { foldkit } from "@foldkit/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite-plus";
 
+import { agentSurface } from "./agent.ts";
 import { localRunner } from "./demo/local.ts";
 import { islandAttributes } from "./src/islands.ts";
 
 export default defineConfig({
-  plugins: [tailwindcss(), foldkit(), markdown({ islands: islandAttributes }), localRunner()],
+  plugins: [
+    tailwindcss(),
+    foldkit(),
+    markdown({ islands: islandAttributes }),
+    agentSurface(),
+    localRunner(),
+  ],
+  // public/ holds replays recorded on this machine; the deployed site reads them from R2.
+  build: { copyPublicDir: false },
   resolve: { conditions: ["@effect-browser/source"] },
   ssr: {
     resolve: {

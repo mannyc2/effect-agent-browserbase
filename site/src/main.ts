@@ -62,20 +62,20 @@ export type Message = typeof Message.Type;
 
 // COMMAND
 
-const NavigateInternal = Command.define("NavigateInternal", {
+export const NavigateInternal = Command.define("NavigateInternal", {
   args: { url: Schema.String },
   messages: [Message.CompletedNavigateInternal],
   execute: ({ url }) => pushUrl(url).pipe(Effect.as(Message.CompletedNavigateInternal())),
 });
 
-const LoadExternal = Command.define("LoadExternal", {
+export const LoadExternal = Command.define("LoadExternal", {
   args: { href: Schema.String },
   messages: [Message.CompletedLoadExternal],
   execute: ({ href }) => load(href).pipe(Effect.as(Message.CompletedLoadExternal())),
 });
 
 /** Scrolls to a heading on the new page, or to the top when there is none. */
-const ScrollTo = Command.define("ScrollTo", {
+export const ScrollTo = Command.define("ScrollTo", {
   args: { anchor: Schema.String },
   messages: [Message.CompletedScroll],
   execute: ({ anchor }) =>
@@ -93,7 +93,7 @@ const copied = <E>(text: Effect.Effect<string, E>, notice: string) =>
   );
 
 /** Copies the page as an agent reads it: the markdown the site serves beside it. */
-const CopyMarkdown = Command.define("CopyMarkdown", {
+export const CopyMarkdown = Command.define("CopyMarkdown", {
   args: { path: Schema.String },
   messages: [Message.CompletedCopy],
   execute: ({ path }) =>
@@ -109,13 +109,13 @@ const CopyMarkdown = Command.define("CopyMarkdown", {
     ),
 });
 
-const CopyCode = Command.define("CopyCode", {
+export const CopyCode = Command.define("CopyCode", {
   args: { text: Schema.String },
   messages: [Message.CompletedCopy],
   execute: ({ text }) => copied(Effect.succeed(text), "Copied"),
 });
 
-const ElapseNotice = Command.define("ElapseNotice", {
+export const ElapseNotice = Command.define("ElapseNotice", {
   args: { notices: Schema.Int },
   messages: [Message.ElapsedNotice],
   execute: ({ notices }) =>

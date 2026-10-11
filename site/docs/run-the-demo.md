@@ -27,9 +27,9 @@ cd site && bun run dev
 # open http://localhost:5173/try
 ```
 
-The page finds the local runner that `bun run dev` serves, shows what it still needs, and records a take with the model and cap you choose. When the take is packed, it opens in the player at `/replay/<id>`. From a terminal, `bun run demo` in `site/` records the same take.
+The page finds the local runner that `bun run dev` serves, shows what it still needs, and records a take with the model and cap you choose. When the take is packed, it opens in the player at `/replay/<id>`. From a terminal, `bun run demo take` in `site/` records the same take; `--model`, `--max-usd` and `--headed` change it.
 
-The agent and the narrator run on one OpenRouter model; the voice is `openai/gpt-audio-mini`. The cap covers all three: every call reserves its worst case against it before it is sent, and settles to what it actually cost. A cheap model keeps a take to a few cents.
+The agent and the narrator run on one OpenRouter model; the voice is `openai/gpt-audio-mini`. The cap covers all three: every call reserves its worst case against it before it is sent, and settles to what it actually cost. The featured take ran two minutes on a cheap model: 35 model calls and 12 spoken lines for $0.09 in all, voice included.
 
 From the United States, Polymarket opens with a notice about trading from the US; the agent continues in view-only mode, which is all a reading take needs.
 
@@ -39,6 +39,10 @@ From the United States, Polymarket opens with a notice about trading from the US
 - Each of the agent's turns: what it said, the tools it called and what they returned.
 - Each narrator line: the moment it captioned, the frames it saw, when its words arrived and when the voice spoke them. The lines are also written out as WebVTT captions.
 - The agent's answer and how it checked out against Polymarket's API at the time of the run.
+
+## How the answer is checked
+
+The agent reports three markets: each one's title as its page shows it, the outcome it quotes and that outcome's chance. The check searches Polymarket's public Gamma API for each title and passes a market that is open and within 4 points of the chance the agent read, since odds move while it browses. For an event with several options, the agent must name the option, such as a date or a range; "Yes" alone is a miss, and the check lists the options it had. A market the API does not answer for counts as not checked, so the take fails its check and still packs.
 
 ## Hand it to your coding agent
 
