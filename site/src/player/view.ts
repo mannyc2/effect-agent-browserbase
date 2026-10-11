@@ -43,6 +43,7 @@ const mutedIcon =
 const agentIcon = "M6 3l12.5 9.2-5.6.9 3.3 6.4-2.4 1.2-3.3-6.5L6 18.2z";
 
 const checkIcon = "M9.5 16.2 5.3 12l-1.4 1.4 5.6 5.6 11-11-1.4-1.4z";
+
 const crossIcon =
   "M18.3 7.1 16.9 5.7 12 10.6 7.1 5.7 5.7 7.1l4.9 4.9-4.9 4.9 1.4 1.4 4.9-4.9 4.9 4.9 1.4-1.4-4.9-4.9z";
 
@@ -237,6 +238,7 @@ const timelineView = (model: Model, replay: Replay, derived: Derived, h: H): Htm
       ...segments.map((segment, index) => {
         const from = fractionOf(replay, segment.at);
         const to = fractionOf(replay, segments[index + 1]?.at ?? ends);
+
         const played =
           to === from
             ? 0

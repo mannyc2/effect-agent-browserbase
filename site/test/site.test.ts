@@ -207,15 +207,28 @@ const isOutput = (block: Markdown.Block) =>
 
 describe("docs", () => {
   test("every code block is an example, followed by what running it printed", () => {
-    for (const page of pages) {
-      const blocks = outside(Option.getOrThrow(documentOf(page)).blocks);
+    const blocks = pages.flatMap((page) =>
+      outside(Option.getOrThrow(documentOf(page)).blocks).map((block) => ({
+        page: page.slug,
+        block,
+      })),
+    );
 
-      expect(blocks.filter((block) => block._tag === "CodeBlock").map(() => page.slug)).toEqual([]);
-      for (const block of blocks)
-        if (block._tag === "Island") {
-          expect(block.blocks[0]?._tag, page.slug).toBe("CodeBlock");
-          expect(block.blocks.slice(1).some(isOutput), page.slug).toBe(true);
-        }
-    }
+    const examples = blocks.flatMap(({ page, block }) =>
+      block._tag === "Island" ? [{ page, island: block }] : [],
+    );
+
+    expect(
+      blocks.filter(({ block }) => block._tag === "CodeBlock").map(({ page }) => page),
+    ).toEqual([]);
+    expect(
+      examples
+        .filter(
+          ({ island }) =>
+            island.blocks[0]?._tag !== "CodeBlock" || !island.blocks.slice(1).some(isOutput),
+        )
+        .map(({ page }) => page),
+    ).toEqual([]);
+    expect(examples.length).toBeGreaterThan(0);
   });
 });
