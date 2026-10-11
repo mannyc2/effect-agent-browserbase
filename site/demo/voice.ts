@@ -181,7 +181,7 @@ export const make = Effect.fn("Voice.make")(function* (options: VoiceOptions) {
     return yield* new VoiceError({ message: `the voice would not say "${line}" as written` });
   });
 
-  return { speak, spent: Ref.get(spent), credit: `${options.model} · ${options.voice}` };
+  return { speak, spent: Ref.get(spent), credit: `${options.model}, voice ${options.voice}` };
 });
 
 export type Voice = Effect.Success<ReturnType<typeof make>>;

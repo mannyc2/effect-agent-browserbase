@@ -104,7 +104,8 @@ describe("apiChance", () => {
 
 describe("wordsFor", () => {
   it("fits a line in its interval, within bounds", () => {
-    assert.strictEqual(wordsFor(Duration.seconds(4)), 13);
+    assert.strictEqual(wordsFor(Duration.seconds(6)), 13);
+    assert.strictEqual(wordsFor(Duration.seconds(8)), 17);
     assert.strictEqual(wordsFor(Duration.seconds(1)), 8);
     assert.strictEqual(wordsFor(Duration.seconds(30)), 20);
   });

@@ -46,7 +46,9 @@ const takeCommand = Command.make(
     every: Flag.Finite("every").pipe(
       Flag.withSchema(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(3))),
       Flag.withDefault(Duration.toSeconds(defaults.every)),
-      Flag.withDescription("Seconds from one narrator line to the next call. Defaults to 4."),
+      Flag.withDescription(
+        `Seconds from the start of one of the host's lines to the next. Defaults to ${Duration.toSeconds(defaults.every)}.`,
+      ),
     ),
     maxSteps: Flag.Int("max-steps").pipe(
       Flag.withDefault(defaults.maxSteps),

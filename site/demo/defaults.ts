@@ -7,7 +7,7 @@ export const defaults = {
   model: "openai/gpt-6-luna",
   reasoning: "medium",
   maxUsd: 0.5,
-  every: Duration.seconds(4),
+  every: Duration.seconds(8),
   maxSteps: 24,
   headed: false,
 } as const;
