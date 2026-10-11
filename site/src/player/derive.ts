@@ -1,10 +1,11 @@
 // What a loaded replay shows besides its video, worked out once when it loads: the pointer's
-// track, the actions on the timeline and the feed of narrator lines and agent steps, each with the
-// host time it belongs to. Every time is on the recording's host clock, in milliseconds.
+// track, the actions on the timeline, the chapters a run falls into and the transcript of narrator
+// lines and agent steps, each with the host time it belongs to. Every time is on the recording's
+// host clock, in milliseconds.
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
-import { describeCall, doing } from "../present.ts";
+import { describeCall, doing, items } from "../present.ts";
 import { type Replay, track } from "../replay.ts";
 
 const Point = { at: Schema.Finite, x: Schema.Finite, y: Schema.Finite };
@@ -60,10 +61,16 @@ export type Entry = typeof Entry.Type;
 /** How long a caption stays up when the replay has no voice to time it. */
 const silentLineMillis = 4000;
 
+/** A stretch of the run on one page, or one part of it, such as a search or the report. */
+export const Chapter = Schema.Struct({ at: Schema.Finite, title: Schema.String });
+
+export type Chapter = typeof Chapter.Type;
+
 export const Derived = Schema.Struct({
   track: Track,
   spans: Schema.Array(Span),
   entries: Schema.Array(Entry),
+  chapters: Schema.Array(Chapter),
 });
 
 export type Derived = typeof Derived.Type;
@@ -149,6 +156,173 @@ const feed = (replay: Replay): ReadonlyArray<Entry> =>
         : [...folded, entry];
     }, []);
 
+const slugOf = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-|-$/g, "");
+
+/** The names a run gave things: what its answer reported, then what its actions acted on. */
+const namesIn = (replay: Replay): ReadonlyArray<string> => [
+  ...Option.match(items(replay.outcome.answer), {
+    onNone: () => [],
+    onSome: (list) =>
+      list.flatMap((item) =>
+        item.flatMap((field) =>
+          field.key === "title" || field.key === "question" || field.key === "name"
+            ? [field.value]
+            : [],
+        ),
+      ),
+  }),
+  ...replay.events.flatMap(({ event }) =>
+    event._tag === "Action" && typeof event.subject?.name === "string" ? [event.subject.name] : [],
+  ),
+];
+
+/** How many words a name's slug shares with an address's last part, from the start. */
+const sharedWords = (slug: string, segment: string) => {
+  const words = slug.split("-");
+  const parts = segment.split("-");
+  const differ = words.findIndex((word, index) => parts[index] !== word);
+
+  return { shared: differ < 0 ? words.length : differ, of: words.length };
+};
+
+/**
+ * A page's name: the name the run gave what its address ends in, such as the link it followed or
+ * the market it reported, or else that last part of its address in words, or its site. A site
+ * may name a page's address after an earlier wording of its title, so a name fits an address
+ * that starts with all of its words, or with at least three and half of them.
+ */
+export const pageName = (address: string, names: ReadonlyArray<string>) => {
+  const url = URL.parse(address);
+
+  if (url === null) return address;
+  const last = url.pathname.split("/").findLast((part) => part !== "");
+
+  if (last === undefined) return url.hostname.replace(/^www\./, "");
+  const segment = decodeURIComponent(last).toLowerCase();
+
+  const named = names
+    .flatMap((name) => {
+      const slug = slugOf(name);
+      const { shared, of } = sharedWords(slug, segment);
+
+      return slug !== "" && (shared === of || (shared >= 3 && shared * 2 >= of))
+        ? [{ name, score: shared + (shared === of ? of : 0) }]
+        : [];
+    })
+    .reduce<{ readonly name: string; readonly score: number } | undefined>(
+      (best, fit) => (best === undefined || fit.score > best.score ? fit : best),
+      undefined,
+    );
+
+  const words = segment.replace(/[-_]+/g, " ").trim();
+
+  return named?.name ?? `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+};
+
+/** Chapters closer together than this make one, the later. */
+const chapterGap = 1500;
+
+/** How long the run may go before its first step for the narrator's opening to be a chapter. */
+const openingMillis = 5000;
+
+/**
+ * The run's chapters: one for each page its address changed to, one for each search it typed,
+ * an opening while the narrator spoke before the agent's first step, and the report at its end.
+ */
+const chapters = (replay: Replay): ReadonlyArray<Chapter> => {
+  const start = replay.video.startsAt;
+  const names = namesIn(replay);
+  const firstStep = replay.steps[0]?.at;
+  const firstLine = replay.narration?.lines[0]?.at;
+
+  const opening =
+    firstStep !== undefined &&
+    firstLine !== undefined &&
+    firstLine < firstStep &&
+    firstStep - start > openingMillis
+      ? firstStep
+      : undefined;
+
+  const ordered = replay.events.toSorted((left, right) => left.event.at - right.event.at);
+
+  const paged = ordered.reduce<{ readonly path: string; readonly marks: ReadonlyArray<Chapter> }>(
+    (state, { event }) => {
+      if (event._tag === "Navigated") {
+        const path = URL.parse(event.url)?.pathname ?? event.url;
+
+        return path === state.path
+          ? state
+          : {
+              path,
+              marks: [
+                ...state.marks,
+                {
+                  at: Math.max(start, opening ?? start, event.at),
+                  title: pageName(event.url, names),
+                },
+              ],
+            };
+      }
+      if (
+        event._tag === "Action" &&
+        event.name === "type" &&
+        event.text !== undefined &&
+        event.text !== "" &&
+        /search/i.test(event.subject?.name ?? "")
+      )
+        return {
+          ...state,
+          marks: [...state.marks, { at: event.startedAt, title: `Searching for “${event.text}”` }],
+        };
+
+      return state;
+    },
+    { path: "", marks: [] },
+  ).marks;
+
+  const report = replay.steps.findLast((step) => step.calls.some((call) => call.name === "done"));
+
+  const marks = [
+    ...(opening === undefined ? [] : [{ at: start, title: "Introduction" }]),
+    ...paged,
+    ...(report === undefined ? [] : [{ at: report.at, title: "The report" }]),
+  ].toSorted((left, right) => left.at - right.at);
+
+  // A search's results pages are part of the search, so they are no chapters of their own.
+  const kept = marks.reduce<{
+    readonly searched: string | undefined;
+    readonly marks: ReadonlyArray<Chapter>;
+  }>(
+    (state, mark) => {
+      const searching = mark.title.match(/^Searching for “(.*)”$/)?.[1];
+
+      if (searching !== undefined) return { searched: searching, marks: [...state.marks, mark] };
+
+      const results =
+        state.searched !== undefined &&
+        (mark.title.toLowerCase() === state.searched.toLowerCase() ||
+          /^search\b/i.test(mark.title));
+
+      return results ? state : { searched: undefined, marks: [...state.marks, mark] };
+    },
+    { searched: undefined, marks: [] },
+  ).marks;
+
+  return kept.filter((mark, index) => {
+    const next = kept[index + 1];
+
+    return next === undefined || next.at - mark.at >= chapterGap;
+  });
+};
+
+/** The chapter playing at `now`: the last to start at or before it, or the first. */
+export const chapterAt = (chapters: ReadonlyArray<Chapter>, now: number) =>
+  chapters.findLast((chapter) => chapter.at <= now) ?? chapters[0];
+
 export const derive = (replay: Replay): Derived => ({
   track: track(replay.events),
   spans: replay.events.flatMap(({ event }) =>
@@ -157,6 +331,7 @@ export const derive = (replay: Replay): Derived => ({
       : [],
   ),
   entries: feed(replay),
+  chapters: chapters(replay),
 });
 
 /** The index of the last entry at or before `now`, or -1 before the first. */

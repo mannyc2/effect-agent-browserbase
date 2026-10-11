@@ -280,8 +280,10 @@ export const update = (model: Model, message: Message) =>
       model: modifyFields(model, {
         load: () => Load.Ready({ replay, derived: derive(replay) }),
         now: () => replay.video.startsAt,
-        // A long agent run is mostly the model thinking; it starts at double speed.
-        speed: () => (replay.video.durationMillis > 90_000 ? 2 : 1),
+        // A long run with no one talking is mostly the model thinking; it starts at double speed.
+        // A narrated one starts at the speed its voice was recorded for.
+        speed: () =>
+          replay.narration === undefined && replay.video.durationMillis > 90_000 ? 2 : 1,
       }),
     }),
     FailedLoadReplay: ({ reason }) => ({

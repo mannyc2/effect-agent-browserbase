@@ -34,6 +34,7 @@ export const duration = (millis: number) => {
 const usd = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
+  minimumSignificantDigits: 2,
   maximumSignificantDigits: 2,
 });
 
@@ -60,7 +61,7 @@ export const plain = (value: unknown): string => {
   if (isRecord(value))
     return Object.entries(value)
       .map(([key, item]) => `${labelOf(key)}: ${plain(item)}`)
-      .join(" · ");
+      .join("; ");
 
   return JSON.stringify(value);
 };

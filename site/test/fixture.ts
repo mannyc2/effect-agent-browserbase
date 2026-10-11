@@ -79,7 +79,7 @@ export const replay = Schema.decodeSync(Replay)({
     frames: 900,
   },
   narration: {
-    voice: "openai/gpt-audio-mini · marin",
+    voice: "openai/gpt-audio-mini, voice marin",
     captions: "captions.vtt",
     lines: [
       {

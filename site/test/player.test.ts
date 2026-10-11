@@ -31,7 +31,7 @@ const ready = (now = replay.video.startsAt): Model => ({
 const videoId = videoIdOf("polymarket");
 
 describe("update", () => {
-  test("a recording starts at its video's first frame, and a long one at double speed", () => {
+  test("a recording starts at its video's first frame, and a long one with no voice at double speed", () => {
     story(
       update,
       given(loading),
@@ -48,6 +48,20 @@ describe("update", () => {
       message(
         Message.SucceededLoadReplay({
           replay: { ...replay, video: { ...replay.video, durationMillis: 120_000 } },
+        }),
+      ),
+      model((model) => expect(model.speed).toBe(1)),
+    );
+    story(
+      update,
+      given(loading),
+      message(
+        Message.SucceededLoadReplay({
+          replay: {
+            ...replay,
+            narration: undefined,
+            video: { ...replay.video, durationMillis: 120_000 },
+          },
         }),
       ),
       model((model) => expect(model.speed).toBe(2)),
@@ -172,16 +186,17 @@ describe("view", () => {
     );
   });
 
-  test("lists the agent's steps and the narrator's lines, and the checked result", () => {
+  test("follows the video with its chapter and a transcript, then says what was found", () => {
     Scene.scene(
       { update, view },
       Scene.given(ready()),
       watched,
+      Scene.expect(Scene.role("region", { name: "Transcript" })).toExist(),
       Scene.expect(Scene.text("Opening the ceasefire market.")).toExist(),
-      Scene.expect(Scene.text("Narrator", { exact: false })).toExist(),
-      Scene.expect(Scene.text("✓ Checked")).toExist(),
+      Scene.expect(Scene.text("polymarket.com")).toExist(),
+      Scene.expect(Scene.text("What the agent found")).toExist(),
       Scene.expect(Scene.text("Every market matched Polymarket's API")).toExist(),
-      Scene.expect(Scene.text("voice: openai/gpt-audio-mini · marin", { exact: false })).toExist(),
+      Scene.expect(Scene.text("openai/gpt-audio-mini, voice marin")).toExist(),
     );
   });
 
