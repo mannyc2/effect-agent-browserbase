@@ -82,15 +82,17 @@ describe("update", () => {
     );
   });
 
-  test("the timeline seeks the video, held within the recording", () => {
+  test("the timeline seeks the video, held within the recording, and the feed follows", () => {
     story(
       update,
       given(ready()),
       message(Message.UpdatedTimeline({ value: "5000" })),
       Command.resolve(SeekVideo({ videoId, seconds: 5 }), Message.CompletedSeekVideo()),
+      Command.resolve(ScrollFeed, Message.CompletedScrollFeed()),
       model((model) => expect(model.now).toBe(6000)),
       message(Message.UpdatedTimeline({ value: "99000" })),
       Command.resolve(SeekVideo({ videoId, seconds: 30 }), Message.CompletedSeekVideo()),
+      Command.resolve(ScrollFeed, Message.CompletedScrollFeed()),
       model((model) => expect(model.now).toBe(31_000)),
     );
   });

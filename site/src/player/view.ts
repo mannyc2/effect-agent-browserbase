@@ -4,7 +4,7 @@ import { Option } from "effect";
 import { createLazy, type Html, type HtmlBuilder } from "foldkit/html";
 import { defineView } from "foldkit/submodel";
 
-import { clock, cost, duration, type Field, fields } from "../present.ts";
+import { clock, cost, duration, type Field, fields, items } from "../present.ts";
 import { pointerAt, recentMark, type Replay } from "../replay.ts";
 import {
   type CallWords,
@@ -579,6 +579,89 @@ const fieldList = (items: ReadonlyArray<Field>, h: H): Html =>
     ),
   );
 
+const headline = new Set(["title", "question", "name"]);
+const odds = new Set(["outcome", "chance", "probability"]);
+
+/** One reported item, such as a market: its name, its odds and the rest of what was said. */
+const itemView = (item: ReadonlyArray<Field>, h: H): Html => {
+  const named = item.find((field) => headline.has(field.key));
+  const quoted = item.filter((field) => odds.has(field.key));
+  const rest = item.filter((field) => !headline.has(field.key) && !odds.has(field.key));
+
+  return h.li(
+    [
+      h.Class(
+        "flex flex-col gap-1 rounded-lg bg-white px-3 py-2.5 ring-1 ring-stone-200 dark:bg-stone-900 dark:ring-stone-800",
+      ),
+    ],
+    [
+      named === undefined
+        ? h.empty
+        : h.span(
+            [h.Class("text-sm font-semibold text-stone-900 dark:text-stone-100")],
+            [named.value],
+          ),
+      quoted.length === 0
+        ? h.empty
+        : h.span(
+            [h.Class("flex flex-wrap gap-1.5")],
+            quoted.map((field) =>
+              h.span(
+                [
+                  h.Class(
+                    "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 dark:bg-amber-400/15 dark:text-amber-300",
+                  ),
+                  h.Title(field.label),
+                ],
+                [field.value],
+              ),
+            ),
+          ),
+      ...rest.map((field) =>
+        h.span(
+          [h.Class("text-[0.8125rem] text-stone-600 dark:text-stone-400")],
+          [field.key === "why" ? field.value : `${field.label}: ${field.value}`],
+        ),
+      ),
+    ],
+  );
+};
+
+const reportedView = (answer: unknown, h: H): Html =>
+  Option.match(items(answer), {
+    onNone: () => fieldList(fields(answer), h),
+    onSome: (list) =>
+      h.ol(
+        [h.Class("flex flex-col gap-2")],
+        list.map((item) => itemView(item, h)),
+      ),
+  });
+
+/** How the grade was reached: its verdict, then one line per thing it checked. */
+const checkedView = (detail: string, h: H): Html => {
+  const [head = "", ...rest] = detail.split("; ");
+  const split = rest.length === 0 ? -1 : head.indexOf(". ");
+  const verdict = split < 0 ? (rest.length === 0 ? head : "") : head.slice(0, split + 1);
+  const lines = rest.length === 0 ? [] : [split < 0 ? head : head.slice(split + 2), ...rest];
+
+  return h.div(
+    [
+      h.Class(
+        "rounded-lg bg-stone-100 px-3 py-2 text-[0.8125rem] text-stone-700 dark:bg-stone-800/70 dark:text-stone-300",
+      ),
+    ],
+    [
+      h.p([], [h.strong([], ["How it was checked: "]), verdict]),
+      lines.length === 0
+        ? h.empty
+        : h.ul(
+            [h.Class("mt-1.5 flex list-disc flex-col gap-1 pl-4")],
+            lines.map((line) => h.li([], [line])),
+          ),
+    ],
+  );
+};
+
 const badge = (replay: Replay, h: H): Html => {
   const { outcome } = replay;
   const base = "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold";
@@ -632,7 +715,7 @@ const resultView = (replay: Replay, h: H): Html => {
                 [h.Class("text-sm text-stone-600 dark:text-stone-400")],
                 [`Nothing: the run ended ${outcome.reason.replaceAll("-", " ")}.`],
               )
-            : fieldList(reported, h),
+            : reportedView(outcome.answer, h),
         ],
       ),
       h.details(
@@ -649,16 +732,7 @@ const resultView = (replay: Replay, h: H): Html => {
           h.p([h.Class("mt-2 text-stone-700 dark:text-stone-300")], [replay.task.prompt]),
         ],
       ),
-      outcome.detail === "" || reported.length === 0
-        ? h.empty
-        : h.p(
-            [
-              h.Class(
-                "rounded-lg bg-stone-100 px-3 py-2 text-[0.8125rem] text-stone-700 dark:bg-stone-800/70 dark:text-stone-300",
-              ),
-            ],
-            [h.strong([], ["How it was checked: "]), outcome.detail],
-          ),
+      outcome.detail === "" || reported.length === 0 ? h.empty : checkedView(outcome.detail, h),
       h.p(
         [h.Class("text-xs text-stone-500")],
         [

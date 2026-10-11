@@ -91,14 +91,41 @@ const lines = (replay: Replay): ReadonlyArray<Entry> =>
         }),
       );
 
+/**
+ * The names the page gave the targets of a step's actions, by ref: from the actions the browser
+ * performed between the step's start and the next one's.
+ */
+const subjectsOf = (replay: Replay, from: number, until: number) => {
+  const named = new Map<string, string>();
+
+  for (const { event } of replay.events)
+    if (
+      event._tag === "Action" &&
+      event.startedAt >= from &&
+      event.startedAt < until &&
+      event.target !== undefined &&
+      typeof event.subject?.name === "string" &&
+      event.subject.name !== ""
+    )
+      named.set(event.target, event.subject.name);
+
+  return (ref: string) => named.get(ref);
+};
+
 const steps = (replay: Replay): ReadonlyArray<Entry> =>
-  replay.steps.map((step) =>
+  replay.steps.map((step, index) =>
     Entry.Steps({
       at: step.at,
       first: step.step,
       last: step.step,
       said: step.text.trim(),
-      calls: step.calls.map((call, order) => describeCall(call, step.results[order])),
+      calls: step.calls.map((call, order) =>
+        describeCall(
+          call,
+          step.results[order],
+          subjectsOf(replay, step.at - 500, replay.steps[index + 1]?.at ?? Infinity),
+        ),
+      ),
       rejected: step.rejected === undefined ? Option.none() : Option.some(step.rejected),
     }),
   );

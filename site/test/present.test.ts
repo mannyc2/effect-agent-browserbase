@@ -1,7 +1,8 @@
 // What a visitor reads for a recorded call, answer and time: words, never refs, nulls or tags.
 import { assert, describe, it } from "@effect/vitest";
+import { Option } from "effect";
 
-import { clock, describeCall, fields } from "../src/present.ts";
+import { clock, describeCall, fields, items } from "../src/present.ts";
 
 const malformed = {
   _tag: "AiError",
@@ -108,5 +109,57 @@ describe("clock", () => {
     assert.strictEqual(clock(4200, 8000), "0:04.2");
     assert.strictEqual(clock(4200, 203_000), "0:04");
     assert.strictEqual(clock(203_000, 203_000), "3:23");
+  });
+});
+
+describe("describeCall with the page's names", () => {
+  it("names what an action clicked and typed into, by the ref the agent used", () => {
+    const subjectOf = (ref: string) => ({ e4: "Tech", e81: "Search" })[ref];
+
+    assert.strictEqual(
+      describeCall(
+        {
+          name: "act",
+          params: {
+            actions: [
+              { kind: "fill", ref: "e81", value: "AI model end of October" },
+              { kind: "click", ref: "e4" },
+            ],
+          },
+        },
+        undefined,
+        subjectOf,
+      ).text,
+      "Typed “AI model end of October” into “Search” and clicked “Tech”",
+    );
+  });
+
+  it("says where a navigation went and which way a scroll moved", () => {
+    assert.strictEqual(
+      describeCall({ name: "navigate", params: { url: "https://polymarket.com/tech" } }, undefined)
+        .text,
+      "Opened polymarket.com/tech",
+    );
+    assert.strictEqual(
+      describeCall({ name: "scroll", params: { ref: null, deltaY: -600 } }, undefined).text,
+      "Scrolled up",
+    );
+  });
+});
+
+describe("items", () => {
+  it("reads an answer that is one list of records as items of fields", () => {
+    const listed = items({ markets: [{ title: "Rain?", outcome: "Yes", chance: 69 }] });
+
+    assert.isTrue(Option.isSome(listed));
+    assert.deepStrictEqual(
+      Option.getOrThrow(listed)[0]?.map((field) => [field.label, field.value]),
+      [
+        ["Market", "Rain?"],
+        ["Outcome", "Yes"],
+        ["Chance", "69%"],
+      ],
+    );
+    assert.isTrue(Option.isNone(items({ ticker: "BTC", price: 1 })));
   });
 });

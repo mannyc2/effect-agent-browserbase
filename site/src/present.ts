@@ -65,7 +65,7 @@ export const plain = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+export const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** A field's key as a visitor reads it: `change24h` becomes "Change24h", `orderId` "Order id". */
@@ -100,8 +100,11 @@ const fieldWords: Readonly<Record<string, FieldWords>> = {
   table: { label: "Table" },
   markets: { label: "Markets" },
   question: { label: "Market" },
+  title: { label: "Market" },
   outcome: { label: "Outcome" },
   probability: { label: "Chance", format: numeric((value) => `${decimal.format(value)}%`) },
+  chance: { label: "Chance", format: numeric((value) => `${decimal.format(value)}%`) },
+  why: { label: "Why" },
   summary: { label: "Summary" },
 };
 
@@ -110,6 +113,19 @@ export interface Field {
   readonly label: string;
   readonly value: string;
 }
+
+/**
+ * An answer's list of items, such as the markets an agent reports, when the answer is that list
+ * alone; each item is labelled fields.
+ */
+export const items = (value: unknown): Option.Option<ReadonlyArray<ReadonlyArray<Field>>> => {
+  const entries = isRecord(value) ? Object.values(value) : [];
+  const [list] = entries;
+
+  return entries.length === 1 && Array.isArray(list) && list.length > 0 && list.every(isRecord)
+    ? Option.some(list.map(fields))
+    : Option.none();
+};
 
 /** An answer or the page's truth as labelled fields, in the order the task's schema gives them. */
 export const fields = (value: unknown): ReadonlyArray<Field> => {
@@ -148,14 +164,22 @@ const Params = Schema.Struct({
   still: Schema.optional(Schema.NullOr(Schema.Boolean)),
   url: Schema.optional(Schema.NullOr(Schema.String)),
   value: Schema.optional(Schema.NullOr(Schema.String)),
+  ref: Schema.optional(Schema.NullOr(Schema.String)),
+  deltaY: Schema.optional(Schema.NullOr(Schema.Finite)),
   answer: Schema.optional(Schema.Unknown),
 });
 
 /** One action of an `act` call: a click, a fill or a choice, on a ref. */
 const Act = Schema.Struct({
   kind: Schema.String,
+  ref: Schema.optional(Schema.NullOr(Schema.String)),
   value: Schema.optional(Schema.NullOr(Schema.String)),
 });
+
+/** The name the page gave an action's target, by the ref the agent used for it. */
+export type SubjectOf = (ref: string) => string | undefined;
+
+const noSubjects: SubjectOf = () => undefined;
 
 /** An `act` call's actions, one or a batch. */
 const Acts = Schema.Union([
@@ -163,19 +187,24 @@ const Acts = Schema.Union([
   Schema.Struct({ action: Act }),
 ]);
 
-/** What an `act` call did, in words: "typed “Ada” and clicked". */
-const acted = (params: unknown, failed: boolean) =>
+/** What an `act` call did, in words: "typed “Ada” into “Name” and clicked “Save”". */
+const acted = (params: unknown, failed: boolean, subjectOf: SubjectOf) =>
   Option.match(Schema.decodeUnknownOption(Acts)(params), {
     onNone: () => (failed ? "Act on the page" : "Acted on the page"),
     onSome: (acts) => {
-      const steps = ("actions" in acts ? acts.actions : [acts.action]).map(({ kind, value }) =>
-        kind === "fill"
-          ? `${failed ? "type" : "typed"} ${quoted(value ?? "")}`
-          : kind === "select"
-            ? `${failed ? "choose" : "chose"} ${quoted(value ?? "")}`
-            : failed
-              ? "click"
-              : "clicked",
+      const steps = ("actions" in acts ? acts.actions : [acts.action]).map(
+        ({ kind, ref, value }) => {
+          const subject = ref === undefined || ref === null ? undefined : subjectOf(ref);
+
+          const on = (preposition: string) =>
+            subject === undefined ? "" : `${preposition}${quoted(subject)}`;
+
+          return kind === "fill"
+            ? `${failed ? "type" : "typed"} ${quoted(value ?? "")}${on(" into ")}`
+            : kind === "select"
+              ? `${failed ? "choose" : "chose"} ${quoted(value ?? "")}${on(" in ")}`
+              : `${failed ? "click" : "clicked"}${on(" ")}`;
+        },
       );
 
       return capitalized(
@@ -185,6 +214,13 @@ const acted = (params: unknown, failed: boolean) =>
       );
     },
   });
+
+/** A page's address without its scheme, shortened for a line of text. */
+const address = (url: string) => {
+  const short = url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
+
+  return short.length > 56 ? `${short.slice(0, 56)}…` : short;
+};
 
 const noParams: typeof Params.Type = {};
 
@@ -251,6 +287,7 @@ const quoted = (text: string) => `“${text.length > 60 ? `${text.slice(0, 60)}�
 export const describeCall = (
   call: { readonly name: string; readonly params: unknown },
   outcome: { readonly result: unknown; readonly isFailure: boolean } | undefined,
+  subjectOf: SubjectOf = noSubjects,
 ): CallWords => {
   const params = readParams(call.params);
   const failed = outcome?.isFailure === true;
@@ -262,7 +299,7 @@ export const describeCall = (
       case "click_at":
         return failed || outcome === undefined ? "Click" : `Clicked ${clicked(outcome.result)}`;
       case "act":
-        return acted(call.params, failed);
+        return acted(call.params, failed, subjectOf);
       case "type":
       case "type_text":
         return `${failed ? "Type" : "Typed"} ${quoted(params.text ?? "")}`;
@@ -286,11 +323,19 @@ export const describeCall = (
         return "Gave up";
       case "scroll":
       case "wheel":
-        return failed ? "Scroll" : "Scrolled";
+        return `${failed ? "Scroll" : "Scrolled"}${
+          params.deltaY === undefined || params.deltaY === null || params.deltaY === 0
+            ? ""
+            : params.deltaY < 0
+              ? " up"
+              : " down"
+        }`;
       case "select":
         return `${failed ? "Choose" : "Chose"} ${quoted(params.value ?? params.text ?? "")}`;
       case "navigate":
-        return failed ? "Open a page" : "Opened a page";
+        return `${failed ? "Open" : "Opened"} ${
+          params.url === undefined || params.url === null ? "a page" : address(params.url)
+        }`;
       case "snapshot":
       case "observe":
       case "inspect":

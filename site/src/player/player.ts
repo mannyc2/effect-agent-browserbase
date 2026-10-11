@@ -230,25 +230,25 @@ export const init = (id: string) => ({
 
 type UpdateReturn = Update.Return<Model, Message>;
 
-const clampTo = (model: Model, at: number) =>
+/** Moves to host time `at`, held within the recording, and brings the feed's entry for it into view. */
+const seek = (model: Model, at: number): UpdateReturn =>
   Load.match(model.load, {
-    Loading: () => Option.none<{ readonly at: number; readonly seconds: number }>(),
-    Missing: () => Option.none(),
-    Ready: ({ replay }) => {
+    Loading: () => ({ model }),
+    Missing: () => ({ model }),
+    Ready: ({ replay, derived }) => {
       const { startsAt, durationMillis } = replay.video;
       const offset = Math.min(durationMillis, Math.max(0, at - startsAt));
+      const before = currentEntry(derived.entries, model.now);
+      const after = currentEntry(derived.entries, startsAt + offset);
 
-      return Option.some({ at: startsAt + offset, seconds: offset / 1000 });
+      return {
+        model: modifyFields(model, { now: () => startsAt + offset }),
+        commands: [
+          SeekVideo({ videoId: videoIdOf(model.id), seconds: offset / 1000 }),
+          ...(before === after ? [] : [ScrollFeed({ feedId: feedIdOf(model.id), index: after })]),
+        ],
+      };
     },
-  });
-
-const seek = (model: Model, at: number): UpdateReturn =>
-  Option.match(clampTo(model, at), {
-    onNone: () => ({ model }),
-    onSome: (target) => ({
-      model: modifyFields(model, { now: () => target.at }),
-      commands: [SeekVideo({ videoId: videoIdOf(model.id), seconds: target.seconds })],
-    }),
   });
 
 const followPlayhead = (model: Model, seconds: number): UpdateReturn =>

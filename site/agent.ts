@@ -192,6 +192,9 @@ export const agentSurface = (): Plugin => {
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? "/", "http://localhost");
+
+        // The app imports the docs as modules, at the same paths with a query or as scripts.
+        if (url.search !== "" || request.headers["sec-fetch-dest"] === "script") return next();
         const served = serve(request.method ?? "GET", url.pathname, request.headers.accept ?? null);
 
         const path =

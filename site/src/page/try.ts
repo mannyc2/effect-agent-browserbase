@@ -244,7 +244,7 @@ const remoteView = (model: Model, h: H): Html =>
       h.p(
         [],
         [
-          "A take runs on your machine: your Chromium, your OpenRouter key, your spending cap. Clone the repository and start the site there; this page then finds the local runner and records a narrated take you can watch here.",
+          "A take runs where the site runs. Start it on your machine and this page finds the local runner there, records a narrated take and opens it in the player.",
         ],
       ),
       commandBlock(h, [
