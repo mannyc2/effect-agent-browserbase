@@ -3,6 +3,7 @@ import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Exit, Fiber, Option, Schedule, Scope, Stream } from "effect";
 
 import { Browser } from "../src/Browser.ts";
+import { Closed, consequence } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Frame } from "../src/Frame.ts";
 import * as Stage from "../src/Stage.ts";
@@ -121,10 +122,23 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("closing an uncommitted cue stops its native capture and refuses later commit", () =>
+    // #284: giving up a cue must not tell its consumer that a healthy session was lost.
+    it.effect("closing an uncommitted cue stops capture without reporting a lost session", () =>
       Effect.gen(function* () {
-        const page = yield* (yield* Browser).newPage(animated);
+        const browser = yield* Browser;
+        const onAir = yield* browser.newPage("data:text/html,<title>On air</title>");
+        const page = yield* browser.newPage(animated);
         const stage = yield* Stage.make();
+
+        yield* stage.present(onAir);
+        const closing = yield* browser.newPage("data:text/html,<title>Closing</title>");
+        const closingCue = yield* stage.cue(closing);
+
+        yield* closing.close;
+        const pageGone = yield* Effect.flip(closingCue.commit());
+
+        assert.deepStrictEqual(pageGone.reason, new Closed({ cause: "page" }));
+        assert.deepStrictEqual(consequence(pageGone), { lost: "page", repeat: "safe" });
         const owner = yield* Scope.fork(yield* Effect.scope);
         const cue = yield* stage.cue(page).pipe(Scope.provide(owner));
 
@@ -137,8 +151,12 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual((yield* page.captureStats()).received, before.received);
         const failure = yield* Effect.flip(cue.commit());
 
-        assert.strictEqual(failure.reason._tag, "Closed");
-        assert.isTrue(Option.isNone(yield* stage.current));
+        assert.deepStrictEqual(yield* stage.current, Option.some(onAir));
+        assert.strictEqual(yield* onAir.title, "On air");
+        assert.strictEqual((yield* stage.present(page)).page, page.id);
+        assert.deepStrictEqual(consequence(failure), { lost: "nothing", repeat: "pointless" });
+        assert.notInclude(failure.message, "browser was released");
+        assert.isFalse(failure.dispatched);
       }),
     );
 

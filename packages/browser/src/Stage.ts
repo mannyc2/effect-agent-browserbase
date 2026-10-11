@@ -96,7 +96,8 @@ interface Evidence {
   readonly value: Shown;
 }
 
-const closed = () => undispatched("cue", new Closed({ cause: "released" }));
+const unavailable = () =>
+  undispatched("cue", new InvalidRequest({ detail: "the cue's capture is no longer available" }));
 
 /** The sole writer of a cue's capture lifecycle; presentation ownership belongs to the stage. */
 const update = (
@@ -138,13 +139,13 @@ const ended = (feed: Feed): Effect.Effect<never, BrowserError> =>
         Effect.flatMap((exit) =>
           Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
             ? Effect.failCause(exit.cause)
-            : Effect.fail(closed()),
+            : Effect.fail(unavailable()),
         ),
       );
 
 const firstOf = (feed: Feed, wait: Duration.Duration) =>
   Effect.suspend(() => {
-    if (feed.state._tag === "Stopped") return Effect.fail(closed());
+    if (feed.state._tag === "Stopped") return Effect.fail(unavailable());
     if (feed.page.playwright.isClosed()) return failWith("cue", new Closed({ cause: "page" }));
     if (frameOf(feed) !== undefined) return Effect.void;
 
@@ -446,7 +447,7 @@ export const make = Effect.fn("Stage.make")(function* (
           const switchTo = Effect.suspend(() => {
             const frame = frameOf(feed);
 
-            if (frame === undefined) return Effect.fail(closed());
+            if (frame === undefined) return Effect.fail(unavailable());
             const at = Math.max(now(), asked, frame.hostTime, painted);
 
             showing = {

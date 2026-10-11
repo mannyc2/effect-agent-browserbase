@@ -487,6 +487,10 @@ The consumer can stop performance between `Plan.take` steps for a clean cut. Int
 the switch changes nothing and leaves the cue usable. A committed switch keeps ownership through
 outgoing capture cleanup, even if its caller is interrupted then.
 
+Releasing an uncommitted cue ends its capture. Its later `ready` or `commit` fails with
+`InvalidRequest`, whose consequence is `{ lost: "nothing", repeat: "pointless" }`; the page and
+browser remain usable. A capture that completes without a failure gives the same outcome.
+
 `Presented.at` records when the switch took effect, no earlier than the event, the incoming frame
 or the last frame shown; `latency` is its delay after the requested `at`. `firstFrame` bounds a
 wait for current paint (5 seconds by default). Old-page input admission, drain and the final frame

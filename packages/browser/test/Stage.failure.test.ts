@@ -18,7 +18,7 @@ import { TestClock } from "effect/testing";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
-import { BrowserError, Closed } from "../src/BrowserError.ts";
+import { BrowserError, Closed, consequence } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { Frame, Screenshot } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
@@ -242,10 +242,19 @@ it.live("a prepared frame cannot hide its capture's terminal failure or completi
       yield* Effect.yieldNow;
       const ready = yield* cue.ready.pipe(Effect.flip);
 
-      assert.strictEqual(ready.reason._tag, "Closed");
       const commit = yield* cue.commit().pipe(Effect.flip);
 
-      assert.strictEqual(commit.reason._tag, "Closed");
+      // #284: stream completion ends the cue; only a reported connection loss ends the session.
+      for (const error of [ready, commit]) {
+        assert.deepStrictEqual(
+          consequence(error),
+          ending === "failure"
+            ? { lost: "session", repeat: "safe" }
+            : { lost: "nothing", repeat: "pointless" },
+        );
+        if (ending === "failure")
+          assert.deepStrictEqual(error.reason, new Closed({ cause: "connection" }));
+      }
       assert.isTrue(Option.isNone(yield* stage.current));
     }).pipe(Effect.scoped),
   ),
@@ -391,7 +400,7 @@ it.live("closing a cue wakes a commit waiting for a future event", () =>
     yield* Scope.close(scope, Exit.void);
     const error = yield* Fiber.join(committing).pipe(Effect.timeout("200 millis"));
 
-    assert.strictEqual(error.reason._tag, "Closed");
+    assert.deepStrictEqual(consequence(error), { lost: "nothing", repeat: "pointless" });
     assert.isTrue(Option.isNone(yield* stage.current));
   }),
 );
