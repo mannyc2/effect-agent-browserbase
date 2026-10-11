@@ -1,12 +1,11 @@
-import react from "@vitejs/plugin-react";
+import { markdown } from "@foldkit/markdown/vite";
+import { foldkit } from "@foldkit/vite-plugin";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
-  // Served from any path, such as a static host's subdirectory.
-  base: "./",
-  plugins: [react()],
+  plugins: [tailwindcss(), foldkit(), markdown()],
   resolve: { conditions: ["@effect-browser/source"] },
-  // Tests run in Vite's SSR environment, before the workspace packages are built.
   ssr: {
     resolve: {
       conditions: ["@effect-browser/source"],
@@ -14,7 +13,8 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["test/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "test/**/*.test.ts"],
+    environment: "happy-dom",
     server: { deps: { inline: ["effect-browser"] } },
   },
 });

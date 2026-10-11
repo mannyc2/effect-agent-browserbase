@@ -13,7 +13,7 @@ import {
   type BrowserEvent,
 } from "effect-browser/BrowserEvent";
 
-import { pointerAt, shownFrames, track } from "../src/Replay.ts";
+import { pointerAt, shownFrames, track } from "../src/replay.ts";
 
 const recorded = (...events: ReadonlyArray<BrowserEvent>) =>
   events.map((event, index) => new RecordedEvent({ sequence: index + 1, event }));

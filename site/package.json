@@ -1,0 +1,42 @@
+{
+  "name": "site",
+  "private": true,
+  "description": "effect-browser's docs and its narrated demo, as a Foldkit app deployed to Cloudflare with Alchemy.",
+  "type": "module",
+  "scripts": {
+    "build": "vp build",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "demo": "node --conditions=@effect-browser/source demo/main.ts",
+    "deploy": "alchemy deploy",
+    "destroy": "alchemy destroy",
+    "dev": "vp dev",
+    "test": "vp test --run"
+  },
+  "dependencies": {
+    "@effect/platform-browser": "4.0.0",
+    "@foldkit/markdown": "0.14.2",
+    "effect": "4.0.0",
+    "foldkit": "0.167.0"
+  },
+  "devDependencies": {
+    "@alchemy.run/frontend-frameworks": "2.0.0-beta.81",
+    "@effect/ai-openrouter": "4.0.0",
+    "@effect/platform-node": "4.0.0",
+    "@effect/vitest": "4.0.0",
+    "@foldkit/devtools": "0.167.0",
+    "@foldkit/vite-plugin": "0.27.0",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.1.2",
+    "@yielded/agent": "0.1.0-beta.168",
+    "alchemy": "2.0.0-beta.81",
+    "bench": "workspace:*",
+    "effect-agent-browser": "workspace:*",
+    "effect-browser": "workspace:*",
+    "happy-dom": "20.14.6",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+    "vite-plus": "1.1.0",
+    "vitest": "5.0.3"
+  }
+}

@@ -12,5 +12,6 @@ downloads/
 .env.*
 !.env.example
 *.log
-demos/public/replays/
+site/public/replays/
+site/.alchemy/
 .vitest/

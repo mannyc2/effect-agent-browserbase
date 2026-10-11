@@ -1,7 +1,8 @@
 import { Recording } from "bench/Recording.ts";
 // A packed recording, as the player reads it: the bench's Recording with its frames encoded into
-// one video, and what that recording shows at any host time: where the pointer is, what was just
-// pressed or scrolled, and which page owned the screen.
+// one video, the narrator's lines as they were spoken over it, and what the recording shows at any
+// host time: where the pointer is, what was just pressed or scrolled, and which page owned the
+// screen. Every time is on the recording's host clock, in milliseconds.
 import { Schema } from "effect";
 import type { RecordedEvent } from "effect-browser/BrowserEvent";
 
@@ -9,9 +10,24 @@ import type { RecordedEvent } from "effect-browser/BrowserEvent";
 // hosted run's carry its Browserbase session id in the API requests' URLs.
 const { frames: _frames, spans: _spans, ...kept } = Recording.fields;
 
-export class Replay extends Schema.Class<Replay>("demos/Replay")({
+/**
+ * One narrator line as a viewer hears it. The narrator captioned a moment, the screen from `from`
+ * to `until`; its words arrived at `readyAt`, and the voice speaks them from `at` to `end`: as
+ * soon as they arrived, or once the line before has finished.
+ */
+export class NarrationLine extends Schema.Class<NarrationLine>("site/NarrationLine")({
+  text: Schema.String,
+  from: Schema.Finite,
+  until: Schema.Finite,
+  readyAt: Schema.Finite,
+  at: Schema.Finite,
+  end: Schema.Finite,
+}) {}
+
+export class Replay extends Schema.Class<Replay>("site/Replay")({
   ...kept,
   video: Schema.Struct({
+    /** H.264, with the narration as its AAC audio track when there is one. */
     file: Schema.String,
     /** The host time of the video's first instant. */
     startsAt: Schema.Finite,
@@ -20,6 +36,16 @@ export class Replay extends Schema.Class<Replay>("demos/Replay")({
     height: Schema.Finite,
     frames: Schema.Int,
   }),
+  /** Absent from a replay packed without a voice. */
+  narration: Schema.optional(
+    Schema.Struct({
+      /** The voice's model and name, as the site credits it. */
+      voice: Schema.String,
+      /** The lines as WebVTT, timed from the video's start. */
+      captions: Schema.String,
+      lines: Schema.Array(NarrationLine),
+    }),
+  ),
 }) {}
 
 /**
