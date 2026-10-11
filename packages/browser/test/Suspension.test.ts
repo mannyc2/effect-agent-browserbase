@@ -6,6 +6,7 @@ import { Effect, Exit, Fiber, Scope, Stream } from "effect";
 import { consequence } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
+import * as Stage from "../src/Stage.ts";
 
 const document = (title = "Input") =>
   `data:text/html,${encodeURIComponent(`<title>${title}</title><h1>${title}</h1><input aria-label="Memo"><button>Submit</button><select aria-label="Choice"><option>One</option><option>Two</option></select>`)}`;
@@ -56,6 +57,87 @@ const delayedReply = Effect.fnUntraced(function* (page: Page, kind: "press" | "n
 });
 
 describe("Scoped browser input authority", () => {
+  it.live("retains a dispatched script mutation until its actual acknowledgement arrives", () =>
+    Effect.gen(function* () {
+      const browser = yield* Chromium.open({
+        actionTimeout: "300 millis",
+        navigationTimeout: "300 millis",
+      });
+
+      const create = browser.context.newCDPSession.bind(browser.context);
+      const arrived = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let submissions = 0;
+
+      // The beta.11 handoff requires read-only exemptions to preserve real mutation ownership.
+      // Retain the reply only after Chromium has actually performed the selection.
+      browser.context.newCDPSession = async (target) => {
+        const cdp = await create(target);
+        const send = cdp.send.bind(cdp);
+
+        cdp.send = async (method, params) => {
+          const reply = await send(method, params);
+
+          if (
+            method === "Runtime.evaluate" &&
+            params !== undefined &&
+            "expression" in params &&
+            typeof params.expression === "string" &&
+            params.expression.includes("globalThis.__effectBrowser.select(")
+          ) {
+            submissions += 1;
+            arrived.resolve();
+            await release.promise;
+          }
+
+          return reply;
+        };
+
+        return cdp;
+      };
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          release.resolve();
+          browser.context.newCDPSession = create;
+        }),
+      );
+      const page = yield* browser.newPage(document());
+      const other = yield* browser.newPage(document("Other"));
+      const [choice] = yield* page.find({ role: "combobox", name: "Choice" });
+      const stage = yield* Stage.make();
+
+      yield* stage.present(page);
+      const cue = yield* stage.cue(other);
+
+      yield* cue.ready;
+
+      const selecting = yield* page
+        .select(choice?.ref ?? "", ["Two"])
+        .pipe(Effect.flip, Effect.forkChild);
+
+      yield* Effect.promise(() => arrived.promise);
+      const failure = yield* Fiber.join(selecting);
+
+      assert.strictEqual(failure.reason._tag, "Timeout");
+      assert.isTrue(failure.dispatched);
+
+      const suspension = yield* browser
+        .suspend({ drain: "200 millis" })
+        .pipe(Effect.scoped, Effect.flip);
+
+      assert.strictEqual(suspension.reason._tag, "Busy");
+      assert.strictEqual((yield* Effect.flip(cue.commit())).reason._tag, "Timeout");
+      release.resolve();
+      yield* page.press("a");
+      yield* cue.commit();
+      assert.strictEqual(submissions, 1);
+      assert.strictEqual(
+        yield* Effect.promise(() => page.playwright.locator("select").inputValue()),
+        "Two",
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.live("refuses every page write, keeps reads and events live, and nests scopes", () =>
     Effect.gen(function* () {
       let judged = 0;

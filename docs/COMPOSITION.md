@@ -83,8 +83,10 @@ cannot justify that continuation, even when matching text is currently visible. 
 durable effect cannot authorize another submission either. `Uncertain` stays a failure for the
 consumer to reconcile; the runner never retries it as a fresh numeric step.
 
-`durable: true` is the workflow author's assertion about an actual lasting read-back. A toast,
-generic success heading or another run's saved record is not sufficient. The library cannot
+`durable: true` is allowed only on `Appeared` or exact-URL `Navigated`. It is the workflow author's
+assertion about an actual lasting, operation-specific read-back. Absence and relative navigation
+cannot recover unknown input. A toast, generic success heading, arbitrary exact URL or another
+run's saved record is not sufficient. The library cannot
 prove that a site's text represents the intended business operation. Expected effects require
 plan version 2; ordinary recorded plans remain version 1.
 
