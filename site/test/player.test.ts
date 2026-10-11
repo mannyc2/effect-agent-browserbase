@@ -13,7 +13,7 @@ import {
   PlayVideo,
   ScrollFeed,
   SeekVideo,
-  SetMuted,
+  SetSound,
   update,
   videoIdOf,
   WatchVideo,
@@ -116,8 +116,30 @@ describe("update", () => {
       message(Message.ClickedCaptions()),
       model((model) => expect(model.captions).toBe("Hidden")),
       message(Message.ClickedSound()),
-      Command.resolve(SetMuted({ videoId, muted: true }), Message.CompletedSetMuted()),
+      Command.resolve(SetSound({ videoId, muted: true, volume: 1 }), Message.CompletedSetSound()),
       model((model) => expect(model.sound).toBe("Muted")),
+    );
+  });
+
+  test("the volume slider sets the narration's volume, and at zero mutes it", () => {
+    story(
+      update,
+      given(ready()),
+      message(Message.UpdatedVolume({ value: "0.4" })),
+      Command.resolve(
+        SetSound({ videoId, muted: false, volume: 0.4 }),
+        Message.CompletedSetSound(),
+      ),
+      message(Message.UpdatedVolume({ value: "0" })),
+      Command.resolve(SetSound({ videoId, muted: true, volume: 0 }), Message.CompletedSetSound()),
+      model((model) => expect(model.sound).toBe("Muted")),
+      // Unmuting from zero brings the narration back at full volume.
+      message(Message.ClickedSound()),
+      Command.resolve(SetSound({ videoId, muted: false, volume: 1 }), Message.CompletedSetSound()),
+      model((model) => {
+        expect(model.sound).toBe("On");
+        expect(model.volume).toBe(1);
+      }),
     );
   });
 

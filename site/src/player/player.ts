@@ -31,6 +31,8 @@ export const Model = Schema.Struct({
   now: Schema.Finite,
   speed: Speed,
   sound: Schema.Literals(["On", "Muted"]),
+  /** The narration's volume when it is on, from 0 to 1. */
+  volume: Schema.Finite,
   captions: Schema.Literals(["Shown", "Hidden"]),
   /** The moment whose frames are open beneath its line. */
   maybeOpenMoment: Schema.Option(Schema.Int),
@@ -123,14 +125,18 @@ export const SetPlaybackRate = Command.define("SetPlaybackRate", {
     }).pipe(Effect.as(Message.CompletedSetPlaybackRate())),
 });
 
-export const SetMuted = Command.define("SetMuted", {
-  args: { videoId: Schema.String, muted: Schema.Boolean },
-  messages: [Message.CompletedSetMuted],
-  execute: ({ videoId, muted }) =>
+export const SetSound = Command.define("SetSound", {
+  args: { videoId: Schema.String, muted: Schema.Boolean, volume: Schema.Finite },
+  messages: [Message.CompletedSetSound],
+  execute: ({ videoId, muted, volume }) =>
     withVideo(videoId, (video) => {
       video.muted = muted;
-    }).pipe(Effect.as(Message.CompletedSetMuted())),
+      video.volume = volume;
+    }).pipe(Effect.as(Message.CompletedSetSound())),
 });
+
+const setSound = (model: Model) =>
+  SetSound({ videoId: videoIdOf(model.id), muted: model.sound === "Muted", volume: model.volume });
 
 /** Keeps the current entry a third of the way down the feed, scrolling the feed alone. */
 export const ScrollFeed = Command.define("ScrollFeed", {
@@ -220,6 +226,7 @@ export const init = (id: string) => ({
     now: 0,
     speed: 1,
     sound: "On",
+    volume: 1,
     captions: "Shown",
     maybeOpenMoment: Option.none(),
   }),
@@ -292,13 +299,13 @@ export const update = (model: Model, message: Message) =>
     CompletedPauseVideo: () => ({ model }),
     CompletedSeekVideo: () => ({ model }),
     CompletedSetPlaybackRate: () => ({ model }),
-    CompletedSetMuted: () => ({ model }),
+    CompletedSetSound: () => ({ model }),
     CompletedScrollFeed: () => ({ model }),
     LoadedVideo: () => ({
       model,
       commands: [
         SetPlaybackRate({ videoId: videoIdOf(model.id), rate: model.speed }),
-        SetMuted({ videoId: videoIdOf(model.id), muted: model.sound === "Muted" }),
+        setSound(model),
       ],
     }),
     UpdatedPlayhead: ({ seconds }) => followPlayhead(model, seconds),
@@ -316,12 +323,26 @@ export const update = (model: Model, message: Message) =>
       commands: [SetPlaybackRate({ videoId: videoIdOf(model.id), rate: speed })],
     }),
     ClickedSound: () => {
-      const sound = model.sound === "On" ? "Muted" : "On";
+      // Unmuting a narration turned all the way down brings it back at full volume.
+      const next =
+        model.sound === "On"
+          ? modifyFields(model, { sound: () => "Muted" as const })
+          : modifyFields(model, {
+              sound: () => "On" as const,
+              volume: (volume) => (volume === 0 ? 1 : volume),
+            });
 
-      return {
-        model: modifyFields(model, { sound: () => sound }),
-        commands: [SetMuted({ videoId: videoIdOf(model.id), muted: sound === "Muted" })],
-      };
+      return { model: next, commands: [setSound(next)] };
+    },
+    UpdatedVolume: ({ value }) => {
+      const volume = Math.min(1, Math.max(0, Number(value) || 0));
+
+      const next = modifyFields(model, {
+        volume: () => volume,
+        sound: () => (volume === 0 ? ("Muted" as const) : ("On" as const)),
+      });
+
+      return { model: next, commands: [setSound(next)] };
     },
     ClickedCaptions: () => ({
       model: modifyFields(model, {

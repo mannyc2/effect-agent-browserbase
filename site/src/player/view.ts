@@ -309,6 +309,59 @@ const controlButton = (
     content,
   );
 
+/**
+ * The narration's mute button, with its volume in a popover above it while the pointer is on either
+ * or the keyboard's focus is. Phones set the volume with their own buttons, and iOS ignores a page's.
+ */
+const soundView = (model: Model, h: H): Html => {
+  const volume = model.sound === "Muted" ? 0 : model.volume;
+
+  return h.div(
+    [h.Class("group/sound relative flex items-center")],
+    [
+      controlButton(
+        h,
+        model.sound === "On" ? "Mute the narration" : "Unmute the narration",
+        Option.none(),
+        Message.ClickedSound(),
+        [icon(h, model.sound === "On" ? soundIcon : mutedIcon)],
+      ),
+      // Padding, not margin, joins the popover to the button, so the pointer can cross the gap.
+      h.div(
+        [
+          h.Class(
+            "absolute bottom-full left-1/2 z-20 hidden -translate-x-1/2 pb-2 pointer-fine:group-has-[button:focus-visible]/sound:block pointer-fine:group-has-[input:focus]/sound:block pointer-fine:group-hover/sound:block",
+          ),
+        ],
+        [
+          h.div(
+            [
+              h.Class(
+                "flex h-28 w-10 items-center justify-center rounded-lg border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-900",
+              ),
+            ],
+            [
+              h.input([
+                h.Type("range"),
+                h.Min("0"),
+                h.Max("1"),
+                h.Step("0.05"),
+                h.Value(String(volume)),
+                h.AriaLabel("Narration volume"),
+                h.AriaValuetext(`${Math.round(volume * 100)}%`),
+                h.Class(
+                  "h-20 w-4 cursor-pointer accent-stone-900 [direction:rtl] [writing-mode:vertical-lr] dark:accent-stone-100",
+                ),
+                h.OnInput((value) => Message.UpdatedVolume({ value })),
+              ]),
+            ],
+          ),
+        ],
+      ),
+    ],
+  );
+};
+
 const controlsView = (model: Model, replay: Replay, derived: Derived, h: H): Html => {
   const { startsAt, durationMillis } = replay.video;
   const playing = model.playback === "Playing";
@@ -353,15 +406,7 @@ const controlsView = (model: Model, replay: Replay, derived: Derived, h: H): Htm
             Message.ClickedCaptions(),
             ["CC"],
           ),
-          replay.narration === undefined
-            ? h.empty
-            : controlButton(
-                h,
-                model.sound === "On" ? "Mute the narration" : "Unmute the narration",
-                Option.none(),
-                Message.ClickedSound(),
-                [icon(h, model.sound === "On" ? soundIcon : mutedIcon)],
-              ),
+          replay.narration === undefined ? h.empty : soundView(model, h),
         ],
       ),
     ],
