@@ -871,7 +871,8 @@ A loss publishes `Lost` with the browser's `disconnected` cause and revokes its 
 When the consumer detects an unusable page or capture while the browser stays connected,
 `lease.lose(detail)` applies the same transition with `cause: "declared"` and that detail. It stops
 serving the generation and revokes work without a handover wait, including work declaring its own
-loss. Repeated declarations and declarations from draining or closed generations do nothing.
+loss and returning immediately. Declaring loss does not wait for work cleanup or provider release.
+Repeated declarations and declarations from draining or closed generations do nothing.
 It reopens on `reopen`, which also retries an open failure until the schedule ends. A provider's
 `definite` failure goes `Down` at once, with the cause also available through `Unavailable`.
 

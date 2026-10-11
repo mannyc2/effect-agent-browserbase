@@ -190,6 +190,9 @@ type Apply<A> = (
   input: Lifecycle.Input<Held<A>, Hold>,
 ) => Effect.Effect<Lifecycle.Step<Held<A>, Hold>>;
 
+const superseded = (generation: number, { reason, revokeAt }: Lifecycle.Draining) =>
+  new Superseded({ generation, reason, revokeAt });
+
 const retired = () => new Unavailable({ reason: "retired", detail: "the supervisor was retired" });
 
 const describe = (cause: Cause.Cause<unknown>) => {
@@ -327,9 +330,18 @@ const leasing = <A>(
           apply({ _tag: "Let", number: live.number, hold }).pipe(Effect.asVoid),
         );
 
+        const revoked = Deferred.await(live.value.revoked).pipe(Effect.flatMap(Effect.fail));
+
         return yield* Effect.raceFirst(
-          work(leaseOf(live)),
-          Deferred.await(live.value.revoked).pipe(Effect.flatMap(Effect.fail)),
+          work(leaseOf(live)).pipe(
+            // Declaring loss and returning can finish before the race's other fiber runs.
+            Effect.tap(() =>
+              Deferred.isDone(live.value.revoked).pipe(
+                Effect.flatMap((done) => (done ? revoked : Effect.void)),
+              ),
+            ),
+          ),
+          revoked,
         );
       }),
     );
@@ -387,23 +399,14 @@ const watchGeneration = <A>(
   return Effect.all([loss, rotation], { concurrency: 2, discard: true });
 };
 
-// Revocation stops use work; retained resources and use finalizers let go before the provider.
+// After revocation, retained resources and use finalizers let go before the provider.
 const releaseGeneration = <A>(
   command: Extract<Lifecycle.Command<Held<A>>, { readonly _tag: "Release" | "Leave" }>,
   state: SubscriptionRef.SubscriptionRef<State<A>>,
   apply: Apply<A>,
 ) =>
   Effect.gen(function* () {
-    const { live, ending } = command;
-
-    yield* Deferred.succeed(
-      live.value.revoked,
-      new Superseded({
-        generation: live.number,
-        reason: ending.reason,
-        revokeAt: ending.revokeAt,
-      }),
-    );
+    const { live } = command;
     const holds = Lifecycle.lookup(state.value, live.number)?.holds ?? [];
 
     const cleaned = yield* Effect.forEach(
@@ -523,11 +526,7 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
             );
             break;
           case "Drain": {
-            const ending = new Superseded({
-              generation: command.live.number,
-              reason: command.ending.reason,
-              revokeAt: command.ending.revokeAt,
-            });
+            const ending = superseded(command.live.number, command.ending);
 
             yield* Deferred.succeed(command.live.value.ending, ending);
             yield* Effect.forkIn(
@@ -542,6 +541,10 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
           }
           case "Release":
           case "Leave":
+            yield* Deferred.succeed(
+              command.live.value.revoked,
+              superseded(command.live.number, command.ending),
+            );
             runRelease(command.live.number, releaseGeneration(command, state, apply));
             break;
         }

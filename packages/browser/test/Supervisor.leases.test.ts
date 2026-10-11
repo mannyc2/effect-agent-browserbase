@@ -112,7 +112,7 @@ describe("Supervisor leases", () => {
   );
 
   it.effect(
-    "self-declared loss releases an exclusive generation without waiting for its own handover",
+    "rejects a work result after self-declared loss and releases its exclusive generation",
     () =>
       Effect.gen(function* () {
         const world = yield* provider();
@@ -123,13 +123,16 @@ describe("Supervisor leases", () => {
           handover: "1 hour",
         });
 
-        const failed = yield* Effect.flip(
-          supervisor.use((lease) =>
-            lease.lose("capture failed").pipe(Effect.andThen(Effect.never)),
-          ),
-        );
+        const outcome = yield* supervisor
+          .use((lease) => lease.lose("capture failed").pipe(Effect.as("stale result")))
+          .pipe(
+            Effect.match({
+              onFailure: (error) => [error._tag, error.reason],
+              onSuccess: (value) => ["Success", value],
+            }),
+          );
 
-        assert.deepStrictEqual([failed._tag, failed.reason], ["Superseded", "lost"]);
+        assert.deepStrictEqual(outcome, ["Superseded", "lost"]);
         assert.strictEqual(
           yield* supervisor.use(({ generation }) => Effect.succeed(generation)),
           2,
@@ -141,6 +144,46 @@ describe("Supervisor leases", () => {
           "open 2",
         ]);
       }),
+  );
+
+  it.effect("returns an external loss declaration before revoked work finishes cleanup", () =>
+    Effect.gen(function* () {
+      const world = yield* provider();
+      const supervisor = yield* Supervisor.make({ open: world.open, exclusive: true });
+      const admitted = yield* Deferred.make<Supervisor.Lease<{ readonly number: number }>>();
+      const declared = yield* Deferred.make<void>();
+      const cleaning = yield* Deferred.make<void>();
+      const cleaned = yield* Deferred.make<void>();
+
+      yield* Effect.gen(function* () {
+        const work = yield* supervisor
+          .use((lease) =>
+            Effect.addFinalizer(() =>
+              Deferred.succeed(cleaning, undefined).pipe(Effect.andThen(Deferred.await(cleaned))),
+            ).pipe(Effect.andThen(Deferred.succeed(admitted, lease)), Effect.andThen(Effect.never)),
+          )
+          .pipe(Effect.flip, Effect.forkChild);
+
+        const lease = yield* Deferred.await(admitted);
+
+        yield* lease
+          .lose("page closed")
+          .pipe(Effect.andThen(Deferred.succeed(declared, undefined)), Effect.forkChild);
+        yield* Effect.yieldNow;
+        assert.isTrue(yield* Deferred.isDone(declared));
+        yield* Deferred.await(cleaning);
+        assert.notInclude(world.order, "release 1");
+        assert.strictEqual(world.count(), 1);
+        yield* Deferred.succeed(cleaned, undefined);
+        const failure = yield* Fiber.join(work);
+
+        assert.deepStrictEqual([failure._tag, failure.reason], ["Superseded", "lost"]);
+        assert.strictEqual(
+          yield* supervisor.use(({ generation }) => Effect.succeed(generation)),
+          2,
+        );
+      }).pipe(Effect.ensuring(Deferred.succeed(cleaned, undefined)));
+    }),
   );
 
   it.effect("ignores a stale declaration while its generation drains and after it closes", () =>
