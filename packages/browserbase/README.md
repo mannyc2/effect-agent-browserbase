@@ -105,10 +105,11 @@ failures, including those from `build` or `admit`.
 `admit({ number, after })` runs before each attempt, including the first, before acquiring a
 context lease or making a provider request. `after`, when present, is the previous generation's
 release outcome. Await it to enforce an account policy such as refusing a reopen after an
-`Unconfirmed` release; ignoring it preserves immediate reopening. Awaiting release during a
-healthy rotation requires exclusive generations (as persisting contexts are): nonexclusive
-rotation keeps the old generation serving until its replacement opens. Admission shares the
-opening fiber's retry and cancellation rules.
+`Unconfirmed` release; ignoring it preserves immediate reopening. First opens and healthy
+nonexclusive rotations have no `after`, so the same policy keeps ephemeral rotations opening
+the replacement before releasing the outgoing session. Loss recovery and exclusive rotation
+expose the preceding release, including on retries after a failed acquisition. Admission shares
+the opening fiber's retry and cancellation rules.
 
 ```ts
 const program = Effect.gen(function* () {

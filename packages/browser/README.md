@@ -878,10 +878,13 @@ It reopens on `reopen`, which also retries an open failure until the schedule en
 `admit({ number, after })` runs before every open attempt, including the first and each retry,
 inside the opening scope. It can await the last opened generation's release through `after`,
 even after an earlier reopen failed, to enforce a policy such as stopping after `Unconfirmed`.
-The first generation has no `after`. Admission failures follow `reopen` and `definite`, and
-retirement interrupts admission. Ignoring `after` adds no release wait; awaiting a healthy
-outgoing generation requires `exclusive`, because nonexclusive rotation keeps that generation
-serving until the replacement opens.
+The first generation and a healthy nonexclusive rotation have no `after`: that rotation keeps
+the outgoing generation serving until its replacement opens. After a loss, or an exclusive
+rotation, `after` exposes the outgoing release. One policy can therefore await every available
+`after` without delaying healthy nonexclusive rotations. This is checked again before each
+retry, including when the serving generation was lost during a failed rotation. Admission
+failures follow `reopen` and `definite`, and retirement interrupts admission. Ignoring `after`
+adds no release wait.
 
 `retire` revokes immediately, stops acquisition and waits for every generation to release.
 Closing the supervisor's scope does the same unless `keep` is set: then only the serving

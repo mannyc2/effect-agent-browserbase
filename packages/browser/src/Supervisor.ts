@@ -96,8 +96,8 @@ export interface Opened<A = void> {
 export interface Admission {
   readonly number: number;
   /**
-   * The preceding generation's release, if one exists. Use `exclusive` when awaiting a healthy
-   * outgoing generation: otherwise its release waits for this replacement to open.
+   * The preceding generation's release once it stops serving. Undefined on the first open and
+   * while a nonexclusive rotation keeps it serving; checked again before each retry.
    */
   readonly after: Effect.Effect<Lifecycle.Released> | undefined;
 }
@@ -446,6 +446,11 @@ const openedInput = <A, E>(
       ? { _tag: "Abandoned", number }
       : { _tag: "Failed", number, detail: describe(exit.cause), cause: Cause.squash(exit.cause) };
 
+const admissionAfter = <A>(previous: Lifecycle.Live<Held<A>> | undefined, state: State<A>) =>
+  previous === undefined || (state._tag !== "Retired" && state.serving?.number === previous.number)
+    ? undefined
+    : Deferred.await(previous.value.released);
+
 const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
   options: MakeOptions<E, R, A>,
 ): Effect.fn.Return<Supervisor<A | void>, never, Scope.Scope | Exclude<R, Scope.Scope>> {
@@ -546,9 +551,10 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
     const after = previous === undefined ? undefined : Deferred.await(previous.value.released);
 
     const openOnce = acquireGeneration(
-      Effect.suspend(() => options.admit?.({ number, after }) ?? Effect.void).pipe(
-        Effect.andThen(options.open),
-      ),
+      Effect.suspend(
+        () =>
+          options.admit?.({ number, after: admissionAfter(previous, state.value) }) ?? Effect.void,
+      ).pipe(Effect.andThen(options.open)),
       own,
     ).pipe(Effect.provideContext(context));
 
