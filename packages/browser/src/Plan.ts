@@ -69,9 +69,9 @@ const Query = Schema.Struct({
 
 /**
  * What a step leaves. `durable` asserts an author-chosen, lasting read-back of this operation,
- * such as its uniquely named saved receipt. A toast or an intermediate address is not durable.
- * Only Appeared or an exact Navigated URL can be durable. Absence or an unspecified document
- * change cannot reconcile unknown input; a durable check's absence never authorizes repeating it.
+ * such as its uniquely named saved receipt or exact operation URL. Only Appeared and an exact
+ * Navigated URL allow it; a toast, absence or relative navigation cannot establish recovery.
+ * Relative navigation measures observed change from dispatch, without asserting causality.
  */
 export const Expected = Schema.Union([
   Schema.TaggedStruct("Checked", { checked: Schema.Boolean }),
@@ -84,12 +84,12 @@ export const Expected = Schema.Union([
     durable: Schema.optional(Schema.Never),
   }),
   Schema.TaggedStruct("Navigated", {
-    url: Schema.optional(Schema.String),
-    durable: Schema.optional(Schema.Never),
+    url: Schema.String,
+    durable: Schema.optional(Schema.Literal(true)),
   }),
   Schema.TaggedStruct("Navigated", {
-    url: Schema.String,
-    durable: Schema.Literal(true),
+    url: Schema.optional(Schema.Never),
+    durable: Schema.optional(Schema.Never),
   }),
 ]);
 
@@ -464,13 +464,11 @@ const checkEffect = (
               : Effect.succeed(found.state.checked === expected.checked),
           );
     case "Navigated":
-      // A relative navigation only has meaning after this step's preparation; it cannot
-      // already hold before input. Exact destinations can be read back before dispatch.
       if (expected.url === undefined && first === undefined) return Effect.succeed(false);
 
       return Effect.map(page.state, (now) =>
-        expected.url === undefined && first !== undefined
-          ? now.url !== first.url || now.document !== first.document
+        expected.url === undefined
+          ? now.url !== first?.url || now.document !== first?.document
           : now.url === expected.url,
       );
     case "Appeared":

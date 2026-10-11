@@ -17,10 +17,16 @@ import * as Plan from "../src/Plan.ts";
 const subject = new Subject({ role: "button", name: "Target", tag: "button", context: {} });
 
 /** Only the public Page methods Plan consumes; no browser internals or Expect substitute. */
-const scripted = (check: "present" | "absent" | "failed" = "absent") => {
+const scripted = (
+  check: "present" | "absent" | "failed" | "blank" | "error" | "unrendered" = "absent",
+) => {
   const dispatches: Array<string> = [];
   const dispatch = (action: string) => Effect.sync(() => void dispatches.push(action));
-  const url = "https://workflow.test/run";
+
+  const url =
+    check === "blank"
+      ? "about:blank"
+      : `https://workflow.test/${check === "error" ? "error" : "run"}`;
 
   const found = new Found({
     ref: "e1",
@@ -172,24 +178,55 @@ describe("Plan step safety", () => {
       action: Arbitrary.schema(
         Schema.Literals(["click", "press", "drag", "back", "reload", "type"]),
       ),
-      check: Arbitrary.schema(Schema.Literals(["present", "absent", "failed"])),
-      expectation: Arbitrary.schema(Schema.Literals(["none", "transient", "durable"])),
+      check: Arbitrary.schema(
+        Schema.Literals(["present", "absent", "failed", "blank", "error", "unrendered"]),
+      ),
+      expectation: Arbitrary.schema(
+        Schema.Literals(["none", "transient", "durable", "gone", "relative", "exact"]),
+      ),
       input: Arbitrary.schema(Schema.Literals(["unsent", "unknown"])),
+      entry: Arbitrary.schema(Schema.Literals(["take", "replay", "restore"])),
     },
-    ({ action, check, expectation, input }) =>
+    ({ action, check, expectation, input, entry }) =>
       Effect.gen(function* () {
         const { page, dispatches } = scripted(check);
+        let document = 1;
+
+        const changing: Page = {
+          ...page,
+          state: Effect.map(page.state, (state) => new State({ ...state, document: document++ })),
+        };
+
+        const prohibited = expectation === "gone" || expectation === "relative";
+        const unknown = input === "unknown" || prohibited || entry === "restore";
 
         const expect =
           expectation === "none"
             ? undefined
-            : {
-                _tag: "Appeared" as const,
-                query: { text: "Done" },
-                ...(expectation === "durable" ? { durable: true as const } : {}),
-              };
+            : expectation === "relative" || expectation === "exact"
+              ? {
+                  _tag: "Navigated" as const,
+                  ...(expectation === "exact"
+                    ? {
+                        url:
+                          check === "present"
+                            ? "https://workflow.test/run"
+                            : "https://workflow.test/receipt/42",
+                      }
+                    : {}),
+                  durable: true as const,
+                }
+              : {
+                  _tag: expectation === "gone" ? ("Gone" as const) : ("Appeared" as const),
+                  query: { text: "Done" },
+                  ...(expectation === "durable" || expectation === "gone"
+                    ? { durable: true as const }
+                    : {}),
+                };
 
-        const step = new Plan.Step({
+        // Deliberately bypass constructors: persisted or constructed malformed objects must not
+        // turn negative or relative evidence into a receipt (beta.11 review, user-requested R1).
+        const step = {
           action,
           subject,
           to: subject,
@@ -198,31 +235,91 @@ describe("Plan step safety", () => {
           input: action === "type" ? "text" : undefined,
           options: action === "type" ? { replace: false } : undefined,
           expect,
-        });
+        };
 
-        const plan = new Plan.Plan({ version: expect === undefined ? 1 : 2, steps: [step] });
+        const payload = { version: expect === undefined ? 1 : 2, steps: [step] };
+        const plan = payload as unknown as Plan.Plan;
+        const from = new Plan.Stopped({ step: 0, input: unknown ? "unknown" : "unsent" });
+        const options = { arrival: 0, inputs: { text: "memo" } };
 
-        const result = yield* Plan.replay(page, plan, {
-          from: { step: 0, input },
-          settle: false,
-          arrival: 0,
-          inputs: { text: "memo" },
-        }).pipe(Effect.exit);
+        const result = yield* (
+          entry === "take"
+            ? Plan.take(changing, plan, from, options).pipe(Effect.map((receipt) => [receipt]))
+            : entry === "restore"
+              ? Plan.restore(changing, plan, options)
+              : Plan.replay(changing, plan, { ...options, from })
+        ).pipe(Effect.exit);
 
-        if (input === "unknown") {
+        if (unknown) {
           assert.deepStrictEqual(dispatches, []);
           assert.strictEqual(
             Exit.isSuccess(result),
-            expectation === "durable" && check === "present",
+            (expectation === "durable" || expectation === "exact") && check === "present",
           );
+          if (Exit.isFailure(result)) {
+            const error = Exit.findErrorOption(result);
+
+            assert.isTrue(error._tag === "Some" && error.value.reason._tag === "Uncertain");
+            if (error._tag === "Some") assert.deepStrictEqual(error.value.receipts, []);
+          }
         } else {
           assert.strictEqual(
             dispatches.length,
-            expectation === "none" || check === "absent" ? 1 : 0,
+            expectation === "none" ||
+              (expectation === "exact"
+                ? check !== "present"
+                : check !== "present" && check !== "failed")
+              ? 1
+              : 0,
           );
+        }
+        const decoded = Schema.decodeUnknownExit(Plan.Plan)(payload);
+
+        if (prohibited) assert.isTrue(Exit.isFailure(decoded));
+        else {
+          assert.isTrue(Exit.isSuccess(decoded));
+          if (Exit.isSuccess(decoded))
+            assert.deepStrictEqual(
+              yield* Schema.decodeEffect(Plan.Plan)(
+                yield* Schema.encodeEffect(Plan.Plan)(decoded.value),
+              ),
+              decoded.value,
+            );
         }
       }),
     { arbitrary: { runs: 180 } },
+  );
+
+  it.effect("refuses malformed durable absence and relative navigation before any input", () =>
+    Effect.gen(function* () {
+      for (const expect of [
+        { _tag: "Gone", query: { text: "Done" }, durable: true },
+        { _tag: "Navigated", durable: true },
+      ]) {
+        const payload = { version: 2, steps: [{ action: "click", subject, url: "", expect }] };
+        const plan = payload as unknown as Plan.Plan;
+        const { page, dispatches } = scripted("blank");
+
+        for (const at of [new Plan.Stopped({ step: 0, input: "unknown" }), 0]) {
+          const result = yield* Plan.take(page, plan, at, { settle: false, arrival: 0 }).pipe(
+            Effect.exit,
+          );
+
+          assert.deepStrictEqual(dispatches, []);
+          assert.isTrue(Exit.isFailure(result));
+          if (Exit.isFailure(result)) {
+            const error = Exit.findErrorOption(result);
+
+            assert.isTrue(error._tag === "Some" && error.value.reason._tag === "Uncertain");
+            if (error._tag === "Some") assert.deepStrictEqual(error.value.receipts, []);
+          }
+        }
+        for (const onExcessProperty of ["ignore", "error"] as const)
+          assert.isTrue(
+            Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan, { onExcessProperty })(payload)),
+          );
+      }
+    }),
   );
 
   it.effect("resumes only the repeatable actions whose input was unknown", () =>
@@ -256,59 +353,6 @@ describe("Plan step safety", () => {
         ),
       );
     }),
-  );
-
-  // beta7 (63a1356) allowed absence or any document change to reconcile unknown input.
-  // Exercise persisted-plan decoding through restoration, so invalid evidence cannot be dropped
-  // by the decoder and then silently authorize continuation after a process restart.
-  it.effect.prop(
-    "rejects persisted recovery based on absence or unspecified navigation",
-    {
-      kind: Arbitrary.schema(Schema.Literals(["Gone", "Navigated"])),
-      entry: Arbitrary.schema(Schema.Literals(["decoded", "constructed"])),
-    },
-    ({ kind, entry }) =>
-      Effect.gen(function* () {
-        const { page, dispatches } = scripted();
-        let document = 1;
-
-        const restored: Page = {
-          ...page,
-          state: Effect.map(page.state, (state) => new State({ ...state, document })),
-          ready: () => Effect.sync(() => void document++),
-        };
-
-        const stored = {
-          version: 2,
-          steps: [
-            {
-              action: "click",
-              subject,
-              url: "",
-              expect: {
-                _tag: kind,
-                ...(kind === "Gone" ? { query: { text: "Done" } } : {}),
-                durable: true,
-              },
-            },
-          ],
-        };
-
-        // A JS caller or an older in-memory value can bypass decoding; neither route may turn
-        // absence into a receipt for an unknown operation.
-        const load =
-          entry === "decoded"
-            ? Schema.decodeUnknownEffect(Plan.Plan)(stored)
-            : Effect.succeed(stored as unknown as Plan.Plan);
-
-        const result = yield* load.pipe(
-          Effect.flatMap((plan) => Plan.restore(restored, plan, { arrival: 0 })),
-          Effect.exit,
-        );
-
-        assert.isTrue(Exit.isFailure(result));
-        assert.deepStrictEqual(dispatches, []);
-      }),
   );
 
   it.effect(
@@ -429,6 +473,11 @@ const workflow = Effect.fnUntraced(function* () {
 
           return;
         }
+        if (address.pathname === "/receipt/1") {
+          response.end(orders > 0 ? "<h1>Saved order 1</h1>" : "<h1>No saved order</h1>");
+
+          return;
+        }
         response.end(`<h1>Workflow</h1>
           <label><input type="checkbox" checked onchange="document.body.dataset.toggles = String(Number(document.body.dataset.toggles || 0) + 1)">Enabled</label>
           <button id="order" onclick="fetch('/order', {method:'POST'}).then(r => r.text()).then(n => { record.textContent = 'Order '+n; notice.textContent = 'Submitted' })">Place order</button>
@@ -496,6 +545,53 @@ const orderPlan = (durable: boolean) =>
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Plan steps in Chromium",
   (it) => {
+    it.effect("recovers an exact operation URL without more input", () =>
+      Effect.gen(function* () {
+        const site = yield* workflow();
+        const page = yield* open(site.url);
+
+        yield* Plan.take(page, orderPlan(true), 0);
+        const receiptUrl = site.url + "/receipt/1";
+
+        yield* page.goto(receiptUrl);
+
+        const exact = Plan.Plan.new([
+          new Plan.Step({
+            action: "click",
+            subject: named("Place order"),
+            url: "",
+            expect: { _tag: "Navigated", url: receiptUrl, durable: true },
+          }),
+        ]);
+
+        const saved = yield* Schema.decodeEffect(Plan.Plan)(
+          yield* Schema.encodeEffect(Plan.Plan)(exact),
+        );
+
+        assert.strictEqual(
+          (yield* Plan.take(page, saved, 0, { settle: false })).outcome,
+          "skipped",
+        );
+        const replacement = yield* open(receiptUrl);
+        const options = { settle: false, arrival: "100 millis" } satisfies Plan.TakeOptions;
+        const stopped = new Plan.Stopped({ step: 0, input: "unknown" });
+
+        assert.strictEqual(
+          (yield* Plan.take(replacement, saved, stopped, options)).outcome,
+          "skipped",
+        );
+        assert.strictEqual(
+          (yield* Plan.restore(replacement, saved, options))[0]?.outcome,
+          "skipped",
+        );
+        assert.strictEqual(
+          (yield* Plan.replay(replacement, saved, { ...options, from: stopped }))[0]?.outcome,
+          "skipped",
+        );
+        assert.strictEqual(yield* site.orders, 1);
+      }),
+    );
+
     it.effect(
       "skips a checked target instead of toggling it, and stamps the receipt on the browser clock",
       () =>
