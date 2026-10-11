@@ -4,6 +4,25 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.12
+
+- Navigation waits have native deadlines, and read-only preparation/settling waits no longer
+  retains mutation ownership after its bounded end. Corrective navigation, browser suspension
+  and a prepared Stage cut can proceed while a remote load remains unresolved. Dispatched input
+  and mutating evaluations still drain through their actual acknowledgements; timeout does not
+  assert that a navigation was aborted or input was unsent. Stage's input deadline ends at the
+  cut; outgoing capture cleanup retains its separate bound.
+- A relative `Plan` navigation expectation starts immediately before dispatch, after readiness
+  and arrival, and never skips fresh input. A preceding step's redirect during readiness cannot
+  verify the following step. Relative checks observe change, without asserting causality.
+- Durable recovery accepts only `Appeared` or explicit exact-URL `Navigated`, with the author's
+  assertion that the evidence is lasting and unique to the operation. Decoding rejects
+  `durable: true` on `Gone` and relative `Navigated`, including previous version 2 payloads;
+  execution also refuses those claims on constructed plans. Supported version 1/2 plans remain.
+- Local Chromium and property regressions reproduce these defects and preserve unanswered-input
+  boundaries. Hosted H1/H2/H3 qualification remains unperformed. The pinned Yielded archive
+  installation remains the supported route.
+
 ## 0.3.0-beta.11
 
 - Each `Browser.connection` is fresh on construction, including reattachment to the same provider

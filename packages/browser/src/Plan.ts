@@ -69,8 +69,9 @@ const Query = Schema.Struct({
 
 /**
  * What a step leaves. `durable` asserts an author-chosen, lasting read-back of this operation,
- * such as its uniquely named saved receipt. A toast or an intermediate address is not durable.
- * Even a durable check's absence never authorizes repeating unknown consequential input.
+ * such as its uniquely named saved receipt or exact operation URL. Only Appeared and an exact
+ * Navigated URL allow it; a toast, absence or relative navigation cannot establish recovery.
+ * Relative navigation measures observed change from dispatch, without asserting causality.
  */
 export const Expected = Schema.Union([
   Schema.TaggedStruct("Checked", { checked: Schema.Boolean }),
@@ -80,11 +81,15 @@ export const Expected = Schema.Union([
   }),
   Schema.TaggedStruct("Gone", {
     query: Query,
+    durable: Schema.optional(Schema.Never),
+  }),
+  Schema.TaggedStruct("Navigated", {
+    url: Schema.String,
     durable: Schema.optional(Schema.Literal(true)),
   }),
   Schema.TaggedStruct("Navigated", {
-    url: Schema.optional(Schema.String),
-    durable: Schema.optional(Schema.Literal(true)),
+    url: Schema.optional(Schema.Never),
+    durable: Schema.optional(Schema.Never),
   }),
 ]);
 
@@ -444,7 +449,7 @@ const arrived = (page: Page, urls: ReadonlyArray<string>, millis: number) =>
 const checkEffect = (
   page: Page,
   step: Step,
-  first: { readonly url: string; readonly document: number },
+  first?: { readonly url: string; readonly document: number },
 ) => {
   const expected = step.expect;
 
@@ -459,9 +464,11 @@ const checkEffect = (
               : Effect.succeed(found.state.checked === expected.checked),
           );
     case "Navigated":
+      if (expected.url === undefined && first === undefined) return Effect.succeed(false);
+
       return Effect.map(page.state, (now) =>
         expected.url === undefined
-          ? now.url !== first.url || now.document !== first.document
+          ? now.url !== first?.url || now.document !== first?.document
           : now.url === expected.url,
       );
     case "Appeared":
@@ -509,9 +516,15 @@ export const take = Effect.fn("Plan.take")(function* (
     const unresolved = input === "unknown" && !repeatable(step);
     const expected = step.expect;
 
+    const durable =
+      expected !== undefined &&
+      (expected._tag === "Appeared" ||
+        (expected._tag === "Navigated" && typeof expected.url === "string")) &&
+      expected.durable === true;
+
     if (
-      unresolved &&
-      (expected === undefined || expected._tag === "Checked" || expected.durable !== true)
+      !durable &&
+      (unresolved || (expected !== undefined && "durable" in expected && expected.durable === true))
     )
       return yield* uncertain;
     const settle = options.settle === false ? Effect.void : page.ready(options.settle);
@@ -521,7 +534,7 @@ export const take = Effect.fn("Plan.take")(function* (
 
     if (before !== undefined)
       yield* arrived(page, unresolved ? [before, step.url] : [before], millis);
-    const check = checkEffect(page, step, first);
+    const check = checkEffect(page, step);
 
     const read =
       millis === 0
@@ -550,6 +563,7 @@ export const take = Effect.fn("Plan.take")(function* (
     const text = step.input === undefined ? "" : options.inputs?.[step.input];
 
     if (text === undefined) return yield* invalid(`no text for the input "${step.input ?? ""}"`);
+    const verify = checkEffect(page, step, yield* page.state);
     const acted = yield* Effect.exit(dispatch(page, step, text));
 
     if (Exit.isFailure(acted)) {
@@ -557,11 +571,8 @@ export const take = Effect.fn("Plan.take")(function* (
 
       if (Option.isSome(error) && error.value._tag === "BrowserError" && error.value.dispatched) {
         input = "unknown";
-        if (
-          expected !== undefined &&
-          (repeatable(step) || (expected._tag !== "Checked" && expected.durable === true))
-        ) {
-          const observed = yield* Effect.exit(within(check, millis));
+        if (expected !== undefined && (repeatable(step) || durable)) {
+          const observed = yield* Effect.exit(within(verify, millis));
 
           if (Exit.isSuccess(observed) && observed.value) return yield* receipt("verified");
         }
@@ -570,7 +581,7 @@ export const take = Effect.fn("Plan.take")(function* (
       return yield* Effect.failCause(acted.cause);
     }
     input = "unknown";
-    if (expected !== undefined && !(yield* within(check, millis)))
+    if (expected !== undefined && !(yield* within(verify, millis)))
       return yield* new Drifted({ detail: "the step's expected effect did not arrive" });
 
     return yield* receipt(expected === undefined ? "taken" : "verified");

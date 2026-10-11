@@ -2,6 +2,18 @@
 
 ## 0.3
 
+The `0.3.0-beta.12` corrections bound navigation waits without releasing unanswered input or
+mutation acknowledgements. A hanging load no longer permanently prevents corrective navigation,
+browser suspension or a prepared Stage cut after the operation ends. A navigation timeout does
+not prove that the remote load stopped; later navigation can replace it.
+
+Relative plan navigation checks now start immediately before dispatch, after readiness and
+arrival, and cannot skip fresh input. Durable recovery accepts only positive `Appeared` or an
+explicit exact-URL `Navigated`, with operation-specific durability asserted by the author.
+Decoding intentionally rejects `durable: true` on absence or relative navigation in stored
+version 2 plans; execution refuses those recovery claims independently. Valid version 1/2 plans
+remain supported. Local regression evidence does not qualify hosted H1/H2/H3, which remain unrun.
+
 The `0.3.0-beta.11` release completes connection identity and the
 [compiled composition examples](COMPOSITION.md). `Browser.connection` and required
 `Frame.connection` distinguish evidence across reattachment; `(connection, page, document)` names

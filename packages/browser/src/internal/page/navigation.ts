@@ -14,6 +14,7 @@ import {
 } from "../../BrowserError.ts";
 import type { Guard } from "../input/guard.ts";
 import type { InputMarks, Perform } from "../input/perform.ts";
+import { Current } from "../input/replies.ts";
 import { failWith, type PageContext } from "./context.ts";
 import * as Url from "./url.ts";
 
@@ -24,6 +25,9 @@ export const make = (
 ) => {
   const { playwright, settings, native } = page;
   const { send } = page.protocol;
+  // Playwright must also end its native wait: the action deadline alone cannot settle a promise
+  // retained for input ownership. A timed-out load can still commit until another navigation.
+  const timeout = Duration.toMillis(settings.navigationTimeout);
 
   // `address` is where `run` goes, as the action, the guard and a failure report it.
   const navigation = (name: string, run: () => Promise<unknown>, address: string) => {
@@ -36,7 +40,7 @@ export const make = (
       preparePolicy(name, { target: url }, [], { destination: url }),
       (marks) =>
         marks.sent.pipe(
-          Effect.andThen(native(name, run)),
+          Effect.andThen(native(name, run, timeout)),
           Effect.mapError((error) =>
             error.reason._tag === "Failed" &&
             /net::|NS_ERROR|Cannot navigate/i.test(error.reason.detail)
@@ -141,7 +145,12 @@ export const make = (
           }),
         () => Effect.sync(() => playwright.off("framenavigated", onNavigation)),
       );
-      yield* native("back", () => playwright.waitForLoadState("domcontentloaded", { timeout: 0 }));
+      // Waiting for a dispatched traversal's load is an observation, not its acknowledgement.
+      yield* native(
+        "back",
+        () => playwright.waitForLoadState("domcontentloaded", { timeout }),
+        timeout,
+      ).pipe(Effect.provideService(Current, undefined));
     });
 
   const goto = (url: string) => {
@@ -158,7 +167,7 @@ export const make = (
 
     return navigation(
       "navigate",
-      () => playwright.goto(parsed.href, { waitUntil: "domcontentloaded", timeout: 0 }),
+      () => playwright.goto(parsed.href, { waitUntil: "domcontentloaded", timeout }),
       parsed.href,
     );
   };
@@ -174,7 +183,7 @@ export const make = (
   const reload = Effect.suspend(() =>
     navigation(
       "reload",
-      () => playwright.reload({ waitUntil: "domcontentloaded", timeout: 0 }),
+      () => playwright.reload({ waitUntil: "domcontentloaded", timeout }),
       playwright.url(),
     ),
   );

@@ -417,10 +417,7 @@ export const make = Effect.fn("Stage.make")(function* (
               changedAt: at,
             };
 
-            return publish(feed, frame).pipe(
-              Effect.andThen(old === undefined ? Effect.void : stop(old.feed)),
-              Effect.as(showing.presented),
-            );
+            return publish(feed, frame).pipe(Effect.as(showing.presented));
           }).pipe(Effect.uninterruptible);
 
           const readyToSwitch = firstOf(feed, firstFrame).pipe(
@@ -430,7 +427,17 @@ export const make = Effect.fn("Stage.make")(function* (
 
           const before = old === undefined ? undefined : internalsOf(old.feed.page);
 
-          return yield* before === undefined ? readyToSwitch : before.afterInput(readyToSwitch);
+          return yield* (
+            before === undefined ? readyToSwitch : before.afterInput(readyToSwitch)
+          ).pipe(
+            // The cut owns old-page input through publication. Capture cleanup has its own bound
+            // and must finish even if the caller leaves, without turning a completed cut into Timeout.
+            Effect.ensuring(
+              Effect.suspend(() =>
+                showing?.feed === feed && old !== undefined ? stop(old.feed) : Effect.void,
+              ),
+            ),
+          );
         }).pipe(Effect.provideService(Clock.Clock, clock)),
       );
     });
