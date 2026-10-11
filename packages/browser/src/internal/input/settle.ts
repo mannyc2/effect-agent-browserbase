@@ -10,6 +10,7 @@ import { Deferred, Duration, Effect, Exit } from "effect";
 
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, type PageContext } from "../page/context.ts";
+import { Current } from "./replies.ts";
 
 // A document still loading after this, or a closed page, is the next look's to show.
 const settling = Duration.seconds(5);
@@ -33,9 +34,13 @@ export const make = (page: PageContext, bridge: Bridge) => {
   const settle = (operation: string, before: ReturnType<typeof mark>) =>
     Effect.gen(function* () {
       // A commit ends the call's world; the loop then waits for that document.
-      yield* bridge
-        .evaluate(operation, scriptCall("settle"))
-        .pipe(Effect.catchIf(contextGone, () => Effect.void));
+      yield* bridge.evaluate(operation, scriptCall("settle")).pipe(
+        // This is a read, not an input acknowledgement. A pending navigation may hold the
+        // evaluate after the settling deadline, without retaining browser input authority.
+        Effect.provideService(Current, undefined),
+        Effect.catchIf(contextGone, () => Effect.void),
+        Effect.onError(() => page.stopLoading),
+      );
       while (document() > before.document && parsed < document()) yield* Deferred.await(changed);
     }).pipe(
       Effect.timeoutOrElse({ duration: settling, orElse: () => Effect.fail("unsettled") }),

@@ -14,6 +14,7 @@ import {
 } from "../../BrowserError.ts";
 import type { Guard } from "../input/guard.ts";
 import type { InputMarks, Perform } from "../input/perform.ts";
+import { Current } from "../input/replies.ts";
 import { failWith, type PageContext } from "./context.ts";
 import * as Url from "./url.ts";
 
@@ -36,7 +37,7 @@ export const make = (
       preparePolicy(name, { target: url }, [], { destination: url }),
       (marks) =>
         marks.sent.pipe(
-          Effect.andThen(native(name, run)),
+          Effect.andThen(native(name, run).pipe(Effect.onError(() => page.stopLoading))),
           Effect.mapError((error) =>
             error.reason._tag === "Failed" &&
             /net::|NS_ERROR|Cannot navigate/i.test(error.reason.detail)
@@ -126,22 +127,27 @@ export const make = (
       yield* Effect.acquireUseRelease(
         Effect.sync(() => playwright.on("framenavigated", onNavigation)),
         () =>
-          Effect.gen(function* () {
-            yield* marks.sent;
-            yield* native("back", () =>
-              send("Page.navigateToHistoryEntry", { entryId: previous.id }),
-            );
-            yield* traversingHistory.pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced(Duration.millis(50)),
-                until: (latest) => latest.entries[latest.currentIndex]?.id !== current.id,
-              }),
-            );
-            yield* Deferred.await(navigated);
-          }),
+          marks.sent.pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                yield* native("back", () =>
+                  send("Page.navigateToHistoryEntry", { entryId: previous.id }),
+                );
+                yield* traversingHistory.pipe(
+                  Effect.repeat({
+                    schedule: Schedule.spaced(Duration.millis(50)),
+                    until: (latest) => latest.entries[latest.currentIndex]?.id !== current.id,
+                  }),
+                );
+                yield* Deferred.await(navigated);
+                yield* native("back", () =>
+                  playwright.waitForLoadState("domcontentloaded", { timeout: 0 }),
+                ).pipe(Effect.provideService(Current, undefined));
+              }).pipe(Effect.onError(() => page.stopLoading)),
+            ),
+          ),
         () => Effect.sync(() => playwright.off("framenavigated", onNavigation)),
       );
-      yield* native("back", () => playwright.waitForLoadState("domcontentloaded", { timeout: 0 }));
     });
 
   const goto = (url: string) => {

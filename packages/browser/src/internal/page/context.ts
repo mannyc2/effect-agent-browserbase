@@ -267,6 +267,13 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
         orElse: () => failWith(operation, new Timeout({ millis: Duration.toMillis(duration) })),
       });
 
+  // Stop a navigation whose bounded wait failed. The stop and original mutation keep their
+  // actual replies owned; this cleanup does not turn an unanswered acknowledgement into success.
+  const stopLoading = native("stopLoading", () => send("Page.stopLoading")).pipe(
+    within("stopLoading", options.settings.navigationTimeout),
+    Effect.ignore,
+  );
+
   // The latest submitted input or page change. A read that must follow it waits for the action in
   // flight, so only paint from after its latest input is current. An action ends after its input
   // was handled, so if that input changed the page, newer paint follows; a lost final paint is
@@ -306,6 +313,7 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     protocol,
     native,
     within,
+    stopLoading,
     activity,
     noteInput,
   };

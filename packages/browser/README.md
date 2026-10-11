@@ -246,14 +246,18 @@ An interrupted call remains interrupted. Persist that a step has begun **before*
 a missing receipt, including after a process restart, is `Stopped({ step, input: "unknown" })`.
 The consumer owns that durable journal and the decision to reconcile a consequential operation.
 
-An optional `Step.expect` checks `Checked`, `Appeared`, `Gone` or `Navigated` before input and
-waits for it afterward. `verified` means the specified observation held; it is not a transaction
+An optional `Step.expect` checks `Checked`, `Appeared`, `Gone` or an exact `Navigated` URL before
+input and waits for it afterward. `Navigated` without a URL only checks for a change after this
+step's preparation; it never skips input because an earlier redirect completed during readiness
+or arrival. `verified` means the specified observation held; it is not a transaction
 receipt from the target service. Keep the receipt with its plan to interpret that evidence.
 `Checked` can converge a checkbox click to a desired boolean.
 Unknown non-repeatable input is never automatically sent again: only a positive check explicitly
 marked `durable: true` permits continuation. This is the author's assertion of a lasting,
-uniquely scoped read-back, such as a saved order receipt. A toast or an intermediate URL cannot
-justify it. A negative or failed durable check still leaves the operation uncertain.
+uniquely scoped read-back, such as a saved order receipt. Only `Appeared` and `Navigated` with an
+exact `url` accept `durable: true`; stored plans marking `Gone` or URL-less `Navigated` durable
+fail decoding. A toast or an intermediate URL cannot justify it. A negative or failed durable
+check still leaves the operation uncertain.
 Navigation, hover, scroll, selection and replacement typing without submission can be repeated;
 back, reload, insertion, presses, drags and ordinary clicks cannot. `Plan.repeatable(step)` says
 which applies. `Plan.restore(page, plan, { upTo, inputs })` reconstructs earlier steps on a fresh
@@ -262,6 +266,11 @@ page using those same rules and refuses unresolved commitments. `upTo` is exclus
 `Plan.Plan.new(steps)` selects the stored version: recordings without expected checks remain
 version 1; checks require version 2. Both decode, with version and contents validated together.
 Old 0.2 plans and unknown versions do not decode.
+
+Navigation deadlines and cancellation stop the page's pending loading within a bounded cleanup.
+This allows corrective navigation and releases input authority for suspension and Stage cuts
+once actual mutation replies settle. Observational settling waits do not retain that authority;
+an unanswered dispatched mutation still does, even after its caller stops waiting.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action, the
 resolved element, the page's URL and title, and the `facts` the page's structure establishes:

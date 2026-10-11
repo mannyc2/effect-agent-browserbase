@@ -258,6 +258,47 @@ describe("Plan step safety", () => {
     }),
   );
 
+  // beta7 (63a1356) allowed absence or any document change to reconcile unknown input.
+  // Exercise persisted-plan decoding through restoration, so invalid evidence cannot be dropped
+  // by the decoder and then silently authorize continuation after a process restart.
+  it.effect.prop(
+    "rejects persisted recovery based on absence or unspecified navigation",
+    { kind: Arbitrary.schema(Schema.Literals(["Gone", "Navigated"])) },
+    ({ kind }) =>
+      Effect.gen(function* () {
+        const { page, dispatches } = scripted();
+        let document = 1;
+
+        const restored: Page = {
+          ...page,
+          state: Effect.map(page.state, (state) => new State({ ...state, document })),
+          ready: () => Effect.sync(() => void document++),
+        };
+
+        const result = yield* Schema.decodeUnknownEffect(Plan.Plan)({
+          version: 2,
+          steps: [
+            {
+              action: "click",
+              subject,
+              url: "",
+              expect: {
+                _tag: kind,
+                ...(kind === "Gone" ? { query: { text: "Done" } } : {}),
+                durable: true,
+              },
+            },
+          ],
+        }).pipe(
+          Effect.flatMap((plan) => Plan.restore(restored, plan, { arrival: 0 })),
+          Effect.exit,
+        );
+
+        assert.isTrue(Exit.isFailure(result));
+        assert.deepStrictEqual(dispatches, []);
+      }),
+  );
+
   it.effect(
     "refuses a Checked expectation on a target with no checked state before any input",
     () =>
