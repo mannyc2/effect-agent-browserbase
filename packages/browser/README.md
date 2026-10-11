@@ -246,14 +246,19 @@ An interrupted call remains interrupted. Persist that a step has begun **before*
 a missing receipt, including after a process restart, is `Stopped({ step, input: "unknown" })`.
 The consumer owns that durable journal and the decision to reconcile a consequential operation.
 
-An optional `Step.expect` checks `Checked`, `Appeared`, `Gone` or `Navigated` before input and
-waits for it afterward. `verified` means the specified observation held; it is not a transaction
+An optional `Step.expect` checks `Checked`, `Appeared`, `Gone` or exact-URL `Navigated` before
+input and waits for it afterward. Relative `Navigated` (without a URL) never skips fresh input:
+it compares with the page immediately before dispatch, after readiness and arrival. It observes
+change after that baseline, without proving the input caused it.
+`verified` means the specified observation held; it is not a transaction
 receipt from the target service. Keep the receipt with its plan to interpret that evidence.
 `Checked` can converge a checkbox click to a desired boolean.
 Unknown non-repeatable input is never automatically sent again: only a positive check explicitly
-marked `durable: true` permits continuation. This is the author's assertion of a lasting,
-uniquely scoped read-back, such as a saved order receipt. A toast or an intermediate URL cannot
-justify it. A negative or failed durable check still leaves the operation uncertain.
+marked `durable: true` permits continuation. Only `Appeared` or `Navigated` with an explicit exact
+URL can carry that assertion. It remains the author's assertion of a lasting, uniquely scoped
+read-back, such as a saved order receipt or its operation-specific URL. An arbitrary exact URL,
+toast or intermediate URL cannot justify it. `Gone`, relative navigation, and a negative or failed
+durable check still leave unknown consequential input uncertain.
 Navigation, hover, scroll, selection and replacement typing without submission can be repeated;
 back, reload, insertion, presses, drags and ordinary clicks cannot. `Plan.repeatable(step)` says
 which applies. `Plan.restore(page, plan, { upTo, inputs })` reconstructs earlier steps on a fresh
@@ -261,7 +266,9 @@ page using those same rules and refuses unresolved commitments. `upTo` is exclus
 
 `Plan.Plan.new(steps)` selects the stored version: recordings without expected checks remain
 version 1; checks require version 2. Both decode, with version and contents validated together.
-Old 0.2 plans and unknown versions do not decode.
+From beta.13, decoding rejects `durable: true` on `Gone` or URL-less `Navigated`, including older
+version 2 payloads that used these unsupported recovery claims. Execution independently refuses
+to recover through them. Old 0.2 plans and unknown versions do not decode.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action, the
 resolved element, the page's URL and title, and the `facts` the page's structure establishes:
@@ -416,6 +423,12 @@ it, and a picture never shows a document the page has left. A tab the input open
 registered before the action returns, within its action timeout. An unresolved opening fails with
 dispatched input, and closing the page or losing its browser wakes the wait with `Closed`.
 
+Observational task/frame settling waits do not retain input authority after the action ends.
+Navigation deadlines and cancellation stop pending loading within a bounded cleanup, allowing
+corrective navigation, suspension and Stage cuts once actual mutation replies settle. Dispatched
+mutations and stop commands keep their unanswered acknowledgements tracked, including after
+cancellation; a wrapper's timeout cannot surrender their authority.
+
 ## Presenting pages
 
 `Presentation` performs input for viewers of a page, and `Stage` decides which page they see.
@@ -473,8 +486,9 @@ outgoing capture cleanup, even if its caller is interrupted then.
 `Presented.at` records when the switch took effect, no earlier than the event, the incoming frame
 or the last frame shown; `latency` is its delay after the requested `at`. `firstFrame` bounds a
 wait for current paint (5 seconds by default). Old-page input admission, drain and the final frame
-wait are also bounded by that browser's `navigationTimeout`. Failure before the cut leaves the
-old output in place. An old document's frame cannot satisfy a new document's readiness; paint-time
+wait are also bounded by that browser's `navigationTimeout`. Outgoing capture cleanup follows
+the cut under its own bound; it cannot turn a completed cut into an input-drain timeout.
+Failure before the cut leaves the old output in place. An old document's frame cannot satisfy a new document's readiness; paint-time
 uncertainty must place it after the document commit. A cue joining an existing quiet capture can
 use that capture's current frame without waiting for invented new paint.
 
@@ -723,8 +737,10 @@ how long it waited and how many operations were ahead, and replies not answered 
 
 `browser.suspend({ drain })` withholds library input on every tab for the current scope. It first
 drains operations already admitted, through their `Action` records and native acknowledgements.
-A canceled call may already have sent input: its unanswered reply still prevents a successful
-drain. New and queued writes fail `Suspended`, with `dispatched: false`, and record that refusal.
+A canceled call may already have sent input: its unanswered mutation reply still prevents a
+successful drain. An ended observational settling wait does not retain that authority.
+New and queued writes fail `Suspended`, with
+`dispatched: false`, and record that refusal.
 Already-held authority refuses input before invoking an input guard; a guard already waiting is
 checked again at admission. Reads, captures and events continue.
 

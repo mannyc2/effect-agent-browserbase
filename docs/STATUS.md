@@ -2,6 +2,15 @@
 
 ## 0.3
 
+The `0.3.0-beta.13` release fixes navigation waits retaining input authority after their deadline,
+so corrective input, suspension and Stage cuts can proceed after bounded loading cleanup. Actual
+mutation acknowledgements remain tracked after cancellation. Plan expectations no longer count
+an earlier redirect during preparation as the next step's navigation; saved plans cannot use
+absence or unspecified navigation as durable proof for recovering an unknown operation, including
+when a caller bypasses decoding. A completed Stage cut remains successful during bounded outgoing
+capture cleanup. Native Chromium and plan recovery checks cover these failures. The beta.12 tag
+is preserved but was superseded before publication.
+
 The `0.3.0-beta.11` release completes connection identity and the
 [compiled composition examples](COMPOSITION.md). `Browser.connection` and required
 `Frame.connection` distinguish evidence across reattachment; `(connection, page, document)` names

@@ -4,6 +4,23 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.13
+
+- A failed or interrupted navigation stops loading within a bound so later input, browser
+  suspension and Stage cuts can proceed. Observational settling waits no longer retain input
+  authority; dispatched mutations and stop commands keep ownership until their actual replies.
+- A URL-less `Navigated` plan expectation compares against the state after preparation, just
+  before dispatch. An earlier redirect during readiness or arrival cannot skip or verify the
+  next step's input.
+- Durable plan evidence is limited to `Appeared` and `Navigated` with an exact URL. Persisted
+  plans marking `Gone` or unspecified navigation durable now fail decoding, preserving unknown
+  consequential input until positive operation-specific evidence can reconcile it. Execution
+  also refuses those invalid claims when a caller bypasses decoding.
+- A completed presentation cut remains successful while bounded outgoing-capture cleanup finishes;
+  the old page's input deadline no longer turns an already visible cut into a timeout.
+
+`v0.3.0-beta.12` was tagged but not published; this release supersedes it without moving the tag.
+
 ## 0.3.0-beta.11
 
 - Each `Browser.connection` is fresh on construction, including reattachment to the same provider
