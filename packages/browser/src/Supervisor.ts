@@ -92,9 +92,21 @@ export interface Opened<A = void> {
   readonly release?: Effect.Effect<Lifecycle.Released> | undefined;
 }
 
+/** Facts available before an acquisition attempt; awaiting `after` never changes release order. */
+export interface Admission {
+  readonly number: number;
+  /**
+   * The preceding generation's release, if one exists. Use `exclusive` when awaiting a healthy
+   * outgoing generation: otherwise its release waits for this replacement to open.
+   */
+  readonly after: Effect.Effect<Lifecycle.Released> | undefined;
+}
+
 export interface Options<E, R, A = void> {
   /** Opens one generation in the scope it is given. */
   readonly open: Effect.Effect<Opened<A>, E, R>;
+  /** Runs before every open attempt, including the first; failures follow `reopen` and `definite`. */
+  readonly admit?: ((opening: Admission) => Effect.Effect<void, E, R>) | undefined;
   /** When to try a failed open again. Defaults to exponential from 1 second, for 5 minutes. */
   readonly reopen?: Schedule.Schedule<unknown, E> | undefined;
   /**
@@ -132,6 +144,8 @@ export interface Lease<A> {
   readonly generation: number;
   readonly browser: Browser.Service;
   readonly value: A;
+  /** Declare this serving generation unusable and revoke it now; stale declarations do nothing. */
+  readonly lose: (detail: string) => Effect.Effect<void>;
   /** First notice that serving ended; loss or retirement may revoke before its deadline. */
   readonly ending: Effect.Effect<Superseded>;
   /** An independent scope; its resources close before provider release. Fails once revoked. */
@@ -167,6 +181,7 @@ interface Held<A> {
   readonly opened: Opened<A>;
   readonly ending: Deferred.Deferred<Superseded>;
   readonly revoked: Deferred.Deferred<Superseded>;
+  readonly released: Deferred.Deferred<Lifecycle.Released>;
   readonly scope: Scope.Closeable;
 }
 
@@ -278,6 +293,8 @@ const leasing = <A>(
     generation: live.number,
     browser: live.value.opened.browser,
     value: live.value.opened.value,
+    lose: (detail) =>
+      apply({ _tag: "Lost", number: live.number, cause: "declared", detail }).pipe(Effect.asVoid),
     ending: Deferred.await(live.value.ending),
     retain: Effect.uninterruptible(
       Effect.gen(function* () {
@@ -338,6 +355,7 @@ const acquireGeneration = <A, E, R>(
           scope,
           ending: Deferred.makeUnsafe<Superseded>(),
           revoked: Deferred.makeUnsafe<Superseded>(),
+          released: Deferred.makeUnsafe<Lifecycle.Released>(),
         })),
       ),
     ),
@@ -414,8 +432,19 @@ const releaseGeneration = <A>(
     const closed = yield* Effect.exit(Scope.close(live.value.scope, Exit.void));
 
     yield* apply({ _tag: "Released", number: live.number, released });
+    if (released !== undefined) yield* Deferred.succeed(live.value.released, released);
     yield* Exit.asVoidAll([...cleaned, closed]);
   });
+
+const openedInput = <A, E>(
+  number: number,
+  exit: Exit.Exit<Held<A>, E>,
+): Lifecycle.Input<Held<A>, Hold> =>
+  Exit.isSuccess(exit)
+    ? { _tag: "Opened", live: { number, value: exit.value } }
+    : Cause.hasInterruptsOnly(exit.cause)
+      ? { _tag: "Abandoned", number }
+      : { _tag: "Failed", number, detail: describe(exit.cause), cause: Cause.squash(exit.cause) };
 
 const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
   options: MakeOptions<E, R, A>,
@@ -513,35 +542,29 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
         }
     });
 
-  const openOnce = acquireGeneration(options.open, own).pipe(Effect.provideContext(context));
+  const openGeneration = (number: number, previous: Lifecycle.Live<Held<A | void>> | undefined) => {
+    const after = previous === undefined ? undefined : Deferred.await(previous.value.released);
 
-  const openGeneration = (number: number, after: number | undefined) =>
-    Effect.uninterruptibleMask((restore) =>
+    const openOnce = acquireGeneration(
+      Effect.suspend(() => options.admit?.({ number, after }) ?? Effect.void).pipe(
+        Effect.andThen(options.open),
+      ),
+      own,
+    ).pipe(Effect.provideContext(context));
+
+    return Effect.uninterruptibleMask((restore) =>
       restore(
-        (after === undefined
-          ? Effect.void
-          : changedUntil(state, (current) => !current.draining.has(after))
-        ).pipe(
+        (exclusive && after !== undefined ? after : Effect.void).pipe(
           Effect.andThen(
             Effect.retry(openOnce, { schedule: reopen, while: (error) => !definite(error) }),
           ),
         ),
       ).pipe(
         Effect.exit,
-        Effect.flatMap((exit) =>
-          Exit.isSuccess(exit)
-            ? apply({ _tag: "Opened", live: { number, value: exit.value } })
-            : Cause.hasInterruptsOnly(exit.cause)
-              ? apply({ _tag: "Abandoned", number })
-              : apply({
-                  _tag: "Failed",
-                  number,
-                  detail: describe(exit.cause),
-                  cause: Cause.squash(exit.cause),
-                }),
-        ),
+        Effect.flatMap((exit) => apply(openedInput(number, exit))),
       ),
     );
+  };
 
   const use = leasing(state, apply, waitTimeout, now, clock);
 

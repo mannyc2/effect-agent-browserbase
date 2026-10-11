@@ -4,6 +4,7 @@ import { Duration, Effect, Exit, Fiber, Option, Schedule, Scope, Stream } from "
 
 import { Browser } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
+import type { Frame } from "../src/Frame.ts";
 import * as Stage from "../src/Stage.ts";
 
 const animated = `data:text/html,${encodeURIComponent(`<canvas id=c width=200 height=200></canvas><script>
@@ -19,6 +20,63 @@ const eventually = (check: Effect.Effect<boolean>) =>
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Stage cues",
   (it) => {
+    // #282: a prepared still page must enter the output at the cut, preserving its older capture.
+    it.effect("stamps the output time of a prepared reveal independently of capture time", () =>
+      Effect.gen(function* () {
+        const browser = yield* Browser;
+        const onAir = yield* browser.newPage(animated);
+        const revealed = yield* browser.newPage("data:text/html,<h1>Prepared reveal</h1>");
+        const stage = yield* Stage.make();
+        const seen: Array<Stage.Shown> = [];
+        const frames: Array<Frame> = [];
+
+        yield* stage.shown({ hold: "100 millis" }).pipe(
+          Stream.runForEach((value) => Effect.sync(() => void seen.push(value))),
+          Effect.forkScoped,
+        );
+        yield* stage.frames.pipe(
+          Stream.runForEach((frame) => Effect.sync(() => void frames.push(frame))),
+          Effect.forkScoped,
+        );
+        const initial = yield* stage.present(onAir);
+        const cue = yield* stage.cue(revealed);
+
+        yield* cue.ready;
+        yield* Effect.sleep("300 millis");
+        const presented = yield* cue.commit();
+
+        yield* eventually(
+          Effect.sync(() =>
+            seen.some((value) => value._tag === "Still" && value.frame.page === revealed.id),
+          ),
+        );
+        const paints = seen.filter((value) => value._tag === "Painted");
+        const first = paints.find((value) => value.frame.page === revealed.id);
+        const outgoing = paints.filter((value) => value.frame.page === onAir.id);
+
+        assert.strictEqual(outgoing[0]?.at, initial.at);
+        assert.isAtLeast(outgoing.length, 3);
+        assert.strictEqual(first?.at, presented.at);
+        assert.isBelow(first?.frame.hostTime ?? Infinity, outgoing.at(-1)?.frame.hostTime ?? 0);
+        assert.strictEqual(
+          frames.find((frame) => frame.page === revealed.id),
+          first?.frame,
+        );
+        for (let index = 1; index < seen.length; index++) {
+          const current = seen[index];
+          const previous = seen[index - 1];
+
+          assert.isAtLeast(current?.at ?? -Infinity, previous?.at ?? Infinity);
+          if (
+            current?._tag === "Painted" &&
+            current.frame.page === onAir.id &&
+            current.frame.hostTime >= (previous?.at ?? Infinity)
+          )
+            assert.strictEqual(current.at, current.frame.hostTime);
+        }
+      }),
+    );
+
     it.effect("warms now and transfers capture ownership only when its event commits", () =>
       Effect.gen(function* () {
         const browser = yield* Browser;

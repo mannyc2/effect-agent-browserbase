@@ -193,7 +193,9 @@ also holds through a stalled connection.
 
 `Moment.capture` is a window that ends at a picture of the page now. It takes the picture first,
 then the window up to its paint, from where a previous window or moment ended, so the changes hold
-nothing the picture does not show. A picture, a read of changes or an outline that cannot be had is
+nothing the picture does not show. A cached picture from before the latest action finished is
+replaced with a fresh screenshot, keeping a navigation's triggering action in the moment.
+A picture, a read of changes or an outline that cannot be had is
 missing from the moment, with why, and the moment is still made. `Moment.toPrompt` leads with what
 changed: news and what settled first, then what was still changing, by the moment's account, with
 the cells of a column that changed together on one line; a change that kept changing says whether
@@ -214,8 +216,8 @@ the options they were given, its navigations with the address asked for and the 
 what was typed as an input slot named for its field, never the text itself. A navigation to an
 address with a credential withheld is an input slot too, `address`, so replay goes where the caller
 says, never to the address without its credential. `Plan.replay(page,
-plan, { inputs })` takes the steps in turn: before each that acts, it waits for `Page.ready`
-(`settle` sets how, or `false` not to wait), finds the one element the step's subject names with
+plan, { inputs })` takes the steps in turn: before each step except an opening navigate, back or
+reload, it waits for `Page.ready` (`settle` sets how, or `false` not to wait), finds the element with
 `Plan.locate`, and acts on it. An element that does not repeat every part of the recorded context
 is another subject: its row read whole, so a row named "Wrapped BTC" is not the row "BTC" (laid out
 again without rows, as cards, one of its fields must start with the row's words), its column where
@@ -238,7 +240,9 @@ Each `Action` now records its ending address, so a bounded event history can sti
 of later actions after its earlier navigation has expired.
 
 `Plan.take(page, plan, index)` takes one step and returns a `Receipt`: the step index, host-clock
-`startedAt` and `at`, and `taken`, `verified` or `skipped`. `Plan.replay` returns those receipts;
+`startedAt` and `at`, and `taken`, `verified` or `skipped`. Readiness is a precondition of the next
+step, including later navigation, never a wait after the last step. Call `page.ready` after replay
+when the final page must be still. `Plan.replay` returns those receipts;
 a `ReplayError` includes completed receipts and a serializable `stopped` value with the next step
 and whether its input is `unsent` or `unknown`. Resume with `{ from: error.stopped }`. A numeric
 index means fresh input, so never convert an unresolved stopping point into a number to retry it.
@@ -494,18 +498,22 @@ use that capture's current frame without waiting for invented new paint.
 
 `stage.shown({ hold: "1 second" })` describes the output without inventing new frames:
 
-- `Painted` carries a frame when it is published to the output.
+- `Painted` carries a frame and its output time `at`: the switch's `Presented.at` for its first
+  frame, and `frame.hostTime` for subsequent timely paint. A late frame's output time is held at
+  the preceding output time; its capture time stays unchanged.
 - `Still` follows a quiet interval only after a fresh page/capture round trip, with no pending
   capture acknowledgement, the same active capture and current document, and no newer frame.
 - `Stalled` says silence could not be confirmed. A timeout is uncertainty, not stillness.
 - `Gone` says the page or browser is lost. It is emitted once for that feed, with nothing more
   until another page is committed.
 
-`hold` must be finite and positive. Continuous paint restarts the silence interval. A failed
+Every `shown` value carries `at`, which never decreases along a subscription, including across
+silence and switches. `hold` must be finite and positive. Continuous paint restarts the silence interval. A failed
 capture can restart while its page/browser still stands, but old paint cannot pass for a new
 capture's first frame. These guarantees depend on Chromium reporting its paint; they do not
-prove that every canvas update was delivered. `frames` remains the paint-only stream with bounded
-reader queues, so subscribe before presenting to receive the first image. The consumer owns
+prove that every canvas update was delivered. `frames` remains the capture-timed paint-only stream:
+its `hostTime` can go backwards at a switch to a prepared cue. Use `shown`'s `at` to schedule output.
+Both streams have bounded reader queues, so subscribe before presenting to receive the first image. The consumer owns
 encoding, redaction, slates and any repetition of a confirmed held image.
 
 Local Chromium verifies preparation, ownership, input barriers and evidence. Earlier hosted
@@ -815,7 +823,7 @@ const program = Effect.gen(function* () {
 ```
 
 `use(work, { wait })` atomically borrows the serving generation and runs `work` in a scope of its
-own. The lease gives its `generation`, `browser`, `value`, an `ending` notice and `retain`.
+own. The lease gives its `generation`, `browser`, `value`, an `ending` notice, `retain` and `lose`.
 `wait` defaults to `waitTimeout` (two minutes); zero either borrows immediately or fails
 `Unavailable`. Cancelling the caller closes its work scope and lets its hold go. Ordinary work
 errors stay ordinary work errors. `browser` still returns an unheld browser: use it only when the
@@ -860,8 +868,21 @@ before acquisition starts. Call `rotate` outside `use` for a clean cut: an exclu
 inside `use` waits for its own hold to end or be revoked.
 
 A loss publishes `Lost` with the browser's `disconnected` cause and revokes its holds immediately.
+When the consumer detects an unusable page or capture while the browser stays connected,
+`lease.lose(detail)` applies the same transition with `cause: "declared"` and that detail. It stops
+serving the generation and revokes work without a handover wait, including work declaring its own
+loss. Repeated declarations and declarations from draining or closed generations do nothing.
 It reopens on `reopen`, which also retries an open failure until the schedule ends. A provider's
 `definite` failure goes `Down` at once, with the cause also available through `Unavailable`.
+
+`admit({ number, after })` runs before every open attempt, including the first and each retry,
+inside the opening scope. It can await the last opened generation's release through `after`,
+even after an earlier reopen failed, to enforce a policy such as stopping after `Unconfirmed`.
+The first generation has no `after`. Admission failures follow `reopen` and `definite`, and
+retirement interrupts admission. Ignoring `after` adds no release wait; awaiting a healthy
+outgoing generation requires `exclusive`, because nonexclusive rotation keeps that generation
+serving until the replacement opens.
+
 `retire` revokes immediately, stops acquisition and waits for every generation to release.
 Closing the supervisor's scope does the same unless `keep` is set: then only the serving
 generation skips provider release, `Kept`; its application scopes still close. Other generations
