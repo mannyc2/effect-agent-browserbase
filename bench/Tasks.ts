@@ -112,22 +112,31 @@ export const narrate = <E>(
     yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
     let previous: Moment.Moment | undefined;
     let said: string | undefined;
+    // The first look is at once, and so is the first retry of a look or call that failed;
+    // otherwise the narrator waits `every` after its last try.
+    let first = true;
+    let failures = 0;
 
     for (;;) {
-      yield* Deferred.await(stop).pipe(
-        Effect.timeoutOrElse({ duration: every, orElse: () => Effect.void }),
-      );
+      if (!first && failures !== 1)
+        yield* Deferred.await(stop).pipe(
+          Effect.timeoutOrElse({ duration: every, orElse: () => Effect.void }),
+        );
+      first = false;
       if (yield* Deferred.isDone(stop)) return;
 
       // A moment says what it could not read, as mid-navigation, rather than fail; one that fails
-      // anyway leaves its window to the next caption.
+      // anyway, or whose caption fails, leaves its window to the next try.
       const captured = yield* Moment.capture(page, {
         frames: 3,
         since: previous ?? Duration.fromInputUnsafe(every),
         snapshot: false,
       }).pipe(Effect.option);
 
-      if (Option.isNone(captured)) continue;
+      if (Option.isNone(captured)) {
+        failures += 1;
+        continue;
+      }
       const moment = captured.value;
       const question = instructions(said);
 
@@ -142,8 +151,12 @@ export const narrate = <E>(
         Effect.catchTag("AiError", () => Effect.succeedNone),
       );
 
+      if (Option.isNone(response)) {
+        failures += 1;
+        continue;
+      }
       previous = moment;
-      if (Option.isNone(response)) continue;
+      failures = 0;
       said = response.value.value.caption;
       yield* options.onUsage(usageOf(response.value.usage));
       if (options.trace !== undefined)
