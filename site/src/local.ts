@@ -11,6 +11,7 @@ export const Take = Schema.Struct({
   /** USD for the agent, narrator and voice together; the take stops admitting calls past it. */
   maxUsd: Schema.Finite.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(5)),
 });
+
 export type Take = typeof Take.Type;
 
 export const RunnerStatus = Schema.Struct({
@@ -18,6 +19,7 @@ export const RunnerStatus = Schema.Struct({
   missing: Schema.Array(Schema.String),
   defaults: Take,
 });
+
 export type RunnerStatus = typeof RunnerStatus.Type;
 
 /** What the runner printed, newest last, bounded. */
@@ -29,6 +31,7 @@ export const TakeState = Schema.TaggedUnion({
   Packed: { log, replay: Schema.String },
   Failed: { log, reason: Schema.String },
 });
+
 export type TakeState = typeof TakeState.Type;
 
 export class LocalRunner extends HttpApiGroup.make("LocalRunner")

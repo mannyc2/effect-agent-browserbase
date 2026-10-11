@@ -41,9 +41,9 @@ Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter:
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
-import { BrowserTools } from "effect-agent-browser";
-import { Browser, Chromium } from "effect-browser";
 import { Model } from "effect/ai";
+import { Browser, Chromium } from "effect-browser";
+import { BrowserTools } from "effect-agent-browser";
 import { FetchHttpClient } from "effect/http";
 
 const tools = BrowserTools.make();
