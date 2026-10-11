@@ -75,8 +75,8 @@ const lines = (replay: Replay): ReadonlyArray<Entry> =>
           ? []
           : [
               Entry.Line({
-                at: moment.readyAt,
-                end: moment.readyAt + silentLineMillis,
+                at: moment.at,
+                end: moment.at + silentLineMillis,
                 text: moment.caption,
                 moment: index,
               }),

@@ -1,6 +1,8 @@
 // When each narrator line is heard, and the voice's track and captions that follow from it. A
-// line is spoken as soon as its words arrived, as on a live stream, or once the line before has
-// finished; a line that would start long after it arrived is stale and left unsaid.
+// line is spoken where the window it describes ends, the last frame the narrator saw, or once the
+// line before has finished; a line that would start long after its window is stale and left
+// unsaid. A live stream would hear each line when its words arrived, seconds later, with the
+// screen moved on; a replay need not keep that delay.
 import { Effect } from "effect";
 
 import { sampleRate } from "./voice.ts";
@@ -21,11 +23,11 @@ export interface Line extends Caption {
 /** The pause between two lines, in milliseconds. */
 export const breath = 250;
 
-/** How late a line may start after its words arrived before it is stale, in milliseconds. */
+/** How late a line may start after its window ends before it is stale, in milliseconds. */
 export const staleAfter = 3000;
 
 /**
- * Speaks captions in the order they arrived, each once it can be heard whole. `speak` gives a
+ * Speaks captions in the order of their windows, each once it can be heard whole. `speak` gives a
  * caption's speech, or nothing to leave it unsaid, and is asked only for lines that are not stale.
  */
 export const schedule = Effect.fnUntraced(function* <S extends { readonly millis: number }, E, R>(
@@ -34,11 +36,11 @@ export const schedule = Effect.fnUntraced(function* <S extends { readonly millis
 ) {
   const lines: Array<Line & { readonly speech: S }> = [];
 
-  for (const caption of captions.toSorted((left, right) => left.readyAt - right.readyAt)) {
+  for (const caption of captions.toSorted((left, right) => left.until - right.until)) {
     const previous = lines.at(-1);
-    const at = Math.max(caption.readyAt, previous === undefined ? 0 : previous.end + breath);
+    const at = Math.max(caption.until, previous === undefined ? 0 : previous.end + breath);
 
-    if (at - caption.readyAt > staleAfter) continue;
+    if (at - caption.until > staleAfter) continue;
     const speech = yield* speak(caption);
 
     if (speech !== undefined) lines.push({ ...caption, at, end: at + speech.millis, speech });

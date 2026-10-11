@@ -12,8 +12,8 @@ const { frames: _frames, spans: _spans, ...kept } = Recording.fields;
 
 /**
  * One narrator line as a viewer hears it. The narrator captioned a moment, the screen from `from`
- * to `until`; its words arrived at `readyAt`, and the voice speaks them from `at` to `end`: as
- * soon as they arrived, or once the line before has finished.
+ * to `until`; its words arrived at `readyAt`, and the voice speaks them from `at` to `end`: where
+ * the window ends, or once the line before has finished.
  */
 export class NarrationLine extends Schema.Class<NarrationLine>("site/NarrationLine")({
   text: Schema.String,

@@ -85,7 +85,8 @@ export const pack = Effect.fn("pack")(function* (source: string, id: string, voi
                   {
                     text: moment.caption,
                     from: moment.from,
-                    until: moment.at,
+                    // A window that closed before the first frame is heard from the first frame.
+                    until: Math.max(moment.at, first.hostTime),
                     readyAt: moment.readyAt,
                   },
                 ],

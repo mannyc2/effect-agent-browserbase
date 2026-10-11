@@ -13,17 +13,17 @@ import {
 } from "../demo/narration.ts";
 import { sampleRate } from "../demo/voice.ts";
 
-const caption = (readyAt: number, text = `line at ${readyAt}`): Caption => ({
+const caption = (until: number, text = `line at ${until}`): Caption => ({
   text,
-  from: readyAt - 5000,
-  until: readyAt - 2000,
-  readyAt,
+  from: until - 5000,
+  until,
+  readyAt: until + 4000,
 });
 
 const speaking = (millis: number) => (_caption: Caption) => Effect.succeed({ millis });
 
 describe("schedule", () => {
-  it.effect("speaks a line when it arrives, or after the line before and a breath", () =>
+  it.effect("speaks a line where its window ends, or after the line before and a breath", () =>
     Effect.gen(function* () {
       const lines = yield* schedule([caption(10_000), caption(12_000)], speaking(4000));
 
@@ -43,7 +43,7 @@ describe("schedule", () => {
 
       const lines = yield* schedule([caption(1000), caption(2000), caption(9000)], (line) =>
         Effect.sync(() => {
-          asked.push(line.readyAt);
+          asked.push(line.until);
 
           return { millis: staleAfter + 2000 };
         }),
@@ -51,7 +51,7 @@ describe("schedule", () => {
 
       assert.deepStrictEqual(asked, [1000, 9000]);
       assert.deepStrictEqual(
-        lines.map((line) => line.readyAt),
+        lines.map((line) => line.until),
         [1000, 9000],
       );
     }),
@@ -60,7 +60,7 @@ describe("schedule", () => {
   it.effect("skips a line the voice leaves unsaid", () =>
     Effect.gen(function* () {
       const lines = yield* schedule([caption(1000), caption(3000)], (line) =>
-        Effect.succeed(line.readyAt === 1000 ? undefined : { millis: 1000 }),
+        Effect.succeed(line.until === 1000 ? undefined : { millis: 1000 }),
       );
 
       assert.deepStrictEqual(

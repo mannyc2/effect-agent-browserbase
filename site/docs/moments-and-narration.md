@@ -33,7 +33,7 @@ Frames carry the browser's paint time mapped onto one host clock, with its uncer
 
 Each moment can start where the last one ended, so a narrator neither repeats nor misses an event or a change. In the demo, the narrator runs beside the agent: every few seconds it captures the moment since its last line and asks a model for one sentence, sized to the interval so spoken lines don't pile up. It reads the screen and nothing else. It never steers, slows or grades the agent, and a failed caption call is skipped rather than ending the run.
 
-A voice model speaks each line the moment its words arrive, or as soon as the line before has finished. The replay keeps all of it on the recording's clock: the window each line describes, when its words arrived, and when it was spoken.
+A voice model speaks each line where the window it describes ends, at the last frame the narrator saw, or as soon as the line before has finished. On a live stream a line is heard when its words arrive, several seconds later and with the screen moved on; a replay places it where it belongs. The replay keeps all of it on the recording's clock: the window each line describes, when its words arrived, and when it was spoken.
 
 ::Replay{id="polymarket"}
 
