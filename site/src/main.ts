@@ -724,7 +724,7 @@ const demoView = (model: Model, h: H): Html =>
     [h.Class(container)],
     [
       intro(h, "Demo", "An agent explores Polymarket while a narrator watches", [
-        "One take, recorded in a real Chromium: the agent browses on its own and reports a market, a narrator describes what each moment shows in its own voice, and the report is checked against Polymarket's public API. ",
+        "One take, recorded in a real Chromium: the agent browses on its own and reports three markets with their odds, a narrator says what each moment shows and a voice speaks its lines, and each market's odds are checked against Polymarket's public API. ",
         inlineLink(h, "/docs/moments-and-narration", "How the narration works"),
         " · ",
         inlineLink(h, "/try", "Record your own take"),
