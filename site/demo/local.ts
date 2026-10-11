@@ -1,8 +1,11 @@
 // The local runner: under `bun run dev`, the Try page records takes on the visitor's own machine.
 // The dev server serves LocalApi under /local, and each take is `bun run demo take` in a child
 // process, one at a time: its output is the take's log, and its replay is packed into
-// public/replays/, which the dev server already serves. A deployed site has no runner.
+// public/replays/, which the dev server serves from disk. A deployed site has no runner.
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 
 import { NodeHttpPlatform, NodeServices } from "@effect/platform-node";
@@ -13,6 +16,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { Plugin } from "vite";
 
 import { LocalApi, type Take, TakeState } from "../src/local.ts";
+import { replayContentType, serve } from "../src/serve.ts";
 import { defaults } from "./defaults.ts";
 
 /** The lines of output a take keeps, newest last. */
@@ -154,7 +158,47 @@ const send = async (to: ServerResponse, response: Response) => {
   to.end(Buffer.from(await response.arrayBuffer()));
 };
 
-/** The dev server's runner, under /local. */
+/**
+ * Answers /replays/* from public/replays/ on disk, with byte ranges so the player can seek. Vite
+ * lists public files when it starts and follows its file watcher after that, which misses a
+ * replay packed again in place while it runs; a take recorded from the Try page is one.
+ */
+const replayFile = async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
+  const served = serve(
+    request.method ?? "GET",
+    new URL(request.url ?? "/", "http://localhost").pathname,
+    null,
+  );
+
+  if (served._tag !== "ReplayFile") return next();
+  const file = join(site, "public", "replays", served.key);
+  const found = await stat(file).catch(() => undefined);
+
+  if (found === undefined || !found.isFile()) return next();
+  const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range ?? "");
+  const size = found.size;
+  const start = range === null ? 0 : range[1] === "" ? size - Number(range[2]) : Number(range[1]);
+  const end = range === null || range[1] === "" || range[2] === "" ? size - 1 : Number(range[2]);
+
+  response.setHeader("Content-Type", replayContentType(served.key));
+  response.setHeader("Accept-Ranges", "bytes");
+  response.setHeader("Cache-Control", "no-cache");
+  if (range !== null && (start < 0 || start > end || end >= size)) {
+    response.statusCode = 416;
+    response.setHeader("Content-Range", `bytes */${size}`);
+
+    return response.end();
+  }
+  if (range !== null) {
+    response.statusCode = 206;
+    response.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+  }
+  response.setHeader("Content-Length", String(end - start + 1));
+  if (request.method === "HEAD") return response.end();
+  createReadStream(file, { start, end }).pipe(response);
+};
+
+/** The dev server's runner, under /local, and the replays it packs, under /replays. */
 export const localRunner = (): Plugin => ({
   name: "effect-browser-local-runner",
   apply: "serve",
@@ -169,6 +213,11 @@ export const localRunner = (): Plugin => ({
 
     server.httpServer?.once("close", () => void web.dispose());
     server.middlewares.use((request, response, next) => {
+      if (request.url?.startsWith("/replays/") === true) {
+        replayFile(request, response, next).then(() => undefined, next);
+
+        return;
+      }
       if (request.url?.startsWith("/local/") !== true) return next();
       web.handler(toRequest(request)).then((answer) => send(response, answer), next);
     });
