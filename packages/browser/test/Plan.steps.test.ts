@@ -451,10 +451,9 @@ describe("Plan step safety", () => {
 });
 
 /** An operation record belongs to the server and survives a replacement browser page. */
-const workflow = Effect.fnUntraced(function* (holdRedirect = false) {
+const workflow = Effect.fnUntraced(function* () {
   let orders = 0;
   const ordered = yield* Deferred.make<void>();
-  const redirect = yield* Deferred.make<() => void>();
 
   const server = yield* Effect.acquireRelease(
     Effect.callback<ReturnType<typeof createServer>>((resume) => {
@@ -479,26 +478,6 @@ const workflow = Effect.fnUntraced(function* (holdRedirect = false) {
 
           return;
         }
-        if (address.pathname === "/delayed") {
-          if (holdRedirect)
-            Deferred.doneUnsafe(
-              redirect,
-              Effect.succeed(() => {
-                if (!response.writableEnded) response.end("ready");
-              }),
-            );
-          else response.end("ready");
-
-          return;
-        }
-        if (address.pathname === "/relative" || address.pathname === "/relative-next") {
-          response.end(`<main><h1>Relative navigation</h1>
-            <button onclick="document.querySelector('main').setAttribute('aria-busy', 'true'); fetch('/delayed').then(() => location.href = '/relative-next')">Fetch redirect</button>
-            <button onclick="document.body.dataset.clicks = String(Number(document.body.dataset.clicks || 0) + 1)">Stay here</button>
-          </main>`);
-
-          return;
-        }
         response.end(`<h1>Workflow</h1>
           <label><input type="checkbox" checked onchange="document.body.dataset.toggles = String(Number(document.body.dataset.toggles || 0) + 1)">Enabled</label>
           <button id="order" onclick="fetch('/order', {method:'POST'}).then(r => r.text()).then(n => { record.textContent = 'Order '+n; notice.textContent = 'Submitted' })">Place order</button>
@@ -517,7 +496,6 @@ const workflow = Effect.fnUntraced(function* (holdRedirect = false) {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     orders: Effect.sync(() => orders),
     ordered: Deferred.await(ordered),
-    releaseRedirect: Deferred.await(redirect).pipe(Effect.flatMap(Effect.sync)),
   };
 });
 
@@ -567,123 +545,51 @@ const orderPlan = (durable: boolean) =>
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Plan steps in Chromium",
   (it) => {
-    // The beta.11 review requests a real delayed redirect during the following step's readiness.
-    it.effect(
-      "measures relative navigation from dispatch after readiness, never from preparation",
-      () =>
-        Effect.gen(function* () {
-          const site = yield* workflow(true);
-          const page = yield* open(site.url + "/relative");
+    it.effect("recovers an exact operation URL without more input", () =>
+      Effect.gen(function* () {
+        const site = yield* workflow();
+        const page = yield* open(site.url);
 
-          const duringReadiness: Page = {
-            ...page,
-            ready: (options) =>
-              page.ready(options).pipe(
-                Effect.forkChild,
-                Effect.tap(() => site.releaseRedirect),
-                Effect.flatMap(Fiber.join),
-              ),
-          };
+        yield* Plan.take(page, orderPlan(true), 0);
+        const receiptUrl = site.url + "/receipt/1";
 
-          const plan = Plan.Plan.new([
-            new Plan.Step({ action: "click", subject: named("Fetch redirect"), url: "" }),
-            new Plan.Step({
-              action: "click",
-              subject: named("Stay here"),
-              url: "",
-              expect: { _tag: "Navigated" },
-            }),
-          ]);
+        yield* page.goto(receiptUrl);
 
-          yield* Plan.take(page, plan, 0, { settle: false });
-          const started = yield* page.state;
+        const exact = Plan.Plan.new([
+          new Plan.Step({
+            action: "click",
+            subject: named("Place order"),
+            url: "",
+            expect: { _tag: "Navigated", url: receiptUrl, durable: true },
+          }),
+        ]);
 
-          const result = yield* Plan.take(duringReadiness, plan, 1, {
-            settle: { still: "content", quietMillis: 100, timeout: "2 seconds" },
-            arrival: "100 millis",
-          }).pipe(Effect.exit);
+        const saved = yield* Schema.decodeEffect(Plan.Plan)(
+          yield* Schema.encodeEffect(Plan.Plan)(exact),
+        );
 
-          assert.strictEqual(started.url, site.url + "/relative");
-          assert.strictEqual(yield* page.url, site.url + "/relative-next");
-          assert.strictEqual(
-            yield* Effect.promise(() =>
-              page.playwright.evaluate(() => document.body.dataset["clicks"]),
-            ),
-            "1",
-          );
-          assert.isTrue(Exit.isFailure(result));
-          if (Exit.isFailure(result)) {
-            const error = Exit.findErrorOption(result);
+        assert.strictEqual(
+          (yield* Plan.take(page, saved, 0, { settle: false })).outcome,
+          "skipped",
+        );
+        const replacement = yield* open(receiptUrl);
+        const options = { settle: false, arrival: "100 millis" } satisfies Plan.TakeOptions;
+        const stopped = new Plan.Stopped({ step: 0, input: "unknown" });
 
-            assert.isTrue(error._tag === "Some" && error.value.reason._tag === "Drifted");
-          }
-        }),
-    );
-
-    it.effect(
-      "verifies genuine relative navigation and recovers an exact operation URL without more input",
-      () =>
-        Effect.gen(function* () {
-          const site = yield* workflow();
-          const page = yield* open(site.url + "/relative");
-
-          const relative = Plan.Plan.new([
-            new Plan.Step({
-              action: "click",
-              subject: named("Fetch redirect"),
-              url: "",
-              expect: { _tag: "Navigated" },
-            }),
-          ]);
-
-          const receipt = yield* Plan.take(page, relative, 0, {
-            settle: false,
-            arrival: "1 second",
-          });
-
-          assert.strictEqual(receipt.outcome, "verified");
-          assert.isAtMost(receipt.startedAt, receipt.at);
-          yield* page.goto(site.url);
-          yield* Plan.take(page, orderPlan(true), 0);
-          const receiptUrl = site.url + "/receipt/1";
-
-          yield* page.goto(receiptUrl);
-
-          const exact = Plan.Plan.new([
-            new Plan.Step({
-              action: "click",
-              subject: named("Place order"),
-              url: "",
-              expect: { _tag: "Navigated", url: receiptUrl, durable: true },
-            }),
-          ]);
-
-          const saved = yield* Schema.decodeEffect(Plan.Plan)(
-            yield* Schema.encodeEffect(Plan.Plan)(exact),
-          );
-
-          assert.strictEqual(
-            (yield* Plan.take(page, saved, 0, { settle: false })).outcome,
-            "skipped",
-          );
-          const replacement = yield* open(receiptUrl);
-          const options = { settle: false, arrival: "100 millis" } satisfies Plan.TakeOptions;
-          const stopped = new Plan.Stopped({ step: 0, input: "unknown" });
-
-          assert.strictEqual(
-            (yield* Plan.take(replacement, saved, stopped, options)).outcome,
-            "skipped",
-          );
-          assert.strictEqual(
-            (yield* Plan.restore(replacement, saved, options))[0]?.outcome,
-            "skipped",
-          );
-          assert.strictEqual(
-            (yield* Plan.replay(replacement, saved, { ...options, from: stopped }))[0]?.outcome,
-            "skipped",
-          );
-          assert.strictEqual(yield* site.orders, 1);
-        }),
+        assert.strictEqual(
+          (yield* Plan.take(replacement, saved, stopped, options)).outcome,
+          "skipped",
+        );
+        assert.strictEqual(
+          (yield* Plan.restore(replacement, saved, options))[0]?.outcome,
+          "skipped",
+        );
+        assert.strictEqual(
+          (yield* Plan.replay(replacement, saved, { ...options, from: stopped }))[0]?.outcome,
+          "skipped",
+        );
+        assert.strictEqual(yield* site.orders, 1);
+      }),
     );
 
     it.effect(

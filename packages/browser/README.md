@@ -266,7 +266,7 @@ page using those same rules and refuses unresolved commitments. `upTo` is exclus
 
 `Plan.Plan.new(steps)` selects the stored version: recordings without expected checks remain
 version 1; checks require version 2. Both decode, with version and contents validated together.
-From beta.12, decoding rejects `durable: true` on `Gone` or URL-less `Navigated`, including older
+From beta.13, decoding rejects `durable: true` on `Gone` or URL-less `Navigated`, including older
 version 2 payloads that used these unsupported recovery claims. Execution independently refuses
 to recover through them. Old 0.2 plans and unknown versions do not decode.
 
@@ -423,13 +423,11 @@ it, and a picture never shows a document the page has left. A tab the input open
 registered before the action returns, within its action timeout. An unresolved opening fails with
 dispatched input, and closing the page or losing its browser wakes the wait with `Closed`.
 
-Read-only input preparation, validation and task/frame settling calls do not retain input
-authority after the action ends. Target resolution that can scroll, focusing, selection and
-other mutations still do.
-Navigation also gives Playwright a native deadline, so its load wait settles even when the server
-never answers. A timeout does not abort the remote load or prove it cannot commit later; a
-corrective navigation can replace it on the same page. Input and mutating evaluations keep their
-unanswered acknowledgements tracked, including after cancellation.
+Observational task/frame settling waits do not retain input authority after the action ends.
+Navigation deadlines and cancellation stop pending loading within a bounded cleanup, allowing
+corrective navigation, suspension and Stage cuts once actual mutation replies settle. Dispatched
+mutations and stop commands keep their unanswered acknowledgements tracked, including after
+cancellation; a wrapper's timeout cannot surrender their authority.
 
 ## Presenting pages
 
@@ -740,8 +738,8 @@ how long it waited and how many operations were ahead, and replies not answered 
 `browser.suspend({ drain })` withholds library input on every tab for the current scope. It first
 drains operations already admitted, through their `Action` records and native acknowledgements.
 A canceled call may already have sent input: its unanswered mutation reply still prevents a
-successful drain. An ended read-only preparation/settling wait or settled native navigation timeout does not
-hold authority for the unresolved remote load. New and queued writes fail `Suspended`, with
+successful drain. An ended observational settling wait does not retain that authority.
+New and queued writes fail `Suspended`, with
 `dispatched: false`, and record that refusal.
 Already-held authority refuses input before invoking an input guard; a guard already waiting is
 checked again at admission. Reads, captures and events continue.

@@ -25,9 +25,6 @@ export const make = (
 ) => {
   const { playwright, settings, native } = page;
   const { send } = page.protocol;
-  // Playwright must also end its native wait: the action deadline alone cannot settle a promise
-  // retained for input ownership. A timed-out load can still commit until another navigation.
-  const timeout = Duration.toMillis(settings.navigationTimeout);
 
   // `address` is where `run` goes, as the action, the guard and a failure report it.
   const navigation = (name: string, run: () => Promise<unknown>, address: string) => {
@@ -40,7 +37,7 @@ export const make = (
       preparePolicy(name, { target: url }, [], { destination: url }),
       (marks) =>
         marks.sent.pipe(
-          Effect.andThen(native(name, run, timeout)),
+          Effect.andThen(native(name, run).pipe(Effect.onError(() => page.stopLoading))),
           Effect.mapError((error) =>
             error.reason._tag === "Failed" &&
             /net::|NS_ERROR|Cannot navigate/i.test(error.reason.detail)
@@ -130,27 +127,27 @@ export const make = (
       yield* Effect.acquireUseRelease(
         Effect.sync(() => playwright.on("framenavigated", onNavigation)),
         () =>
-          Effect.gen(function* () {
-            yield* marks.sent;
-            yield* native("back", () =>
-              send("Page.navigateToHistoryEntry", { entryId: previous.id }),
-            );
-            yield* traversingHistory.pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced(Duration.millis(50)),
-                until: (latest) => latest.entries[latest.currentIndex]?.id !== current.id,
-              }),
-            );
-            yield* Deferred.await(navigated);
-          }),
+          marks.sent.pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                yield* native("back", () =>
+                  send("Page.navigateToHistoryEntry", { entryId: previous.id }),
+                );
+                yield* traversingHistory.pipe(
+                  Effect.repeat({
+                    schedule: Schedule.spaced(Duration.millis(50)),
+                    until: (latest) => latest.entries[latest.currentIndex]?.id !== current.id,
+                  }),
+                );
+                yield* Deferred.await(navigated);
+                yield* native("back", () =>
+                  playwright.waitForLoadState("domcontentloaded", { timeout: 0 }),
+                ).pipe(Effect.provideService(Current, undefined));
+              }).pipe(Effect.onError(() => page.stopLoading)),
+            ),
+          ),
         () => Effect.sync(() => playwright.off("framenavigated", onNavigation)),
       );
-      // Waiting for a dispatched traversal's load is an observation, not its acknowledgement.
-      yield* native(
-        "back",
-        () => playwright.waitForLoadState("domcontentloaded", { timeout }),
-        timeout,
-      ).pipe(Effect.provideService(Current, undefined));
     });
 
   const goto = (url: string) => {
@@ -167,7 +164,7 @@ export const make = (
 
     return navigation(
       "navigate",
-      () => playwright.goto(parsed.href, { waitUntil: "domcontentloaded", timeout }),
+      () => playwright.goto(parsed.href, { waitUntil: "domcontentloaded", timeout: 0 }),
       parsed.href,
     );
   };
@@ -183,7 +180,7 @@ export const make = (
   const reload = Effect.suspend(() =>
     navigation(
       "reload",
-      () => playwright.reload({ waitUntil: "domcontentloaded", timeout }),
+      () => playwright.reload({ waitUntil: "domcontentloaded", timeout: 0 }),
       playwright.url(),
     ),
   );

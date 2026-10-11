@@ -14,7 +14,6 @@ import { Navigated, PageLoaded } from "../../BrowserEvent.ts";
 import { edit, type Edit } from "../input/edit.inpage.ts";
 import { evidence } from "../input/evidence.inpage.ts";
 import { guard, type Guard } from "../input/guard.inpage.ts";
-import { Current } from "../input/replies.ts";
 import { targets, type Targets } from "../input/targets.inpage.ts";
 import { context } from "../reading/context.inpage.ts";
 import { controls, type Controls } from "../reading/controls.inpage.ts";
@@ -189,11 +188,6 @@ export const mainFrame = (page: string, event: typeof MainFrameEvent.Type) =>
 export const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
-// Only audited observations may outlive an action without owning its input. In particular point
-// can scroll, and focus/select can run handlers: those and all new calls retain reply ownership.
-const observes = (call: string) =>
-  /^(settle|typeable|prepareInput|validateInput|scrollPlan|viewport|screenSize)\(/.test(call);
-
 export const make = Effect.fnUntraced(function* (page: PageContext) {
   const { id, cdp, native, span, publish, now } = page;
   const { send } = page.protocol;
@@ -337,15 +331,11 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       ),
     );
 
-  const evaluateIn = (operation: string, call: string, contextId: number) => {
-    const evaluation = run(
+  const evaluateIn = (operation: string, call: string, contextId: number) =>
+    run(
       operation,
       `globalThis.__effectBrowser === undefined ? ${JSON.stringify(missing)} : globalThis.__effectBrowser.${call}`,
       contextId,
-    );
-
-    return (
-      observes(call) ? evaluation.pipe(Effect.provideService(Current, undefined)) : evaluation
     ).pipe(
       Effect.filterOrFail(
         (value) => value !== missing,
@@ -354,7 +344,6 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       // One round trip to the page. Its arguments can hold typed text, so only the call is named.
       span("Page.evaluate", { function: call.split("(")[0] }, "Trace"),
     );
-  };
 
   // Ordinary reads can recreate a document's world. Approval validation deliberately cannot. A
   // world found by its name that lacks the script, in a document the registration missed, gets it.

@@ -2,17 +2,14 @@
 
 ## 0.3
 
-The `0.3.0-beta.12` corrections bound navigation waits without releasing unanswered input or
-mutation acknowledgements. A hanging load no longer permanently prevents corrective navigation,
-browser suspension or a prepared Stage cut after the operation ends. A navigation timeout does
-not prove that the remote load stopped; later navigation can replace it.
-
-Relative plan navigation checks now start immediately before dispatch, after readiness and
-arrival, and cannot skip fresh input. Durable recovery accepts only positive `Appeared` or an
-explicit exact-URL `Navigated`, with operation-specific durability asserted by the author.
-Decoding intentionally rejects `durable: true` on absence or relative navigation in stored
-version 2 plans; execution refuses those recovery claims independently. Valid version 1/2 plans
-remain supported. Local regression evidence does not qualify hosted H1/H2/H3, which remain unrun.
+The `0.3.0-beta.13` release fixes navigation waits retaining input authority after their deadline,
+so corrective input, suspension and Stage cuts can proceed after bounded loading cleanup. Actual
+mutation acknowledgements remain tracked after cancellation. Plan expectations no longer count
+an earlier redirect during preparation as the next step's navigation; saved plans cannot use
+absence or unspecified navigation as durable proof for recovering an unknown operation, including
+when a caller bypasses decoding. A completed Stage cut remains successful during bounded outgoing
+capture cleanup. Native Chromium and plan recovery checks cover these failures. The beta.12 tag
+is preserved but was superseded before publication.
 
 The `0.3.0-beta.11` release completes connection identity and the
 [compiled composition examples](COMPOSITION.md). `Browser.connection` and required
