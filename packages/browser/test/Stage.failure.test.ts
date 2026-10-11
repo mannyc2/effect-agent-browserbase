@@ -446,3 +446,66 @@ layer(Chromium.layer(), { excludeTestServices: true })("stage input drain failur
     }),
   );
 });
+
+// A completed cut is not an input-drain failure when the outgoing capture takes longer to stop.
+it.live("outgoing capture cleanup cannot time out a cut that already reached the output", () =>
+  Effect.gen(function* () {
+    const browser = yield* Chromium.open({ navigationTimeout: "200 millis" });
+    const create = browser.context.newCDPSession.bind(browser.context);
+    const stopping = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let ended = false;
+
+    browser.context.newCDPSession = async (target) => {
+      const session = await create(target);
+      const send = session.send.bind(session);
+
+      session.send = (method, params) => {
+        const reply = send(method, params);
+
+        return method === "Page.stopScreencast"
+          ? reply.then(async (value) => {
+              stopping.resolve();
+              await release.promise;
+              ended = true;
+
+              return value;
+            })
+          : reply;
+      };
+
+      return session;
+    };
+    const first = yield* browser.newPage("data:text/html,<h1>First</h1>");
+    const second = yield* browser.newPage("data:text/html,<h1>Second</h1>");
+    const stage = yield* Stage.make();
+
+    yield* stage.present(first);
+    const cue = yield* stage.cue(second);
+
+    yield* cue.ready;
+    const committing = yield* cue.commit().pipe(Effect.exit, Effect.forkChild);
+
+    yield* Effect.promise(() => stopping.promise);
+    const current = yield* stage.current;
+
+    yield* Effect.sleep("400 millis");
+    const early = committing.pollUnsafe();
+
+    // Release before checking, so the regression also cleans up the broken implementation.
+    release.resolve();
+    const result = yield* Fiber.join(committing);
+
+    assert.deepStrictEqual(current, Option.some(second));
+    assert.isUndefined(early, "commit still owns outgoing capture cleanup");
+    assert.isTrue(ended);
+    assert.strictEqual(
+      Exit.isSuccess(result)
+        ? "Presented"
+        : Option.getOrUndefined(Exit.findErrorOption(result))?.reason._tag,
+      "Presented",
+      "the visible cut must return its Presented receipt",
+    );
+    if (Exit.isSuccess(result)) assert.strictEqual(result.value.page, second.id);
+  }).pipe(Effect.scoped),
+);

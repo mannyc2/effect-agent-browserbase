@@ -263,8 +263,11 @@ describe("Plan step safety", () => {
   // by the decoder and then silently authorize continuation after a process restart.
   it.effect.prop(
     "rejects persisted recovery based on absence or unspecified navigation",
-    { kind: Arbitrary.schema(Schema.Literals(["Gone", "Navigated"])) },
-    ({ kind }) =>
+    {
+      kind: Arbitrary.schema(Schema.Literals(["Gone", "Navigated"])),
+      entry: Arbitrary.schema(Schema.Literals(["decoded", "constructed"])),
+    },
+    ({ kind, entry }) =>
       Effect.gen(function* () {
         const { page, dispatches } = scripted();
         let document = 1;
@@ -275,7 +278,7 @@ describe("Plan step safety", () => {
           ready: () => Effect.sync(() => void document++),
         };
 
-        const result = yield* Schema.decodeUnknownEffect(Plan.Plan)({
+        const stored = {
           version: 2,
           steps: [
             {
@@ -289,7 +292,16 @@ describe("Plan step safety", () => {
               },
             },
           ],
-        }).pipe(
+        };
+
+        // A JS caller or an older in-memory value can bypass decoding; neither route may turn
+        // absence into a receipt for an unknown operation.
+        const load =
+          entry === "decoded"
+            ? Schema.decodeUnknownEffect(Plan.Plan)(stored)
+            : Effect.succeed(stored as unknown as Plan.Plan);
+
+        const result = yield* load.pipe(
           Effect.flatMap((plan) => Plan.restore(restored, plan, { arrival: 0 })),
           Effect.exit,
         );

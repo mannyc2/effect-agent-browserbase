@@ -518,9 +518,15 @@ export const take = Effect.fn("Plan.take")(function* (
     const unresolved = input === "unknown" && !repeatable(step);
     const expected = step.expect;
 
+    const durable =
+      expected !== undefined &&
+      (expected._tag === "Appeared" ||
+        (expected._tag === "Navigated" && typeof expected.url === "string")) &&
+      expected.durable === true;
+
     if (
-      unresolved &&
-      (expected === undefined || expected._tag === "Checked" || expected.durable !== true)
+      !durable &&
+      (unresolved || (expected !== undefined && "durable" in expected && expected.durable === true))
     )
       return yield* uncertain;
     const settle = options.settle === false ? Effect.void : page.ready(options.settle);
@@ -567,10 +573,7 @@ export const take = Effect.fn("Plan.take")(function* (
 
       if (Option.isSome(error) && error.value._tag === "BrowserError" && error.value.dispatched) {
         input = "unknown";
-        if (
-          expected !== undefined &&
-          (repeatable(step) || (expected._tag !== "Checked" && expected.durable === true))
-        ) {
+        if (expected !== undefined && (repeatable(step) || durable)) {
           const observed = yield* Effect.exit(within(verify, millis));
 
           if (Exit.isSuccess(observed) && observed.value) return yield* receipt("verified");
