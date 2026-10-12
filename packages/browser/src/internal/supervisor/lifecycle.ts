@@ -42,14 +42,16 @@ export class Lost extends Schema.TaggedClass<Lost>()("Lost", {
 
 /**
  * It never opened: its last try failed with `cause`, which the provider deems definite, or after
- * which the reopen schedule gave up.
+ * which the reopen schedule gave up. `released` combines this generation's failed-try cleanup,
+ * retaining the first unconfirmed end; it is absent when no try reported cleanup.
  */
 export class Down extends Schema.TaggedClass<Down>()("Down", {
   detail: Schema.String,
   cause: Schema.Defect(),
+  released: Schema.optional(Released),
 }) {}
 
-/** It ended. `released` says how its release went; one retired while opening has none. */
+/** It ended. `released` includes reported cleanup when retired while opening, if any. */
 export class Closed extends Schema.TaggedClass<Closed>()("Closed", {
   released: Schema.optional(Released),
 }) {}
@@ -106,11 +108,13 @@ export type State<A, H = unknown> = (
   readonly draining: ReadonlyMap<number, Drain<A, H>>;
   /** Retain the first unconfirmed end, otherwise the latest settled end, without its resources. */
   readonly released?: Released | undefined;
+  /** Failed-try outcomes by their opening generation, forgotten when that opening ends. */
+  readonly attempts?: ReadonlyMap<number, Released> | undefined;
 };
 
 export type Input<A, H = unknown> =
   | { readonly _tag: "Opened"; readonly live: Live<A> }
-  | { readonly _tag: "AttemptReleased"; readonly released: Released }
+  | { readonly _tag: "AttemptReleased"; readonly number: number; readonly released: Released }
   | {
       readonly _tag: "Failed";
       readonly number: number;
@@ -279,6 +283,7 @@ const next = <A, H>(change: Change<A, H>, number: number, reopen: boolean) => {
     serving: reopen || exclusive ? undefined : current,
     draining: change.state.draining,
     released: change.state.released,
+    attempts: change.state.attempts,
   };
   change.events.push([number, reopen ? new Reopening() : new Opening()]);
   change.commands.push({ _tag: "Open", number });
@@ -305,6 +310,17 @@ const lost = <A, H>(
       end(change, current, "lost");
     }
   }
+};
+
+/** End one opening without confusing its cleanup with preceding generations' releases. */
+const finishAttempt = <A, H>(change: Change<A, H>, number: number) => {
+  const attempts = new Map(change.state.attempts);
+  const released = attempts.get(number);
+
+  attempts.delete(number);
+  change.state = { ...change.state, attempts };
+
+  return released;
 };
 
 /** Pure admission and lifecycle changes. A rejected hold preserves state identity. */
@@ -338,6 +354,7 @@ export const transition = <A, H = unknown>(
       if (lookup(state, live.number) !== undefined) break;
       if (state._tag !== "Opening" || state.number !== live.number) end(change, live, "retired");
       else {
+        finishAttempt(change, live.number);
         change.events.push([live.number, new Open()]);
         change.commands.push({ _tag: "Watch", live });
         if (state.serving !== undefined) end(change, state.serving, "rotated");
@@ -346,6 +363,7 @@ export const transition = <A, H = unknown>(
           serving: live,
           draining: change.state.draining,
           released: change.state.released,
+          attempts: change.state.attempts,
         };
       }
       break;
@@ -355,26 +373,42 @@ export const transition = <A, H = unknown>(
 
       if (state._tag === "Opening" && state.number === number)
         change.state = { ...state, _tag: "Down", detail, cause };
-      change.events.push([number, new Down({ detail, cause })]);
+      change.events.push([
+        number,
+        new Down({ detail, cause, released: finishAttempt(change, number) }),
+      ]);
       break;
     }
     case "Abandoned":
-      change.events.push([input.number, new Closed({})]);
+      change.events.push([
+        input.number,
+        new Closed({ released: finishAttempt(change, input.number) }),
+      ]);
       break;
     case "AttemptReleased":
-      change.state = { ...state, released: combine(state.released, input.released) };
+      change.state = {
+        ...state,
+        released: combine(state.released, input.released),
+        attempts: new Map(state.attempts).set(
+          input.number,
+          combine(state.attempts?.get(input.number), input.released),
+        ),
+      };
       break;
     case "Released": {
-      const drain = state.draining.get(input.number);
+      const { number, released } = input;
+      const drain = state.draining.get(number);
 
       if (drain === undefined || drain._tag === "Draining" || drain.live.holds.size > 0) break;
       const draining = new Map(state.draining);
 
-      draining.delete(input.number);
-      change.state = { ...state, draining, released: combine(state.released, input.released) };
+      draining.delete(number);
+      change.state = { ...state, draining, released: combine(state.released, released) };
+      const outcome = combine(finishAttempt(change, number), released);
+
       change.events.push([
-        input.number,
-        input.released === undefined ? new Kept() : new Closed({ released: input.released }),
+        number,
+        released === undefined ? new Kept() : new Closed({ released: outcome }),
       ]);
       break;
     }
@@ -403,6 +437,7 @@ export const transition = <A, H = unknown>(
         _tag: "Retired",
         draining: change.state.draining,
         released: change.state.released,
+        attempts: change.state.attempts,
       };
   }
 
@@ -410,8 +445,16 @@ export const transition = <A, H = unknown>(
 };
 
 /** Later confirmations cannot establish that an earlier unconfirmed session ended. */
-export const combine = (before: Released | undefined, next: Released | undefined) =>
-  before?._tag === "Unconfirmed" ? before : (next ?? before);
+export function combine(before: Released | undefined, next: Released): Released;
+
+export function combine(
+  before: Released | undefined,
+  next: Released | undefined,
+): Released | undefined;
+
+export function combine(before: Released | undefined, next: Released | undefined) {
+  return before?._tag === "Unconfirmed" ? before : (next ?? before);
+}
 
 export type Resolution<A> =
   | { readonly _tag: "Serve"; readonly live: Live<A> }

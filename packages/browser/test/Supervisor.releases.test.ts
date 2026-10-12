@@ -1,6 +1,7 @@
 // #286: admission accounts for all earlier releases, including uncertainty after a drain ends.
 import { assert, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Stream } from "effect";
+import { Deferred, Effect, Fiber, Option, Schedule, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 import type * as Browser from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
@@ -14,6 +15,131 @@ const published = (supervisor: Supervisor.Supervisor, number: number, tag: strin
     Stream.filter((event) => event.number === number && event.state._tag === tag),
     Stream.runHead,
   );
+
+const reporting = Effect.serviceOption(Supervisor.Releasing).pipe(
+  Effect.flatMap(
+    Option.match({
+      onNone: () => Effect.die("the cleanup port is missing"),
+      onSome: Effect.succeed,
+    }),
+  ),
+);
+
+for (const outcome of [
+  undefined,
+  new Supervisor.Settled(),
+  new Supervisor.Unconfirmed({ detail: "the interrupted attempt may still run" }),
+])
+  it.effect(`publishes interrupted acquisition cleanup (${outcome?._tag ?? "none"})`, () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+
+      const supervisor = yield* Supervisor.make({
+        open: Effect.gen(function* () {
+          const releasing = yield* reporting;
+
+          yield* Effect.acquireRelease(Deferred.succeed(entered, undefined), () =>
+            outcome === undefined
+              ? Effect.void
+              : Effect.sleep("1 second").pipe(Effect.andThen(releasing.released(outcome))),
+          );
+
+          return yield* Effect.never;
+        }),
+      });
+
+      yield* Deferred.await(entered);
+      const retiring = yield* Effect.forkChild(supervisor.retire);
+
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(retiring);
+      const closed = yield* published(supervisor, 1, "Closed");
+
+      const state = closed._tag === "Some" ? closed.value.state : undefined;
+
+      assert.strictEqual(state?._tag, "Closed");
+      assert.strictEqual(state?._tag === "Closed" ? state.released : undefined, outcome);
+      assert.strictEqual((yield* Effect.flip(supervisor.browser)).reason, "retired");
+    }),
+  );
+
+it.effect(
+  "routes terminal cleanup to its own generation while admission keeps older uncertainty",
+  () =>
+    Effect.gen(function* () {
+      const older = new Supervisor.Unconfirmed({ detail: "the first generation's failed try" });
+      const settled = new Supervisor.Settled();
+      const admissions: Array<Supervisor.Released | undefined> = [];
+      let attempts = 0;
+
+      const supervisor = yield* Supervisor.make({
+        reopen: Schedule.recurs(1),
+        open: Effect.gen(function* () {
+          const releasing = yield* reporting;
+
+          if (++attempts === 2) return { browser: browser() };
+          yield* releasing.released(attempts === 1 ? older : settled);
+
+          return yield* Effect.fail("failed attempt");
+        }),
+        admit: ({ after }) =>
+          Effect.gen(function* () {
+            admissions.push(after === undefined ? undefined : yield* after);
+          }),
+      });
+
+      yield* supervisor.browser;
+      assert.strictEqual((yield* Effect.flip(supervisor.rotate)).reason, "down");
+      const down = yield* published(supervisor, 2, "Down");
+
+      const state = down._tag === "Some" ? down.value.state : undefined;
+
+      assert.strictEqual(state?._tag, "Down");
+      assert.strictEqual(state?._tag === "Down" ? state.released : undefined, settled);
+      assert.deepStrictEqual(admissions, [undefined, older, older, older]);
+    }),
+);
+
+it.effect("keeps failed-try uncertainty when retirement wins a successful acquisition", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    const outcome = new Supervisor.Unconfirmed({ detail: "the first try may still run" });
+    let attempts = 0;
+
+    const supervisor = yield* Supervisor.make({
+      reopen: Schedule.recurs(1),
+      open: Effect.gen(function* () {
+        const releasing = yield* reporting;
+
+        if (++attempts === 1) {
+          yield* releasing.released(outcome);
+
+          return yield* Effect.fail("failed attempt");
+        }
+
+        return yield* Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(finish)),
+          Effect.as({ browser: browser(), release: Effect.succeed(new Supervisor.Settled()) }),
+          Effect.uninterruptible,
+        );
+      }),
+    });
+
+    yield* Deferred.await(entered);
+    const retiring = yield* Effect.forkChild(supervisor.retire);
+
+    yield* Effect.yieldNow;
+    yield* Deferred.succeed(finish, undefined);
+    yield* Fiber.join(retiring);
+    const closed = yield* published(supervisor, 1, "Closed");
+    const state = closed._tag === "Some" ? closed.value.state : undefined;
+
+    assert.strictEqual(state?._tag, "Closed");
+    assert.strictEqual(state?._tag === "Closed" ? state.released : undefined, outcome);
+    assert.strictEqual(attempts, 2);
+  }),
+);
 
 for (const outcome of [
   new Supervisor.Settled(),

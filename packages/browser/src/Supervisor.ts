@@ -107,7 +107,8 @@ export interface Admission {
 /**
  * Optional service supplied during `open`. Providers report failed-attempt cleanup here before
  * their scope closes; successful generations instead return `Opened.release`. Reporting does
- * not release resources or replace the original acquisition failure.
+ * not release resources or replace the original acquisition failure. Terminal `Down` and opening
+ * `Closed` states publish the reported outcomes of their own generation's tries.
  */
 export class Releasing extends Context.Service<
   Releasing,
@@ -556,7 +557,7 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
         return yield* options.open.pipe(
           Effect.provideService(Releasing, {
             released: (released) =>
-              apply({ _tag: "AttemptReleased", released }).pipe(Effect.asVoid),
+              apply({ _tag: "AttemptReleased", number, released }).pipe(Effect.asVoid),
           }),
         );
       }),
