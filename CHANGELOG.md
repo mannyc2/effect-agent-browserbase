@@ -19,7 +19,8 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
   responsibility through Yielded's existing preparation hook; accounts are run-scoped.
 - `ReadyOptions.still: "foreground"` checks newly accepted frames for foreground motion while
   ignoring animation already present before input. Brief motion and motion accepted after a delay
-  restart the quiet interval. Gaps in newly accepted frame history or batch overflow restart quiet;
+  restart the quiet interval. All three color channels are compared, so red/blue motion with an
+  unchanged green channel still counts. Gaps in newly accepted frame history or batch overflow restart quiet;
   without pre-input history, all motion counts. Processing is bounded to eight frames per poll.
   The agent's `wait_still` tool uses foreground stillness and requires the browser core from this
   release.

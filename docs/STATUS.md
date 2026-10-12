@@ -3,8 +3,8 @@
 ## 0.3
 
 The `0.3.0-beta.17` release adds browser moments in the agent's thread, with native conversation
-compaction and the latest three moments' images retained separately. Foreground stillness checks
-newly accepted frames while ignoring animation already present before input; gaps in newly accepted
+compaction and the latest three moments' images retained separately. Foreground stillness compares
+all three color channels in newly accepted frames while ignoring animation already present before input; gaps in newly accepted
 frame history restart quiet, and without pre-input history all motion counts. Presented typing
 follows a same-name focused field replacing the field just
 pressed, while secret and guarded actions remain bound to the original field. Paused capture waits
