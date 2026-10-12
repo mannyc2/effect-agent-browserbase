@@ -4,6 +4,35 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.17
+
+- Presented typing follows a focused text field of the same name when a page replaces the field
+  just pressed. Secret fields, guarded actions, differently named replacements and unfocused
+  replacements remain refused; the old reference stays stale. Bridge version 20 upgrades already
+  installed page bridges without navigation. Resolved targets reuse the canonical subject schema
+  while preserving their metadata and geometry.
+- `LayerOptions.vision: "moments"` retains chronological browser accounts in the agent's thread,
+  compacted with the conversation. The latest three moments' images remain turn-labeled references;
+  older image bytes are released. `LayerOptions.onMoment` lets a consumer retain the evidence.
+  Lost pages and moments without usable pictures fail preparation before another model call, and
+  zoom crops stay with their original tab. Model-aware image-token estimates remain a consumer
+  responsibility through Yielded's existing preparation hook; accounts are run-scoped.
+- `ReadyOptions.still: "foreground"` checks newly accepted frames for foreground motion while
+  ignoring animation already present before input. Brief motion and motion accepted after a delay
+  restart the quiet interval. All three color channels are compared, so red/blue motion with an
+  unchanged green channel still counts. Gaps in newly accepted frame history or batch overflow restart quiet;
+  without pre-input history, all motion counts. Processing is bounded to eight frames per poll.
+  The agent's `wait_still` tool uses foreground stillness and requires the browser core from this
+  release.
+- Paused capture waits for an uncropped native snapshot of the restored surface before restarting,
+  keeping same-aspect-ratio crop pixels out of screencast frames. Interrupted input retains its
+  authority through loading cleanup after submitted native replies settle. Stage schedules silence
+  checks from the last paint without adding another hold when a frame arrives during the wait.
+- The private docs and demo site replaces the old demos workspace, with recorded-take playback,
+  browser activity and replay chapters. Demo speech uses the agent's own turn text; malformed URL
+  escapes and tied largest wins are handled. The separate narrator and duplicated player code are
+  removed.
+
 ## 0.3.0-beta.16
 
 - Terminal supervisor states publish failed-acquisition cleanup. `Down.released` and an opening
