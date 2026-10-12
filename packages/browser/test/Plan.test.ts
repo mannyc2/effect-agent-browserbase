@@ -646,9 +646,12 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
           const recording = yield* fresh;
 
           yield* walks[walk](recording, site.url);
+          // Read the final document before freezing its recorded arrival address.
+          const truth = yield* truthOf(recording);
+
           recorded.set(walk, {
             plan: Plan.fromEvents(yield* recording.recentEvents),
-            truth: yield* truthOf(recording),
+            truth,
           });
         }
         // Under one operator at a time, the walks replay side by side, each on a page of its own.
