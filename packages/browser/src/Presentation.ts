@@ -20,6 +20,7 @@ import { Clock, Duration, Effect, Fiber, MutableRef, Option, Semaphore } from "e
 import type { BrowserError } from "./BrowserError.ts";
 import * as Style from "./internal/input/style.ts";
 import { type Internals, internalsOf, viewOf } from "./internal/page/page.ts";
+import { monotonicMillis } from "./internal/pictures/clock.ts";
 import * as Motion from "./Motion.ts";
 import type { Page, Point, Target } from "./Page.ts";
 
@@ -81,7 +82,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
   const pacing = options.pacing ?? human;
   const clock = yield* Clock.Clock;
   const scope = yield* Effect.scope;
-  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  const now = () => monotonicMillis(clock);
   const pointer = MutableRef.make(Option.none<Point>());
   const hand = yield* Semaphore.make(1);
 

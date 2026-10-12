@@ -7,11 +7,11 @@ import { Effect } from "effect";
 
 import { InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
 import { ResolvedTarget, type Target } from "../../Page.ts";
-import { type Bridge, scriptCall } from "../page/bridge.ts";
+import { scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import type { Dispatch } from "./dispatch.ts";
-import type { Approval, Guard } from "./guard.ts";
+import { type Approval, check, type Guard } from "./guard.ts";
 import type { InputMarks } from "./perform.ts";
 import type { Pointer } from "./pointer.ts";
 import type { Settle } from "./settle.ts";
@@ -45,15 +45,13 @@ const resolvedTarget = (result: Script.ResolvedPoint): ResolvedTarget =>
   });
 
 export const make = (
-  bridge: Bridge,
   viewport: Viewport,
   guard: Guard,
   pointer: Pointer,
   dispatch: Dispatch,
   settling: Settle,
 ) => {
-  const { evaluate } = bridge;
-  const { mutate } = guard;
+  const { evaluate, mutate } = guard;
   const { moveTo, wheel } = pointer;
   const { flush } = dispatch;
 
@@ -63,10 +61,9 @@ export const make = (
     approval: Approval | undefined,
     scroll: boolean,
   ) =>
-    (approval === undefined
-      ? evaluate(operation, scriptCall("point", target, scroll))
-      : mutate(operation, scriptCall("point", target, scroll), approval)
-    ).pipe(Effect.flatMap(decodeWith(operation, Script.PointResultSchema)));
+    evaluate(operation, scriptCall("point", target, scroll), approval).pipe(
+      Effect.flatMap(decodeWith(operation, Script.PointResultSchema)),
+    );
 
   const resolve = (operation: string, target: Target, approval?: Approval, scroll = true) => {
     if (typeof target === "string" && !/^e\d+$/.test(target))
@@ -127,7 +124,7 @@ export const make = (
       );
       yield* flush(operation, marks.input);
       yield* settling.settle(operation, before);
-      if (approval !== undefined) yield* approval.check();
+      yield* check(approval);
     }
 
     // Wheels may be prevented or the target may need unsupported nested/frame geometry. One
@@ -137,7 +134,7 @@ export const make = (
 
     yield* resolve(operation, target, approval);
     yield* settling.settle(operation, before);
-    if (approval !== undefined) yield* approval.check();
+    yield* check(approval);
 
     return yield* resolve(operation, target, approval, false);
   });

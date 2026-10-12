@@ -1,7 +1,7 @@
 import { assert, it, layer } from "@effect/vitest";
-import { Duration, Effect, Schedule, Stream } from "effect";
+import { Duration, Effect, Fiber, Schedule, Stream } from "effect";
 
-import { Browser } from "../src/Browser.ts";
+import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
@@ -25,6 +25,76 @@ const reason = (effect: Effect.Effect<void, { readonly reason: { readonly _tag: 
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Page.ready",
   (it) => {
+    it.effect("never takes a screenshot's paused capture for a still animated screen", () =>
+      Effect.gen(function* () {
+        const native = (yield* Browser).context.browser();
+
+        if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+        const context = yield* Effect.acquireRelease(
+          Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+          (context) => Effect.promise(() => context.close()),
+        );
+
+        const browser = yield* makeBrowser(context, { id: "ready-picture", provider: "test" });
+        const page = yield* browser.newPage();
+
+        yield* show(
+          page,
+          `<canvas id=c width=400 height=200></canvas><script>
+  const g = c.getContext("2d");
+  function draw(now) {
+    g.fillStyle = "hsl(" + Math.round(now) % 360 + ", 80%, 50%)";
+    g.fillRect(0, 0, 400, 200);
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+</script>`,
+        );
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* page.state.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("10 millis"),
+            until: (state) => state.frame !== undefined,
+          }),
+          Effect.timeout("5 seconds"),
+        );
+        const entered = Promise.withResolvers<void>();
+        const restored = Promise.withResolvers<void>();
+        const screenshot = page.playwright.screenshot.bind(page.playwright);
+
+        page.playwright.screenshot = (options) => {
+          entered.resolve();
+
+          return screenshot(options).then((image) => restored.promise.then(() => image));
+        };
+        yield* Effect.addFinalizer(() => Effect.sync(() => restored.resolve()));
+
+        const outcome = (timeout: Duration.Input) =>
+          page
+            .ready({ quietMillis: 100, timeout })
+            .pipe(
+              Effect.match({ onSuccess: () => "ready", onFailure: (error) => error.reason._tag }),
+            );
+
+        const before = yield* outcome("1 second").pipe(Effect.forkScoped);
+
+        yield* Effect.sleep("20 millis");
+
+        const picture = yield* page
+          .zoom({ x: 5, y: 5, width: 160, height: 90 })
+          .pipe(Effect.forkScoped);
+
+        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("5 seconds"));
+        assert.strictEqual(yield* outcome("300 millis"), "Timeout");
+        assert.strictEqual(yield* Fiber.join(before), "Timeout");
+        restored.resolve();
+        yield* Fiber.join(picture);
+        // The resumed stream still observes the drawing canvas.
+        assert.strictEqual(yield* outcome("300 millis"), "Timeout");
+      }),
+    );
+
     it.effect("is not ready while the viewport shows nothing, and is once the chart draws", () =>
       Effect.gen(function* () {
         const page = yield* blank;

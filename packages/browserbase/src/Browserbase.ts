@@ -51,7 +51,7 @@ import {
   type SessionOptions,
 } from "./BrowserbaseClient.ts";
 import { BrowserbaseError, Decode, InvalidRequest, isTransient } from "./BrowserbaseError.ts";
-import { ContextHeld, ContextLease } from "./ContextLease.ts";
+import { ContextHeld, ContextLease, ContextRefused } from "./ContextLease.ts";
 import * as CaptureConnection from "./internal/captureConnection.ts";
 
 export interface Options extends Browser.Options {
@@ -137,7 +137,7 @@ const confirm = (client: Service, id: string, settle: Duration.Duration | undefi
 
     if (!confirmed)
       return new Supervisor.Unconfirmed({
-        detail: `${last} ${Duration.format(releaseDeadline)} after its release`,
+        detail: `Session ${id}: ${last} ${Duration.format(releaseDeadline)} after its release`,
       });
     if (settle !== undefined) yield* Effect.sleep(settle);
 
@@ -429,6 +429,11 @@ const adoptable = Effect.fnUntraced(function* (
 const start = Effect.fnUntraced(function* (options: Options, keeping: Keeping | undefined) {
   const client = yield* BrowserbaseClient;
   const lease = yield* ContextLease;
+  const reporting = yield* Effect.serviceOption(Supervisor.Releasing);
+
+  const report = (outcome: Supervisor.Released) =>
+    Option.isSome(reporting) ? reporting.value.released(outcome) : Effect.void;
+
   const context = options.session?.browserSettings?.context;
   const persisting = context?.persist === true ? context.id : undefined;
   const local = yield* Scope.fork(yield* Effect.scope);
@@ -496,13 +501,18 @@ const start = Effect.fnUntraced(function* (options: Options, keeping: Keeping | 
         return yield* ending(session);
       }),
       ({ release, leave }, exit) =>
-        keeping !== undefined && Exit.isSuccess(exit) ? leave : Effect.asVoid(release),
+        keeping !== undefined && Exit.isSuccess(exit)
+          ? leave
+          : release.pipe(
+              Effect.flatMap((outcome) => (Exit.isFailure(exit) ? report(outcome) : Effect.void)),
+            ),
     ).pipe(
       // A session nobody can see bills until its timeout, and one that saves to the context would
       // write beside the next writer: end it, found by its create's own label.
       Effect.tapError((error) =>
         adopted === undefined && mayHaveCreated(error)
           ? endOrphan(client, own, writing && settle).pipe(
+              Effect.tap(report),
               Effect.flatMap((outcome) => writing?.lost(outcome) ?? Effect.void),
             )
           : Effect.void,
@@ -633,11 +643,11 @@ export interface SuperviseOptions<A = Session, E = never, R = never>
     Options,
     Pick<
       Supervisor.Options<
-        BrowserError | BrowserbaseError | ContextHeld | E,
-        BrowserbaseClient | ContextLease | R,
+        BrowserError | BrowserbaseError | ContextHeld | ContextRefused | E,
+        Scope.Scope | BrowserbaseClient | ContextLease | R,
         A
       >,
-      "reopen" | "rotateBefore" | "waitTimeout" | "handover"
+      "reopen" | "rotateBefore" | "waitTimeout" | "handover" | "admit" | "definite"
     > {
   /**
    * Keep the session past the supervisor's scope, under this name: 1 to 64 letters, digits, `_`,
@@ -653,11 +663,12 @@ export interface SuperviseOptions<A = Session, E = never, R = never>
 }
 
 /**
- * Browserbase refused the request: no new try mends a refused key, request or id. A context held
- * is not among them, since each try ends its sessions again.
+ * No new try mends a refused key, request, id or context policy. A context held temporarily is
+ * not among them, since each try can take its lease and end its sessions again.
  */
 const refused = (error: unknown) =>
-  Schema.is(BrowserbaseError)(error) && !isTransient(error) && error.reason._tag !== "Decode";
+  Schema.is(ContextRefused)(error) ||
+  (Schema.is(BrowserbaseError)(error) && !isTransient(error) && error.reason._tag !== "Decode");
 
 /**
  * Keep Browserbase sessions open as `Supervisor` generations, each a new session made from
@@ -708,7 +719,8 @@ export function supervise<A = Session, E = never, R = never>(
       exclusive: options.session?.browserSettings?.context?.persist === true,
       keep: keep !== undefined,
       reopen: options.reopen,
-      definite: refused,
+      admit: options.admit,
+      definite: (error) => refused(error) || options.definite?.(error) === true,
       rotateBefore: options.rotateBefore,
       waitTimeout: options.waitTimeout,
       handover: options.handover,
@@ -720,7 +732,7 @@ export const layer = (
   options: Options = {},
 ): Layer.Layer<
   Browser.Browser,
-  BrowserError | BrowserbaseError | ContextHeld,
+  BrowserError | BrowserbaseError | ContextHeld | ContextRefused,
   BrowserbaseClient | ContextLease
 > =>
   Layer.effect(

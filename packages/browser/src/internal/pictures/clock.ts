@@ -1,8 +1,13 @@
 /**
- * The browser's clock read on the owner's: estimates of their offset from timed probes, how an
- * estimate ages, and the one mapping a browser's pages share. `pictures.ts` takes the probes.
+ * Host monotonic milliseconds and the browser's clock read on the owner's: estimates of their
+ * offset from timed probes, how an estimate ages, and the mapping a browser's pages share.
+ * `pictures.ts` takes the probes.
  */
-import { Duration, Effect, Option } from "effect";
+import { type Clock, Duration, Effect, Option } from "effect";
+
+/** Read the captured owner's clock, including from native callbacks, without changing its origin. */
+export const monotonicMillis = (clock: Clock.Clock): number =>
+  Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
 
 export interface Probe {
   readonly hostStart: number;

@@ -7,7 +7,7 @@
  * as a named input slot, never the text itself. A navigation to an address whose credentials the
  * events withheld is an input slot too, so replay goes where the caller says, or nowhere, and
  * never to the address without them. `replay` takes the steps in turn. Before a step
- * that acts on the page, it waits for `Page.ready`; then it finds the one element the step's
+ * except an opening navigate, back or reload, it waits for `Page.ready`; then it finds the element its
  * subject names, by role and name among those that repeat all its recorded context, and acts on
  * it. Text typed into focus was typed into the focused field, which replay finds the same way, and
  * text typed into a secret field goes into nothing else. An element step never falls back to
@@ -33,6 +33,7 @@ import {
 } from "./BrowserEvent.ts";
 import { undispatched } from "./internal/page/context.ts";
 import { Ambiguous, choose, Drifted, Missing } from "./internal/reading/choose.ts";
+import { Point as ViewportPoint } from "./Motion.ts";
 import {
   type Found,
   type Page,
@@ -43,8 +44,6 @@ import {
 } from "./Page.ts";
 
 export { Ambiguous, Drifted, Missing } from "./internal/reading/choose.ts";
-
-const ViewportPoint = Schema.Struct({ x: Schema.Finite, y: Schema.Finite });
 
 export const StepAction = Schema.Literals([
   "navigate",
@@ -382,7 +381,7 @@ const dispatch = (
 };
 
 export interface TakeOptions {
-  /** How each step waits for the page first, or false not to wait. */
+  /** How each step waits first, except an opening navigation, or false. No final-step wait. */
   readonly settle?: ReadyOptions | false | undefined;
   readonly inputs?: Readonly<Record<string, string>> | undefined;
   /**
@@ -527,9 +526,11 @@ export const take = Effect.fn("Plan.take")(function* (
       (unresolved || (expected !== undefined && "durable" in expected && expected.durable === true))
     )
       return yield* uncertain;
-    const settle = options.settle === false ? Effect.void : page.ready(options.settle);
-
-    if (!["navigate", "back", "reload"].includes(step.action)) yield* settle;
+    if (
+      options.settle !== false &&
+      (index > 0 || !["navigate", "back", "reload"].includes(step.action))
+    )
+      yield* page.ready(options.settle);
     const before = plan.steps[index - 1]?.url;
 
     if (before !== undefined)
@@ -551,7 +552,6 @@ export const take = Effect.fn("Plan.take")(function* (
 
     const receipt = (outcome: Receipt["outcome"]) =>
       Effect.gen(function* () {
-        if (index === plan.steps.length - 1) yield* settle;
         yield* arrived(page, [step.url], millis);
         const now = yield* page.state;
 

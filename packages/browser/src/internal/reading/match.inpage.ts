@@ -10,6 +10,7 @@
  *   its row, column, label or heading. Replay chooses among candidates by the same rule.
  */
 import type { SubjectContext } from "../../BrowserEvent.ts";
+import type { Point } from "../../Motion.ts";
 
 /** A string, or a pattern sent to the page as its source and flags. */
 export type Wanted = string | { readonly source: string; readonly flags: string };
@@ -19,7 +20,7 @@ export interface FindRequest {
   readonly name: Wanted | null;
   readonly text: Wanted | null;
   readonly near: string | null;
-  readonly at: { readonly x: number; readonly y: number } | null;
+  readonly at: Point | null;
   readonly scope: "viewport" | "document";
   readonly firstRef: number;
 }

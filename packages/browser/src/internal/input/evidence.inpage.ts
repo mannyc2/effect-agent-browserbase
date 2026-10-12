@@ -7,28 +7,10 @@ import { Schema } from "effect";
 import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 
-export interface FormField {
-  readonly type: string;
-  readonly name: string;
-  readonly autocomplete?: string | undefined;
-  readonly filled: boolean;
-}
+export type FormField = typeof FormFieldSchema.Encoded;
 
 /** Page text about the first target. It never includes what a field holds. */
-export interface Evidence {
-  readonly title: string;
-  readonly description?: string | undefined;
-  readonly dialog?: string | undefined;
-  readonly heading?: string | undefined;
-  readonly nearby?: string | undefined;
-  readonly form?:
-    | {
-        readonly method: string;
-        readonly action: string;
-        readonly fields: ReadonlyArray<FormField>;
-      }
-    | undefined;
-}
+export type Evidence = typeof EvidenceSchema.Encoded;
 
 type Field = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 

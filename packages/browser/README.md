@@ -193,7 +193,9 @@ also holds through a stalled connection.
 
 `Moment.capture` is a window that ends at a picture of the page now. It takes the picture first,
 then the window up to its paint, from where a previous window or moment ended, so the changes hold
-nothing the picture does not show. A picture, a read of changes or an outline that cannot be had is
+nothing the picture does not show. A cached picture from before the latest action finished is
+replaced with a fresh screenshot, keeping a navigation's triggering action in the moment.
+A picture, a read of changes or an outline that cannot be had is
 missing from the moment, with why, and the moment is still made. `Moment.toPrompt` leads with what
 changed: news and what settled first, then what was still changing, by the moment's account, with
 the cells of a column that changed together on one line; a change that kept changing says whether
@@ -214,8 +216,8 @@ the options they were given, its navigations with the address asked for and the 
 what was typed as an input slot named for its field, never the text itself. A navigation to an
 address with a credential withheld is an input slot too, `address`, so replay goes where the caller
 says, never to the address without its credential. `Plan.replay(page,
-plan, { inputs })` takes the steps in turn: before each that acts, it waits for `Page.ready`
-(`settle` sets how, or `false` not to wait), finds the one element the step's subject names with
+plan, { inputs })` takes the steps in turn: before each step except an opening navigate, back or
+reload, it waits for `Page.ready` (`settle` sets how, or `false` not to wait), finds the element with
 `Plan.locate`, and acts on it. An element that does not repeat every part of the recorded context
 is another subject: its row read whole, so a row named "Wrapped BTC" is not the row "BTC" (laid out
 again without rows, as cards, one of its fields must start with the row's words), its column where
@@ -238,7 +240,9 @@ Each `Action` now records its ending address, so a bounded event history can sti
 of later actions after its earlier navigation has expired.
 
 `Plan.take(page, plan, index)` takes one step and returns a `Receipt`: the step index, host-clock
-`startedAt` and `at`, and `taken`, `verified` or `skipped`. `Plan.replay` returns those receipts;
+`startedAt` and `at`, and `taken`, `verified` or `skipped`. Readiness is a precondition of the next
+step, including later navigation, never a wait after the last step. Call `page.ready` after replay
+when the final page must be still. `Plan.replay` returns those receipts;
 a `ReplayError` includes completed receipts and a serializable `stopped` value with the next step
 and whether its input is `unsent` or `unknown`. Resume with `{ from: error.stopped }`. A numeric
 index means fresh input, so never convert an unresolved stopping point into a number to retry it.
@@ -483,6 +487,10 @@ The consumer can stop performance between `Plan.take` steps for a clean cut. Int
 the switch changes nothing and leaves the cue usable. A committed switch keeps ownership through
 outgoing capture cleanup, even if its caller is interrupted then.
 
+Releasing an uncommitted cue ends its capture. Its later `ready` or `commit` fails with
+`InvalidRequest`, whose consequence is `{ lost: "nothing", repeat: "pointless" }`; the page and
+browser remain usable. A capture that completes without a failure gives the same outcome.
+
 `Presented.at` records when the switch took effect, no earlier than the event, the incoming frame
 or the last frame shown; `latency` is its delay after the requested `at`. `firstFrame` bounds a
 wait for current paint (5 seconds by default). Old-page input admission, drain and the final frame
@@ -494,18 +502,22 @@ use that capture's current frame without waiting for invented new paint.
 
 `stage.shown({ hold: "1 second" })` describes the output without inventing new frames:
 
-- `Painted` carries a frame when it is published to the output.
+- `Painted` carries a frame and its output time `at`: the switch's `Presented.at` for its first
+  frame, and `frame.hostTime` for subsequent timely paint. A late frame's output time is held at
+  the preceding output time; its capture time stays unchanged.
 - `Still` follows a quiet interval only after a fresh page/capture round trip, with no pending
   capture acknowledgement, the same active capture and current document, and no newer frame.
 - `Stalled` says silence could not be confirmed. A timeout is uncertainty, not stillness.
 - `Gone` says the page or browser is lost. It is emitted once for that feed, with nothing more
   until another page is committed.
 
-`hold` must be finite and positive. Continuous paint restarts the silence interval. A failed
+Every `shown` value carries `at`, which never decreases along a subscription, including across
+silence and switches. `hold` must be finite and positive. Continuous paint restarts the silence interval. A failed
 capture can restart while its page/browser still stands, but old paint cannot pass for a new
 capture's first frame. These guarantees depend on Chromium reporting its paint; they do not
-prove that every canvas update was delivered. `frames` remains the paint-only stream with bounded
-reader queues, so subscribe before presenting to receive the first image. The consumer owns
+prove that every canvas update was delivered. `frames` remains the capture-timed paint-only stream:
+its `hostTime` can go backwards at a switch to a prepared cue. Use `shown`'s `at` to schedule output.
+Both streams have bounded reader queues, so subscribe before presenting to receive the first image. The consumer owns
 encoding, redaction, slates and any repetition of a confirmed held image.
 
 Local Chromium verifies preparation, ownership, input barriers and evidence. Earlier hosted
@@ -595,7 +607,7 @@ timestamp field.
 minute: received and accepted frames, missing timestamps, `late` frames (Chromium encodes several at
 once and finished these after a newer one; they are dropped, never reordered, and a busy machine
 makes more of them), frames dropped for their size (`foreignSize`) or for coming during one of the
-library's own clipped pictures (`duringPictures`), frames a reader `lost` by falling behind, and
+library's own pictures (`duringPictures`), frames a reader `lost` by falling behind, and
 paint-time gap totals/minimum/maximum/last. `ackBacklog` is the acknowledgements still unanswered:
 Chromium sends a frame only while few are, so a backlog over a slow connection means fewer frames.
 Chromium draws a clipped or scaled screenshot of the page, taken
@@ -605,15 +617,17 @@ returning drops them, while the page reporting a viewport of their size, or thei
 delivers them as a real resize, so a page that cannot answer, or that measures in other units as
 under browser zoom, is never stalled. `foreignSize` therefore also counts some of the page's own
 frames: those of a new size still unconfirmed when another size replaced it, when the capture
-stopped, or beyond the 16 held. The library's own clipped pictures are left out while they are
-taken: from the picture's call until 50 ms after its reply, by when a frame arrived or by its paint
-time widened by the clock's uncertainty either side. A crop on the page's own session, as over CDP
-and on Browserbase, is drawn at the crop's own size, so there only frames of another size are left
-out, and the page's own keep reaching readers. Where Playwright emulates the viewport, as
-`Chromium.layer` does, a crop keeps the device's size, so every frame in that window is left out,
-the page's own included: the capture pauses for the picture's round trip, plus 50 ms, plus twice
-the clock's uncertainty, about 100 ms a zoom locally, and a crop with the viewport's own
-proportions never reaches readers either. A clip someone else takes passes where Chromium keeps
+stopped, or beyond the 16 held. Before taking any new library picture, including an uncropped
+forced screenshot, the running native capture stops. It restarts with the same readers and settings
+only after the actual screenshot promise and viewport restoration settle, and after reading the
+current viewport. A frame received during that pause is acknowledged and discarded as
+`duringPictures`; the pause can produce no callbacks, leaving the count at zero. Cached-frame reuse
+still costs no call. A forced picture with capture running adds stop, viewport refresh and restart
+calls to its usual cost. Caller cancellation retains the actual native replies: the next picture or
+capture waits for them, cleanup is bounded to two seconds, and unconfirmed restoration fails the
+capture rather than resuming it early. Readiness requires current post-resume frame evidence, so
+paused capture cannot certify that a still-painting page is quiet.
+A clip someone else takes passes where Chromium keeps
 the device's size during it and the clip has the viewport's proportions, and on a page that paints
 nothing after it, a clip of any shape lasts long enough to pass for a resize.
 Each page's own session holds focus emulation, so a tab behind another keeps painting and its
@@ -815,7 +829,7 @@ const program = Effect.gen(function* () {
 ```
 
 `use(work, { wait })` atomically borrows the serving generation and runs `work` in a scope of its
-own. The lease gives its `generation`, `browser`, `value`, an `ending` notice and `retain`.
+own. The lease gives its `generation`, `browser`, `value`, an `ending` notice, `retain` and `lose`.
 `wait` defaults to `waitTimeout` (two minutes); zero either borrows immediately or fails
 `Unavailable`. Cancelling the caller closes its work scope and lets its hold go. Ordinary work
 errors stay ordinary work errors. `browser` still returns an unheld browser: use it only when the
@@ -860,16 +874,46 @@ before acquisition starts. Call `rotate` outside `use` for a clean cut: an exclu
 inside `use` waits for its own hold to end or be revoked.
 
 A loss publishes `Lost` with the browser's `disconnected` cause and revokes its holds immediately.
+When the consumer detects an unusable page or capture while the browser stays connected,
+`lease.lose(detail)` applies the same transition with `cause: "declared"` and that detail. It stops
+serving the generation and revokes work without a handover wait, including work declaring its own
+loss and returning immediately. Declaring loss does not wait for work cleanup or provider release.
+Repeated declarations and declarations from draining or closed generations do nothing.
 It reopens on `reopen`, which also retries an open failure until the schedule ends. A provider's
 `definite` failure goes `Down` at once, with the cause also available through `Unavailable`.
+
+`admit({ number, after })` runs before every open attempt, including the first and each retry,
+inside the opening scope. `after` covers every earlier session that stopped serving: all older
+generations still draining or releasing, and sessions whose acquisition or application build
+failed. It waits for all of their pending releases. If any end is `Unconfirmed`, that outcome
+remains visible on every later admission, even after newer releases settle. The supervisor keeps
+the first unconfirmed outcome as its witness, without retaining completed generations' resources.
+
+Before any release there is no `after`; completed confirmed releases resolve immediately. A
+nonexclusive rotation excludes its still-serving predecessor, so awaiting `after` preserves
+make-before-break rotation unless an older release remains pending or unconfirmed. The facts are
+checked again before every retry. Exclusive acquisition also waits for all pending releases.
+Admission failures follow `reopen` and `definite`, and retirement interrupts admission while
+releases run to their outcomes. Ignoring `after` adds no release wait for nonexclusive acquisition.
+
+Provider adapters can read the optional `Supervisor.Releasing` service during `open`. When an
+attempt fails, its cleanup reports the actual outcome with `released(outcome)` before finishing;
+the original acquisition failure stays a failure. Successful generations return `Opened.release`
+as usual. `Browserbase.supervise` supplies failed-connect and failed-build outcomes this way, so
+consumers do not need to wrap or repeat a provider release.
+
 `retire` revokes immediately, stops acquisition and waits for every generation to release.
 Closing the supervisor's scope does the same unless `keep` is set: then only the serving
 generation skips provider release, `Kept`; its application scopes still close. Other generations
 are released normally.
 
 `states` streams `Opening`, `Reopening`, `Open`, `Draining`, `Lost`, `Down`, `Closed` and `Kept`.
-`Closed.released` preserves `Settled` or `Unconfirmed`; the latter does not establish that a
-provider stopped the browser or its billing. `Generation.at` is wall-clock epoch milliseconds;
+`Down.released` and an opening generation's `Closed.released` publish that generation's reported
+failed-try cleanup, even when no later admission follows. The first `Unconfirmed` stays visible
+after later tries settle; no reported cleanup leaves `released` undefined. A successful `Open`
+ends this opening record, while `Admission.after` keeps earlier uncertainty. `Closed.released`
+also preserves the serving generation's provider release. `Unconfirmed` does not establish that
+a provider stopped the browser or its billing. `Generation.at` is wall-clock epoch milliseconds;
 `hostTime` and `revokeAt` are host monotonic milliseconds from the supervisor's Effect `Clock`.
 They can be compared with browser event and frame times when those use that same clock and host,
 not across processes or against a provider's wall-clock timestamps. A generation event is

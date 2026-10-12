@@ -26,6 +26,7 @@ import { type BrowserError, Closed, consequence, InvalidRequest, Timeout } from 
 import type { CaptureStats, Frame, ScreencastOptions } from "./Frame.ts";
 import { failWith, undispatched } from "./internal/page/context.ts";
 import { internalsOf } from "./internal/page/page.ts";
+import { monotonicMillis } from "./internal/pictures/clock.ts";
 import type { Page } from "./Page.ts";
 
 export interface Options extends ScreencastOptions {
@@ -50,9 +51,9 @@ export interface Cue {
   }) => Effect.Effect<Presented, BrowserError>;
 }
 
-/** What the output establishes about its last image; loss ends this page's evidence. */
+/** What the output establishes at nondecreasing host times; frames retain their capture times. */
 export type Shown =
-  | { readonly _tag: "Painted"; readonly frame: Frame }
+  | { readonly _tag: "Painted"; readonly frame: Frame; readonly at: number }
   | { readonly _tag: "Still"; readonly frame: Frame; readonly at: number }
   | { readonly _tag: "Stalled"; readonly frame: Frame; readonly at: number }
   | { readonly _tag: "Gone"; readonly page: string; readonly at: number };
@@ -65,7 +66,7 @@ export interface Stage {
   readonly cue: (page: Page) => Effect.Effect<Cue, BrowserError, Scope.Scope>;
   /** Paint and, after every finite positive hold without paint, current evidence or loss. */
   readonly shown: (options: { readonly hold: Duration.Input }) => Stream.Stream<Shown>;
-  /** Current-page paint; a reader more than 16 frames behind loses the oldest. */
+  /** Capture-timed current-page paint; use `shown` for output time. Readers retain 16 frames. */
   readonly frames: Stream.Stream<Frame>;
   readonly current: Effect.Effect<Option.Option<Page>>;
   readonly stats: (options?: {
@@ -87,9 +88,17 @@ interface Feed {
 interface Paint {
   readonly feed: Feed;
   readonly frame: Frame;
+  readonly at: number;
 }
 
-const closed = () => undispatched("cue", new Closed({ cause: "released" }));
+interface Evidence {
+  readonly feed: Feed;
+  readonly frame: Frame;
+  readonly value: Shown;
+}
+
+const unavailable = () =>
+  undispatched("cue", new InvalidRequest({ detail: "the cue's capture is no longer available" }));
 
 /** The sole writer of a cue's capture lifecycle; presentation ownership belongs to the stage. */
 const update = (
@@ -131,13 +140,13 @@ const ended = (feed: Feed): Effect.Effect<never, BrowserError> =>
         Effect.flatMap((exit) =>
           Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
             ? Effect.failCause(exit.cause)
-            : Effect.fail(closed()),
+            : Effect.fail(unavailable()),
         ),
       );
 
 const firstOf = (feed: Feed, wait: Duration.Duration) =>
   Effect.suspend(() => {
-    if (feed.state._tag === "Stopped") return Effect.fail(closed());
+    if (feed.state._tag === "Stopped") return Effect.fail(unavailable());
     if (feed.page.playwright.isClosed()) return failWith("cue", new Closed({ cause: "page" }));
     if (frameOf(feed) !== undefined) return Effect.void;
 
@@ -225,6 +234,8 @@ const evidence = (
         throw new RangeError("shown hold must be a finite positive duration");
       const millis = Duration.toMillis(parsed.value);
       let checkedAt = now();
+      let shownAt = Number.NEGATIVE_INFINITY;
+      let seen: Pick<Paint, "feed" | "frame"> | undefined = current();
       let gone: Feed | undefined;
 
       const probe = Effect.gen(function* () {
@@ -239,37 +250,67 @@ const evidence = (
           gone === before.feed ||
           checkedAt - before.changedAt < millis
         )
-          return Option.none<Shown>();
+          return Option.none<Evidence>();
         const { feed } = before;
 
         const confirmed = yield* Effect.result(confirm(feed, frame));
 
-        if (current()?.feed !== feed || current()?.frame !== frame) return Option.none<Shown>();
+        if (current()?.feed !== feed || current()?.frame !== frame) return Option.none<Evidence>();
         const at = now();
 
         checkedAt = at;
         if (Result.isFailure(confirmed) && consequence(confirmed.failure).lost !== "nothing") {
-          gone = feed;
-
-          return Option.some<Shown>({ _tag: "Gone", page: feed.page.id, at });
+          return Option.some<Evidence>({
+            feed,
+            frame,
+            value: { _tag: "Gone", page: feed.page.id, at },
+          });
         }
 
-        return Option.some<Shown>({
-          _tag: Result.isSuccess(confirmed) && confirmed.success ? "Still" : "Stalled",
+        return Option.some<Evidence>({
+          feed,
           frame,
-          at,
+          value: {
+            _tag: Result.isSuccess(confirmed) && confirmed.success ? "Still" : "Stalled",
+            frame,
+            at,
+          },
         });
       });
 
       return Stream.merge(
         Stream.fromPubSub(output).pipe(
-          Stream.filter(({ feed }) => gone !== feed),
-          Stream.map(({ frame }): Shown => ({ _tag: "Painted", frame })),
+          Stream.map(({ feed, frame, at }): Evidence => ({
+            feed,
+            frame,
+            value: { _tag: "Painted", frame, at },
+          })),
         ),
         Stream.fromEffectRepeat(probe).pipe(
           Stream.filter(Option.isSome),
           Stream.map(({ value }) => value),
         ),
+      ).pipe(
+        // A probe can overtake queued paint while its reader is paused. It establishes nothing
+        // about that reader's output until the matching frame has reached it.
+        Stream.filter(({ feed, frame, value }) => {
+          if (value._tag === "Painted" && gone !== feed) {
+            seen = { feed, frame };
+
+            return true;
+          }
+          // The subscription may have begun after its first publication.
+          seen ??= { feed, frame };
+
+          return value._tag !== "Painted" && seen?.feed === feed && seen.frame === frame;
+        }),
+        Stream.map(({ feed, value }) => {
+          if (value._tag === "Gone") gone = feed;
+          // A frame captured before a silence probe can arrive after the probe's evidence.
+          shownAt = Math.max(shownAt, value.at);
+
+          return value.at === shownAt ? value : { ...value, at: shownAt };
+        }),
       );
     }),
   );
@@ -350,7 +391,7 @@ export const make = Effect.fn("Stage.make")(function* (
 ): Effect.fn.Return<Stage, BrowserError, Scope.Scope> {
   const clock = yield* Clock.Clock;
   const owner = yield* Effect.scope;
-  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  const now = () => monotonicMillis(clock);
   const waited = Duration.fromInput(options.firstFrame ?? Duration.seconds(5));
 
   if (
@@ -375,15 +416,15 @@ export const make = Effect.fn("Stage.make")(function* (
 
   yield* Effect.addFinalizer(() => PubSub.shutdown(output));
 
-  const publish = (feed: Feed, frame: Frame) =>
+  const publish = (feed: Feed, frame: Frame, at = frame.hostTime) =>
     Effect.suspend(() => {
-      painted = Math.max(painted, frame.hostTime);
+      painted = Math.max(painted, at);
       if (showing !== undefined) {
         showing.changedAt = now();
         showing.frame = frame;
       }
 
-      return PubSub.publish(output, { feed, frame });
+      return PubSub.publish(output, { feed, frame, at: painted });
     });
 
   const commit = (feed: Feed, options: { readonly at?: number | undefined } = {}) =>
@@ -407,7 +448,7 @@ export const make = Effect.fn("Stage.make")(function* (
           const switchTo = Effect.suspend(() => {
             const frame = frameOf(feed);
 
-            if (frame === undefined) return Effect.fail(closed());
+            if (frame === undefined) return Effect.fail(unavailable());
             const at = Math.max(now(), asked, frame.hostTime, painted);
 
             showing = {
@@ -417,7 +458,7 @@ export const make = Effect.fn("Stage.make")(function* (
               changedAt: at,
             };
 
-            return publish(feed, frame).pipe(Effect.as(showing.presented));
+            return publish(feed, frame, at).pipe(Effect.as(showing.presented));
           }).pipe(Effect.uninterruptible);
 
           const readyToSwitch = firstOf(feed, firstFrame).pipe(

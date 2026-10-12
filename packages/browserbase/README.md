@@ -16,7 +16,8 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 - `ContextLease`: who may write a stored context. `ContextLease.layer` lets one writer at a time
   hold each context in this process; an application provides its own to exclude writers across
   processes. A persisting open that will not write to a context whose sessions may still save to
-  it fails with `ContextHeld`.
+  it fails with `ContextHeld`. A custom lease can refuse a writer permanently with `ContextRefused`;
+  `open`, `verifyContext` and `reconcile` preserve that error, and supervision stops retrying it.
 - `BrowserbaseClient`: sessions, Live View, stored contexts, extensions, Search and Fetch.
   `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
 - `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
@@ -53,8 +54,8 @@ Each create `open` sends carries a nonce of its own in the session's user metada
 A create whose answer was lost, or that Browserbase answered 5xx or 408, may still have made a
 session that nobody can see, and that bills until its timeout: `open` looks for it by its nonce,
 again and again for up to 30 seconds, since Browserbase can list a new session late, ends it, and
-then fails with the create's error. A `supervise` that tries again after such failures leaves no
-session behind each try.
+then fails with the create's error. `supervise` reports that cleanup's outcome to the next
+attempt's admission, including when a session it found could not be confirmed ended.
 
 `open` and `attach` record the session's id and region on their spans, so a trace finds its
 session in Browserbase's dashboard (`https://browserbase.com/sessions/<id>`).
@@ -87,7 +88,8 @@ The [generic supervisor contract](../browser/README.md#supervising-browser-gener
 `use`, transferable `retain` scopes, cancellation and stale-work refusal.
 
 Outgoing holds drain for `handover`, 30 seconds by default. A lost session revokes immediately and
-is replaced on `reopen`; `rotateBefore` and `rotate` keep their normal schedule while older
+is replaced on `reopen`; a consumer can declare the same loss with `lease.lose(detail)`.
+`rotateBefore` and `rotate` keep their normal schedule while older
 nonexclusive generations drain. This can overlap more than two hosted sessions. The consumer
 owns its overlap and billing policy. `states` reports each generation's release outcome;
 `Unconfirmed` means the old session might still run even after local ownership ends.
@@ -96,8 +98,21 @@ Sessions that persist to a stored context are exclusive: rotation first drains t
 generation, releases its session and lets its save settle. If release is unconfirmed, the next
 writer reconciles the context and fails `ContextHeld` while the old writer cannot be confirmed
 ended. It does not silently create another writer. An open Browserbase refused, as for a bad key
-or an invalid request, is `Down` at once; everything else, a held context included, is tried again
-on the schedule.
+or an invalid request, and a permanent `ContextRefused`, are `Down` at once. Temporary `ContextHeld`
+failures are tried again on the schedule. `definite(error)` can also stop retries for application
+failures, including those from `build` or `admit`.
+
+`admit({ number, after })` runs before each attempt, including the first, before acquiring a
+context lease or making a provider request. `after`, when present, covers every session the
+supervisor started that no longer serves: prior generations still releasing and failed attempts,
+including a failed connection or `build`. It waits for all their releases and is `Unconfirmed`
+if any was; the first unconfirmed outcome remains visible on later attempts and identifies its
+session when known.
+Await it to enforce an account policy such as refusing a reopen after an `Unconfirmed` release;
+ignoring it preserves immediate reopening. The serving predecessor of a healthy nonexclusive
+rotation is excluded, so the same policy keeps ephemeral rotations opening the replacement
+before releasing the outgoing session. Admission shares the opening fiber's retry and
+cancellation rules.
 
 ```ts
 const program = Effect.gen(function* () {

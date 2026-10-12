@@ -21,6 +21,7 @@
 import {
   Cause,
   Clock,
+  Context,
   DateTime,
   Deferred,
   Duration,
@@ -92,9 +93,33 @@ export interface Opened<A = void> {
   readonly release?: Effect.Effect<Lifecycle.Released> | undefined;
 }
 
+/** Facts available before an acquisition attempt; awaiting `after` never changes release order. */
+export interface Admission {
+  readonly number: number;
+  /**
+   * Every earlier session that stopped serving, including failed attempts and older drains.
+   * Waits for all pending releases; an Unconfirmed end remains visible to later attempts.
+   * Undefined before any release. A still-serving nonexclusive predecessor is excluded.
+   */
+  readonly after: Effect.Effect<Lifecycle.Released> | undefined;
+}
+
+/**
+ * Optional service supplied during `open`. Providers report failed-attempt cleanup here before
+ * their scope closes; successful generations instead return `Opened.release`. Reporting does
+ * not release resources or replace the original acquisition failure. Terminal `Down` and opening
+ * `Closed` states publish the reported outcomes of their own generation's tries.
+ */
+export class Releasing extends Context.Service<
+  Releasing,
+  { readonly released: (outcome: Lifecycle.Released) => Effect.Effect<void> }
+>()("effect-browser/Supervisor/Releasing") {}
+
 export interface Options<E, R, A = void> {
   /** Opens one generation in the scope it is given. */
   readonly open: Effect.Effect<Opened<A>, E, R>;
+  /** Runs before every open attempt, including the first; failures follow `reopen` and `definite`. */
+  readonly admit?: ((opening: Admission) => Effect.Effect<void, E, R>) | undefined;
   /** When to try a failed open again. Defaults to exponential from 1 second, for 5 minutes. */
   readonly reopen?: Schedule.Schedule<unknown, E> | undefined;
   /**
@@ -132,6 +157,8 @@ export interface Lease<A> {
   readonly generation: number;
   readonly browser: Browser.Service;
   readonly value: A;
+  /** Declare this serving generation unusable and revoke it now; stale declarations do nothing. */
+  readonly lose: (detail: string) => Effect.Effect<void>;
   /** First notice that serving ended; loss or retirement may revoke before its deadline. */
   readonly ending: Effect.Effect<Superseded>;
   /** An independent scope; its resources close before provider release. Fails once revoked. */
@@ -167,13 +194,17 @@ interface Held<A> {
   readonly opened: Opened<A>;
   readonly ending: Deferred.Deferred<Superseded>;
   readonly revoked: Deferred.Deferred<Superseded>;
+  readonly released: Deferred.Deferred<Lifecycle.Released>;
   readonly scope: Scope.Closeable;
 }
 
 type State<A> = Lifecycle.State<Held<A>, Hold>;
-type Apply<A> = (
-  input: Lifecycle.Input<Held<A>, Hold>,
-) => Effect.Effect<Lifecycle.Step<Held<A>, Hold>>;
+type Input<A> = Lifecycle.Input<Held<A>, Hold>;
+type Step<A> = Lifecycle.Step<Held<A>, Hold>;
+type Apply<A> = (input: Input<A>) => Effect.Effect<Step<A>>;
+
+const superseded = (generation: number, { reason, revokeAt }: Lifecycle.Draining) =>
+  new Superseded({ generation, reason, revokeAt });
 
 const retired = () => new Unavailable({ reason: "retired", detail: "the supervisor was retired" });
 
@@ -182,15 +213,6 @@ const describe = (cause: Cause.Cause<unknown>) => {
 
   return Predicate.isError(error) ? error.message : String(error);
 };
-
-const unavailable = (
-  resolution: Extract<Lifecycle.Resolution<unknown>, { readonly _tag: "Unavailable" }>,
-) =>
-  new Unavailable({
-    reason: resolution.reason,
-    detail: resolution.detail,
-    cause: resolution.cause,
-  });
 
 const timedOut = () =>
   new Unavailable({ reason: "opening", detail: "no generation opened within the wait" });
@@ -216,7 +238,7 @@ const waitFor = <A, H>(
   const result = (resolution: Lifecycle.Resolution<A>) =>
     resolution._tag === "Serve"
       ? Effect.succeed(resolution.live)
-      : Effect.fail(unavailable(resolution));
+      : Effect.fail(new Unavailable(resolution));
 
   return Effect.suspend(() => {
     const current = Lifecycle.resolve(state.value, target);
@@ -259,25 +281,26 @@ const leasing = <A>(
   now: () => number,
   clock: Clock.Clock,
 ) => {
-  const borrow = (hold: Hold, wait: Duration.Duration) =>
-    Effect.gen(function* () {
-      const until = now() + Duration.toMillis(wait);
+  const borrow = Effect.fnUntraced(function* (hold: Hold, wait: Duration.Duration) {
+    const until = now() + Duration.toMillis(wait);
 
-      for (;;) {
-        const step = yield* apply({ _tag: "Hold", hold });
+    for (;;) {
+      const step = yield* apply({ _tag: "Hold", hold });
 
-        if (step.borrowed !== undefined) return step.borrowed;
-        yield* waitFor(state, Duration.millis(Math.max(0, until - now())), clock).pipe(
-          Effect.interruptible,
-        );
-        if (now() >= until) return yield* timedOut();
-      }
-    });
+      if (step.borrowed !== undefined) return step.borrowed;
+      yield* waitFor(state, Duration.millis(Math.max(0, until - now())), clock).pipe(
+        Effect.interruptible,
+      );
+      if (now() >= until) return yield* timedOut();
+    }
+  });
 
   const leaseOf = (live: Lifecycle.Live<Held<A>>): Lease<A> => ({
     generation: live.number,
     browser: live.value.opened.browser,
     value: live.value.opened.value,
+    lose: (detail) =>
+      apply({ _tag: "Lost", number: live.number, cause: "declared", detail }).pipe(Effect.asVoid),
     ending: Deferred.await(live.value.ending),
     retain: Effect.uninterruptible(
       Effect.gen(function* () {
@@ -310,9 +333,18 @@ const leasing = <A>(
           apply({ _tag: "Let", number: live.number, hold }).pipe(Effect.asVoid),
         );
 
+        const revoked = Deferred.await(live.value.revoked).pipe(Effect.flatMap(Effect.fail));
+
         return yield* Effect.raceFirst(
-          work(leaseOf(live)),
-          Deferred.await(live.value.revoked).pipe(Effect.flatMap(Effect.fail)),
+          work(leaseOf(live)).pipe(
+            // Declaring loss and returning can finish before the race's other fiber runs.
+            Effect.tap(() =>
+              Deferred.isDone(live.value.revoked).pipe(
+                Effect.flatMap((done) => (done ? revoked : Effect.void)),
+              ),
+            ),
+          ),
+          revoked,
         );
       }),
     );
@@ -338,15 +370,11 @@ const acquireGeneration = <A, E, R>(
           scope,
           ending: Deferred.makeUnsafe<Superseded>(),
           revoked: Deferred.makeUnsafe<Superseded>(),
+          released: Deferred.makeUnsafe<Lifecycle.Released>(),
         })),
       ),
     ),
   );
-
-const changedUntil = <A>(
-  state: SubscriptionRef.SubscriptionRef<State<A>>,
-  predicate: (current: State<A>) => boolean,
-) => SubscriptionRef.changes(state).pipe(Stream.filter(predicate), Stream.runHead, Effect.asVoid);
 
 const watchGeneration = <A>(
   live: Lifecycle.Live<Held<A>>,
@@ -369,53 +397,62 @@ const watchGeneration = <A>(
   return Effect.all([loss, rotation], { concurrency: 2, discard: true });
 };
 
-// Revocation stops use work; retained resources and use finalizers let go before the provider.
-const releaseGeneration = <A>(
+// After revocation, retained resources and use finalizers let go before the provider.
+const releaseGeneration = Effect.fnUntraced(function* <A>(
   command: Extract<Lifecycle.Command<Held<A>>, { readonly _tag: "Release" | "Leave" }>,
   state: SubscriptionRef.SubscriptionRef<State<A>>,
   apply: Apply<A>,
-) =>
-  Effect.gen(function* () {
-    const { live, ending } = command;
+) {
+  const { live } = command;
 
-    yield* Deferred.succeed(
-      live.value.revoked,
-      new Superseded({
-        generation: live.number,
-        reason: ending.reason,
-        revokeAt: ending.revokeAt,
-      }),
-    );
-    const holds = Lifecycle.lookup(state.value, live.number)?.holds ?? [];
+  const cleaned = yield* Effect.forEach(
+    Lifecycle.lookup(state.value, live.number)?.holds ?? [],
+    (hold) =>
+      Effect.exit(hold._tag === "Retained" ? Scope.close(hold.scope, Exit.void) : Effect.void),
+    { concurrency: 8 },
+  );
 
-    const cleaned = yield* Effect.forEach(
-      holds,
-      (hold) =>
-        Effect.exit(hold._tag === "Retained" ? Scope.close(hold.scope, Exit.void) : Effect.void),
-      { concurrency: 8 },
-    );
+  yield* SubscriptionRef.changes(state).pipe(
+    Stream.filter((current) => (Lifecycle.lookup(current, live.number)?.holds.size ?? 0) === 0),
+    Stream.runHead,
+  );
 
-    yield* changedUntil(
-      state,
-      (current) => (Lifecycle.lookup(current, live.number)?.holds.size ?? 0) === 0,
-    );
-
-    const released =
-      command._tag === "Leave"
-        ? undefined
-        : yield* (live.value.opened.release ?? Effect.succeed(new Lifecycle.Settled())).pipe(
-            Effect.catchCause((cause) =>
-              Effect.succeed(
-                new Lifecycle.Unconfirmed({ detail: `the release failed: ${describe(cause)}` }),
-              ),
+  const released =
+    command._tag === "Leave"
+      ? undefined
+      : yield* (live.value.opened.release ?? Effect.succeed(new Lifecycle.Settled())).pipe(
+          Effect.catchCause((cause) =>
+            Effect.succeed(
+              new Lifecycle.Unconfirmed({ detail: `the release failed: ${describe(cause)}` }),
             ),
-          );
+          ),
+        );
 
-    const closed = yield* Effect.exit(Scope.close(live.value.scope, Exit.void));
+  const closed = yield* Effect.exit(Scope.close(live.value.scope, Exit.void));
 
-    yield* apply({ _tag: "Released", number: live.number, released });
-    yield* Exit.asVoidAll([...cleaned, closed]);
-  });
+  yield* apply({ _tag: "Released", number: live.number, released });
+  if (released !== undefined) yield* Deferred.succeed(live.value.released, released);
+  yield* Exit.asVoidAll([...cleaned, closed]);
+});
+
+const admissionAfter = <A>(state: State<A>) => {
+  const released = state.released;
+
+  const pending = [...state.draining.values()]
+    .filter((drain) => drain._tag !== "Leaving")
+    .map(({ live }) => live.value.released);
+
+  return pending.length === 0 && released === undefined
+    ? undefined
+    : Effect.gen(function* () {
+        let outcome = released;
+
+        for (const release of pending)
+          outcome = Lifecycle.combine(outcome, yield* Deferred.await(release));
+
+        return outcome ?? new Lifecycle.Settled();
+      });
+};
 
 const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
   options: MakeOptions<E, R, A>,
@@ -425,7 +462,6 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
   const context = yield* Effect.context<Exclude<R, Scope.Scope>>();
   const own = yield* Scope.fork(yield* Effect.scope);
   const exclusive = options.exclusive ?? false;
-  const definite = options.definite ?? (() => false);
 
   const reopen: Schedule.Schedule<unknown, E> =
     options.reopen ??
@@ -449,118 +485,116 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
   const runOpen = yield* FiberHandle.runtime(opening)();
   const runRelease = yield* FiberMap.runtime(releases)();
 
-  const apply = (
-    input: Lifecycle.Input<Held<A | void>, Hold>,
-  ): Effect.Effect<Lifecycle.Step<Held<A | void>, Hold>> =>
-    applying
-      .withPermit(
-        Effect.gen(function* () {
-          const current = state.value;
-          const step = Lifecycle.transition(current, input, exclusive, now(), handover);
+  const apply: Apply<A | void> = Effect.fnUntraced(
+    function* (input: Input<A | void>) {
+      const current = state.value;
+      const step = Lifecycle.transition(current, input, exclusive, now(), handover);
 
-          if (step.state !== current) yield* SubscriptionRef.set(state, step.state);
-          yield* perform(step);
+      if (step.state !== current) yield* SubscriptionRef.set(state, step.state);
+      yield* perform(step);
 
-          return step;
+      return step;
+    },
+    (effect) => applying.withPermit(effect),
+    Effect.uninterruptible,
+    Effect.provideService(Clock.Clock, clock),
+  );
+
+  const perform = Effect.fnUntraced(function* (step: Step<A | void>): Effect.fn.Return<void> {
+    for (const [number, generation] of step.events)
+      PubSub.publishUnsafe(events, [
+        new Generation({
+          number,
+          at: clock.currentTimeMillisUnsafe(),
+          hostTime: now(),
+          state: generation,
         }),
-      )
-      .pipe(Effect.uninterruptible, Effect.provideService(Clock.Clock, clock));
+      ]);
+    for (const command of step.commands)
+      switch (command._tag) {
+        case "Open":
+          runOpen(openGeneration(command.number));
+          break;
+        case "Watch":
+          yield* Effect.forkIn(
+            Effect.provideContext(watchGeneration(command.live, rotateBefore, apply), context),
+            command.live.value.scope,
+          );
+          break;
+        case "Drain": {
+          const ending = superseded(command.live.number, command.ending);
 
-  const perform = (step: Lifecycle.Step<Held<A | void>, Hold>): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      for (const [number, generation] of step.events)
-        PubSub.publishUnsafe(events, [
-          new Generation({
-            number,
-            at: clock.currentTimeMillisUnsafe(),
-            hostTime: now(),
-            state: generation,
-          }),
-        ]);
-      for (const command of step.commands)
-        switch (command._tag) {
-          case "Open":
-            runOpen(openGeneration(command.number, command.after));
-            break;
-          case "Watch":
-            yield* Effect.forkIn(
-              Effect.provideContext(watchGeneration(command.live, rotateBefore, apply), context),
-              command.live.value.scope,
-            );
-            break;
-          case "Drain": {
-            const ending = new Superseded({
-              generation: command.live.number,
-              reason: command.ending.reason,
-              revokeAt: command.ending.revokeAt,
-            });
-
-            yield* Deferred.succeed(command.live.value.ending, ending);
-            yield* Effect.forkIn(
-              until(ending.revokeAt, now).pipe(
-                Effect.andThen(
-                  Effect.suspend(() => apply({ _tag: "Revoke", number: command.live.number })),
-                ),
+          yield* Deferred.succeed(command.live.value.ending, ending);
+          yield* Effect.forkIn(
+            until(ending.revokeAt, now).pipe(
+              Effect.andThen(
+                Effect.suspend(() => apply({ _tag: "Revoke", number: command.live.number })),
               ),
-              command.live.value.scope,
-            );
-            break;
-          }
-          case "Release":
-          case "Leave":
-            runRelease(command.live.number, releaseGeneration(command, state, apply));
-            break;
+            ),
+            command.live.value.scope,
+          );
+          break;
         }
-    });
+        case "Release":
+        case "Leave":
+          yield* Deferred.succeed(
+            command.live.value.revoked,
+            superseded(command.live.number, command.ending),
+          );
+          runRelease(command.live.number, releaseGeneration(command, state, apply));
+          break;
+      }
+  });
 
-  const openOnce = acquireGeneration(options.open, own).pipe(Effect.provideContext(context));
+  const openGeneration = (number: number) => {
+    const openOnce = acquireGeneration(
+      Effect.gen(function* () {
+        const after = admissionAfter(state.value);
 
-  const openGeneration = (number: number, after: number | undefined) =>
-    Effect.uninterruptibleMask((restore) =>
+        if (exclusive && after !== undefined) yield* after;
+        yield* options.admit?.({ number, after }) ?? Effect.void;
+
+        return yield* options.open.pipe(
+          Effect.provideService(Releasing, {
+            released: (released) =>
+              apply({ _tag: "AttemptReleased", number, released }).pipe(Effect.asVoid),
+          }),
+        );
+      }),
+      own,
+    ).pipe(Effect.provideContext(context));
+
+    return Effect.uninterruptibleMask((restore) =>
       restore(
-        (after === undefined
-          ? Effect.void
-          : changedUntil(state, (current) => !current.draining.has(after))
-        ).pipe(
-          Effect.andThen(
-            Effect.retry(openOnce, { schedule: reopen, while: (error) => !definite(error) }),
-          ),
-        ),
+        Effect.retry(openOnce, {
+          schedule: reopen,
+          while: (error) => !options.definite?.(error),
+        }),
       ).pipe(
         Effect.exit,
-        Effect.flatMap((exit) =>
-          Exit.isSuccess(exit)
-            ? apply({ _tag: "Opened", live: { number, value: exit.value } })
-            : Cause.hasInterruptsOnly(exit.cause)
-              ? apply({ _tag: "Abandoned", number })
-              : apply({
-                  _tag: "Failed",
-                  number,
-                  detail: describe(exit.cause),
-                  cause: Cause.squash(exit.cause),
-                }),
-        ),
+        Effect.flatMap((exit) => {
+          if (Exit.isSuccess(exit))
+            return apply({ _tag: "Opened", live: { number, value: exit.value } });
+          const cause = exit.cause;
+
+          return apply(
+            Cause.hasInterruptsOnly(cause)
+              ? { _tag: "Abandoned", number }
+              : { _tag: "Failed", number, detail: describe(cause), cause: Cause.squash(cause) },
+          );
+        }),
       ),
     );
-
-  const use = leasing(state, apply, waitTimeout, now, clock);
+  };
 
   const end = yield* Effect.cached(PubSub.publish(events, Exit.void));
 
-  const stop = (input: Lifecycle.Input<Held<A | void>, Hold>) =>
-    apply(input).pipe(
-      Effect.andThen(FiberHandle.clear(opening)),
-      Effect.andThen(FiberMap.awaitEmpty(releases)),
-      Effect.andThen(
-        Effect.suspend(() =>
-          Deferred.isDone(releases.deferred).pipe(
-            Effect.flatMap((failed) => (failed ? FiberMap.join(releases) : Effect.void)),
-          ),
-        ),
-      ),
-      Effect.ensuring(end),
-      Effect.asVoid,
-    );
+  const stop = Effect.fnUntraced(function* (input: Input<A | void>) {
+    yield* apply(input);
+    yield* FiberHandle.clear(opening);
+    yield* FiberMap.awaitEmpty(releases);
+    if (yield* Deferred.isDone(releases.deferred)) yield* FiberMap.join(releases);
+  }, Effect.ensuring(end));
 
   const retire = yield* Effect.cached(stop({ _tag: "Retire" }));
 
@@ -569,7 +603,7 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
 
   return {
     browser: Effect.map(waitFor(state, waitTimeout, clock), (live) => live.value.opened.browser),
-    use,
+    use: leasing(state, apply, waitTimeout, now, clock),
     states: Stream.fromPubSubTake(events),
     rotate: apply({ _tag: "Rotate" }).pipe(
       Effect.flatMap(({ reply }) =>

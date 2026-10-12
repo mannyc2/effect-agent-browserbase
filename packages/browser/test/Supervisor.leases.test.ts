@@ -58,6 +58,155 @@ const published = (
   );
 
 describe("Supervisor leases", () => {
+  // #279: consumer-detected failures must reach the supervisor's real loss path.
+  it.effect(
+    "declares a loss, revokes work immediately and never serves it after a failed reopen",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* provider();
+
+        const supervisor = yield* Supervisor.make({
+          open: Effect.suspend(() =>
+            world.count() === 0 ? world.open : Effect.fail("provider outage"),
+          ),
+          definite: () => true,
+        });
+
+        const admitted = yield* Deferred.make<Supervisor.Lease<{ readonly number: number }>>();
+
+        const work = yield* supervisor
+          .use((lease) => Deferred.succeed(admitted, lease).pipe(Effect.andThen(Effect.never)))
+          .pipe(Effect.flip, Effect.forkChild);
+
+        const lease = yield* Deferred.await(admitted);
+
+        yield* lease.lose("page closed");
+        yield* lease.lose("duplicate");
+        const failure = yield* Fiber.join(work);
+
+        assert.deepStrictEqual([failure._tag, failure.reason], ["Superseded", "lost"]);
+        yield* published(supervisor, 2, "Down");
+        assert.strictEqual((yield* Effect.flip(supervisor.browser)).reason, "down");
+        assert.strictEqual(
+          (yield* Effect.flip(supervisor.use(() => Effect.void, { wait: 0 }))).reason,
+          "down",
+        );
+        yield* published(supervisor, 1, "Closed");
+        yield* lease.lose("already closed");
+        yield* supervisor.retire;
+        const events = yield* supervisor.states.pipe(Stream.runCollect);
+        const lost = events.filter(({ state }) => state._tag === "Lost");
+
+        assert.strictEqual(lost.length, 1);
+        assert.deepStrictEqual(
+          lost[0]?.state,
+          new Supervisor.Lost({ cause: "declared", detail: "page closed" }),
+        );
+        assert.deepStrictEqual(
+          events
+            .map(({ number, state }) => `${number} ${state._tag}`)
+            .filter((line) => !line.includes("Closed")),
+          ["1 Opening", "1 Open", "1 Lost", "1 Draining", "2 Reopening", "2 Down"],
+        );
+      }),
+  );
+
+  it.effect(
+    "rejects a work result after self-declared loss and releases its exclusive generation",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* provider();
+
+        const supervisor = yield* Supervisor.make({
+          open: world.open,
+          exclusive: true,
+          handover: "1 hour",
+        });
+
+        const outcome = yield* supervisor
+          .use((lease) => lease.lose("capture failed").pipe(Effect.as("stale result")))
+          .pipe(
+            Effect.match({
+              onFailure: (error) => [error._tag, error.reason],
+              onSuccess: (value) => ["Success", value],
+            }),
+          );
+
+        assert.deepStrictEqual(outcome, ["Superseded", "lost"]);
+        assert.strictEqual(
+          yield* supervisor.use(({ generation }) => Effect.succeed(generation)),
+          2,
+        );
+        assert.deepStrictEqual(world.order.slice(0, 4), [
+          "open 1",
+          "release 1",
+          "scope 1",
+          "open 2",
+        ]);
+      }),
+  );
+
+  it.effect("returns an external loss declaration before revoked work finishes cleanup", () =>
+    Effect.gen(function* () {
+      const world = yield* provider();
+      const supervisor = yield* Supervisor.make({ open: world.open, exclusive: true });
+      const admitted = yield* Deferred.make<Supervisor.Lease<{ readonly number: number }>>();
+      const declared = yield* Deferred.make<void>();
+      const cleaning = yield* Deferred.make<void>();
+      const cleaned = yield* Deferred.make<void>();
+
+      yield* Effect.gen(function* () {
+        const work = yield* supervisor
+          .use((lease) =>
+            Effect.addFinalizer(() =>
+              Deferred.succeed(cleaning, undefined).pipe(Effect.andThen(Deferred.await(cleaned))),
+            ).pipe(Effect.andThen(Deferred.succeed(admitted, lease)), Effect.andThen(Effect.never)),
+          )
+          .pipe(Effect.flip, Effect.forkChild);
+
+        const lease = yield* Deferred.await(admitted);
+
+        yield* lease
+          .lose("page closed")
+          .pipe(Effect.andThen(Deferred.succeed(declared, undefined)), Effect.forkChild);
+        yield* Effect.yieldNow;
+        assert.isTrue(yield* Deferred.isDone(declared));
+        yield* Deferred.await(cleaning);
+        assert.notInclude(world.order, "release 1");
+        assert.strictEqual(world.count(), 1);
+        yield* Deferred.succeed(cleaned, undefined);
+        const failure = yield* Fiber.join(work);
+
+        assert.deepStrictEqual([failure._tag, failure.reason], ["Superseded", "lost"]);
+        assert.strictEqual(
+          yield* supervisor.use(({ generation }) => Effect.succeed(generation)),
+          2,
+        );
+      }).pipe(Effect.ensuring(Deferred.succeed(cleaned, undefined)));
+    }),
+  );
+
+  it.effect("ignores a stale declaration while its generation drains and after it closes", () =>
+    Effect.gen(function* () {
+      const world = yield* provider();
+      const supervisor = yield* Supervisor.make({ open: world.open, handover: "1 hour" });
+
+      const held = yield* supervisor.use((lease) =>
+        lease.retain.pipe(Effect.map((scope) => ({ lease, scope }))),
+      );
+
+      yield* supervisor.rotate;
+      yield* held.lease.lose("late page failure");
+      assert.notInclude(world.order, "release 1");
+      assert.strictEqual((yield* held.lease.ending).reason, "rotated");
+      yield* Scope.close(held.scope, Exit.void);
+      yield* published(supervisor, 1, "Closed");
+      yield* held.lease.lose("later page failure");
+      assert.strictEqual(yield* supervisor.use(({ generation }) => Effect.succeed(generation)), 2);
+      assert.strictEqual(world.count(), 2);
+    }),
+  );
+
   it.effect("keeps manual and timed rotation independent of older retained generations", () =>
     Effect.gen(function* () {
       for (const timed of [false, true]) {

@@ -20,6 +20,7 @@ import * as Chromium from "../src/Chromium.ts";
 import { BrowserPaint, Frame, Screenshot } from "../src/Frame.ts";
 import { boundsOf, within } from "../src/internal/timeline/window.ts";
 import * as Moment from "../src/Moment.ts";
+import type { Page } from "../src/Page.ts";
 import { Snapshot } from "../src/Snapshot.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 
@@ -664,6 +665,62 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.match(text, /\[ref=e\d+\]/);
       assert.include(timeline, '"Next page"');
       assert.notMatch(timeline, /\be\d+\b/);
+    }),
+  );
+
+  // #259: the release gate observed a new-document picture before its click's final reply.
+  // Replay that timing at the public frame boundary; navigation, event history and windows are
+  // native. Waiting for this narrow paint/reply race failed to reproduce it in 73 prior runs.
+  it.effect("keeps a navigation's trigger when its cached picture predates the action's end", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/form");
+      const first = yield* Moment.capture(page);
+      const [link] = yield* page.find({ role: "link", name: "Next page" });
+
+      if (link === undefined) return yield* Effect.die("missing navigation link");
+      yield* page.click(link.ref);
+      const events = yield* page.recentEvents;
+      const action = events.findLast((event) => event._tag === "Action" && event.name === "click");
+      const navigation = events.findLast((event) => event._tag === "Navigated");
+
+      if (action?._tag !== "Action" || navigation?._tag !== "Navigated")
+        return yield* Effect.die("missing native navigation evidence");
+      assert.isBelow(navigation.at, action.at);
+      const picture = yield* page.frame({ maxAge: 0 });
+
+      const painted = new Frame({
+        ...picture,
+        timing: new Screenshot({
+          hostTime: (navigation.at + action.at) / 2,
+          uncertaintyMillis: 0,
+        }),
+      });
+
+      // A narrator's earlier window can end while the click is in flight. The completed Action
+      // belongs to the following window even though its startedAt falls in the earlier one.
+      const during = yield* page.window({
+        since: first,
+        until: (action.startedAt + navigation.at) / 2,
+      });
+
+      const cached: Page = {
+        ...page,
+        frame: (options) => (options?.maxAge === 0 ? page.frame(options) : Effect.succeed(painted)),
+      };
+
+      const moment = yield* Moment.capture(cached, { since: during });
+      const following = yield* Moment.capture(page, { since: moment });
+
+      assert.include(moment.events, action);
+      assert.include(moment.events, navigation);
+      assert.isAtLeast(moment.until, action.at);
+      assert.include(texts(Moment.toPrompt(moment)).join("\n"), 'click link "Next page"');
+      assert.deepStrictEqual(
+        [...during.events, ...moment.events, ...following.events].filter(
+          (event) => event._tag === "Action" && event.name === "click",
+        ),
+        [action],
+      );
     }),
   );
 

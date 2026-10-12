@@ -119,8 +119,7 @@ const Button = Schema.Literals(["left", "right", "middle"]);
 
 /** An element's box in viewport CSS pixels; it may lie partly or wholly outside the viewport. */
 export const Box = Schema.Struct({
-  x: Schema.Finite,
-  y: Schema.Finite,
+  ...Motion.Point.fields,
   width: Schema.Finite,
   height: Schema.Finite,
 });
@@ -169,8 +168,8 @@ export class Action extends Schema.TaggedClass<Action>()("Action", {
   /** For an action at a point, the box of what it found there. */
   box: Schema.optional(Box),
   text: Schema.optional(Schema.String),
-  x: Schema.optional(Schema.Finite),
-  y: Schema.optional(Schema.Finite),
+  x: Schema.optional(Motion.Point.fields.x),
+  y: Schema.optional(Motion.Point.fields.y),
   ok: Schema.Boolean,
   dispatched: Schema.Boolean,
   error: Schema.optional(Schema.String),
@@ -196,16 +195,14 @@ export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>()("TrackP
   page: Schema.String,
   plan: Sequence,
   dispatched: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  x: Schema.Finite,
-  y: Schema.Finite,
+  ...Motion.Point.fields,
   complete: Schema.Boolean,
 }) {}
 
 export class PointerPressed extends Schema.TaggedClass<PointerPressed>()("PointerPressed", {
   at: Schema.Finite,
   page: Schema.String,
-  x: Schema.Finite,
-  y: Schema.Finite,
+  ...Motion.Point.fields,
   button: Button,
   clickCount: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
@@ -213,8 +210,7 @@ export class PointerPressed extends Schema.TaggedClass<PointerPressed>()("Pointe
 export class PointerReleased extends Schema.TaggedClass<PointerReleased>()("PointerReleased", {
   at: Schema.Finite,
   page: Schema.String,
-  x: Schema.Finite,
-  y: Schema.Finite,
+  ...Motion.Point.fields,
   button: Button,
   clickCount: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
@@ -222,8 +218,7 @@ export class PointerReleased extends Schema.TaggedClass<PointerReleased>()("Poin
 export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>()("WheelScrolled", {
   at: Schema.Finite,
   page: Schema.String,
-  x: Schema.Finite,
-  y: Schema.Finite,
+  ...Motion.Point.fields,
   dx: Schema.Finite,
   dy: Schema.Finite,
 }) {}

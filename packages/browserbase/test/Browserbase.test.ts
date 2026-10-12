@@ -1197,6 +1197,318 @@ class BuildSetup extends Context.Service<BuildSetup, { readonly marker: string }
 ) {}
 
 describe("Browserbase.supervise", () => {
+  // #280: a lease's permanent policy refusal must not spend the reopen schedule retrying.
+  it.effect("goes down after one permanent context refusal, retaining its cause", () =>
+    Effect.gen(function* () {
+      const refusal = new ContextLease.ContextRefused({
+        context: "refused-context",
+        detail: "this deployment cannot write this context",
+      });
+
+      let holds = 0;
+
+      const sessions = yield* Browserbase.supervise({
+        session: persisting(refusal.context),
+        reopen: Schedule.recurs(2),
+      }).pipe(
+        Effect.provideService(ContextLease.ContextLease, {
+          hold: () =>
+            Effect.suspend(() => {
+              holds++;
+
+              return Effect.fail(refusal);
+            }),
+        }),
+      );
+
+      const unavailable = yield* Effect.flip(sessions.browser);
+
+      const states = yield* sessions.states.pipe(
+        Stream.takeUntil(({ state }) => state._tag === "Down"),
+        Stream.runCollect,
+      );
+
+      assert.strictEqual(holds, 1);
+      assert.strictEqual(unavailable.reason, "down");
+      assert.strictEqual(unavailable.cause, refusal);
+      assert.deepStrictEqual(states.map(line), ["1 Opening", "1 Down"]);
+      assert.deepStrictEqual(yield* asked, []);
+    }).pipe(Effect.scoped, Effect.provide(hostedFake())),
+  );
+
+  // #280: each public context operation preserves the lease's typed refusal without creating.
+  it.effect("passes a permanent refusal through open, verification and reconciliation", () =>
+    Effect.gen(function* () {
+      const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
+      const refusal = new ContextLease.ContextRefused({ context: id, detail: "writer forbidden" });
+      let holds = 0;
+
+      const refusing: ContextLease.Service = {
+        hold: () =>
+          Effect.suspend(() => {
+            holds++;
+
+            return Effect.fail(refusal);
+          }),
+      };
+
+      const operations = [
+        Effect.asVoid(Browserbase.open({ session: persisting(id) })),
+        Browserbase.verifyContext(id, () => Effect.die("verification must not run")),
+        Effect.asVoid(Browserbase.reconcile(id)),
+      ];
+
+      for (const operation of operations) {
+        const error = yield* operation.pipe(
+          Effect.scoped,
+          Effect.provideService(ContextLease.ContextLease, refusing),
+          Effect.flip,
+        );
+
+        assert.strictEqual(error, refusal);
+      }
+      assert.strictEqual(holds, 3);
+      assert.deepStrictEqual(yield* kept, []);
+      assert.notInclude(yield* asked, "POST /v1/sessions");
+    }).pipe(Effect.provide(hostedFake())),
+  );
+
+  // #280: transient contention still retries; a later permanent refusal stops a lost generation.
+  it.live("retries a busy lease but stops reopening when that lease refuses permanently", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
+        const lease = yield* ContextLease.ContextLease;
+
+        const refusal = new ContextLease.ContextRefused({
+          context: id,
+          detail: "permission removed",
+        });
+
+        let holds = 0;
+        let forbidden = false;
+
+        const sessions = yield* Browserbase.supervise({
+          session: persisting(id),
+          contextSettle: 0,
+          reopen: Schedule.recurs(2),
+        }).pipe(
+          Effect.provideService(ContextLease.ContextLease, {
+            hold: (context) =>
+              Effect.suspend(() => {
+                holds++;
+                if (forbidden) return Effect.fail(refusal);
+                if (holds < 3)
+                  return Effect.fail(new ContextLease.ContextHeld({ context, detail: "busy" }));
+
+                return lease.hold(context);
+              }),
+          }),
+        );
+
+        const first = yield* sessions.browser;
+
+        assert.strictEqual(holds, 3);
+        forbidden = true;
+        yield* Effect.promise(async () => first.context.browser()?.close());
+        yield* sessions.states.pipe(
+          Stream.filter(({ state }) => state._tag === "Down"),
+          Stream.runHead,
+        );
+        const unavailable = yield* Effect.flip(sessions.browser);
+
+        assert.strictEqual(unavailable.reason, "down");
+        assert.strictEqual(unavailable.cause, refusal);
+        assert.strictEqual(holds, 4);
+        assert.lengthOf(
+          (yield* asked).filter((request) => request === "POST /v1/sessions"),
+          1,
+        );
+        yield* sessions.retire;
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status }) => status),
+          ["COMPLETED"],
+        );
+      }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
+    }),
+  );
+
+  // #281: admission is before the context lease and any provider request, even on the first try.
+  it.effect("applies application admission before holding a context or creating a session", () =>
+    Effect.gen(function* () {
+      let holds = 0;
+      let admissions = 0;
+
+      const options: Browserbase.SuperviseOptions<Session, string, BuildSetup> = {
+        session: persisting("unopened-context"),
+        reopen: Schedule.recurs(2),
+        admit: ({ number, after }) =>
+          Effect.gen(function* () {
+            const { marker } = yield* BuildSetup;
+
+            admissions++;
+            assert.strictEqual(number, 1);
+            assert.isUndefined(after);
+
+            return yield* Effect.fail(marker);
+          }),
+        definite: (error) => error === "account stopped",
+      };
+
+      const sessions = yield* Browserbase.supervise(options).pipe(
+        Effect.provideService(BuildSetup, { marker: "account stopped" }),
+        Effect.provideService(ContextLease.ContextLease, {
+          hold: (context) =>
+            Effect.suspend(() => {
+              holds++;
+
+              return Effect.fail(
+                new ContextLease.ContextHeld({ context, detail: "must not hold" }),
+              );
+            }),
+        }),
+      );
+
+      const unavailable = yield* Effect.flip(sessions.browser);
+
+      assert.strictEqual(admissions, 1);
+      assert.strictEqual(holds, 0);
+      assert.strictEqual(unavailable.reason, "down");
+      assert.strictEqual(unavailable.cause, "account stopped");
+      assert.deepStrictEqual(yield* asked, []);
+    }).pipe(Effect.scoped, Effect.provide(hostedFake())),
+  );
+
+  // #286: a failed attempt's session is visible to admission even without a stored context.
+  it.effect.each(["connect", "create"] as const)(
+    "refuses retry after a failed %s leaves an unconfirmed session",
+    (failure) =>
+      Effect.gen(function* () {
+        const outcomes: Array<Supervisor.Released | undefined> = [];
+
+        const sessions = yield* Browserbase.supervise({
+          reopen: Schedule.recurs(1),
+          waitTimeout: "5 minutes",
+          admit: ({ after }) =>
+            Effect.gen(function* () {
+              const released = after === undefined ? undefined : yield* after;
+
+              outcomes.push(released);
+              if (released?._tag === "Unconfirmed")
+                return yield* Effect.fail("release unconfirmed");
+            }),
+          definite: (error) => error === "release unconfirmed",
+        });
+
+        const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
+        const rows = yield* kept;
+
+        assert.strictEqual(error.reason, "down");
+        assert.strictEqual(error.cause, "release unconfirmed");
+        assert.deepStrictEqual(
+          outcomes.map((outcome) => outcome?._tag),
+          [undefined, "Unconfirmed"],
+        );
+        assert.deepStrictEqual(
+          rows.map(({ status, releases }) => [status, releases]),
+          [["RUNNING", 1]],
+        );
+        const outcome = outcomes[1];
+
+        assert.strictEqual(outcome?._tag, "Unconfirmed");
+        if (outcome?._tag === "Unconfirmed") assert.include(outcome.detail, rows[0]!.id);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          hostedFake({
+            ...(failure === "create" ? { creates: [{ _tag: "Lost" }] } : {}),
+            releases: [
+              { _tag: "Refused", status: 403 },
+              { _tag: "Refused", status: 403 },
+            ],
+          }),
+        ),
+      ),
+  );
+
+  it.effect("admits retry after a failed connect's release settles", () =>
+    Effect.gen(function* () {
+      const outcomes: Array<Supervisor.Released | undefined> = [];
+
+      const sessions = yield* Browserbase.supervise({
+        reopen: Schedule.recurs(1),
+        admit: ({ after }) =>
+          Effect.gen(function* () {
+            outcomes.push(after === undefined ? undefined : yield* after);
+          }),
+      });
+
+      const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
+
+      assert.strictEqual(error.reason, "down");
+      assert.isTrue(Schema.is(BrowserbaseError)(error.cause));
+      assert.deepStrictEqual(
+        outcomes.map((outcome) => outcome?._tag),
+        [undefined, "Settled"],
+      );
+      assert.deepStrictEqual(
+        (yield* kept).map(({ status, releases }) => [status, releases]),
+        [
+          ["COMPLETED", 1],
+          ["COMPLETED", 1],
+        ],
+      );
+    }).pipe(Effect.scoped, Effect.provide(hostedFake({ releases: [{ _tag: "Ends" }] }))),
+  );
+
+  it.effect("refuses retry after a failed build leaves an unconfirmed session", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const outcomes: Array<Supervisor.Released | undefined> = [];
+        let builds = 0;
+
+        const sessions = yield* Browserbase.supervise({
+          reopen: Schedule.recurs(1),
+          waitTimeout: "5 minutes",
+          build: (hosted) =>
+            Effect.suspend(() =>
+              ++builds === 1 ? Effect.fail("build failed") : Effect.succeed(hosted.session),
+            ),
+          admit: ({ after }) =>
+            Effect.gen(function* () {
+              const released = after === undefined ? undefined : yield* after;
+
+              outcomes.push(released);
+              if (released?._tag === "Unconfirmed")
+                return yield* Effect.fail("release unconfirmed");
+            }),
+          definite: (error) => error === "release unconfirmed",
+        });
+
+        const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
+
+        assert.strictEqual(error.reason, "down");
+        assert.strictEqual(error.cause, "release unconfirmed");
+        assert.strictEqual(builds, 1);
+        assert.deepStrictEqual(
+          outcomes.map((outcome) => outcome?._tag),
+          [undefined, "Unconfirmed"],
+        );
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status, releases }) => [status, releases]),
+          [["RUNNING", 1]],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(hostedFake({ connectUrl, releases: [{ _tag: "Refused", status: 403 }] })),
+      );
+    }),
+  );
+
   it.live("gives each generation its provider Session when no builder is supplied", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;

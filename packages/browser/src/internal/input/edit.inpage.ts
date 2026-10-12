@@ -10,22 +10,16 @@ import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Guard } from "./guard.inpage.ts";
 
-export type EditResult =
-  | { readonly ok: true; readonly detail: string }
-  | { readonly error: string; readonly stale?: boolean };
+export type EditResult = typeof EditResultSchema.Encoded;
 
 /** A focused field, and whether it is secret. */
-export type FocusResult =
-  | { readonly ok: true; readonly detail: string; readonly secret: boolean }
-  | { readonly error: string; readonly stale?: boolean };
+export type FocusResult = typeof FocusResultSchema.Encoded;
 
 /**
  * Whether text may be typed, and whether its field is secret. Typing into focus also names the
  * focused field, when it is one, so the action records what it typed into.
  */
-export type TypeableResult =
-  | { readonly ok: true; readonly secret: boolean; readonly subject?: typeof Subject.Encoded }
-  | { readonly error: "stale" | "untypeable"; readonly detail: string };
+export type TypeableResult = typeof TypeableResultSchema.Encoded;
 
 export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
   const {

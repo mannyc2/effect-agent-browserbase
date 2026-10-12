@@ -34,21 +34,24 @@ export class Draining extends Schema.TaggedClass<Draining>()("Draining", {
   revokeAt: Schema.Finite,
 }) {}
 
-/** Lost: its connection dropped, or its provider ended its session, as `cause` says. */
+/** Lost through disconnection or a consumer's declaration that it is unusable. */
 export class Lost extends Schema.TaggedClass<Lost>()("Lost", {
-  cause: DisconnectCause,
+  cause: Schema.Union([DisconnectCause, Schema.Literal("declared")]),
+  detail: Schema.optional(Schema.String),
 }) {}
 
 /**
  * It never opened: its last try failed with `cause`, which the provider deems definite, or after
- * which the reopen schedule gave up.
+ * which the reopen schedule gave up. `released` combines this generation's failed-try cleanup,
+ * retaining the first unconfirmed end; it is absent when no try reported cleanup.
  */
 export class Down extends Schema.TaggedClass<Down>()("Down", {
   detail: Schema.String,
   cause: Schema.Defect(),
+  released: Schema.optional(Released),
 }) {}
 
-/** It ended. `released` says how its release went; one retired while opening has none. */
+/** It ended. `released` includes reported cleanup when retired while opening, if any. */
 export class Closed extends Schema.TaggedClass<Closed>()("Closed", {
   released: Schema.optional(Released),
 }) {}
@@ -101,10 +104,17 @@ export type State<A, H = unknown> = (
       readonly serving: Held<A, H> | undefined;
     }
   | { readonly _tag: "Retired" }
-) & { readonly draining: ReadonlyMap<number, Drain<A, H>> };
+) & {
+  readonly draining: ReadonlyMap<number, Drain<A, H>>;
+  /** Retain the first unconfirmed end, otherwise the latest settled end, without its resources. */
+  readonly released?: Released | undefined;
+  /** Failed-try outcomes by their opening generation, forgotten when that opening ends. */
+  readonly attempts?: ReadonlyMap<number, Released> | undefined;
+};
 
 export type Input<A, H = unknown> =
   | { readonly _tag: "Opened"; readonly live: Live<A> }
+  | { readonly _tag: "AttemptReleased"; readonly number: number; readonly released: Released }
   | {
       readonly _tag: "Failed";
       readonly number: number;
@@ -112,7 +122,12 @@ export type Input<A, H = unknown> =
       readonly cause: unknown;
     }
   | { readonly _tag: "Abandoned"; readonly number: number }
-  | { readonly _tag: "Lost"; readonly number: number; readonly cause: DisconnectCause }
+  | {
+      readonly _tag: "Lost";
+      readonly number: number;
+      readonly cause: Lost["cause"];
+      readonly detail?: string | undefined;
+    }
   | { readonly _tag: "Rotate"; readonly due?: number | undefined }
   | { readonly _tag: "Retire" }
   | { readonly _tag: "Keep" }
@@ -130,7 +145,7 @@ export type Input<A, H = unknown> =
     };
 
 export type Command<A> =
-  | { readonly _tag: "Open"; readonly number: number; readonly after: number | undefined }
+  | { readonly _tag: "Open"; readonly number: number }
   | { readonly _tag: "Watch"; readonly live: Live<A> }
   /** Signal ending and arrange revocation. Repeated only when loss/retirement accelerates it. */
   | { readonly _tag: "Drain"; readonly live: Live<A>; readonly ending: Draining }
@@ -149,7 +164,7 @@ export interface Step<A, H = unknown> {
 export const start = <A, H = unknown>(): Step<A, H> => ({
   state: { _tag: "Opening", number: 1, serving: undefined, draining: new Map() },
   events: [[1, new Opening()]],
-  commands: [{ _tag: "Open", number: 1, after: undefined }],
+  commands: [{ _tag: "Open", number: 1 }],
 });
 
 const servingOf = <A, H>(state: State<A, H>) =>
@@ -260,10 +275,6 @@ const next = <A, H>(change: Change<A, H>, number: number, reopen: boolean) => {
   const { exclusive } = change;
   const current = servingOf(change.state);
 
-  const after = exclusive
-    ? (current?.number ?? change.state.draining.keys().next().value)
-    : undefined;
-
   if (current !== undefined && (reopen || exclusive))
     end(change, current, reopen ? "lost" : "rotated");
   change.state = {
@@ -271,9 +282,11 @@ const next = <A, H>(change: Change<A, H>, number: number, reopen: boolean) => {
     number,
     serving: reopen || exclusive ? undefined : current,
     draining: change.state.draining,
+    released: change.state.released,
+    attempts: change.state.attempts,
   };
   change.events.push([number, reopen ? new Reopening() : new Opening()]);
-  change.commands.push({ _tag: "Open", number, after });
+  change.commands.push({ _tag: "Open", number });
 };
 
 const lost = <A, H>(
@@ -284,11 +297,12 @@ const lost = <A, H>(
   const drain = state.draining.get(input.number);
   const current = servingOf(state);
 
+  if (input.cause === "declared" && current?.number !== input.number) return;
   if (drain?._tag === "Draining") {
     change.events.push([input.number, new Lost({ cause: input.cause })]);
     revoke(change, input.number, "lost");
   } else if (state._tag !== "Retired" && current?.number === input.number) {
-    change.events.push([input.number, new Lost({ cause: input.cause })]);
+    change.events.push([input.number, new Lost({ cause: input.cause, detail: input.detail })]);
     if (state._tag !== "Opening")
       next(change, (state._tag === "Open" ? current.number : state.number) + 1, true);
     else {
@@ -296,6 +310,17 @@ const lost = <A, H>(
       end(change, current, "lost");
     }
   }
+};
+
+/** End one opening without confusing its cleanup with preceding generations' releases. */
+const finishAttempt = <A, H>(change: Change<A, H>, number: number) => {
+  const attempts = new Map(change.state.attempts);
+  const released = attempts.get(number);
+
+  attempts.delete(number);
+  change.state = { ...change.state, attempts };
+
+  return released;
 };
 
 /** Pure admission and lifecycle changes. A rejected hold preserves state identity. */
@@ -329,10 +354,17 @@ export const transition = <A, H = unknown>(
       if (lookup(state, live.number) !== undefined) break;
       if (state._tag !== "Opening" || state.number !== live.number) end(change, live, "retired");
       else {
+        finishAttempt(change, live.number);
         change.events.push([live.number, new Open()]);
         change.commands.push({ _tag: "Watch", live });
         if (state.serving !== undefined) end(change, state.serving, "rotated");
-        change.state = { _tag: "Open", serving: live, draining: change.state.draining };
+        change.state = {
+          _tag: "Open",
+          serving: live,
+          draining: change.state.draining,
+          released: change.state.released,
+          attempts: change.state.attempts,
+        };
       }
       break;
     }
@@ -341,23 +373,42 @@ export const transition = <A, H = unknown>(
 
       if (state._tag === "Opening" && state.number === number)
         change.state = { ...state, _tag: "Down", detail, cause };
-      change.events.push([number, new Down({ detail, cause })]);
+      change.events.push([
+        number,
+        new Down({ detail, cause, released: finishAttempt(change, number) }),
+      ]);
       break;
     }
     case "Abandoned":
-      change.events.push([input.number, new Closed({})]);
+      change.events.push([
+        input.number,
+        new Closed({ released: finishAttempt(change, input.number) }),
+      ]);
+      break;
+    case "AttemptReleased":
+      change.state = {
+        ...state,
+        released: combine(state.released, input.released),
+        attempts: new Map(state.attempts).set(
+          input.number,
+          combine(state.attempts?.get(input.number), input.released),
+        ),
+      };
       break;
     case "Released": {
-      const drain = state.draining.get(input.number);
+      const { number, released } = input;
+      const drain = state.draining.get(number);
 
       if (drain === undefined || drain._tag === "Draining" || drain.live.holds.size > 0) break;
       const draining = new Map(state.draining);
 
-      draining.delete(input.number);
-      change.state = { ...state, draining };
+      draining.delete(number);
+      change.state = { ...state, draining, released: combine(state.released, released) };
+      const outcome = combine(finishAttempt(change, number), released);
+
       change.events.push([
-        input.number,
-        input.released === undefined ? new Kept() : new Closed({ released: input.released }),
+        number,
+        released === undefined ? new Kept() : new Closed({ released: outcome }),
       ]);
       break;
     }
@@ -382,11 +433,28 @@ export const transition = <A, H = unknown>(
       if (state._tag === "Retired") break;
       for (const number of state.draining.keys()) revoke(change, number, "retired");
       if (state.serving !== undefined) end(change, state.serving, "retired", input._tag === "Keep");
-      change.state = { _tag: "Retired", draining: change.state.draining };
+      change.state = {
+        _tag: "Retired",
+        draining: change.state.draining,
+        released: change.state.released,
+        attempts: change.state.attempts,
+      };
   }
 
   return change;
 };
+
+/** Later confirmations cannot establish that an earlier unconfirmed session ended. */
+export function combine(before: Released | undefined, next: Released): Released;
+
+export function combine(
+  before: Released | undefined,
+  next: Released | undefined,
+): Released | undefined;
+
+export function combine(before: Released | undefined, next: Released | undefined) {
+  return before?._tag === "Unconfirmed" ? before : (next ?? before);
+}
 
 export type Resolution<A> =
   | { readonly _tag: "Serve"; readonly live: Live<A> }

@@ -4,6 +4,54 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.16
+
+- Terminal supervisor states publish failed-acquisition cleanup. `Down.released` and an opening
+  generation's `Closed.released` combine that generation's reported outcomes, retaining its first
+  `Unconfirmed` even if a later try settles. This also holds when retirement wins a late successful
+  acquisition. No cleanup report leaves the field absent; later admission and the original failure
+  cause remain unchanged. Public fake-provider regressions and randomized lifecycle tests cover
+  ownership, interruption and outcome routing; they do not establish hosted billing.
+- Input actions share guard validation and pending-input cleanup while preserving their checkpoints
+  and approved document binding. Point data and page-script result types use shared boundary shapes.
+
+## 0.3.0-beta.15
+
+- `Supervisor.Admission.after` covers every earlier session that stopped serving, including failed
+  acquisition attempts and older generations still draining. It waits for all pending releases and
+  retains the first `Unconfirmed` outcome for later attempts. Healthy nonexclusive rotation still
+  keeps its serving predecessor until the replacement opens; admission remains interruptible.
+- The optional `Supervisor.Releasing` service lets provider adapters report failed-attempt cleanup
+  without replacing the acquisition failure. Browserbase reports failed connection, build and
+  lost-create cleanup through it. Completed generations drop their browser and scope references;
+  admission retains release outcomes and pending signals. The Browserbase package requires
+  `effect-browser` from this release for the new service. Local Chromium and fake-provider tests
+  establish sequencing, not hosted billing or actual provider release confirmation.
+
+## 0.3.0-beta.14
+
+- Library pictures pause native screencast capture through actual screenshot restoration, preserving
+  readers and settings. Delayed crop frames stay private even when both their paint stamp and arrival
+  outlast the screenshot reply. Cancellation retains native picture, stop and restart replies;
+  unconfirmed cleanup fails capture within two seconds and blocks overlapping pictures or captures
+  until actual settlement. Readiness cannot certify quietness during that pause and requires fresh
+  post-resume frame evidence. Cached-frame reuse remains free; forced pictures with capture running
+  add stop, viewport refresh and restart calls.
+- `Plan.take` returns the receipt of acknowledged terminal input without waiting for a continuously
+  updating page to settle. Readiness still runs before each later step, including navigation.
+  `Moment.capture` refreshes pictures that predate completed input and records its navigation once.
+- `Supervisor.Lease.lose(detail)` revokes an unusable serving generation before returning, including
+  when its declaring work immediately returns. Stale declarations have no effect. Recovery admission
+  runs before every acquisition attempt; `Admission.after` lets a consumer await the predecessor's
+  actual release after loss or a failed reopen without blocking a healthy nonexclusive rotation.
+- `Browserbase.supervise` exposes `admit` and `definite`, and `ContextLease.ContextRefused` stops retries
+  for permanent context-policy refusal before any provider request. Temporary context holds still retry.
+  The Browserbase package requires `effect-browser` from this release for those APIs.
+- `Stage.shown`'s `Painted.at` measures output time separately from frame capture time. Prepared cuts
+  use `Presented.at`; silence, delayed frames and paused readers keep output times nondecreasing.
+- An abandoned cue or normally ended capture fails with `InvalidRequest`, without reporting a healthy
+  browser as lost. Actual page and connection losses preserve their causes; the page can be cued again.
+
 ## 0.3.0-beta.13
 
 - A failed or interrupted navigation stops loading within a bound so later input, browser

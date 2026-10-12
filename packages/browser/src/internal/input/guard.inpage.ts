@@ -5,6 +5,7 @@
  */
 import { Schema } from "effect";
 
+import type { Point } from "../../Motion.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import { type Evidence, type EvidenceReader, EvidenceSchema } from "./evidence.inpage.ts";
 import type { Targets } from "./targets.inpage.ts";
@@ -23,48 +24,26 @@ export type Fact = typeof Fact.Type;
 
 export interface InputPlan {
   readonly action: string;
-  readonly targets: ReadonlyArray<string | { readonly x: number; readonly y: number } | null>;
+  readonly targets: ReadonlyArray<string | Point | null>;
   readonly submit: boolean;
   readonly keys: string | null;
   readonly destination: string | null;
 }
 
-export interface InspectedTarget {
-  readonly ref: string;
-  readonly element: string;
-  readonly role: string | null;
-  readonly name: string;
-  readonly cursor: string;
-  readonly href?: string | undefined;
-  /** A field the DOM marks as holding a password, a one-time code or a card's details. */
-  readonly secret: boolean;
-  readonly fingerprint: string;
-}
+export type InspectedTarget = NonNullable<PreparedInput["targets"][number]>;
 
-export interface PreparedInput {
-  readonly url: string;
-  readonly targets: ReadonlyArray<InspectedTarget | null>;
-  readonly facts: ReadonlyArray<Fact>;
-  readonly destination?: string | undefined;
-  readonly evidence: Evidence;
-}
+export type PreparedInput = Exclude<PreparedInputResult, InputFailure>;
 
 /** A refusal; a stale target is named by its index in the plan. */
-export interface InputFailure {
-  readonly error: string;
-  readonly detail: string;
-  readonly index?: number | undefined;
-}
+export type InputFailure = typeof InputPreparationError.Encoded;
 
-export type PreparedInputResult = PreparedInput | InputFailure;
+export type PreparedInputResult = typeof PreparedInputResultSchema.Encoded;
 
-export type ValidatedInputResult = { readonly ok: true } | InputFailure;
+export type ValidatedInputResult = typeof ValidatedInputResultSchema.Encoded;
 
 /** A point where a target, by its index in the plan, is about to receive a press. */
-export interface Press {
+export interface Press extends Point {
   readonly index: number;
-  readonly x: number;
-  readonly y: number;
 }
 
 export interface ValidationOptions {
@@ -587,6 +566,7 @@ export const PreparedInputResultSchema = Schema.Union([
           name: Schema.String,
           cursor: Schema.String,
           href: Schema.optional(Schema.String),
+          /** A field the DOM marks as holding a password, a one-time code or a card's details. */
           secret: Schema.Boolean,
           fingerprint: Schema.String,
         }),

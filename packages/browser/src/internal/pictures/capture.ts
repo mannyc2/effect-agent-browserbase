@@ -18,8 +18,9 @@ import {
 import { type BrowserError, InvalidRequest } from "../../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../../Frame.ts";
 import { undispatched } from "../page/context.ts";
-import { type Estimate, toHostTime, uncertaintyAt } from "./clock.ts";
+import { type Estimate, monotonicMillis, toHostTime, uncertaintyAt } from "./clock.ts";
 import { tally } from "./counts.ts";
+import * as Quiescence from "./quiescence.ts";
 import type { NativeFrame, Transport } from "./transport.ts";
 
 export { countsKept } from "./counts.ts";
@@ -76,11 +77,9 @@ interface Generation {
   /** The native capture's settings; every reader of this generation shares them. */
   readonly quality: number;
   readonly size: Size | null;
-  readonly onFrame: (frame: NativeFrame) => void;
-  accepting: boolean;
+  phase: "Capturing" | "Paused" | "Stopped";
   predecessor: number | undefined;
   failure: BrowserError | undefined;
-  stopReply: Promise<void> | undefined;
 }
 
 export interface Controller {
@@ -109,15 +108,7 @@ export interface Controller {
   /** Run a clipped or scaled picture of the page, keeping what it draws out of the capture. */
   readonly excluding: <A, E, R>(
     picture: Effect.Effect<A, E, R>,
-    resized?: boolean,
-  ) => Effect.Effect<A, E, R>;
-}
-
-/** When the library took a clipped picture: from its call to its reply, in host milliseconds. */
-interface Excluded {
-  readonly from: number;
-  until: number;
-  readonly resized: boolean;
+  ) => Effect.Effect<A, E | BrowserError, R>;
 }
 
 const replyCapacity = 32;
@@ -136,56 +127,6 @@ const sameShape = (image: Size, device: Size) =>
 // Another capture's frames last only as long as it does; a run of frames that lasts longer is
 // the page's own.
 const outlasting = Duration.seconds(1);
-
-// No frame painted during a picture arrives this long after it.
-const excludedFor = Duration.seconds(10);
-
-// Every frame of a crop is painted before Chromium answers the picture, yet each test of it can
-// land past the reply: its stamp, because Chromium stamps frames on another clock than the one the
-// calibration reads (2 to 3 ms late on an idle machine here), and its arrival, because a frame is
-// encoded after it is painted (3 to 6 ms). A frame is kept only when both land this long after.
-const settling = Duration.millis(50);
-
-/**
- * Chromium draws the library's own clipped pictures into the running screencast. Where Playwright
- * emulates the viewport they keep the page's device size, and its shape when the crop has the
- * viewport's proportions, so nothing in a frame tells them apart: a frame painted, or arriving,
- * while one is taken is left out, the page's own included. A crop on the page's own session is
- * drawn at the crop's size, so there only a frame of another size than the page's is left out.
- */
-const pictureWindows = (now: () => number) => {
-  let windows: ReadonlyArray<Excluded> = [];
-
-  return {
-    drawn: ({ hostTime, timing, receivedAt }: Frame, foreign: boolean) =>
-      windows.some((window) => {
-        const until = window.until + Duration.toMillis(settling);
-
-        return (
-          (foreign || !window.resized) &&
-          ((hostTime + timing.uncertaintyMillis >= window.from &&
-            hostTime - timing.uncertaintyMillis <= until) ||
-            (receivedAt >= window.from && receivedAt <= until))
-        );
-      }),
-    excluding: <A, E, R>(picture: Effect.Effect<A, E, R>, resized = false) =>
-      Effect.acquireUseRelease(
-        Effect.sync(() => {
-          const window = { from: now(), until: Number.POSITIVE_INFINITY, resized };
-          const since = window.from - Duration.toMillis(excludedFor);
-
-          windows = [...windows.filter((kept) => kept.until > since), window];
-
-          return window;
-        }),
-        () => picture,
-        (window) =>
-          Effect.sync(() => {
-            window.until = now();
-          }),
-      ),
-  };
-};
 
 /**
  * A native frame as readers get it: its picture's size, else the capture's or its device's, and
@@ -213,7 +154,7 @@ const timed = (
       hostTime,
       uncertaintyMillis: uncertaintyAt(estimate, hostTime),
     }),
-    receivedAt: Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6,
+    receivedAt: monotonicMillis(options.clock),
     width: size.width,
     height: size.height,
     ...generation.transport.frameTag(),
@@ -281,7 +222,7 @@ const sizeFilter = (
       Queue.offerUnsafe(wake, undefined);
     };
 
-    const now = () => Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6;
+    const now = () => monotonicMillis(options.clock);
 
     const adopt = (adopted: Run) => {
       run = undefined;
@@ -331,7 +272,6 @@ const sizeFilter = (
         expected = viewport;
       },
       /** Whether a frame of this device size shows the page, as far as the capture knows. */
-      expects: (device: Size) => expected !== null && sameSize(device, expected),
       offer: (frame: Frame, timestamp: number, image: Size | undefined, device: Size) => {
         if (image !== undefined && !sameShape(image, device)) {
           drop(1);
@@ -426,7 +366,7 @@ const isCurrent = (
   latest: Option.Option<Frame>,
 ) =>
   generation !== undefined &&
-  generation.accepting &&
+  generation.phase === "Capturing" &&
   generation.failure === undefined &&
   Option.getOrUndefined(latest) === frame &&
   generation.transport.frameTag().document === frame.document;
@@ -460,6 +400,63 @@ const frames = (
   );
 };
 
+const renewals = Effect.fnUntraced(function* (options: Options) {
+  const renewing = yield* Queue.sliding<void>(1);
+
+  yield* Queue.take(renewing).pipe(
+    Effect.andThen(options.renew),
+    Effect.andThen(Effect.sleep(Duration.seconds(1))),
+    Effect.provideService(Clock.Clock, options.clock),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+
+  return renewing;
+});
+
+const receive =
+  (
+    options: Options,
+    current: Generation,
+    replies: Set<Promise<void>>,
+    counts: ReturnType<typeof tally>,
+    sizes: Effect.Success<ReturnType<typeof sizeFilter>>,
+    renewing: Queue.Queue<void>,
+    fail: (current: Generation, error: BrowserError) => void,
+  ) =>
+  (native: NativeFrame) => {
+    if (current.phase === "Stopped") return;
+    counts.count("received");
+    if (replies.size >= replyCapacity) {
+      fail(current, options.error(new Error("screencast acknowledgement capacity exceeded")));
+
+      return;
+    }
+
+    const reply = current.transport
+      .acknowledge(native.sessionId)
+      .then(
+        () => undefined,
+        (cause: unknown) => {
+          if (current.phase !== "Stopped") fail(current, options.error(cause));
+        },
+      )
+      .then(() => void replies.delete(reply));
+
+    replies.add(reply);
+    const browserSeconds = native.metadata.timestamp;
+    const timestamp = browserSeconds === undefined ? Number.NaN : browserSeconds * 1000;
+
+    if (!Number.isFinite(timestamp)) return counts.count("missingTimestamp");
+    if (current.predecessor !== undefined && timestamp <= current.predecessor)
+      return counts.count("late");
+    Queue.offerUnsafe(renewing, undefined);
+    const { frame, image, device } = timed(options, native, timestamp, current);
+
+    if (current.phase === "Paused") return counts.count("duringPictures");
+    sizes.offer(frame, timestamp, image, device);
+  };
+
 export const make = (options: Options) =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
@@ -468,17 +465,15 @@ export const make = (options: Options) =>
     // Done as the page's scope closes, once the page has gone and its browser's loss, if any, is
     // known.
     const closed = yield* Deferred.make<void>();
-    // The latest stop whose reply has not settled. A new capture waits for it rather than
-    // assuming it was lost; it is never submitted again.
-    let unsettledStop: Promise<void> | undefined;
+    const pageScope = yield* Effect.scope;
+    const isClosed = () => pageScope.state._tag === "Closed" || Deferred.isDoneUnsafe(closed);
     let latest = Option.none<Frame>();
     let history: ReadonlyArray<Frame> = [];
     const keepMillis = Duration.toMillis(options.frameHistory);
-    const now = () => Number(options.clock.monotonicTimeNanosUnsafe()) / 1e6;
+    const now = () => monotonicMillis(options.clock);
     const counts = tally(now);
     // Frames delivered, which number them so that a reader can tell what it missed.
     let delivered = 0;
-    const pictures = pictureWindows(now);
 
     const current = (frame: Frame) => isCurrent(frame, generation, latest);
 
@@ -506,75 +501,105 @@ export const make = (options: Options) =>
 
     // On air a capture runs for hours, and its frames are timed by the browser's newest estimate,
     // so arriving frames renew it: a check at most each second, a measurement once it is due.
-    const renewing = yield* Queue.sliding<void>(1);
-
-    yield* Queue.take(renewing).pipe(
-      Effect.andThen(options.renew),
-      Effect.andThen(Effect.sleep(Duration.seconds(1))),
-      Effect.provideService(Clock.Clock, options.clock),
-      Effect.forever,
-      Effect.forkScoped,
-    );
+    const renewing = yield* renewals(options);
 
     const notifyFailure = (current: Generation, failure: BrowserError) => {
       if (current.failure !== undefined) return;
       current.failure = failure;
       for (const subscriber of current.subscribers)
         Queue.offerUnsafe(subscriber, { _tag: "Failure", error: failure });
-    };
-
-    const stop = (current: Generation) => {
-      if (!current.accepting) return;
-      current.accepting = false;
-      sizes.end();
-      current.unlisten();
-
-      // Attach both handlers in the callback turn. Even a caller that leaves immediately never
-      // abandons a rejected native reply, and an uncertain stop is never submitted twice.
-      const reply = current.transport.stop().then(
-        () => undefined,
-        (cause: unknown) => {
-          notifyFailure(current, options.error(cause));
-        },
-      );
-
-      current.stopReply = reply;
-      unsettledStop = reply;
-      void reply.then(() => {
-        if (unsettledStop === reply) unsettledStop = undefined;
-      });
-    };
-
-    const fail = (current: Generation, failure: BrowserError) => {
-      notifyFailure(current, failure);
       stop(current);
     };
 
-    const gone = () => options.error(new Error("Target page has been closed"));
-    const stopDeadline = () => options.error(new Error("screencast stop exceeded its deadline"));
-    const why = told(closed, gone, options.clock);
+    const failed = (current: Generation) => (cause: unknown) =>
+      notifyFailure(current, options.error(cause));
 
-    // A stop's reply, awaited for at most `deadline`; `late` is what a stop past it means.
-    const settled = <E>(reply: () => Promise<void> | undefined, late: Effect.Effect<void, E>) =>
-      Effect.suspend(() => {
-        const pending = reply();
+    const stopNative = (current: Generation) =>
+      pictures.track("screencast stop", current.transport.stop(), failed(current));
 
-        return pending === undefined
-          ? Effect.void
-          : Effect.promise(() => pending).pipe(
-              Effect.interruptible,
-              Effect.timeoutOrElse({ duration: deadline, orElse: () => late }),
-            );
-      }).pipe(Effect.provideService(Clock.Clock, options.clock));
-
-    const awaitStop = (current: Generation) =>
-      settled(
-        () => current.stopReply,
-        Effect.sync(() => notifyFailure(current, stopDeadline())),
+    const startNative = (current: Generation) =>
+      pictures.track(
+        "screencast start",
+        current.transport.start({
+          format: "jpeg",
+          quality: current.quality,
+          ...(current.size === null
+            ? {}
+            : { maxWidth: current.size.width, maxHeight: current.size.height }),
+        }),
+        failed(current),
       );
 
-    // A late stop only delays the next capture; once its reply settles, capture can start again.
-    const awaitPreviousStop = settled(() => unsettledStop, Effect.fail(stopDeadline()));
+    const stop = (current: Generation) => {
+      if (current.phase === "Stopped") return;
+      const paused = current.phase === "Paused";
+
+      current.phase = "Stopped";
+      sizes.end();
+      current.unlisten();
+      // A paused capture already owns its stop, including a reply still in flight.
+      if (!paused) void stopNative(current);
+    };
+
+    const gone = () => options.error(new Error("Target page has been closed"));
+    const why = told(closed, gone, options.clock);
+
+    const awaitStop = (current: Generation) =>
+      pictures
+        .wait("screencast stop")
+        .pipe(Effect.catch((error) => Effect.sync(() => notifyFailure(current, error))));
+
+    const healthy = (current: Generation) =>
+      Effect.suspend(() =>
+        current.failure === undefined ? Effect.void : Effect.fail(current.failure),
+      );
+
+    const pictures = Quiescence.make({
+      clock: options.clock,
+      error: options.error,
+      closed: isClosed,
+      current: () => generation,
+      fail: (current, error) => {
+        if (current !== undefined) notifyFailure(current, error);
+      },
+      pause: (current): Effect.Effect<void, BrowserError> =>
+        Effect.gen(function* () {
+          if (current?.phase !== "Capturing" || current.failure !== undefined) return;
+          current.phase = "Paused";
+          latest = Option.none();
+          sizes.end();
+          void stopNative(current);
+          yield* pictures
+            .wait("screencast stop")
+            .pipe(Effect.tapError((error) => Effect.sync(() => notifyFailure(current, error))));
+          yield* healthy(current);
+        }),
+      resume: (current): Effect.Effect<void, BrowserError> =>
+        Effect.gen(function* () {
+          const resumable = () => {
+            if (current === undefined || generation !== current) return false;
+            if (current.subscribers.size === 0) {
+              stop(current);
+              generation = undefined;
+
+              return false;
+            }
+
+            return current.phase !== "Stopped" && current.failure === undefined && !isClosed();
+          };
+
+          if (current === undefined || !resumable()) return;
+          const viewport = yield* readViewport(options);
+
+          if (!resumable()) return;
+          sizes.restart(viewport);
+          // Its only quiet-page frame can precede the native start acknowledgement.
+          current.phase = "Capturing";
+          void startNative(current);
+          yield* pictures.wait("screencast start");
+          yield* healthy(current);
+        }),
+    });
 
     // A reader leaves; the last one stops its generation.
     const leave = (current: Generation, subscription: Queue.Queue<Envelope>) =>
@@ -590,67 +615,29 @@ export const make = (options: Options) =>
     const acquire = (screencast: ScreencastOptions) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
-          if (Deferred.isDoneUnsafe(closed)) return yield* gone();
+          if (isClosed()) return yield* gone();
           let current = generation;
           const starting = current === undefined;
 
           if (current === undefined) {
-            yield* awaitPreviousStop;
+            yield* pictures.idle;
             const [transport, { calibration, viewport }] = yield* prepare(options, screencast);
             const size = screencast.size ?? viewport;
 
-            if (Deferred.isDoneUnsafe(closed)) return yield* gone();
+            if (isClosed()) return yield* gone();
 
-            const created: Generation = {
+            current = {
               subscribers: new Set(),
               transport,
               unlisten: () => undefined,
               calibration,
               quality: screencast.quality ?? 80,
               size,
-              accepting: true,
+              phase: "Capturing",
               predecessor: undefined,
               failure: undefined,
-              stopReply: undefined,
-              onFrame: (native) => {
-                if (!created.accepting) return;
-                counts.count("received");
-                if (replies.size >= replyCapacity) {
-                  fail(
-                    created,
-                    options.error(new Error("screencast acknowledgement capacity exceeded")),
-                  );
-
-                  return;
-                }
-
-                const reply = created.transport.acknowledge(native.sessionId).then(
-                  () => {
-                    replies.delete(reply);
-                  },
-                  (cause: unknown) => {
-                    replies.delete(reply);
-                    if (created.accepting) fail(created, options.error(cause));
-                  },
-                );
-
-                replies.add(reply);
-                const browserSeconds = native.metadata.timestamp;
-                const timestamp = browserSeconds === undefined ? Number.NaN : browserSeconds * 1000;
-
-                if (!Number.isFinite(timestamp)) return counts.count("missingTimestamp");
-                if (created.predecessor !== undefined && timestamp <= created.predecessor)
-                  return counts.count("late");
-                Queue.offerUnsafe(renewing, undefined);
-                const { frame, image, device } = timed(options, native, timestamp, created);
-
-                if (pictures.drawn(frame, !sizes.expects(device)))
-                  return counts.count("duringPictures");
-                sizes.offer(frame, timestamp, image, device);
-              },
             };
 
-            current = created;
             generation = current;
             latest = Option.none();
             sizes.restart(viewport);
@@ -683,27 +670,19 @@ export const make = (options: Options) =>
           const frame = currentFrame(current, latest);
 
           if (starting) {
-            const { transport, quality, size } = current;
             const listening = current;
 
-            current.unlisten = transport.listen({
-              frame: current.onFrame,
-              lost: (error) => fail(listening, error),
+            current.unlisten = listening.transport.listen({
+              frame: receive(options, current, replies, counts, sizes, renewing, notifyFailure),
+              lost: (error) => notifyFailure(listening, error),
             });
 
-            const screencast = Effect.tryPromise({
-              try: () =>
-                transport.start({
-                  format: "jpeg",
-                  quality,
-                  ...(size === null ? {} : { maxWidth: size.width, maxHeight: size.height }),
-                }),
-              catch: options.error,
-            });
+            const screencast = Effect.promise(() => startNative(listening)).pipe(
+              Effect.andThen(healthy(listening)),
+            );
 
-            const started = yield* Effect.all([options.watch, screencast], {
-              concurrency: 2,
-            }).pipe(
+            const started = yield* options.watch.pipe(
+              Effect.zip(screencast, { concurrent: true }),
               Effect.interruptible,
               Effect.timeoutOrElse({
                 duration: deadline,
@@ -727,7 +706,9 @@ export const make = (options: Options) =>
 
     const open: Controller["open"] = (screencast = {}) =>
       Effect.acquireRelease(acquire(screencast), ({ current, subscription }) =>
-        lock.withPermits(1)(leave(current, subscription)),
+        Effect.sync(() => current.subscribers.delete(subscription)).pipe(
+          Effect.andThen(lock.withPermits(1)(leave(current, subscription))),
+        ),
       ).pipe(
         Effect.map((lease) => ({
           current: lease.frame,
@@ -739,16 +720,19 @@ export const make = (options: Options) =>
 
     // The page's scope closes once the page has gone, when its browser's loss, if any, is known.
     yield* Effect.addFinalizer(() =>
-      lock.withPermits(1)(
-        Effect.suspend(() => {
-          const current = generation;
+      Effect.sync(() => Deferred.doneUnsafe(closed, Exit.void)).pipe(
+        Effect.andThen(
+          lock.withPermits(1)(
+            Effect.suspend(() => {
+              const current = generation;
 
-          Deferred.doneUnsafe(closed, Exit.void);
-          if (current === undefined) return Effect.void;
-          fail(current, gone());
+              if (current === undefined) return Effect.void;
+              notifyFailure(current, gone());
 
-          return awaitStop(current);
-        }),
+              return awaitStop(current);
+            }),
+          ),
+        ),
       ),
     );
 
@@ -758,7 +742,7 @@ export const make = (options: Options) =>
         Stream.unwrap(Effect.map(open(options), ({ stream }) => stream)),
       latest: Effect.sync(() => latest),
       recent: Effect.sync(() => history),
-      active: Effect.sync(() => generation?.accepting === true),
+      active: Effect.sync(() => generation !== undefined && generation.phase !== "Stopped"),
       sync: Effect.suspend(() => synced(generation, why, options.error)),
       current,
       confirm: confirmation(
@@ -767,7 +751,7 @@ export const make = (options: Options) =>
         why,
         options.error,
       ),
-      excluding: pictures.excluding,
+      excluding: (picture) => lock.withPermits(1)(pictures.excluding(picture)),
       stats: (windowMillis?: number) =>
         Effect.sync(
           () => new CaptureStats({ ...counts.read(windowMillis), ackBacklog: replies.size }),
