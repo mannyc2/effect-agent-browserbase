@@ -14,10 +14,11 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { TestClock } from "effect/testing";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
-import { BrowserError, Closed } from "../src/BrowserError.ts";
+import { BrowserError, Closed, consequence } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import { Frame, Screenshot } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
@@ -56,10 +57,8 @@ const scripted = Effect.fnUntraced(function* (
   // Stage's custom-page path uses only these members; it must never infer Still for this page.
   const page = { id, playwright: { isClosed: () => false }, screencast: () => source } as Page;
 
-  const paint = Effect.suspend(() => {
-    const at = Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
-
-    return Queue.offer(
+  const paintAt = (at: number) =>
+    Queue.offer(
       queue,
       new Frame({
         page: id,
@@ -74,11 +73,11 @@ const scripted = Effect.fnUntraced(function* (
         timing: new Screenshot({ hostTime: at, uncertaintyMillis: 0 }),
       }),
     );
-  });
 
   return {
     page,
-    paint,
+    paint: Effect.suspend(() => paintAt(Number(clock.monotonicTimeNanosUnsafe()) / 1e6)),
+    paintAt,
     stopped: Deferred.await(stopped),
     finish: Queue.end(queue),
     released: () => released,
@@ -92,6 +91,142 @@ const scripted = Effect.fnUntraced(function* (
     ),
   };
 });
+
+// #282: control delivery separately from capture time to model a late frame after silence.
+it.effect("keeps the shown timeline monotonic through prepared switches and late paint", () =>
+  Effect.gen(function* () {
+    const stage = yield* Stage.make();
+    const seen = yield* Queue.unbounded<Stage.Shown>();
+
+    const model: Array<{
+      readonly tag: Stage.Shown["_tag"];
+      readonly at: number;
+      readonly captured: number;
+    }> = [];
+
+    const observed: Array<Stage.Shown> = [];
+
+    yield* stage.shown({ hold: "100 millis" }).pipe(
+      Stream.runForEach((value) => Queue.offer(seen, value)),
+      Effect.forkScoped,
+    );
+    for (let turn = 0; turn < 3; turn++) {
+      const fixture = yield* scripted(`page-${turn}`);
+      const cue = yield* stage.cue(fixture.page);
+      const start = turn * 200;
+
+      yield* fixture.paintAt(start);
+      yield* cue.ready;
+      yield* TestClock.adjust("20 millis");
+      const presented = yield* cue.commit();
+
+      model.push({ tag: "Painted", at: start + 20, captured: start });
+      assert.strictEqual(presented.at, start + 20);
+      observed.push(yield* Queue.take(seen));
+      yield* TestClock.adjust("10 millis");
+      yield* fixture.paint;
+      observed.push(yield* Queue.take(seen));
+      yield* TestClock.adjust("170 millis");
+      model.push({ tag: "Painted", at: start + 30, captured: start + 30 });
+      model.push({ tag: "Stalled", at: start + 200, captured: start + 30 });
+      observed.push(yield* Queue.take(seen));
+      yield* fixture.paintAt(start + 40);
+      observed.push(yield* Queue.take(seen));
+      model.push({ tag: "Painted", at: start + 200, captured: start + 40 });
+    }
+    assert.deepStrictEqual(
+      observed.map((value) => ({
+        tag: value._tag,
+        at: value.at,
+        captured: value._tag === "Gone" ? undefined : value.frame.hostTime,
+      })),
+      model,
+    );
+  }),
+);
+
+// #282: a slow output reader must see the switch before later silence evidence for that page.
+it.effect("preserves the switch time when a paused reader resumes after silence", () =>
+  Effect.gen(function* () {
+    const clock = yield* Clock.Clock;
+    // The host clock advances before the timer wakes, as when its event loop was delayed.
+    let hostTime = 0;
+
+    const stage = yield* Stage.make().pipe(
+      Effect.provideService(Clock.Clock, {
+        ...clock,
+        monotonicTimeNanosUnsafe: () => BigInt(hostTime) * 1_000_000n,
+      }),
+    );
+
+    const resume = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const switched = yield* Deferred.make<void>();
+    const observed: Array<Stage.Shown> = [];
+    const first = yield* scripted("first");
+    const one = yield* stage.cue(first.page);
+
+    yield* first.paint;
+    yield* one.ready;
+    yield* one.commit();
+
+    yield* stage.shown({ hold: "100 millis" }).pipe(
+      Stream.runForEach((value) =>
+        Effect.gen(function* () {
+          observed.push(value);
+          if (observed.length === 1) {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(resume);
+          }
+          if (value._tag === "Painted" && value.frame.page === "next")
+            yield* Deferred.succeed(switched, undefined);
+        }),
+      ),
+      Effect.forkScoped,
+    );
+    hostTime = 1;
+    yield* TestClock.adjust("1 millis");
+    yield* first.paint;
+    yield* Deferred.await(entered);
+    for (let paint = 0; paint < 4; paint++) {
+      hostTime += 10;
+      yield* TestClock.adjust("10 millis");
+      yield* first.paint;
+    }
+    hostTime += 10;
+    yield* TestClock.adjust("10 millis");
+    const next = yield* scripted("next");
+    const two = yield* stage.cue(next.page);
+
+    yield* next.paint;
+    const presented = yield* two.commit();
+
+    const probed = yield* Deferred.make<void>();
+
+    next.page.playwright.isClosed = () => {
+      Deferred.doneUnsafe(probed, Exit.void);
+
+      return false;
+    };
+    hostTime += 100;
+    yield* TestClock.adjust("100 millis");
+    yield* Deferred.await(probed);
+    yield* Effect.yieldNow;
+    yield* Deferred.succeed(resume, undefined);
+    yield* Deferred.await(switched);
+
+    const nextValues = observed.filter(
+      (value) => value._tag !== "Gone" && value.frame.page === "next",
+    );
+
+    assert.strictEqual(nextValues[0]?._tag, "Painted");
+    assert.strictEqual(nextValues[0]?.at, presented.at);
+    assert.deepStrictEqual(
+      observed.map(({ at }) => at),
+      observed.map(({ at }) => at).toSorted((a, b) => a - b),
+    );
+  }),
+);
 
 it.live("a prepared frame cannot hide its capture's terminal failure or completion", () =>
   Effect.forEach(["failure", "completion"], (ending) =>
@@ -107,10 +242,19 @@ it.live("a prepared frame cannot hide its capture's terminal failure or completi
       yield* Effect.yieldNow;
       const ready = yield* cue.ready.pipe(Effect.flip);
 
-      assert.strictEqual(ready.reason._tag, "Closed");
       const commit = yield* cue.commit().pipe(Effect.flip);
 
-      assert.strictEqual(commit.reason._tag, "Closed");
+      // #284: stream completion ends the cue; only a reported connection loss ends the session.
+      for (const error of [ready, commit]) {
+        assert.deepStrictEqual(
+          consequence(error),
+          ending === "failure"
+            ? { lost: "session", repeat: "safe" }
+            : { lost: "nothing", repeat: "pointless" },
+        );
+        if (ending === "failure")
+          assert.deepStrictEqual(error.reason, new Closed({ cause: "connection" }));
+      }
       assert.isTrue(Option.isNone(yield* stage.current));
     }).pipe(Effect.scoped),
   ),
@@ -256,7 +400,7 @@ it.live("closing a cue wakes a commit waiting for a future event", () =>
     yield* Scope.close(scope, Exit.void);
     const error = yield* Fiber.join(committing).pipe(Effect.timeout("200 millis"));
 
-    assert.strictEqual(error.reason._tag, "Closed");
+    assert.deepStrictEqual(consequence(error), { lost: "nothing", repeat: "pointless" });
     assert.isTrue(Option.isNone(yield* stage.current));
   }),
 );

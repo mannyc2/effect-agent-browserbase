@@ -92,9 +92,21 @@ export interface Opened<A = void> {
   readonly release?: Effect.Effect<Lifecycle.Released> | undefined;
 }
 
+/** Facts available before an acquisition attempt; awaiting `after` never changes release order. */
+export interface Admission {
+  readonly number: number;
+  /**
+   * The preceding generation's release once it stops serving. Undefined on the first open and
+   * while a nonexclusive rotation keeps it serving; checked again before each retry.
+   */
+  readonly after: Effect.Effect<Lifecycle.Released> | undefined;
+}
+
 export interface Options<E, R, A = void> {
   /** Opens one generation in the scope it is given. */
   readonly open: Effect.Effect<Opened<A>, E, R>;
+  /** Runs before every open attempt, including the first; failures follow `reopen` and `definite`. */
+  readonly admit?: ((opening: Admission) => Effect.Effect<void, E, R>) | undefined;
   /** When to try a failed open again. Defaults to exponential from 1 second, for 5 minutes. */
   readonly reopen?: Schedule.Schedule<unknown, E> | undefined;
   /**
@@ -132,6 +144,8 @@ export interface Lease<A> {
   readonly generation: number;
   readonly browser: Browser.Service;
   readonly value: A;
+  /** Declare this serving generation unusable and revoke it now; stale declarations do nothing. */
+  readonly lose: (detail: string) => Effect.Effect<void>;
   /** First notice that serving ended; loss or retirement may revoke before its deadline. */
   readonly ending: Effect.Effect<Superseded>;
   /** An independent scope; its resources close before provider release. Fails once revoked. */
@@ -167,6 +181,7 @@ interface Held<A> {
   readonly opened: Opened<A>;
   readonly ending: Deferred.Deferred<Superseded>;
   readonly revoked: Deferred.Deferred<Superseded>;
+  readonly released: Deferred.Deferred<Lifecycle.Released>;
   readonly scope: Scope.Closeable;
 }
 
@@ -174,6 +189,9 @@ type State<A> = Lifecycle.State<Held<A>, Hold>;
 type Apply<A> = (
   input: Lifecycle.Input<Held<A>, Hold>,
 ) => Effect.Effect<Lifecycle.Step<Held<A>, Hold>>;
+
+const superseded = (generation: number, { reason, revokeAt }: Lifecycle.Draining) =>
+  new Superseded({ generation, reason, revokeAt });
 
 const retired = () => new Unavailable({ reason: "retired", detail: "the supervisor was retired" });
 
@@ -278,6 +296,8 @@ const leasing = <A>(
     generation: live.number,
     browser: live.value.opened.browser,
     value: live.value.opened.value,
+    lose: (detail) =>
+      apply({ _tag: "Lost", number: live.number, cause: "declared", detail }).pipe(Effect.asVoid),
     ending: Deferred.await(live.value.ending),
     retain: Effect.uninterruptible(
       Effect.gen(function* () {
@@ -310,9 +330,18 @@ const leasing = <A>(
           apply({ _tag: "Let", number: live.number, hold }).pipe(Effect.asVoid),
         );
 
+        const revoked = Deferred.await(live.value.revoked).pipe(Effect.flatMap(Effect.fail));
+
         return yield* Effect.raceFirst(
-          work(leaseOf(live)),
-          Deferred.await(live.value.revoked).pipe(Effect.flatMap(Effect.fail)),
+          work(leaseOf(live)).pipe(
+            // Declaring loss and returning can finish before the race's other fiber runs.
+            Effect.tap(() =>
+              Deferred.isDone(live.value.revoked).pipe(
+                Effect.flatMap((done) => (done ? revoked : Effect.void)),
+              ),
+            ),
+          ),
+          revoked,
         );
       }),
     );
@@ -338,6 +367,7 @@ const acquireGeneration = <A, E, R>(
           scope,
           ending: Deferred.makeUnsafe<Superseded>(),
           revoked: Deferred.makeUnsafe<Superseded>(),
+          released: Deferred.makeUnsafe<Lifecycle.Released>(),
         })),
       ),
     ),
@@ -369,23 +399,14 @@ const watchGeneration = <A>(
   return Effect.all([loss, rotation], { concurrency: 2, discard: true });
 };
 
-// Revocation stops use work; retained resources and use finalizers let go before the provider.
+// After revocation, retained resources and use finalizers let go before the provider.
 const releaseGeneration = <A>(
   command: Extract<Lifecycle.Command<Held<A>>, { readonly _tag: "Release" | "Leave" }>,
   state: SubscriptionRef.SubscriptionRef<State<A>>,
   apply: Apply<A>,
 ) =>
   Effect.gen(function* () {
-    const { live, ending } = command;
-
-    yield* Deferred.succeed(
-      live.value.revoked,
-      new Superseded({
-        generation: live.number,
-        reason: ending.reason,
-        revokeAt: ending.revokeAt,
-      }),
-    );
+    const { live } = command;
     const holds = Lifecycle.lookup(state.value, live.number)?.holds ?? [];
 
     const cleaned = yield* Effect.forEach(
@@ -414,8 +435,24 @@ const releaseGeneration = <A>(
     const closed = yield* Effect.exit(Scope.close(live.value.scope, Exit.void));
 
     yield* apply({ _tag: "Released", number: live.number, released });
+    if (released !== undefined) yield* Deferred.succeed(live.value.released, released);
     yield* Exit.asVoidAll([...cleaned, closed]);
   });
+
+const openedInput = <A, E>(
+  number: number,
+  exit: Exit.Exit<Held<A>, E>,
+): Lifecycle.Input<Held<A>, Hold> =>
+  Exit.isSuccess(exit)
+    ? { _tag: "Opened", live: { number, value: exit.value } }
+    : Cause.hasInterruptsOnly(exit.cause)
+      ? { _tag: "Abandoned", number }
+      : { _tag: "Failed", number, detail: describe(exit.cause), cause: Cause.squash(exit.cause) };
+
+const admissionAfter = <A>(previous: Lifecycle.Live<Held<A>> | undefined, state: State<A>) =>
+  previous === undefined || (state._tag !== "Retired" && state.serving?.number === previous.number)
+    ? undefined
+    : Deferred.await(previous.value.released);
 
 const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
   options: MakeOptions<E, R, A>,
@@ -489,11 +526,7 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
             );
             break;
           case "Drain": {
-            const ending = new Superseded({
-              generation: command.live.number,
-              reason: command.ending.reason,
-              revokeAt: command.ending.revokeAt,
-            });
+            const ending = superseded(command.live.number, command.ending);
 
             yield* Deferred.succeed(command.live.value.ending, ending);
             yield* Effect.forkIn(
@@ -508,40 +541,39 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
           }
           case "Release":
           case "Leave":
+            yield* Deferred.succeed(
+              command.live.value.revoked,
+              superseded(command.live.number, command.ending),
+            );
             runRelease(command.live.number, releaseGeneration(command, state, apply));
             break;
         }
     });
 
-  const openOnce = acquireGeneration(options.open, own).pipe(Effect.provideContext(context));
+  const openGeneration = (number: number, previous: Lifecycle.Live<Held<A | void>> | undefined) => {
+    const after = previous === undefined ? undefined : Deferred.await(previous.value.released);
 
-  const openGeneration = (number: number, after: number | undefined) =>
-    Effect.uninterruptibleMask((restore) =>
+    const openOnce = acquireGeneration(
+      Effect.suspend(
+        () =>
+          options.admit?.({ number, after: admissionAfter(previous, state.value) }) ?? Effect.void,
+      ).pipe(Effect.andThen(options.open)),
+      own,
+    ).pipe(Effect.provideContext(context));
+
+    return Effect.uninterruptibleMask((restore) =>
       restore(
-        (after === undefined
-          ? Effect.void
-          : changedUntil(state, (current) => !current.draining.has(after))
-        ).pipe(
+        (exclusive && after !== undefined ? after : Effect.void).pipe(
           Effect.andThen(
             Effect.retry(openOnce, { schedule: reopen, while: (error) => !definite(error) }),
           ),
         ),
       ).pipe(
         Effect.exit,
-        Effect.flatMap((exit) =>
-          Exit.isSuccess(exit)
-            ? apply({ _tag: "Opened", live: { number, value: exit.value } })
-            : Cause.hasInterruptsOnly(exit.cause)
-              ? apply({ _tag: "Abandoned", number })
-              : apply({
-                  _tag: "Failed",
-                  number,
-                  detail: describe(exit.cause),
-                  cause: Cause.squash(exit.cause),
-                }),
-        ),
+        Effect.flatMap((exit) => apply(openedInput(number, exit))),
       ),
     );
+  };
 
   const use = leasing(state, apply, waitTimeout, now, clock);
 

@@ -16,7 +16,8 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 - `ContextLease`: who may write a stored context. `ContextLease.layer` lets one writer at a time
   hold each context in this process; an application provides its own to exclude writers across
   processes. A persisting open that will not write to a context whose sessions may still save to
-  it fails with `ContextHeld`.
+  it fails with `ContextHeld`. A custom lease can refuse a writer permanently with `ContextRefused`;
+  `open`, `verifyContext` and `reconcile` preserve that error, and supervision stops retrying it.
 - `BrowserbaseClient`: sessions, Live View, stored contexts, extensions, Search and Fetch.
   `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
 - `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
@@ -87,7 +88,8 @@ The [generic supervisor contract](../browser/README.md#supervising-browser-gener
 `use`, transferable `retain` scopes, cancellation and stale-work refusal.
 
 Outgoing holds drain for `handover`, 30 seconds by default. A lost session revokes immediately and
-is replaced on `reopen`; `rotateBefore` and `rotate` keep their normal schedule while older
+is replaced on `reopen`; a consumer can declare the same loss with `lease.lose(detail)`.
+`rotateBefore` and `rotate` keep their normal schedule while older
 nonexclusive generations drain. This can overlap more than two hosted sessions. The consumer
 owns its overlap and billing policy. `states` reports each generation's release outcome;
 `Unconfirmed` means the old session might still run even after local ownership ends.
@@ -96,8 +98,18 @@ Sessions that persist to a stored context are exclusive: rotation first drains t
 generation, releases its session and lets its save settle. If release is unconfirmed, the next
 writer reconciles the context and fails `ContextHeld` while the old writer cannot be confirmed
 ended. It does not silently create another writer. An open Browserbase refused, as for a bad key
-or an invalid request, is `Down` at once; everything else, a held context included, is tried again
-on the schedule.
+or an invalid request, and a permanent `ContextRefused`, are `Down` at once. Temporary `ContextHeld`
+failures are tried again on the schedule. `definite(error)` can also stop retries for application
+failures, including those from `build` or `admit`.
+
+`admit({ number, after })` runs before each attempt, including the first, before acquiring a
+context lease or making a provider request. `after`, when present, is the previous generation's
+release outcome. Await it to enforce an account policy such as refusing a reopen after an
+`Unconfirmed` release; ignoring it preserves immediate reopening. First opens and healthy
+nonexclusive rotations have no `after`, so the same policy keeps ephemeral rotations opening
+the replacement before releasing the outgoing session. Loss recovery and exclusive rotation
+expose the preceding release, including on retries after a failed acquisition. Admission shares
+the opening fiber's retry and cancellation rules.
 
 ```ts
 const program = Effect.gen(function* () {

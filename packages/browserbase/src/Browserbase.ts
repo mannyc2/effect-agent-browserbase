@@ -51,7 +51,7 @@ import {
   type SessionOptions,
 } from "./BrowserbaseClient.ts";
 import { BrowserbaseError, Decode, InvalidRequest, isTransient } from "./BrowserbaseError.ts";
-import { ContextHeld, ContextLease } from "./ContextLease.ts";
+import { ContextHeld, ContextLease, ContextRefused } from "./ContextLease.ts";
 import * as CaptureConnection from "./internal/captureConnection.ts";
 
 export interface Options extends Browser.Options {
@@ -633,11 +633,11 @@ export interface SuperviseOptions<A = Session, E = never, R = never>
     Options,
     Pick<
       Supervisor.Options<
-        BrowserError | BrowserbaseError | ContextHeld | E,
-        BrowserbaseClient | ContextLease | R,
+        BrowserError | BrowserbaseError | ContextHeld | ContextRefused | E,
+        Scope.Scope | BrowserbaseClient | ContextLease | R,
         A
       >,
-      "reopen" | "rotateBefore" | "waitTimeout" | "handover"
+      "reopen" | "rotateBefore" | "waitTimeout" | "handover" | "admit" | "definite"
     > {
   /**
    * Keep the session past the supervisor's scope, under this name: 1 to 64 letters, digits, `_`,
@@ -653,11 +653,12 @@ export interface SuperviseOptions<A = Session, E = never, R = never>
 }
 
 /**
- * Browserbase refused the request: no new try mends a refused key, request or id. A context held
- * is not among them, since each try ends its sessions again.
+ * No new try mends a refused key, request, id or context policy. A context held temporarily is
+ * not among them, since each try can take its lease and end its sessions again.
  */
 const refused = (error: unknown) =>
-  Schema.is(BrowserbaseError)(error) && !isTransient(error) && error.reason._tag !== "Decode";
+  Schema.is(ContextRefused)(error) ||
+  (Schema.is(BrowserbaseError)(error) && !isTransient(error) && error.reason._tag !== "Decode");
 
 /**
  * Keep Browserbase sessions open as `Supervisor` generations, each a new session made from
@@ -708,7 +709,8 @@ export function supervise<A = Session, E = never, R = never>(
       exclusive: options.session?.browserSettings?.context?.persist === true,
       keep: keep !== undefined,
       reopen: options.reopen,
-      definite: refused,
+      admit: options.admit,
+      definite: (error) => refused(error) || options.definite?.(error) === true,
       rotateBefore: options.rotateBefore,
       waitTimeout: options.waitTimeout,
       handover: options.handover,
@@ -720,7 +722,7 @@ export const layer = (
   options: Options = {},
 ): Layer.Layer<
   Browser.Browser,
-  BrowserError | BrowserbaseError | ContextHeld,
+  BrowserError | BrowserbaseError | ContextHeld | ContextRefused,
   BrowserbaseClient | ContextLease
 > =>
   Layer.effect(

@@ -78,10 +78,13 @@ const apply = (world: World, input: Lifecycle.Input<string, number>) => {
         assert.isUndefined(world.opening, "one open at a time");
         assert.isFalse(world.retired, "nothing opens once retired");
         assert.isAbove(command.number, world.newest, "generation numbers only grow");
-        if (!world.exclusive)
-          assert.isUndefined(command.after, "handover never delays a nonexclusive open");
+        assert.strictEqual(
+          command.after?.number,
+          [...world.opened].at(-1),
+          "admission follows the latest opened generation even after its release",
+        );
         world.newest = command.number;
-        world.opening = { number: command.number, after: command.after };
+        world.opening = { number: command.number, after: command.after?.number };
         break;
       case "Watch":
         world.watched.add(command.live.number);
@@ -159,6 +162,16 @@ const apply = (world: World, input: Lifecycle.Input<string, number>) => {
   }
   if (input._tag === "Let")
     assert.isFalse(Lifecycle.lookup(step.state, input.number)?.holds.has(input.hold) ?? false);
+  // #279: late consumer declarations never accelerate a drain or touch its successor.
+  if (
+    input._tag === "Lost" &&
+    input.cause === "declared" &&
+    (before._tag === "Retired" || before.serving?.number !== input.number)
+  ) {
+    assert.strictEqual(step.state, before);
+    assert.deepStrictEqual(step.events, []);
+    assert.deepStrictEqual(step.commands, []);
+  }
   if (world.retired) assert.strictEqual(step.state._tag, "Retired");
   if (world.exclusive)
     assert.isFalse(
@@ -207,7 +220,8 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
   // is tried again changes nothing the transition sees. Exclusive ones try only once the
   // generation before has been released.
   if (opening !== undefined) {
-    const ready = opening.after === undefined || !world.state.draining.has(opening.after);
+    const ready =
+      !world.exclusive || opening.after === undefined || !world.state.draining.has(opening.after);
 
     const tried = (input: Lifecycle.Input<string, number>) => () => {
       if (world.exclusive)
@@ -285,6 +299,10 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
   }
   actions.push(["borrow", () => apply(world, { _tag: "Hold", hold: ++world.hold })]);
   for (const number of world.opened) {
+    actions.push([
+      `declare ${number}`,
+      () => apply(world, { _tag: "Lost", number, cause: "declared" }),
+    ]);
     actions.push([
       `retain ${number}`,
       () => apply(world, { _tag: "Hold", number, hold: ++world.hold }),

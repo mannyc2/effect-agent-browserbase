@@ -32,6 +32,16 @@ export class ContextHeld extends Schema.TaggedError<ContextHeld>()("ContextHeld"
   }
 }
 
+/** The lease refuses this writer outright; retrying cannot change its policy. */
+export class ContextRefused extends Schema.TaggedError<ContextRefused>()("ContextRefused", {
+  context: Schema.String,
+  detail: Schema.String,
+}) {
+  override get message() {
+    return `context ${this.context} is refused: ${this.detail}`;
+  }
+}
+
 /** A writer's hold on a stored context, for the scope `hold` was given. */
 export interface Hold {
   /** Whether a session that saves to the context may still run, as the writer before left it. */
@@ -43,9 +53,12 @@ export interface Hold {
 export interface Service {
   /**
    * Hold the context as its only writer until the scope closes, waiting while another holds it.
-   * It fails with `ContextHeld` when the lease cannot be taken, as when its own store is down.
+   * It fails with `ContextHeld` when the lease cannot be taken, as when its own store is down,
+   * or `ContextRefused` when this writer is forbidden and another try cannot help.
    */
-  readonly hold: (context: string) => Effect.Effect<Hold, ContextHeld, Scope.Scope>;
+  readonly hold: (
+    context: string,
+  ) => Effect.Effect<Hold, ContextHeld | ContextRefused, Scope.Scope>;
 }
 
 export class ContextLease extends Context.Service<ContextLease, Service>()(
