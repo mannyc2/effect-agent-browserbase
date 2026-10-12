@@ -26,6 +26,7 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
     activeElement,
     clean,
     describe,
+    inCurrentDocument,
     isDisabled,
     isHtml,
     isInput,
@@ -72,8 +73,28 @@ export const edit = (names: Names, guard: Guard, placing: ContextReader) => {
     };
   };
 
-  const focus = (ref: string, replace: boolean): FocusResult => {
-    const element = lookup(ref);
+  /**
+   * The focused field, when it is a text field named `name`: one a page put in place of a field
+   * just pressed and gave focus to, as a typeahead does.
+   */
+  const replacement = (name: string): Element | undefined => {
+    const active = activeElement();
+
+    return active !== null &&
+      textEntry(active) &&
+      inCurrentDocument(active) &&
+      nameOf(active, roleOf(active)) === name
+      ? active
+      : undefined;
+  };
+
+  /**
+   * Focus a field to type into. `follow` is the field's name when the action pressed it first: a
+   * page may answer the press with another field of that name in its place, focused, and the keys
+   * follow focus there, as a person's would.
+   */
+  const focus = (ref: string, replace: boolean, follow: string | null): FocusResult => {
+    const element = lookup(ref) ?? (follow === null ? undefined : replacement(follow));
 
     if (element === undefined) return { error: `${ref} is not on the page any more`, stale: true };
     if (isDisabled(element)) return { error: `${ref} is disabled` };

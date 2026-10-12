@@ -341,9 +341,17 @@ const typeText = (input: Parts) => {
             // Focusing can run page handlers, including navigation, before the script returns.
             yield* marks.sent;
 
+            // A page may answer the press with another field of the same name in the field's
+            // place, focused, as a typeahead does: the keys follow it, unless a guard approved
+            // this field and no other, or the field is secret, as its replacement may not be.
+            const follow =
+              marks.style.shown && approval === undefined && !secret && target.name !== ""
+                ? target.name
+                : null;
+
             const focused = yield* mutate(
               "type",
-              scriptCall("focus", into, replace),
+              scriptCall("focus", into, replace, follow),
               approval,
             ).pipe(Effect.flatMap(decodeWith("type", Script.FocusResultSchema)));
 
