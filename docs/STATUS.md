@@ -2,6 +2,16 @@
 
 ## 0.3
 
+The `0.3.0-beta.15` release extends `Admission.after` to every earlier session that stopped
+serving: failed acquisition attempts and older generations still draining are included. Awaiting
+`after` waits for all pending releases; the first `Unconfirmed` outcome stays visible to later
+attempts. Healthy nonexclusive rotation keeps its serving predecessor until the replacement
+opens. The optional `Supervisor.Releasing` service lets adapters report failed-attempt cleanup;
+Browserbase uses it for failed connections, builds and lost creates. Completed generations retain
+only release outcomes and pending signals, rather than browser and scope references. Native
+Chromium, fake-provider and randomized lifecycle tests cover these boundaries; they do not
+establish hosted billing or actual provider release confirmation.
+
 The `0.3.0-beta.14` release adds declared generation loss and per-attempt recovery admission:
 `lease.lose(detail)` revokes serving work before returning, and `Admission.after` supplies the
 preceding generation's actual release once it stops serving. `Browserbase.supervise` exposes
