@@ -1,5 +1,6 @@
 import { assert, it, layer } from "@effect/vitest";
 import { Clock, Duration, Effect, Fiber, Schedule, Stream } from "effect";
+import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
@@ -306,11 +307,67 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
 
         const clock = yield* Clock.Clock;
-        const entered = Promise.withResolvers<void>();
-        const resume = Promise.withResolvers<void>();
+        let entered = Promise.withResolvers<void>();
+        let resume = Promise.withResolvers<void>();
         let held = false;
+        const viewportRead = Promise.withResolvers<void>();
+        const viewportReply = Promise.withResolvers<void>();
+        const createSession = context.newCDPSession.bind(context);
+        let resize: "off" | "waiting" | "delivered" = "off";
 
-        yield* Effect.addFinalizer(() => Effect.sync(() => resume.resolve()));
+        context.newCDPSession = async (target) => {
+          const cdp = await createSession(target);
+          const send = cdp.send.bind(cdp);
+
+          const emitter = cdp as CDPSession & {
+            emit(event: string | symbol, ...args: ReadonlyArray<unknown>): boolean;
+          };
+
+          const emit = emitter.emit.bind(emitter);
+
+          // Deliver the first real resized frame; later duplicates cannot turn acceptance into
+          // a new receipt. Chromium's unacknowledged-frame bound stops further duplicate paints.
+          emitter.emit = (event, ...args) => {
+            if (event === "Page.screencastFrame" && resize !== "off") {
+              const frame = args[0] as { metadata: { deviceWidth: number } };
+
+              if (frame.metadata.deviceWidth === 640) {
+                if (resize === "delivered") return true;
+                resize = "delivered";
+              }
+            }
+
+            return emit(event, ...args);
+          };
+
+          const observed: CDPSession["send"] = (method, params) => {
+            const response = send(method, params);
+
+            if (
+              method === "Runtime.evaluate" &&
+              params !== undefined &&
+              "expression" in params &&
+              params.expression.endsWith(".__effectBrowser.viewport()")
+            ) {
+              viewportRead.resolve();
+
+              return response.then((value) => viewportReply.promise.then(() => value));
+            }
+
+            return response;
+          };
+
+          cdp.send = observed;
+
+          return cdp;
+        };
+
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            resume.resolve();
+            viewportReply.resolve();
+          }),
+        );
 
         const browser = yield* makeBrowser(context, { id: "ready-pulse", provider: "test" }).pipe(
           Effect.provideService(Clock.Clock, {
@@ -372,22 +429,29 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Fiber.join(waiting);
         assert.isAtLeast((yield* browser.now) - returned, 300);
 
-        // A resize is accepted later when its size outlasts a screenshot. No new receipt wakes
-        // that acceptance: a poll between receipt and delivery must not consume the paint.
-        page.playwright.viewportSize = () => ({ width: 320, height: 180 });
+        // CI #38297573716 showed that a resize need not arrive within 200 ms. Wait for its
+        // actual viewport lookup, then hold that answer while ready establishes its reference.
+        page.playwright.viewportSize = () => null;
         const before = yield* page.captureStats();
 
-        const resizing = yield* page
-          .ready({ still: "foreground", quietMillis: 1500, timeout: "5 seconds" })
-          .pipe(Effect.forkScoped);
-
-        yield* Effect.sleep("150 millis");
+        resize = "waiting";
         yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 360 }));
-        yield* Effect.sleep("200 millis");
+        yield* Effect.promise(() => viewportRead.promise).pipe(Effect.timeout("5 seconds"));
         const heldFrames = yield* page.captureStats();
 
         assert.isAbove(heldFrames.received, before.received);
         assert.strictEqual(heldFrames.accepted, before.accepted);
+        entered = Promise.withResolvers<void>();
+        resume = Promise.withResolvers<void>();
+        held = false;
+
+        const resizing = yield* page
+          .ready({ still: "foreground", quietMillis: 300, timeout: "5 seconds" })
+          .pipe(Effect.forkScoped);
+
+        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("5 seconds"));
+        yield* Effect.sleep("350 millis");
+        viewportReply.resolve();
 
         const adopted = yield* page.captureStats().pipe(
           Effect.repeat({
@@ -400,8 +464,9 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const delivered = yield* browser.now;
 
         assert.strictEqual(adopted.received, heldFrames.received);
+        resume.resolve();
         yield* Fiber.join(resizing);
-        assert.isAtLeast((yield* browser.now) - delivered, 1500);
+        assert.isAtLeast((yield* browser.now) - delivered, 300);
       }),
     );
 
