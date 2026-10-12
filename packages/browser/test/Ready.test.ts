@@ -1,7 +1,7 @@
 import { assert, it, layer } from "@effect/vitest";
-import { Duration, Effect, Schedule, Stream } from "effect";
+import { Duration, Effect, Fiber, Schedule, Stream } from "effect";
 
-import { Browser } from "../src/Browser.ts";
+import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
@@ -25,6 +25,76 @@ const reason = (effect: Effect.Effect<void, { readonly reason: { readonly _tag: 
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Page.ready",
   (it) => {
+    it.effect("never takes a screenshot's paused capture for a still animated screen", () =>
+      Effect.gen(function* () {
+        const native = (yield* Browser).context.browser();
+
+        if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+        const context = yield* Effect.acquireRelease(
+          Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+          (context) => Effect.promise(() => context.close()),
+        );
+
+        const browser = yield* makeBrowser(context, { id: "ready-picture", provider: "test" });
+        const page = yield* browser.newPage();
+
+        yield* show(
+          page,
+          `<canvas id=c width=400 height=200></canvas><script>
+  const g = c.getContext("2d");
+  function draw(now) {
+    g.fillStyle = "hsl(" + Math.round(now) % 360 + ", 80%, 50%)";
+    g.fillRect(0, 0, 400, 200);
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+</script>`,
+        );
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* page.state.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("10 millis"),
+            until: (state) => state.frame !== undefined,
+          }),
+          Effect.timeout("5 seconds"),
+        );
+        const entered = Promise.withResolvers<void>();
+        const restored = Promise.withResolvers<void>();
+        const screenshot = page.playwright.screenshot.bind(page.playwright);
+
+        page.playwright.screenshot = (options) => {
+          entered.resolve();
+
+          return screenshot(options).then((image) => restored.promise.then(() => image));
+        };
+        yield* Effect.addFinalizer(() => Effect.sync(() => restored.resolve()));
+
+        const outcome = (timeout: Duration.Input) =>
+          page
+            .ready({ quietMillis: 100, timeout })
+            .pipe(
+              Effect.match({ onSuccess: () => "ready", onFailure: (error) => error.reason._tag }),
+            );
+
+        const before = yield* outcome("1 second").pipe(Effect.forkScoped);
+
+        yield* Effect.sleep("20 millis");
+
+        const picture = yield* page
+          .zoom({ x: 5, y: 5, width: 160, height: 90 })
+          .pipe(Effect.forkScoped);
+
+        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("5 seconds"));
+        assert.strictEqual(yield* outcome("300 millis"), "Timeout");
+        assert.strictEqual(yield* Fiber.join(before), "Timeout");
+        restored.resolve();
+        yield* Fiber.join(picture);
+        // The resumed stream still observes the drawing canvas.
+        assert.strictEqual(yield* outcome("300 millis"), "Timeout");
+      }),
+    );
+
     it.effect("is not ready while the viewport shows nothing, and is once the chart draws", () =>
       Effect.gen(function* () {
         const page = yield* blank;
@@ -108,6 +178,89 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
               .every((animation) => animation.effect?.getComputedTiming().iterations === Infinity),
           ),
         );
+      }),
+    );
+
+    // Accepted stage 2, L1: paint never becomes quiet, although the visible DOM does.
+    it.effect(
+      "observes content quiet from its first read and after changes, while canvas paints",
+      () =>
+        Effect.gen(function* () {
+          const page = yield* blank;
+
+          yield* show(
+            page,
+            `<p id=p>Initial</p><canvas id=c width=400 height=200></canvas>
+<script>
+  const g = c.getContext("2d");
+  function draw(now) { g.fillStyle = "hsl(" + now % 360 + ",80%,50%)"; g.fillRect(0,0,400,200); requestAnimationFrame(draw); }
+  requestAnimationFrame(draw);
+</script>`,
+          );
+          const started = performance.now();
+
+          yield* page.ready({ still: "content", quietMillis: 200, timeout: Duration.seconds(2) });
+          assert.isAtLeast(performance.now() - started, 200);
+          yield* evaluate(page, () => {
+            for (const after of [100, 200, 300])
+              setTimeout(() => {
+                document.querySelector("p")!.textContent = String(after);
+                document.body.dataset.changed = String(performance.now());
+              }, after);
+          });
+          yield* page.ready({ still: "content", quietMillis: 200, timeout: Duration.seconds(2) });
+
+          const observed = yield* evaluate(page, () => ({
+            text: document.querySelector("p")!.textContent,
+            quiet: performance.now() - Number(document.body.dataset.changed),
+          }));
+
+          assert.strictEqual(observed.text, "300");
+          assert.isAtLeast(observed.quiet, 200);
+        }),
+    );
+
+    // L1 exposed the second commit failing Runtime.evaluate instead of restarting readiness.
+    it.effect("restarts content quiet across repeated commits within the original deadline", () =>
+      Effect.gen(function* () {
+        const page = yield* (yield* Browser).newPage();
+
+        yield* Effect.promise(() =>
+          page.playwright.route("https://ready.test/**", (route) => {
+            const url = new URL(route.request().url());
+            const hop = Number(url.pathname.slice(1));
+            const ending = hop === 2 && url.search === "";
+            const next = `setTimeout(() => location.href = "/${hop + 1}${url.search}", 100)`;
+
+            return route.fulfill({
+              contentType: "text/html",
+              body: `<main ${ending ? "" : 'aria-busy="true"'}><h1>${hop}</h1></main>
+<script>window.arrived = performance.now(); ${ending ? "" : hop === 0 ? `window.start = () => { ${next} }` : next}</script>`,
+            });
+          }),
+        );
+        yield* page.goto("https://ready.test/0");
+        yield* evaluate(page, () => (window as unknown as { start: () => void }).start());
+        yield* page.ready({ still: "content", quietMillis: 250, timeout: Duration.seconds(2) });
+        assert.strictEqual(yield* page.url, "https://ready.test/2");
+        assert.isAtLeast(
+          yield* evaluate(
+            page,
+            () => performance.now() - (window as unknown as { arrived: number }).arrived,
+          ),
+          250,
+        );
+        yield* page.goto("https://ready.test/0?endless");
+        yield* evaluate(page, () => (window as unknown as { start: () => void }).start());
+        const started = performance.now();
+
+        assert.strictEqual(
+          yield* reason(
+            page.ready({ still: "content", quietMillis: 250, timeout: Duration.millis(700) }),
+          ),
+          "Timeout",
+        );
+        assert.isBelow(performance.now() - started, 1500);
       }),
     );
   },

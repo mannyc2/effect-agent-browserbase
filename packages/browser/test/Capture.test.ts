@@ -941,8 +941,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.deepStrictEqual([...new Set(sizes.slice(resized))], ["640x480"]);
         const stats = yield* page.captureStats();
 
-        // The library's own crops are left out as they are taken, before any size rule.
-        assert.isAbove(stats.duringPictures, 0);
+        // A paused native capture need not produce a frame to discard. Counts describe callbacks.
         assert.strictEqual(
           stats.received,
           stats.accepted +
@@ -960,7 +959,6 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         assert.isAbove(frames.length, 10);
         assert.deepStrictEqual(escaped, []);
-        assert.isAbove(stats.duringPictures, 0);
         assert.strictEqual(
           stats.received,
           stats.accepted +
@@ -972,11 +970,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    // Chromium stamps frames on another clock than the one the calibration reads, and a loaded
-    // machine can skew the two or deliver frames late. Either way the other half of the rule holds.
-    it.effect("keeps those crops out when frames are stamped late, or arrive late", () =>
+    // Crops must stay private even when both paint timing and delivery outlast a reply.
+    it.effect("keeps those crops out when frames are stamped late and arrive late", () =>
       Effect.gen(function* () {
-        for (const perturbation of [{ stampedLater: 80 }, { arrivingLater: 80 }]) {
+        for (const perturbation of [
+          { stampedLater: 80 },
+          { arrivingLater: 80 },
+          { stampedLater: 80, arrivingLater: 80 },
+        ]) {
           const { frames, escaped } = yield* sameAspectCrops(perturbation);
 
           assert.isAbove(frames.length, 5, JSON.stringify(perturbation));

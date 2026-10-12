@@ -19,8 +19,8 @@
  * part it could not read, which it names with why.
  *
  * Frames come from a running screencast, as far back as the browser's `frameHistory` keeps them.
- * A moment's picture is the newest frame if it was painted after the page's latest input and at
- * most 250 ms ago, else a new screenshot timed by its capture.
+ * A moment's picture is the newest frame if it was painted after the page's latest input and
+ * completed action, at most 250 ms ago, else a new screenshot timed by its capture.
  *
  * @since 0.3.0
  */
@@ -98,6 +98,17 @@ const spread = (frames: ReadonlyArray<Frame>, count: number): ReadonlyArray<Fram
   );
 };
 
+// An action ends after its navigation settles, which can follow the last paint. A fresh picture
+// keeps that completed action inside the moment without moving events between adjacent windows.
+const pictureOf = Effect.fnUntraced(function* (page: Page.Page) {
+  const frame = yield* page.frame({ after: "input" });
+  const events = yield* page.recentEvents;
+
+  return events.some((event) => event._tag === "Action" && event.at > frame.hostTime)
+    ? yield* page.frame({ maxAge: 0 })
+    : frame;
+});
+
 export const capture = Effect.fn("Moment.capture")(function* (
   page: Page.Page,
   options: CaptureOptions = {},
@@ -116,7 +127,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
   // outline is taken alongside. What cannot be read is missing from the moment, not its end.
   const { pictured, outlined } = yield* Effect.all(
     {
-      pictured: Effect.result(page.frame({ after: "input" })).pipe(
+      pictured: Effect.result(pictureOf(page)).pipe(
         Effect.flatMap((picture) =>
           Effect.map(
             page.window({

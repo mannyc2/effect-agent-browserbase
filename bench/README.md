@@ -423,6 +423,24 @@ and Jev `jev-1.13.0`, for $0.018 in all:
 
 ## Browserbase contract
 
+The separate [hosted capability probes](../docs/HOSTED_CHECKS.md) make no model calls:
+
+- `bun run bench handover --allowance /private/h2-allowance.json`: H2, a live retained hold,
+  exclusive replacement and persisted cookie/local-storage read-back; at most two 120-second sessions.
+- `bun run bench cue --allowance /private/h1-allowance.json`: H1, two retained captures for a full
+  five-minute window, 20 cued reveals and a third loading page; one 420-second session.
+- `bun run bench operator --allowance /private/h3-allowance.json --settings /private/h3-settings.json`:
+  H3, bounded input suspension and a human Live View handoff; one 300-second session.
+
+Each requires exact hosted opt-in, recent verification of included allowance, and a clean tested
+commit. Private, aliased evidence retains failed and unconfirmed outcomes. The commands do not
+verify billing settings themselves; establish that boundary before running them. No hosted
+capability run is implied by local test results.
+
+The [compiled composition examples](../docs/COMPOSITION.md) cover watched browsing and an
+operator-assisted workflow runner in local Chromium, with scripted events and a consumer journal.
+Their tests use no hosted session or model.
+
 `effect-browserbase/testing` exports the in-memory Browserbase its tests and the bench's hosted
 tests run on (`TestBrowserbase`), and the checks it is held to (`BrowserbaseContract.checks`):
 what the package relies on Browserbase to do. `bun run bench contract` runs those checks against

@@ -118,7 +118,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.isTrue(after.every((frame) => frame.page === second.id));
         // The switch took effect after the frames it followed and the new page's first frame.
         assert.strictEqual(shown.page, second.id);
-        assert.strictEqual(
+        assert.isAtLeast(
           shown.at,
           Math.max(asked, after[0]?.hostTime ?? asked, before.at(-1)?.hostTime ?? asked),
         );

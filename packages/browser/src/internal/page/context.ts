@@ -20,6 +20,8 @@ import type { CaptureSource } from "../../Browser.ts";
 import { BrowserError, Closed, Failed, type Reason, Timeout } from "../../BrowserError.ts";
 import type { BrowserEvent } from "../../BrowserEvent.ts";
 import type { InputGuard, Point } from "../../Page.ts";
+import type { Gate } from "../input/gate.ts";
+import { Current } from "../input/replies.ts";
 import type * as BrowserClock from "../pictures/clock.ts";
 import * as Lane from "./lane.ts";
 import type { Openings } from "./openings.ts";
@@ -43,6 +45,8 @@ export interface MakeOptions {
   readonly id: string;
   /** The id of the browser's session, which its frames carry. */
   readonly session: string;
+  /** This tracking connection, distinct from the provider session and capture socket. */
+  readonly connection: string;
   /** The page's address when the browser began tracking it. */
   readonly url: string;
   readonly playwright: PlaywrightPage;
@@ -51,6 +55,8 @@ export interface MakeOptions {
   readonly untilLost: <A>(reply: Promise<A>) => Promise<A>;
   readonly settings: Settings;
   readonly clock: Clock.Clock;
+  /** Browser-wide input authority; direct internal page fixtures need not provide one. */
+  readonly inputGate?: Gate | undefined;
   /** The browser's epoch mapping: its first capture measures it, and later ones renew it. */
   readonly mapping: BrowserClock.Mapping;
   readonly publish: (event: BrowserEvent) => number;
@@ -139,6 +145,9 @@ const CurrentCost = Context.Reference<Cost | undefined>(
   },
 );
 
+/** Track the promise returned to the action, after tracing wraps it, so input counts once. */
+const track = <A>(reply: Promise<A>) => Fiber.getCurrent()?.getRef(Current)?.track(reply) ?? reply;
+
 // A message's size on the wire, give or take its envelope.
 const sizeOf = (value: unknown) =>
   value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
@@ -217,7 +226,7 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     }
     const reply = options.untilLost(options.cdp.send(method, params));
 
-    if (cost === undefined) return reply;
+    if (cost === undefined) return track(reply);
 
     const settle = (bytesIn: number) => {
       const at = now();
@@ -228,24 +237,26 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
       }
     };
 
-    return reply.then(
-      (result) => {
-        settle(sizeOf(result));
+    return track(
+      reply.then(
+        (result) => {
+          settle(sizeOf(result));
 
-        return result;
-      },
-      (cause: unknown) => {
-        settle(0);
+          return result;
+        },
+        (cause: unknown) => {
+          settle(0);
 
-        return Promise.reject(cause);
-      },
+          return Promise.reject(cause);
+        },
+      ),
     );
   };
 
   // Every protocol or Playwright call. Errors are undispatched here; `perform` marks them
   // dispatched once input has gone out.
   const native = <A>(operation: string, run: () => Promise<A>, timeoutMillis?: number) =>
-    call(operation, run, options.closedBy, timeoutMillis);
+    call(operation, () => track(run()), options.closedBy, timeoutMillis);
 
   /** Fail with `Timeout` once `duration` has passed, the action timeout unless another is given. */
   const within =
@@ -255,6 +266,13 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
         duration,
         orElse: () => failWith(operation, new Timeout({ millis: Duration.toMillis(duration) })),
       });
+
+  // Stop a navigation whose bounded wait failed. The stop and original mutation keep their
+  // actual replies owned; this cleanup does not turn an unanswered acknowledgement into success.
+  const stopLoading = native("stopLoading", () => send("Page.stopLoading")).pipe(
+    within("stopLoading", options.settings.navigationTimeout),
+    Effect.ignore,
+  );
 
   // The latest submitted input or page change. A read that must follow it waits for the action in
   // flight, so only paint from after its latest input is current. An action ends after its input
@@ -274,6 +292,7 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     documentAt: () => activity.documentAt,
     gone: (operation) => undispatched(operation, new Closed({ cause: options.closedBy() })),
     scope,
+    inputGate: options.inputGate,
   });
 
   // Where this page's latest move left its pointer, which is where its next plain glide starts and
@@ -294,6 +313,7 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     protocol,
     native,
     within,
+    stopLoading,
     activity,
     noteInput,
   };

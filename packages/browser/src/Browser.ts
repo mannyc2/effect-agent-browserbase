@@ -18,6 +18,7 @@ import {
   Exit,
   Option,
   Queue,
+  Schema,
   Scope,
   Semaphore,
   type Stream,
@@ -36,7 +37,9 @@ import {
   type RecordedEvent,
   SessionEnding,
 } from "./BrowserEvent.ts";
+import * as Gate from "./internal/input/gate.ts";
 import { call, failWith, type Settings, undispatched } from "./internal/page/context.ts";
+import * as Identity from "./internal/page/identity.ts";
 import { FailFast } from "./internal/page/lane.ts";
 import * as Openings from "./internal/page/openings.ts";
 import * as PageImpl from "./internal/page/page.ts";
@@ -91,6 +94,17 @@ export interface EventOptions {
   readonly after?: number | undefined;
 }
 
+export interface SuspendOptions {
+  /** Finite, nonnegative drain bound; defaults to the browser's navigationTimeout. */
+  readonly drain?: Duration.Input | undefined;
+}
+
+/** When admitted input finished; events after `since` describe the handoff interval. */
+export class Suspension extends Schema.Class<Suspension>("effect-browser/Suspension")({
+  since: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  at: Schema.Finite,
+}) {}
+
 /**
  * A connection to the browser apart from the one that drives its pages, for their screencasts,
  * as a provider that reaches the browser over a network supplies it: a frame and its
@@ -129,11 +143,17 @@ export interface CaptureSource {
 export interface Service {
   /** The provider's session id, or a local id. */
   readonly id: string;
+  /** Fresh for this connection, even when reattaching the same provider session and page. */
+  readonly connection: string;
   readonly provider: string;
   /** When the provider ends the session on its own, as a hosted session's timeout does. */
   readonly expiresAt: DateTime.Utc | undefined;
   /** Host monotonic milliseconds on the clock shared by this browser’s events and frames. */
   readonly now: Effect.Effect<number>;
+  /** Drain admitted input and withhold new input for this scope; reads and capture continue. */
+  readonly suspend: (
+    options?: SuspendOptions,
+  ) => Effect.Effect<Suspension, BrowserError, Scope.Scope>;
   /** The Playwright context, for anything this API does not cover. Never give it to a model. */
   readonly context: BrowserContext;
   /** Open pages in the order this browser began tracking them. */
@@ -426,6 +446,33 @@ const sentNow = <A>(sent: Promise<A>) => {
   return sent;
 };
 
+/** Close tab resources after publishing their close; a browser loss speaks for all its tabs. */
+const closures = (
+  lostBy: () => DisconnectCause | undefined,
+  publish: (event: BrowserEvent) => number,
+  now: () => number,
+) =>
+  Effect.gen(function* () {
+    const closing = yield* Queue.unbounded<{
+      readonly scope: Scope.Closeable;
+      readonly page: string;
+      readonly cause: PageClosed["cause"];
+    }>();
+
+    yield* Queue.take(closing).pipe(
+      Effect.tap(({ page, cause }) =>
+        Effect.sync(() => {
+          if (lostBy() === undefined) publish(new PageClosed({ at: now(), page, cause }));
+        }),
+      ),
+      Effect.flatMap(({ scope }) => Scope.close(scope, Exit.void)),
+      Effect.forever,
+      Effect.forkScoped,
+    );
+
+    return closing;
+  });
+
 /**
  * Build the service over a context the provider owns. The provider closes the context; this only
  * tracks its pages and events, for as long as the surrounding scope is open. Each page's protocol
@@ -444,6 +491,7 @@ export const make = Effect.fn("Browser.make")(function* (
   options: Options = {},
 ) {
   const clock = yield* Clock.Clock;
+  const connection = yield* Identity.make;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   const { settings, eventHistory, maxPages } = yield* settingsOf(options);
   // Measured on first need: the first capture of any page measures it, and input never waits.
@@ -464,6 +512,15 @@ export const make = Effect.fn("Browser.make")(function* (
     (cause) => publish(new Disconnected({ at: now(), cause })),
   );
 
+  const inputGate = Gate.make({
+    now,
+    sequence: timeline.sequence,
+    closedBy: lostBy,
+    lost,
+    clock,
+    drain: settings.navigationTimeout,
+  });
+
   const registry = new Map<PlaywrightPage, Page.Page>();
   const registrations: Openings.Registrations = new WeakMap();
   const registering = yield* Semaphore.make(1);
@@ -477,22 +534,7 @@ export const make = Effect.fn("Browser.make")(function* (
   // Each tab's scope closes with the tab or the browser. A dropped connection closes every page,
   // then the context, and `Disconnected` stands for all of them: the queue hands a close to its
   // fiber in a later turn, once Playwright has reported the context's.
-  const closing = yield* Queue.unbounded<{
-    readonly scope: Scope.Closeable;
-    readonly page: string;
-    readonly cause: PageClosed["cause"];
-  }>();
-
-  yield* Queue.take(closing).pipe(
-    Effect.tap(({ page, cause }) =>
-      Effect.sync(() => {
-        if (lostBy() === undefined) publish(new PageClosed({ at: now(), page, cause }));
-      }),
-    ),
-    Effect.flatMap(({ scope }) => Scope.close(scope, Exit.void)),
-    Effect.forever,
-    Effect.forkScoped,
-  );
+  const closing = yield* closures(lostBy, publish, now);
 
   const register = (playwright: PlaywrightPage) =>
     registering.withPermits(1)(
@@ -522,11 +564,13 @@ export const make = Effect.fn("Browser.make")(function* (
           const page = yield* PageImpl.make({
             id,
             session: info.id,
+            connection,
             url: targetInfo.url,
             playwright,
             cdp,
             untilLost,
             settings,
+            inputGate,
             clock,
             mapping,
             publish,
@@ -602,9 +646,12 @@ export const make = Effect.fn("Browser.make")(function* (
 
   const service: Service = {
     id: info.id,
+    connection,
     provider: info.provider,
     expiresAt: info.expiresAt,
     now: Effect.sync(now),
+    suspend: (options = {}) =>
+      Effect.map(inputGate.suspend(options.drain), (held) => new Suspension(held)),
     context,
     pages,
     page: (id) =>

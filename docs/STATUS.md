@@ -2,6 +2,99 @@
 
 ## 0.3
 
+The `0.3.0-beta.15` release extends `Admission.after` to every earlier session that stopped
+serving: failed acquisition attempts and older generations still draining are included. Awaiting
+`after` waits for all pending releases; the first `Unconfirmed` outcome stays visible to later
+attempts. Healthy nonexclusive rotation keeps its serving predecessor until the replacement
+opens. The optional `Supervisor.Releasing` service lets adapters report failed-attempt cleanup;
+Browserbase uses it for failed connections, builds and lost creates. Completed generations retain
+only release outcomes and pending signals, rather than browser and scope references. Native
+Chromium, fake-provider and randomized lifecycle tests cover these boundaries; they do not
+establish hosted billing or actual provider release confirmation.
+
+The `0.3.0-beta.14` release adds declared generation loss and per-attempt recovery admission:
+`lease.lose(detail)` revokes serving work before returning, and `Admission.after` supplies the
+preceding generation's actual release once it stops serving. `Browserbase.supervise` exposes
+`admit` and `definite`; permanent context-policy refusal stops before provider requests. Completed
+terminal plan input returns its receipt without waiting for continuous page updates to settle.
+Moment pictures include completed input and account for navigation once. Stage output has its own
+nondecreasing `Painted.at` clock, and a released cue refuses reuse without claiming browser loss.
+Local Chromium and fake-provider regressions cover these boundaries; they do not establish hosted
+billing or provider release behavior.
+
+The `0.3.0-beta.13` release fixes navigation waits retaining input authority after their deadline,
+so corrective input, suspension and Stage cuts can proceed after bounded loading cleanup. Actual
+mutation acknowledgements remain tracked after cancellation. Plan expectations no longer count
+an earlier redirect during preparation as the next step's navigation; saved plans cannot use
+absence or unspecified navigation as durable proof for recovering an unknown operation, including
+when a caller bypasses decoding. A completed Stage cut remains successful during bounded outgoing
+capture cleanup. Native Chromium and plan recovery checks cover these failures. The beta.12 tag
+is preserved but was superseded before publication.
+
+The `0.3.0-beta.11` release completes connection identity and the
+[compiled composition examples](COMPOSITION.md). `Browser.connection` and required
+`Frame.connection` distinguish evidence across reattachment; `(connection, page, document)` names
+one tracked document. Separate capture sockets retain their owning browser's identity. Frame
+reuse requires the current document even when a calibrated timestamp appears newer. Generation
+`hostTime`, frames and browser events use the captured host clock, preserving order when wall time
+changes or callers override their own clock.
+
+The watched example retains prepared pages, cues before send/drop events and cuts performance at
+step boundaries. The separate operator-assisted runner journals begun steps before input, suspends
+library writes during intervention, and requires positive durable read-back to recover unknown
+consequential input. Local Chromium covers both workflows and their failure paths. Editorial
+policy, account decisions and business journals remain consumer responsibilities.
+
+The [H1/H2/H3 commands](HOSTED_CHECKS.md) are executable, opt-in probes with bounded session
+admission and private evidence. Local runs validate the probe mechanisms, including the full
+five-minute two-capture schedule and an external operator stand-in. Hosted runs remain unperformed:
+included Browserbase allowance has not been verified, and H3 also requires a human operator.
+These probes do not make model calls or establish a billing boundary from an environment flag.
+
+The `0.3.0-beta.10` release adds cued presentation: `Stage.cue` prepares capture, and its
+`commit` switches on the event while retaining old-page input authority through the cut.
+Prepared cues belong to their calling scopes; committed capture belongs to the stage.
+Commits preserve arrival order and report queue and input wait in their latency. `Stage.shown`
+reports `Painted`, confirmed `Still`, uncertain `Stalled`, and `Gone` with current-frame checks
+across navigation and capture failure. Local Chromium covers these contracts; hosted concurrent
+capture capacity remains unproven until the included-hour H1 experiment runs.
+
+The `0.3.0-beta.9` release adds scoped browser input suspension. It drains each
+admitted operation through its record and outstanding native replies, refuses later writes as
+`Suspended` and leaves reads/capture available. Nested scopes share authority until the last one
+closes. Local Chromium also verifies agent batches stop between operations without resending
+completed input. The hosted Live View handoff is unrun; provider behavior and included allowance
+remain separate from this native evidence.
+
+The `0.3.0-beta.8` release adds leased generations:
+`Supervisor<A>.use`, scoped values, transferable retained scopes and a default 30-second
+handover. Loss and retirement revoke work immediately; cleanup precedes provider release.
+`Browserbase.supervise({ build })` builds each generation's application value. Exclusive
+persisted-context rotation drains and releases before acquiring; nonexclusive manual and timed
+rotation continue while older generations drain. The consumer owns overlap and billing policy,
+and `Unconfirmed` never asserts that a provider session ended. Generation events carry monotonic
+`hostTime` alongside wall-clock `at`.
+
+The lifecycle model, scripted provider tests and local Chromium cover admission, cancellation,
+revocation, finalizer ordering and rotation. The Browserbase fake covers client sequencing and
+persisted-writer refusal. They do not establish hosted save timing, physical session overlap or
+billing. [H2](HOSTED_CHECKS.md), persisted rotation with a live hold and storage read-back, is
+prepared but unrun until included-hour allowance is verified. Local evidence does not certify
+provider persistence, physical session overlap, capture capacity or billing.
+
+Published `0.3.0-beta.7` adds resumable plan steps with receipts, serialized stopping points, durable
+expected-effect read-back, bounded arrival and content readiness. A missing receipt after
+cancellation or restart stays unknown: the library never automatically repeats unresolved
+consequential input. A positive transient notice is not evidence for recovering a lost reply.
+Local Chromium proves checkbox convergence, cancellation evidence, durable recovery across a
+new page, redirect bounds and content readiness during canvas animation and navigation; these
+are browser contracts, not proof of a particular site's durable transaction semantics.
+
+Published `0.3.0-beta.6` fixes recorded presses replaying on the wrong focused field
+and insertion typing replacing existing text. Local Chromium regressions reproduce both defects
+before the fixes. The Browserbase fake also serves Live View and retains session create settings;
+these tests establish the fake/client contract, not hosted behavior.
+
 0.3 is a rewrite of the 0.2 set on stable Effect 4.0.0 and `effect/ai`, with agents on Yielded
 Agent, the renamed Effect Agent:
 
@@ -28,9 +121,10 @@ Agent, the renamed Effect Agent:
   run on a capture connection of their own, a second, read-only connection to the session, so a
   frame never waits behind a large message on the one that drives the page; a provider supplies
   one through `Cdp.Options.capture`.
-- Sessions that survive: `Supervisor` keeps a browser open as generations from any provider,
-  reopening a lost one on a schedule, rotating ahead of a session's end (make before break, or
-  break first for sessions saving to one stored context), and stopping at once on `retire`. A
+- Sessions that survive: `Supervisor` keeps a browser open as leased generations from any provider,
+  with scoped application values, `use` work and transferable `retain` scopes. It reopens a lost
+  one on a schedule, rotates ahead of a session's end (overlap, or drain and release first for
+  sessions saving to one stored context), and revokes at once on `retire`. A
   failure the provider deems definite, such as a refused key, is `Down` at once with its cause,
   rather than hidden behind the schedule. Each generation's changes stream as `states`, with its
   release outcome last, a loss with its cause. `Browserbase.supervise` supervises hosted sessions,
@@ -182,8 +276,10 @@ Agent, the renamed Effect Agent:
   a screen another session emulates as it was; the page script is registered once per page session, so
   a document's first read is two calls and a warm read one, `ready` included however long the page
   takes, and a wait for a still screen two calls while a capture runs; the library's own clipped
-  pictures stay out of a running screencast, which keeps the page's own frames where the crop is on
-  the page's own session, as over CDP; and focus emulation keeps tabs behind painting. A native
+  pictures stay out of the screencast by pausing native capture through actual picture restoration,
+  retaining readers and settings. Forced pictures with capture running add stop, viewport refresh
+  and restart calls; cached frame reuse remains free, and readiness requires fresh frame evidence
+  after a pause. Focus emulation keeps tabs behind painting. A native
   suite holds these to their call budgets through a counting proxy.
 - Tracing: page operations with their phases and protocol cost, captures, page script round trips
   and opening a browser are Effect spans, and Yielded traces the agent's turns and tool calls with
@@ -228,8 +324,8 @@ and each becoming the next beta.
   page served after a navigation, replays that act in the wrong place, and a busy page's first
   capture failing or widening the clock's estimate. The pictures and clock fixes are in: reads show
   the document a navigation reached, a busy page's first capture starts with what its clock probes
-  could measure and narrows it while frames flow, a crop over CDP no longer pauses a running
-  capture, and a capture's start has a deadline. So are the replay and readiness fixes: replay
+  could measure and narrows it while frames flow, and a capture's start has a deadline. The current
+  release pauses native capture through actual screenshot restoration to keep all crop pixels private. So are the replay and readiness fixes: replay
   refuses the review's six drifts rather than act in the wrong place, `ready` waits out a loading
   screen in one call to the page, and a stalled connection no longer reads as a still screen. Its
   beta, `0.3.0-beta.1`, was never published; `0.3.0-beta.5` carries it.
@@ -387,9 +483,8 @@ README says, in an npm project and in a Bun workspace with the isolated linker, 
 copy of each runtime package, locked the archive's integrity, and loaded all 27 of their entry
 points.
 
-`effect-browser-human-strokes` `0.3.0-beta.5` is not published: npm gave the workflow no credential
-for it (`ENEEDAUTH`), since the package has no trusted publisher yet. Once its entry is added, as
-[RELEASING.md](RELEASING.md) says, dispatching the same tag again publishes it and skips the rest.
+`effect-browser-human-strokes` `0.3.0-beta.5` is published with provenance too. Its first publish
+failed with `ENEEDAUTH`; rerunning the publish job reused the checked archives and completed it.
 
 `v0.3.0-beta.4` (`312ecf8`) was tagged but not published: a fix to `Page.waitFor` came after it,
 and release tags cannot move. `0.2.0-beta.9` was the release before, on 2 October 2026.

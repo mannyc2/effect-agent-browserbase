@@ -9,14 +9,16 @@
  * connection of its own, a round trip there: each answer comes behind every frame sent before it on
  * its connection, and a frame that arrives first starts the spell again. Where the page's changes
  * are recorded, its evidence includes them: nothing in view may have changed for the spell, which a
- * DOM page's changes show better than its paint, and no stall on the way can hide.
+ * DOM page's changes show better than its paint, and no stall on the way can hide. Content
+ * stillness starts that record itself and ignores capture silence. Each new document starts a
+ * new observation, while retries of destroyed script contexts share the caller's deadline.
  */
-import { Duration, Effect, Schedule, Stream } from "effect";
+import { Duration, Effect, Option, Schedule, Stream } from "effect";
 
 import { Timeout } from "../../BrowserError.ts";
 import type { ReadyOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { decodeWith, failWith, type PageContext } from "../page/context.ts";
+import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import type * as Capture from "../pictures/capture.ts";
 import { ReadinessSchema } from "./ready.inpage.ts";
 
@@ -34,9 +36,11 @@ export const make =
             "ready",
             Math.max(0, Math.round(until - page.now())),
             options.quietMillis ?? 0,
+            options.still === "content",
           ),
         ),
       ).pipe(
+        Effect.retry({ while: contextGone, schedule: Schedule.spaced(Duration.millis(10)) }),
         Effect.flatMap(decodeWith("ready", ReadinessSchema)),
         Effect.tap((waiting) => Effect.annotateCurrentSpan({ waiting: waiting.join(",") })),
         Effect.filterOrElse(
@@ -55,8 +59,14 @@ export const make =
         let stirred = running ? page.now() : Number.POSITIVE_INFINITY;
 
         // How long the screen has been still: since a frame, or an unanswered acknowledgement.
-        const look = Effect.map(capture.stats(), (stats) => {
-          if (stats.received !== received || stats.ackBacklog > 0) {
+        const look = Effect.gen(function* () {
+          const stats = yield* capture.stats();
+
+          if (
+            !Option.exists(yield* capture.latest, capture.current) ||
+            stats.received !== received ||
+            stats.ackBacklog > 0
+          ) {
             received = stats.received;
             stirred = page.now();
           }
@@ -95,8 +105,10 @@ export const make =
           Effect.gen(function* () {
             const until = page.now() + Duration.toMillis(timeout);
 
+            if (options.still === "content") yield* bridge.registerRecorder("ready");
             yield* settled(until);
-            if (options.quietMillis !== undefined) yield* quiet(options.quietMillis, until);
+            if (options.quietMillis !== undefined && options.still !== "content")
+              yield* quiet(options.quietMillis, until);
           }).pipe(page.within("ready", timeout)),
         ),
         page.span("Page.ready"),

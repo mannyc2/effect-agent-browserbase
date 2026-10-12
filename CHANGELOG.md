@@ -4,6 +4,141 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.15
+
+- `Supervisor.Admission.after` covers every earlier session that stopped serving, including failed
+  acquisition attempts and older generations still draining. It waits for all pending releases and
+  retains the first `Unconfirmed` outcome for later attempts. Healthy nonexclusive rotation still
+  keeps its serving predecessor until the replacement opens; admission remains interruptible.
+- The optional `Supervisor.Releasing` service lets provider adapters report failed-attempt cleanup
+  without replacing the acquisition failure. Browserbase reports failed connection, build and
+  lost-create cleanup through it. Completed generations drop their browser and scope references;
+  admission retains release outcomes and pending signals. The Browserbase package requires
+  `effect-browser` from this release for the new service. Local Chromium and fake-provider tests
+  establish sequencing, not hosted billing or actual provider release confirmation.
+
+## 0.3.0-beta.14
+
+- Library pictures pause native screencast capture through actual screenshot restoration, preserving
+  readers and settings. Delayed crop frames stay private even when both their paint stamp and arrival
+  outlast the screenshot reply. Cancellation retains native picture, stop and restart replies;
+  unconfirmed cleanup fails capture within two seconds and blocks overlapping pictures or captures
+  until actual settlement. Readiness cannot certify quietness during that pause and requires fresh
+  post-resume frame evidence. Cached-frame reuse remains free; forced pictures with capture running
+  add stop, viewport refresh and restart calls.
+- `Plan.take` returns the receipt of acknowledged terminal input without waiting for a continuously
+  updating page to settle. Readiness still runs before each later step, including navigation.
+  `Moment.capture` refreshes pictures that predate completed input and records its navigation once.
+- `Supervisor.Lease.lose(detail)` revokes an unusable serving generation before returning, including
+  when its declaring work immediately returns. Stale declarations have no effect. Recovery admission
+  runs before every acquisition attempt; `Admission.after` lets a consumer await the predecessor's
+  actual release after loss or a failed reopen without blocking a healthy nonexclusive rotation.
+- `Browserbase.supervise` exposes `admit` and `definite`, and `ContextLease.ContextRefused` stops retries
+  for permanent context-policy refusal before any provider request. Temporary context holds still retry.
+  The Browserbase package requires `effect-browser` from this release for those APIs.
+- `Stage.shown`'s `Painted.at` measures output time separately from frame capture time. Prepared cuts
+  use `Presented.at`; silence, delayed frames and paused readers keep output times nondecreasing.
+- An abandoned cue or normally ended capture fails with `InvalidRequest`, without reporting a healthy
+  browser as lost. Actual page and connection losses preserve their causes; the page can be cued again.
+
+## 0.3.0-beta.13
+
+- A failed or interrupted navigation stops loading within a bound so later input, browser
+  suspension and Stage cuts can proceed. Observational settling waits no longer retain input
+  authority; dispatched mutations and stop commands keep ownership until their actual replies.
+- A URL-less `Navigated` plan expectation compares against the state after preparation, just
+  before dispatch. An earlier redirect during readiness or arrival cannot skip or verify the
+  next step's input.
+- Durable plan evidence is limited to `Appeared` and `Navigated` with an exact URL. Persisted
+  plans marking `Gone` or unspecified navigation durable now fail decoding, preserving unknown
+  consequential input until positive operation-specific evidence can reconcile it. Execution
+  also refuses those invalid claims when a caller bypasses decoding.
+- A completed presentation cut remains successful while bounded outgoing-capture cleanup finishes;
+  the old page's input deadline no longer turns an already visible cut into a timeout.
+
+`v0.3.0-beta.12` was tagged but not published; this release supersedes it without moving the tag.
+
+## 0.3.0-beta.11
+
+- Each `Browser.connection` is fresh on construction, including reattachment to the same provider
+  session and target. `Frame.connection` is required in serialized evidence; separate capture
+  sockets carry the owning browser's identity. Document counters remain local to that connection.
+- Frame reuse now checks document identity as well as paint-time and input bounds. A known old
+  document cannot pass because its calibrated paint timestamp looks newer. A native regression
+  plants that clock-domain mismatch and verifies the actual image pixels.
+- Generation events and frame evidence share the captured host clock across wall-clock changes
+  and caller clock overrides. Native reconnect tests cover both screenshots and screencast frames.
+- Compiled watched-browsing and operator-assisted workflow examples compose leases, input
+  suspension, cues and resumable steps. Their journals, editorial choices and account decisions
+  stay in consumer code. Local scenarios prove durable read-back recovery and refusal to resend
+  unknown commitments; hosted capture, persistence and Live View evidence remain separate.
+
+## 0.3.0-beta.10
+
+- `Stage.cue` starts capture during preparation. Its scope abandons an unused cue; `commit`
+  transfers capture ownership to the stage when the event happens. Commits preserve arrival
+  order, wait for old-page input through outstanding acknowledgements, and require a current
+  first frame at the actual cut. `Presented.latency` includes time spent waiting to switch.
+- `Stage.shown({ hold })` distinguishes paint, confirmed stillness, uncertain capture silence and
+  loss. It confirms a quiet frame against fresh page and capture replies; stale document paint,
+  pending acknowledgements, capture failure and continuous paint cannot claim stillness.
+- Local Chromium and scripted transport regressions cover ownership, cancellation, ordering,
+  delayed old-document frames and input barriers. Hosted two-capture capacity remains unproven
+  until the included-hour H1 experiment runs.
+
+## 0.3.0-beta.9
+
+- `Browser.suspend({ drain })` drains admitted input through each operation's record and native
+  acknowledgements, then withholds library input across every tab for its scope. New and queued
+  writes fail `Suspended`, undispatched. Reads, capture and event observation continue.
+- Suspensions nest across independent scopes and share the first drain's bounded deadline.
+  Cancellation abandons only that claim; a failed drain leaves no held suspension. The returned
+  `Suspension` carries an event cursor and host time for the handoff interval.
+- A canceled script mutation now records potentially dispatched input even when its native reply
+  is still pending. Agent action batches stop between operations and report the refused operation
+  as not dispatched. Operator policy and durable workflow journals remain with the consumer.
+- Local Chromium and model tests cover these contracts. A hosted Live View handoff remains unrun
+  until included Browserbase allowance and a human operator are available.
+
+## 0.3.0-beta.8
+
+- `Supervisor<A>` owns per-generation values and scoped `use` work. Leases expose `ending` and
+  transferable `retain` scopes; outgoing work drains for 30 seconds by default, then fails
+  `Superseded` after cleanup. Loss and retirement revoke immediately. Existing unheld `browser`
+  access remains available.
+- Exclusive rotation drains and releases before acquiring its replacement. Nonexclusive manual
+  and timed rotation continue while older generations drain; the consumer controls overlap.
+  Retained resources and work finalizers finish before provider release, and the generation's
+  scope closes last. `Unconfirmed` remains an honest provider-release outcome.
+- `Browserbase.supervise({ build })` constructs scoped application values; without it the lease's
+  value is its `Session`. Persisted contexts retain their exclusive writer and reconciliation
+  rules. Keeping a session closes application resources; adoption rebuilds its value.
+- Generation events add monotonic `hostTime` beside wall-clock `at`, and `Draining` joins the
+  lifecycle states. Local Chromium, lifecycle-model and fake-provider evidence cover library
+  behavior. Hosted persisted handover and save read-back remain unrun; the
+  [H2 recipe](docs/HOSTED_CHECKS.md) requires verified included Browserbase hours.
+
+## 0.3.0-beta.7
+
+- Plans expose `take`, receipts, stopping points and restoration. Expected checks skip input
+  already satisfied; unknown consequential input requires positive durable read-back and is
+  never automatically resent. The consumer owns its begun-step journal and reconciliation.
+- Recorded-site arrival has a bounded wait, and completed actions carry their address even when
+  a bounded event history has forgotten the earlier navigation. Plans with expected checks use
+  version 2; ordinary recordings retain version 1.
+- `Page.ready({ still: "content", quietMillis })` observes recorded DOM quiet while canvas paint
+  can continue. Repeated document commits restart the observation within the original deadline.
+- The source ceiling now counts code with lint's rule, excluding comments and blank lines, with
+  the accepted ceiling of 11,000 and the existing deletion rule for changes crossing it.
+
+## 0.3.0-beta.6
+
+- Replay resolves a recorded press's subject before sending its keys, so another field's focus
+  cannot redirect them. Typing into focus records insertion explicitly, preserving existing text
+  when replay locates the field again. Caret positions are not recorded.
+- The Browserbase test fake serves Live View for known sessions and retains complete create
+  settings for assertions through its test handle.
+
 ## 0.3.0-beta.5
 
 The first 0.3 release on npm. `0.3.0-beta.0` to `0.3.0-beta.4` were prepared but never published,

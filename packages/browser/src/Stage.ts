@@ -1,24 +1,12 @@
 /**
- * The stage: whichever page's capture feeds a live output, switched between pages in one browser
- * session or across two, each switch stamped with when it took effect on the frame clock. Make one
- * per live output.
- *
- * `present(page, { at })` switches the output to `page` at `at`, host monotonic milliseconds on the
- * clock that times frames, or at once. It starts the new page's capture ahead, waits for its first
- * frame, then for any input already under way on the old page, and turns: from then on `frames`
- * carries the new page's frames, its newest first, and the old page's capture stops. The captures
- * overlap, so a switch shows no dark spell; on Browserbase two ran in one session at the frame
- * rate of one. A first frame that does not come in time fails `present`, and the old page stays. A
- * capture that fails restarts on the same page while its page and browser stand.
- *
- * What a live output does with frames stays the application's: a delay line, a liveness rule,
- * redaction and repeating a held frame. A still page sends no frames until it changes, so the frame
- * a switch begins with may be older than the frames before it; `Presented.at` says when it took
- * effect.
- *
+ * An output's capture ownership. Cue a page while preparing an event; commit when that event
+ * happens. A prepared cue belongs to its caller's scope, and a committed one to the stage.
+ * Commits serialize, drain old-page input and refuse stale first frames. `shown` distinguishes
+ * confirmed silence, uncertain silence and loss without treating capture silence as evidence.
  * @since 0.3.0
  */
 import {
+  Cause,
   Clock,
   Deferred,
   Duration,
@@ -27,197 +15,500 @@ import {
   Fiber,
   Option,
   PubSub,
+  Result,
   Schedule,
   Schema,
-  Semaphore,
+  Scope,
   Stream,
 } from "effect";
 
-import { type BrowserError, consequence, InvalidRequest, Timeout } from "./BrowserError.ts";
+import { type BrowserError, Closed, consequence, InvalidRequest, Timeout } from "./BrowserError.ts";
 import type { CaptureStats, Frame, ScreencastOptions } from "./Frame.ts";
-import { failWith } from "./internal/page/context.ts";
+import { failWith, undispatched } from "./internal/page/context.ts";
 import { internalsOf } from "./internal/page/page.ts";
 import type { Page } from "./Page.ts";
 
 export interface Options extends ScreencastOptions {
-  /** How long a switch waits for the new page's first frame. Defaults to 5 seconds. */
+  /** Bound for each first-frame wait. Defaults to 5 seconds. */
   readonly firstFrame?: Duration.Input | undefined;
 }
 
-/** A switch that took effect. */
+/** A switch that took effect, on the clock shared by browser events and frames. */
 export class Presented extends Schema.Class<Presented>("effect-browser/Presented")({
   page: Schema.String,
-  /**
-   * When it took effect, in host monotonic milliseconds on the frame clock: no earlier than the
-   * time asked for, the frames it followed or the new page's first.
-   */
   at: Schema.Finite,
-  /** How long after the time asked for it took effect. */
   latency: Schema.Finite,
 }) {}
+
+export interface Cue {
+  readonly page: Page;
+  /** A frame of the current document, or the capture's failure or first-frame timeout. */
+  readonly ready: Effect.Effect<void, BrowserError>;
+  /** Commit on the event's host time, or now. Interruption before switching leaves the cue usable. */
+  readonly commit: (options?: {
+    readonly at?: number | undefined;
+  }) => Effect.Effect<Presented, BrowserError>;
+}
+
+/** What the output establishes at nondecreasing host times; frames retain their capture times. */
+export type Shown =
+  | { readonly _tag: "Painted"; readonly frame: Frame; readonly at: number }
+  | { readonly _tag: "Still"; readonly frame: Frame; readonly at: number }
+  | { readonly _tag: "Stalled"; readonly frame: Frame; readonly at: number }
+  | { readonly _tag: "Gone"; readonly page: string; readonly at: number };
 
 export interface Stage {
   readonly present: (
     page: Page,
     options?: { readonly at?: number | undefined },
   ) => Effect.Effect<Presented, BrowserError>;
-  /**
-   * The presented page's frames, each naming its page, session, document and address. A reader
-   * more than 16 frames behind loses the oldest.
-   */
+  readonly cue: (page: Page) => Effect.Effect<Cue, BrowserError, Scope.Scope>;
+  /** Paint and, after every finite positive hold without paint, current evidence or loss. */
+  readonly shown: (options: { readonly hold: Duration.Input }) => Stream.Stream<Shown>;
+  /** Capture-timed current-page paint; use `shown` for output time. Readers retain 16 frames. */
   readonly frames: Stream.Stream<Frame>;
   readonly current: Effect.Effect<Option.Option<Page>>;
-  /**
-   * The presented page's capture counts over the latest `window`, at most a minute: its frames,
-   * their largest gap, and those filtered out, as another capture's or a crop's.
-   */
   readonly stats: (options?: {
     readonly window?: Duration.Input | undefined;
   }) => Effect.Effect<Option.Option<CaptureStats>, BrowserError>;
 }
 
-/** A page's capture for the stage: its newest frame, and whether its frames go out. */
+type FeedState =
+  | { readonly _tag: "Warming" }
+  | { readonly _tag: "Ready"; readonly latest: Frame | undefined }
+  | { readonly _tag: "Stopped" };
 interface Feed {
   readonly page: Page;
-  readonly first: Deferred.Deferred<void>;
-  latest: Frame | undefined;
-  live: boolean;
+  readonly scope: Scope.Closeable;
+  readonly changed: PubSub.PubSub<Frame>;
+  state: FeedState;
   fiber: Fiber.Fiber<void, BrowserError> | undefined;
 }
+interface Paint {
+  readonly feed: Feed;
+  readonly frame: Frame;
+  readonly at: number;
+}
 
-// A capture restarts unless its page or browser is gone, or it would fail the same way again.
+interface Evidence {
+  readonly feed: Feed;
+  readonly frame: Frame;
+  readonly value: Shown;
+}
+
+const unavailable = () =>
+  undispatched("cue", new InvalidRequest({ detail: "the cue's capture is no longer available" }));
+
+/** The sole writer of a cue's capture lifecycle; presentation ownership belongs to the stage. */
+const update = (
+  feed: Feed,
+  input: { readonly _tag: "Paint"; readonly frame: Frame } | { readonly _tag: "Reset" | "Stop" },
+) => {
+  if (feed.state._tag === "Stopped") return;
+  if (input._tag === "Stop") feed.state = { _tag: "Stopped" };
+  else if (input._tag === "Paint") feed.state = { _tag: "Ready", latest: input.frame };
+  else if (feed.state._tag === "Ready") feed.state = { _tag: "Ready", latest: undefined };
+};
+
 const restartable = (error: BrowserError) => {
   const { lost, repeat } = consequence(error);
 
   return lost === "nothing" && repeat !== "pointless";
 };
 
-export const make = Effect.fn("Stage.make")(function* (options: Options = {}) {
-  const clock = yield* Clock.Clock;
-  const scope = yield* Effect.scope;
-  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
-  const waited = Duration.fromInput(options.firstFrame ?? Duration.seconds(5));
+const stop = (feed: Feed) =>
+  Effect.suspend(() => {
+    update(feed, { _tag: "Stop" });
 
-  if (Option.isNone(waited) || !Duration.isPositive(waited.value))
-    return yield* failWith(
-      "stage",
-      new InvalidRequest({ detail: "firstFrame must be a positive duration" }),
-    );
-  const firstFrame = waited.value;
-  const settings = { quality: options.quality, size: options.size };
-  const output = yield* PubSub.sliding<Frame>(16);
-  const switching = yield* Semaphore.make(1);
-  // What is on the stage, which only `present` changes, and the paint of the latest frame out.
-  let shown: { readonly feed: Feed; readonly presented: Presented } | undefined;
-  let painted = Number.NEGATIVE_INFINITY;
+    return Scope.close(feed.scope, Exit.void);
+  });
 
-  const feed = (page: Page) =>
-    Effect.gen(function* () {
-      const fed: Feed = {
-        page,
-        first: yield* Deferred.make<void>(),
-        latest: undefined,
-        live: false,
-        fiber: undefined,
-      };
+const frameOf = (feed: Feed) => {
+  const frame = feed.state._tag === "Ready" ? feed.state.latest : undefined;
+  const internals = internalsOf(feed.page);
 
-      fed.fiber = yield* page.screencast(settings).pipe(
-        Stream.runForEach((frame) =>
-          Effect.sync(() => {
-            fed.latest = frame;
-            if (fed.live) {
-              painted = frame.hostTime;
-              PubSub.publishUnsafe(output, frame);
-            }
-            // Last: a switch waiting for this frame may turn, and send it, at once.
-            Deferred.doneUnsafe(fed.first, Exit.void);
-          }),
+  return frame !== undefined && (internals === undefined || internals.current(frame))
+    ? frame
+    : undefined;
+};
+
+const ended = (feed: Feed): Effect.Effect<never, BrowserError> =>
+  feed.fiber === undefined
+    ? Effect.never
+    : Fiber.await(feed.fiber).pipe(
+        Effect.flatMap((exit) =>
+          Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+            ? Effect.failCause(exit.cause)
+            : Effect.fail(unavailable()),
         ),
-        Effect.retry({ while: restartable, schedule: Schedule.spaced(Duration.millis(500)) }),
-        Effect.forkIn(scope),
       );
 
-      return fed;
-    });
+const firstOf = (feed: Feed, wait: Duration.Duration) =>
+  Effect.suspend(() => {
+    if (feed.state._tag === "Stopped") return Effect.fail(unavailable());
+    if (feed.page.playwright.isClosed()) return failWith("cue", new Closed({ cause: "page" }));
+    if (frameOf(feed) !== undefined) return Effect.void;
 
-  // No frame of it goes out once this returns, and its capture stops.
-  const stop = (fed: Feed) =>
-    Effect.suspend(() => {
-      fed.live = false;
-
-      return fed.fiber === undefined ? Effect.void : Fiber.interrupt(fed.fiber);
-    });
-
-  // The new page's first frame; its capture's own failure, or `Timeout`.
-  const firstOf = (fed: Feed) =>
-    Effect.raceFirst(
-      Deferred.await(fed.first),
-      fed.fiber === undefined ? Effect.never : Effect.andThen(Fiber.join(fed.fiber), Effect.never),
+    return Effect.raceFirst(
+      Stream.fromPubSub(feed.changed).pipe(
+        Stream.filter(() => frameOf(feed) !== undefined),
+        Stream.runHead,
+        Effect.asVoid,
+      ),
+      ended(feed),
     ).pipe(
       Effect.timeoutOrElse({
-        duration: firstFrame,
-        orElse: () => failWith("present", new Timeout({ millis: Duration.toMillis(firstFrame) })),
+        duration: wait,
+        orElse: () => failWith("cue", new Timeout({ millis: Duration.toMillis(wait) })),
+      }),
+    );
+  });
+
+// A timer can wake a fraction early; a commit never precedes its event.
+const until = (at: number, now: () => number): Effect.Effect<void> =>
+  Effect.suspend(() =>
+    at > now()
+      ? Effect.sleep(Duration.millis(Math.ceil(at - now()))).pipe(Effect.andThen(until(at, now)))
+      : Effect.void,
+  );
+
+/** Reserve the next turn before waking it; a fresh caller cannot overtake a queued commit. */
+const ordered = () => {
+  const waiting: Array<Deferred.Deferred<void>> = [];
+
+  return <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const turn = Deferred.makeUnsafe<void>();
+
+        waiting.push(turn);
+        if (waiting.length === 1) Deferred.doneUnsafe(turn, Exit.void);
+
+        return turn;
+      }),
+      (turn) => Deferred.await(turn).pipe(Effect.andThen(effect)),
+      (turn) =>
+        Effect.sync(() => {
+          const at = waiting.indexOf(turn);
+
+          waiting.splice(at, 1);
+          if (at === 0 && waiting[0] !== undefined) Deferred.doneUnsafe(waiting[0], Exit.void);
+        }),
+    );
+};
+
+/** A terminal capture can know the connection is gone before the page receives its close event. */
+const confirm = (feed: Feed, frame: Frame) => {
+  const exit = feed.fiber?.pollUnsafe();
+
+  const failure =
+    exit !== undefined && Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none();
+
+  if (Option.isSome(failure) && consequence(failure.value).lost !== "nothing")
+    return Effect.fail(failure.value);
+
+  return feed.page.playwright.isClosed()
+    ? failWith("shown", new Closed({ cause: "page" }))
+    : (internalsOf(feed.page)?.confirm(frame) ?? Effect.succeed(false));
+};
+
+/** Each subscriber confirms silence; a new frame or commit invalidates a probe. */
+const evidence = (
+  output: PubSub.PubSub<Paint>,
+  current: () =>
+    | { readonly feed: Feed; readonly frame: Frame; readonly changedAt: number }
+    | undefined,
+  now: () => number,
+  hold: Duration.Input,
+): Stream.Stream<Shown> =>
+  Stream.unwrap(
+    Effect.sync(() => {
+      const parsed = Duration.fromInput(hold);
+
+      if (
+        Option.isNone(parsed) ||
+        !Duration.isFinite(parsed.value) ||
+        !Duration.isPositive(parsed.value)
+      )
+        throw new RangeError("shown hold must be a finite positive duration");
+      const millis = Duration.toMillis(parsed.value);
+      let checkedAt = now();
+      let shownAt = Number.NEGATIVE_INFINITY;
+      let seen: Pick<Paint, "feed" | "frame"> | undefined = current();
+      let gone: Feed | undefined;
+
+      const probe = Effect.gen(function* () {
+        yield* until(Math.max(checkedAt, current()?.changedAt ?? checkedAt) + millis, now);
+        checkedAt = now();
+        const before = current();
+        const frame = before?.frame;
+
+        if (
+          before === undefined ||
+          frame === undefined ||
+          gone === before.feed ||
+          checkedAt - before.changedAt < millis
+        )
+          return Option.none<Evidence>();
+        const { feed } = before;
+
+        const confirmed = yield* Effect.result(confirm(feed, frame));
+
+        if (current()?.feed !== feed || current()?.frame !== frame) return Option.none<Evidence>();
+        const at = now();
+
+        checkedAt = at;
+        if (Result.isFailure(confirmed) && consequence(confirmed.failure).lost !== "nothing") {
+          return Option.some<Evidence>({
+            feed,
+            frame,
+            value: { _tag: "Gone", page: feed.page.id, at },
+          });
+        }
+
+        return Option.some<Evidence>({
+          feed,
+          frame,
+          value: {
+            _tag: Result.isSuccess(confirmed) && confirmed.success ? "Still" : "Stalled",
+            frame,
+            at,
+          },
+        });
+      });
+
+      return Stream.merge(
+        Stream.fromPubSub(output).pipe(
+          Stream.map(({ feed, frame, at }): Evidence => ({
+            feed,
+            frame,
+            value: { _tag: "Painted", frame, at },
+          })),
+        ),
+        Stream.fromEffectRepeat(probe).pipe(
+          Stream.filter(Option.isSome),
+          Stream.map(({ value }) => value),
+        ),
+      ).pipe(
+        // A probe can overtake queued paint while its reader is paused. It establishes nothing
+        // about that reader's output until the matching frame has reached it.
+        Stream.filter(({ feed, frame, value }) => {
+          if (value._tag === "Painted" && gone !== feed) {
+            seen = { feed, frame };
+
+            return true;
+          }
+          // The subscription may have begun after its first publication.
+          seen ??= { feed, frame };
+
+          return value._tag !== "Painted" && seen?.feed === feed && seen.frame === frame;
+        }),
+        Stream.map(({ feed, value }) => {
+          if (value._tag === "Gone") gone = feed;
+          // A frame captured before a silence probe can arrive after the probe's evidence.
+          shownAt = Math.max(shownAt, value.at);
+
+          return value.at === shownAt ? value : { ...value, at: shownAt };
+        }),
+      );
+    }),
+  );
+
+const openFeed = (
+  page: Page,
+  owner: Scope.Scope,
+  clock: Clock.Clock,
+  settings: ScreencastOptions,
+  current: () => Feed | undefined,
+  publish: (feed: Feed, frame: Frame) => Effect.Effect<unknown>,
+) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.fork(owner);
+    const started = yield* Deferred.make<void>();
+
+    const feed: Feed = {
+      page,
+      scope,
+      changed: yield* PubSub.sliding<Frame>({ capacity: 1, replay: 1 }),
+      state: { _tag: "Warming" },
+      fiber: undefined,
+    };
+
+    yield* Scope.addFinalizer(
+      scope,
+      Effect.sync(() => {
+        update(feed, { _tag: "Stop" });
+      }),
+    );
+    yield* Effect.addFinalizer(() => (current() === feed ? Effect.void : stop(feed)));
+
+    const accept = (frame: Frame) =>
+      Effect.suspend(() => {
+        update(feed, { _tag: "Paint", frame });
+
+        return (current() === feed ? publish(feed, frame) : Effect.void).pipe(
+          Effect.andThen(PubSub.publish(feed.changed, frame)),
+        );
+      });
+
+    const capture = Effect.scoped(
+      Effect.gen(function* () {
+        update(feed, { _tag: "Reset" });
+
+        const internals = internalsOf(page);
+
+        const { stream, current: frame } = yield* (
+          internals?.capture(settings) ??
+            Effect.succeed({ stream: page.screencast(settings), current: undefined })
+        );
+
+        if (frame !== undefined && internals?.current(frame)) yield* accept(frame);
+        yield* Deferred.succeed(started, undefined);
+        yield* Stream.runForEach(stream, accept);
+      }),
+    ).pipe(
+      Effect.ensuring(Effect.sync(() => update(feed, { _tag: "Reset" }))),
+      Effect.retry({
+        while: (error) => feed.state._tag === "Ready" && restartable(error),
+        schedule: Schedule.spaced("500 millis"),
       }),
     );
 
-  // A timer can fire a fraction of a millisecond early, so the wait looks again.
-  const until = (at: number): Effect.Effect<void> =>
-    Effect.suspend(() =>
-      at > now()
-        ? Effect.andThen(Effect.sleep(Duration.millis(Math.ceil(at - now()))), until(at))
-        : Effect.void,
+    feed.fiber = yield* capture.pipe(
+      Effect.provideService(Clock.Clock, clock),
+      Effect.forkIn(scope),
+    );
+    yield* Effect.raceFirst(Deferred.await(started), ended(feed)).pipe(
+      Effect.onError(() => stop(feed)),
     );
 
-  const present: Stage["present"] = (page, presentOptions = {}) =>
-    switching.withPermits(1)(
-      Effect.gen(function* () {
-        const asked = presentOptions.at ?? now();
-        const old = shown;
+    return feed;
+  });
 
-        if (old?.feed.page === page) return old.presented;
-        const fed = yield* feed(page);
+export const make = Effect.fn("Stage.make")(function* (
+  options: Options = {},
+): Effect.fn.Return<Stage, BrowserError, Scope.Scope> {
+  const clock = yield* Clock.Clock;
+  const owner = yield* Effect.scope;
+  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  const waited = Duration.fromInput(options.firstFrame ?? Duration.seconds(5));
 
-        yield* Effect.gen(function* () {
-          yield* firstOf(fed);
-          yield* until(asked);
-          // Input under way on the old page ends first, within its action timeout.
-          if (old !== undefined)
-            yield* Effect.ignore(internalsOf(old.feed.page)?.inputEnded ?? Effect.void);
-        }).pipe(Effect.onError(() => stop(fed)));
+  if (
+    Option.isNone(waited) ||
+    !Duration.isFinite(waited.value) ||
+    !Duration.isPositive(waited.value)
+  )
+    return yield* failWith(
+      "stage",
+      new InvalidRequest({ detail: "firstFrame must be a finite positive duration" }),
+    );
+  const firstFrame = waited.value;
+  const settings = { quality: options.quality, size: options.size };
+  const output = yield* PubSub.sliding<Paint>(16);
+  const switching = ordered();
 
-        const presented = yield* Effect.sync(() => {
-          const frame = fed.latest;
-          const at = Math.max(asked, frame?.hostTime ?? asked, painted);
+  let showing:
+    | { readonly feed: Feed; readonly presented: Presented; frame: Frame; changedAt: number }
+    | undefined;
 
-          if (old !== undefined) old.feed.live = false;
-          fed.live = true;
-          if (frame !== undefined) {
-            painted = frame.hostTime;
-            PubSub.publishUnsafe(output, frame);
-          }
-          shown = {
-            feed: fed,
-            presented: new Presented({ page: page.id, at, latency: at - asked }),
-          };
+  let painted = Number.NEGATIVE_INFINITY;
 
-          return shown.presented;
-        });
+  yield* Effect.addFinalizer(() => PubSub.shutdown(output));
 
-        if (old !== undefined) yield* stop(old.feed);
+  const publish = (feed: Feed, frame: Frame, at = frame.hostTime) =>
+    Effect.suspend(() => {
+      painted = Math.max(painted, at);
+      if (showing !== undefined) {
+        showing.changedAt = now();
+        showing.frame = frame;
+      }
 
-        return presented;
-      }).pipe(Effect.provideService(Clock.Clock, clock)),
+      return PubSub.publish(output, { feed, frame, at: painted });
+    });
+
+  const commit = (feed: Feed, options: { readonly at?: number | undefined } = {}) =>
+    Effect.suspend(() => {
+      const asked = options.at ?? now();
+
+      return switching(
+        Effect.gen(function* () {
+          if (!Number.isFinite(asked))
+            return yield* failWith(
+              "cue",
+              new InvalidRequest({ detail: "at must be finite host milliseconds" }),
+            );
+          yield* firstOf(feed, firstFrame);
+          const old = showing;
+
+          if (old?.feed === feed) return old.presented;
+
+          yield* Effect.raceFirst(until(asked, now), ended(feed));
+
+          const switchTo = Effect.suspend(() => {
+            const frame = frameOf(feed);
+
+            if (frame === undefined) return Effect.fail(unavailable());
+            const at = Math.max(now(), asked, frame.hostTime, painted);
+
+            showing = {
+              feed,
+              frame,
+              presented: new Presented({ page: feed.page.id, at, latency: at - asked }),
+              changedAt: at,
+            };
+
+            return publish(feed, frame, at).pipe(Effect.as(showing.presented));
+          }).pipe(Effect.uninterruptible);
+
+          const readyToSwitch = firstOf(feed, firstFrame).pipe(
+            Effect.andThen(switchTo),
+            Effect.provideService(Clock.Clock, clock),
+          );
+
+          const before = old === undefined ? undefined : internalsOf(old.feed.page);
+
+          return yield* (
+            before === undefined ? readyToSwitch : before.afterInput(readyToSwitch)
+          ).pipe(
+            // The cut owns old-page input through publication. Capture cleanup has its own bound
+            // and must finish even if the caller leaves, without turning a completed cut into Timeout.
+            Effect.ensuring(
+              Effect.suspend(() =>
+                showing?.feed === feed && old !== undefined ? stop(old.feed) : Effect.void,
+              ),
+            ),
+          );
+        }).pipe(Effect.provideService(Clock.Clock, clock)),
+      );
+    });
+
+  const cue: Stage["cue"] = (page) =>
+    Effect.map(
+      openFeed(page, owner, clock, settings, () => showing?.feed, publish),
+      (feed) => ({
+        page,
+        ready: firstOf(feed, firstFrame).pipe(Effect.provideService(Clock.Clock, clock)),
+        commit: (options) => commit(feed, options),
+      }),
     );
 
   return {
-    present,
-    frames: Stream.fromPubSub(output),
-    current: Effect.sync(() => Option.fromNullishOr(shown?.feed.page)),
-    stats: (statsOptions = {}) =>
-      shown === undefined
+    cue,
+    present: (page, options) =>
+      Effect.suspend(() => {
+        const asked = options?.at ?? now();
+
+        return showing?.feed.page === page
+          ? Effect.as(firstOf(showing.feed, firstFrame), showing.presented)
+          : Effect.scoped(Effect.flatMap(cue(page), (prepared) => prepared.commit({ at: asked })));
+      }),
+    shown: ({ hold }) =>
+      evidence(output, () => showing, now, hold).pipe(Stream.provideService(Clock.Clock, clock)),
+    frames: Stream.fromPubSub(output).pipe(Stream.map(({ frame }) => frame)),
+    current: Effect.sync(() => Option.fromNullishOr(showing?.feed.page)),
+    stats: (options = {}) =>
+      showing === undefined
         ? Effect.succeedNone
-        : Effect.asSome(
-            shown.feed.page.captureStats({ window: statsOptions.window ?? "1 second" }),
-          ),
+        : Effect.asSome(showing.feed.page.captureStats({ window: options.window ?? "1 second" })),
   } satisfies Stage;
 });
