@@ -17,7 +17,14 @@ import {
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
 import type { CaptureSource } from "../../Browser.ts";
-import { BrowserError, Closed, Failed, type Reason, Timeout } from "../../BrowserError.ts";
+import {
+  BrowserError,
+  Closed,
+  Failed,
+  InvalidRequest,
+  type Reason,
+  Timeout,
+} from "../../BrowserError.ts";
 import type { BrowserEvent } from "../../BrowserEvent.ts";
 import type { InputGuard, Point } from "../../Page.ts";
 import type { Gate } from "../input/gate.ts";
@@ -158,6 +165,10 @@ export const undispatched = (operation: string, reason: Reason) =>
 
 export const failWith = (operation: string, reason: Reason) =>
   Effect.fail(undispatched(operation, reason));
+
+/** Refuse a request to `operation` that could never succeed, before sending anything. */
+export const refuse = (operation: string, detail: string) =>
+  failWith(operation, new InvalidRequest({ detail }));
 
 export const decodeWith =
   <A>(operation: string, schema: Schema.Codec<A, unknown>) =>

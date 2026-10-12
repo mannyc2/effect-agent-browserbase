@@ -11,7 +11,14 @@ import { Frame, Image, Screenshot } from "../../Frame.ts";
 import type { Point } from "../../Motion.ts";
 import { type FrameOptions, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { decodeWith, failWith, type PageContext, reasonOf, undispatched } from "../page/context.ts";
+import {
+  decodeWith,
+  failWith,
+  type PageContext,
+  reasonOf,
+  refuse,
+  undispatched,
+} from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import * as Capture from "./capture.ts";
 import * as BrowserClock from "./clock.ts";
@@ -118,9 +125,7 @@ const calibrator = (page: PageContext, bridge: Bridge) => {
       yield* Effect.forEach(
         [1, 2, 3],
         () => Effect.map(probe(contextId), (one) => probes.push(one)),
-        {
-          discard: true,
-        },
+        { discard: true },
       ).pipe(
         within("calibrate", Duration.seconds(2)),
         Effect.catch((error) => (probes.length === 0 ? Effect.fail(error) : Effect.void)),
@@ -308,10 +313,7 @@ const reuse =
       const maxAge = millisOf(options.maxAge ?? defaultMaxAge);
 
       if (!(maxAge >= 0))
-        return yield* failWith(
-          operation,
-          new InvalidRequest({ detail: "maxAge must be a duration of zero or more" }),
-        );
+        return yield* refuse(operation, "maxAge must be a duration of zero or more");
       const latest = yield* capture.latest;
       const known = viewport.knownViewport();
       const { activity } = page;
@@ -468,10 +470,7 @@ export const make = Effect.fnUntraced(function* (
           const size = viewport.knownViewport() ?? (yield* viewport.viewportFor("zoom"));
 
           if (region.x + region.width > size.width || region.y + region.height > size.height)
-            return yield* failWith(
-              "zoom",
-              new InvalidRequest({ detail: "the crop must fit entirely within the viewport" }),
-            );
+            return yield* refuse("zoom", "the crop must fit entirely within the viewport");
           const image = yield* picture("zoom", 80, region);
 
           return new Zoom({ page: id, region, image });
@@ -485,10 +484,7 @@ export const make = Effect.fnUntraced(function* (
 
     return millis > 0 && millis <= Duration.toMillis(Capture.countsKept)
       ? capture.stats(millis)
-      : failWith(
-          "captureStats",
-          new InvalidRequest({ detail: "window must be over zero and at most a minute" }),
-        );
+      : refuse("captureStats", "window must be over zero and at most a minute");
   };
 
   // The browser's clock mapping, measured on this page only while the browser has none, as the

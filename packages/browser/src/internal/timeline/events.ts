@@ -4,9 +4,9 @@
  */
 import { Cause, Deferred, Effect, Stream } from "effect";
 
-import { type BrowserError, EventHistoryExpired, InvalidRequest } from "../../BrowserError.ts";
+import { type BrowserError, EventHistoryExpired } from "../../BrowserError.ts";
 import { type BrowserEvent, RecordedEvent } from "../../BrowserEvent.ts";
-import { undispatched } from "../page/context.ts";
+import { refuse, undispatched } from "../page/context.ts";
 
 /** The owning Browser validates capacity and closes this timeline with its scope. */
 export const make = (capacity: number) => {
@@ -41,13 +41,10 @@ export const make = (capacity: number) => {
         let cursor = after ?? sequence;
 
         if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > sequence)
-          return Stream.fail(
-            undispatched(
+          return Stream.fromEffect(
+            refuse(
               "events",
-              new InvalidRequest({
-                detail:
-                  "the event cursor must be a nonnegative integer no greater than the latest sequence",
-              }),
+              "the event cursor must be a nonnegative integer no greater than the latest sequence",
             ),
           );
 

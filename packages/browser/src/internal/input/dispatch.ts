@@ -26,6 +26,22 @@ export interface MouseEvent extends Point {
   readonly deltaY?: number;
 }
 
+const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
+
+/** A mouse button going down or up at a point, as the `clickCount`th click. */
+export const buttonAt = (
+  type: "mousePressed" | "mouseReleased",
+  point: Point,
+  button: keyof typeof buttonMask = "left",
+  clickCount = 1,
+): MouseEvent => ({
+  type,
+  ...point,
+  button,
+  buttons: type === "mousePressed" ? buttonMask[button] : 0,
+  clickCount,
+});
+
 export const make = (page: PageContext) => {
   const { id, pointer, publish, now, noteInput, closedBy } = page;
   const { send } = page.protocol;
@@ -98,13 +114,12 @@ export const make = (page: PageContext) => {
             () => dispatchMouse(event, estimate, submitted),
             () =>
               dispatchMouse(
-                {
-                  type: "mouseReleased",
-                  ...Option.getOrElse(MutableRef.get(pointer), () => ({ x: event.x, y: event.y })),
-                  button: event.button ?? "left",
-                  buttons: 0,
-                  clickCount: event.clickCount ?? 1,
-                },
+                buttonAt(
+                  "mouseReleased",
+                  Option.getOrElse(MutableRef.get(pointer), () => ({ x: event.x, y: event.y })),
+                  event.button,
+                  event.clickCount,
+                ),
                 estimate,
               ),
           );

@@ -5,11 +5,10 @@
  */
 import { Duration, Effect, MutableRef, Option, Schema } from "effect";
 
-import { InvalidRequest } from "../../BrowserError.ts";
 import { CursorChanged, TrackPerformed, TrackPlanned } from "../../BrowserEvent.ts";
 import * as Motion from "../../Motion.ts";
 import type { Point } from "../../Page.ts";
-import { failWith, type PageContext } from "../page/context.ts";
+import { type PageContext, refuse } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import type { Dispatch } from "./dispatch.ts";
 import type { InputMarks } from "./perform.ts";
@@ -47,11 +46,9 @@ export const make = (page: PageContext, dispatch: Dispatch, viewport: Viewport) 
 
       // A custom planner is a boundary. Decoding reads each sample once into a fresh copy and
       // checks that copy, so neither accessors nor later mutation can change what is admitted.
-      const invalid = failWith(
+      const invalid = refuse(
         operation,
-        new InvalidRequest({
-          detail: "motion must be a bounded, ordered schedule ending at the target",
-        }),
+        "motion must be a bounded, ordered schedule ending at the target",
       );
 
       const samples = yield* Schema.decodeEffect(Motion.Plan)(planned).pipe(
