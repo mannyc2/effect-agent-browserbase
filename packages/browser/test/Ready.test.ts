@@ -459,9 +459,20 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         resize = "waiting";
         yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 360 }));
-        // Resizing a still canvas need not emit a frame; make new pixels without awaiting adoption.
-        yield* draw("white");
-        yield* Effect.promise(() => viewportRead.promise).pipe(waitFor("resize viewport request"));
+        // A resize and its first paint can coalesce without a capture frame. Keep changing pixels
+        // until a real resized frame reaches the held viewport request, then stop the producer.
+        let bright = false;
+
+        const repainting = yield* Effect.suspend(() => {
+          bright = !bright;
+
+          return draw(bright ? "white" : "black");
+        }).pipe(Effect.repeat({ schedule: Schedule.spaced("40 millis") }), Effect.forkScoped);
+
+        yield* Effect.promise(() => viewportRead.promise).pipe(
+          waitFor("resize viewport request"),
+          Effect.ensuring(Fiber.interrupt(repainting)),
+        );
         const heldFrames = yield* page.captureStats();
 
         assert.isAbove(heldFrames.received, before.received);
