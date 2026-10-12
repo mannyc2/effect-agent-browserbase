@@ -12,11 +12,26 @@ import { Clock, Console, DateTime, Duration, Effect, Exit, Path, Tracer } from "
 import * as Chromium from "effect-browser/Chromium";
 import { FetchHttpClient } from "effect/http";
 
+import * as Casino from "./casino.ts";
+import type { DemoName } from "./defaults.ts";
 import { pack } from "./pack.ts";
-import { explore, task } from "./polymarket.ts";
+import * as Polymarket from "./polymarket.ts";
+import type { ExploreOptions } from "./show.ts";
 import * as Voice from "./voice.ts";
 
+const tasks = { polymarket: Polymarket.task, casino: Casino.task } as const;
+
+type Explored = ReturnType<typeof Casino.explore> | ReturnType<typeof Polymarket.explore>;
+
+const explore = (
+  demo: DemoName,
+  options: ExploreOptions,
+): Effect.Effect<Effect.Success<Explored>, Effect.Error<Explored>, Effect.Services<Explored>> =>
+  demo === "casino" ? Casino.explore(options) : Polymarket.explore(options);
+
 export interface TakeOptions {
+  /** Which demo to record. */
+  readonly demo: DemoName;
   /** The replay this take is packed as, under public/replays/. */
   readonly id: string;
   /** An OpenRouter model id, for the agent and the narrator. */
@@ -72,13 +87,18 @@ export const take = Effect.fn("demo.take")(function* (options: TakeOptions) {
 
   yield* Console.log(`Take ${options.id}: ${options.model}, recording into ${directory}`);
 
+  const task = tasks[options.demo];
+
   const work = runner.withModel(
-    explore({
-      every: options.every,
-      maxSteps: options.maxSteps,
-      trace: recorder.trace,
-      captionCall: OpenRouterLanguageModel.withConfigOverride({ reasoning: { effort: "none" } }),
-    }).pipe(Effect.provide(FetchHttpClient.layer)),
+    Effect.provide(
+      explore(options.demo, {
+        every: options.every,
+        maxSteps: options.maxSteps,
+        trace: recorder.trace,
+        captionCall: OpenRouterLanguageModel.withConfigOverride({ reasoning: { effort: "none" } }),
+      }),
+      FetchHttpClient.layer,
+    ),
     options.reasoning,
     account,
   );

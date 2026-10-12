@@ -1,8 +1,8 @@
-// The demo's command line: `take` records a narrated take of the Polymarket demo and packs it for
-// the site; `pack` packs a recording again, such as a bench trial's, with or without the voice.
-// Model calls cost money, so a take needs the bench's opt-in and an OpenRouter key.
+// The demo's command line: `take` records a narrated take of a demo, Polymarket or the casino, and
+// packs it for the site; `pack` packs a recording again, such as a bench trial's, with or without
+// the voice. Model calls cost money, so a take needs the bench's opt-in and an OpenRouter key.
 //
-//   bun run demo take [--model <id>] [--max-usd 0.5] [--every 5] [--id polymarket]
+//   bun run demo take [--demo casino] [--model <id>] [--max-usd 0.5] [--every 5] [--id casino]
 //   bun run demo pack <recording directory> <replay id> [--voice]
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { errorText } from "bench/run.ts";
@@ -10,6 +10,7 @@ import { Cause, Console, Duration, Effect, Option, Schema } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
+import { demoNames, stepsFor } from "./defaults.ts";
 import { pack } from "./pack.ts";
 import { defaults, take } from "./take.ts";
 import * as Voice from "./voice.ts";
@@ -19,11 +20,17 @@ const replayId = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]*$/));
 const takeCommand = Command.make(
   "take",
   {
+    demo: Flag.Literals("demo", demoNames).pipe(
+      Flag.withDefault(defaults.demo),
+      Flag.withDescription(
+        `The demo to record: ${demoNames.join(" or ")}. Defaults to ${defaults.demo}.`,
+      ),
+    ),
     id: Flag.String("id").pipe(
       Flag.withSchema(replayId),
-      Flag.withDefault(defaults.id),
+      Flag.optional,
       Flag.withDescription(
-        `The replay to pack it as, under public/replays/. Defaults to ${defaults.id}.`,
+        "The replay to pack it as, under public/replays/. Defaults to the demo's name.",
       ),
     ),
     model: Flag.String("model").pipe(
@@ -51,16 +58,26 @@ const takeCommand = Command.make(
       ),
     ),
     maxSteps: Flag.Int("max-steps").pipe(
-      Flag.withDefault(defaults.maxSteps),
-      Flag.withDescription(`The agent's turns. Defaults to ${defaults.maxSteps}.`),
+      Flag.optional,
+      Flag.withDescription(
+        `The agent's turns. Defaults to ${Object.entries(stepsFor)
+          .map(([demo, steps]) => `${steps} for ${demo}`)
+          .join(" and ")}.`,
+      ),
     ),
     headed: Flag.Boolean("headed").pipe(
       Flag.withDefault(false),
       Flag.withDescription("Show the local chromium's window."),
     ),
   },
-  (options) => take({ ...options, every: Duration.seconds(options.every) }),
-).pipe(Command.withDescription("Record a narrated take of the Polymarket demo and pack it."));
+  (options) =>
+    take({
+      ...options,
+      id: Option.getOrElse(options.id, () => options.demo),
+      maxSteps: Option.getOrElse(options.maxSteps, () => stepsFor[options.demo]),
+      every: Duration.seconds(options.every),
+    }),
+).pipe(Command.withDescription("Record a narrated take of a demo and pack it."));
 
 const packCommand = Command.make(
   "pack",
@@ -90,7 +107,9 @@ const packCommand = Command.make(
 ).pipe(Command.withDescription("Pack a recording for the site, optionally with the voice."));
 
 Command.make("demo").pipe(
-  Command.withDescription("The site's narrated demo: an agent exploring Polymarket."),
+  Command.withDescription(
+    "The site's narrated demos: an agent exploring Polymarket, or playing a slot.",
+  ),
   Command.withSubcommands([takeCommand, packCommand]),
   Command.run({ version: "0.3" }),
   Effect.tapCause((cause) =>

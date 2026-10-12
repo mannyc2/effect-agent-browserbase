@@ -1,15 +1,11 @@
-// The demo: an agent explores Polymarket in a watched browser, its input performed at a person's
-// pace, while a host, a second model, opens the video, talks viewers through what the agent does
-// and closes with what it found. The host never steers the agent. When the agent reports the
-// markets it found, each one is checked against Polymarket's public API, not taken on its word.
-import * as Arms from "bench/Arms.ts";
-import type { Trace } from "bench/Recording.ts";
-import { Deferred, Duration, Effect, Fiber, Option, Schedule, Schema } from "effect";
+// The demo: an agent explores Polymarket while a host talks viewers through it. When the agent
+// reports the markets it found, each one is checked against Polymarket's public API, not taken on
+// its word.
+import { Effect, Schedule, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Presentation from "effect-browser/Presentation";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
-import * as Narrator from "./narrator.ts";
+import * as Show from "./show.ts";
 
 export const task = {
   name: "polymarket",
@@ -33,7 +29,7 @@ export const task = {
     "try another way rather than giving up.",
     "Do not sign up, log in, connect a wallet or trade.",
   ].join(" "),
-} as const;
+} as const satisfies Show.Task;
 
 export const Answer = Schema.Struct({
   markets: Schema.Array(
@@ -48,15 +44,6 @@ export const Answer = Schema.Struct({
 
 export type Answer = typeof Answer.Type;
 
-/** Who the host is and what the agent was asked, for every line the host says. */
-const brief = [
-  "You are the host of a short screen-recorded demo: an AI agent uses a web browser on its own,",
-  "and viewers watch its screen while you talk them through it, the way a presenter talks over a",
-  "product demo. You are not the agent: call it the agent, or it, and never say I for what it",
-  "does.",
-  `It was asked, word for word: "${task.prompt}"`,
-].join(" ");
-
 const opening = [
   "This is the very start of the video, before the agent has done anything; the picture is the",
   "page it starts on. Open the way a presenter opens a demo: greet the viewers, say in a few",
@@ -64,22 +51,7 @@ const opening = [
   "and hand over to it, as in let's watch. Three or four short sentences, at most 50 words.",
 ].join(" ");
 
-/**
- * Words that fit between lines, with a pause after them: the host starts a line `every`, and a
- * voice says about two and a half words a second.
- */
-export const wordsFor = (every: Duration.Duration) =>
-  Math.max(8, Math.min(20, Math.floor(Duration.toSeconds(every) * 2.2)));
-
-const commentary = (every: Duration.Duration) =>
-  [
-    "The video is under way; the pictures and events above cover the last few seconds, oldest",
-    "first. Say your next line, carrying on from your last one. One or two short sentences, at",
-    `most ${wordsFor(every)} words. Do not begin with The agent, and do not begin the way any of`,
-    "your recent lines began.",
-  ].join(" ");
-
-const closing = (answer: Answer, checked: Checked) =>
+const closing = (answer: Answer, checked: Show.Checked) =>
   [
     "The agent has finished. It reported these markets:",
     ...answer.markets.map(
@@ -92,60 +64,14 @@ const closing = (answer: Answer, checked: Checked) =>
     "for watching. Four or five short sentences, at most 70 words.",
   ].join(" ");
 
-export interface ExploreOptions {
-  /** How often the host speaks while the agent works. */
-  readonly every: Duration.Duration;
-  readonly maxSteps: number;
-  readonly trace: (entry: Trace) => Effect.Effect<void>;
-  /** Wraps each narrator call, such as to switch the model's reasoning off for speed. */
-  readonly captionCall: <A, E, R>(call: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-}
-
 /** One take: the agent explores, the narrator speaks over it, and the answer is checked. */
-export const explore = (options: ExploreOptions) =>
+export const explore = (options: Show.ExploreOptions) =>
   Effect.gen(function* () {
     const page = yield* (yield* Browser).firstPage;
 
     yield* page.goto(task.start);
-    const shown = (yield* Presentation.make()).view(page);
 
-    const host = yield* Narrator.make(shown, {
-      brief,
-      trace: options.trace,
-      captionCall: options.captionCall,
-    });
-
-    // The agent starts once the opening has been said, with a second's pause.
-    const opened = yield* host.open(opening);
-
-    yield* Effect.sleep(
-      Option.match(opened, {
-        onNone: () => Duration.zero,
-        onSome: (line) => Duration.sum(Narrator.speakingTime(line), Duration.seconds(1)),
-      }),
-    );
-    const stop = yield* Deferred.make<void>();
-
-    const talking = yield* Effect.forkScoped(
-      host.commentate(options.every, stop, commentary(options.every)),
-    );
-
-    // However the agent ends, the host finishes the line it is writing and starts no other:
-    // interrupting a call already sent would leave its charge unknown.
-    const result = yield* Arms.operate(5, shown, task.prompt, {
-      answer: Answer,
-      maxSteps: options.maxSteps,
-      onStep: (step) =>
-        options.trace({ _tag: "Step", step }).pipe(Effect.andThen(host.hear(step.text))),
-    }).pipe(
-      Effect.ensuring(Deferred.succeed(stop, undefined).pipe(Effect.andThen(Fiber.await(talking)))),
-    );
-
-    const checked = yield* check(result.answer);
-
-    yield* host.close(closing(result.answer, checked));
-
-    return { pass: checked.pass, detail: checked.detail, ...result };
+    return yield* Show.perform(page, { task, answer: Answer, opening, check, closing }, options);
   }).pipe(Effect.scoped);
 
 const ApiMarket = Schema.Struct({
@@ -234,14 +160,8 @@ export const apiChance = (
   };
 };
 
-export interface Checked {
-  readonly pass: boolean;
-  readonly matched: number;
-  readonly detail: string;
-}
-
 /** Every reported market must be on Polymarket, open, at about the chance the agent read. */
-export const check = (answer: Answer) =>
+export const check = (answer: Answer): Effect.Effect<Show.Checked, never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
 

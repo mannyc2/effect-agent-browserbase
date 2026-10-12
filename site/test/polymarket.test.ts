@@ -2,7 +2,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Duration } from "effect";
 
-import { apiChance, type ApiEvent, wordsFor } from "../demo/polymarket.ts";
+import { apiChance, type ApiEvent } from "../demo/polymarket.ts";
+import { wordsFor } from "../demo/show.ts";
 import { says } from "../demo/voice.ts";
 
 const events: ReadonlyArray<ApiEvent> = [

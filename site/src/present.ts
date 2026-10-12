@@ -92,6 +92,22 @@ const fieldWords: Readonly<Record<string, FieldWords>> = {
   multiplier: { label: "Final multiplier", format: numeric((value) => `×${value}`) },
   totalWin: { label: "Total win", format: numeric((value) => money.format(value)) },
   balance: { label: "Balance", format: numeric((value) => money.format(value)) },
+  fiveCrowns: { label: "Five Crowns pay", format: numeric((value) => money.format(value)) },
+  bet: { label: "Total bet", format: numeric((value) => money.format(value)) },
+  wins: {
+    label: "Each spin's win",
+    format: (value) =>
+      Array.isArray(value)
+        ? value.map((win) => (typeof win === "number" ? money.format(win) : plain(win))).join(", ")
+        : plain(value),
+  },
+  biggest: {
+    label: "Biggest win",
+    format: (value) =>
+      isRecord(value) && typeof value["count"] === "number" && typeof value["symbol"] === "string"
+        ? `${value["count"]} × ${value["symbol"]}`
+        : plain(value),
+  },
   done: { label: "Spin finished" },
   ticker: { label: "Ticker" },
   price: { label: "Price", format: numeric((value) => `$${decimal.format(value)}`) },
