@@ -1,4 +1,4 @@
-import { Recording } from "bench/Recording.ts";
+import { Recording, type RecordedSpan } from "bench/Recording.ts";
 // A packed recording, as the player reads it: the bench's Recording with its frames encoded into
 // one video, the narrator's lines as they were spoken over it, and what the recording shows at any
 // host time: where the pointer is, what was just pressed or scrolled, and which page owned the
@@ -24,6 +24,129 @@ export class NarrationLine extends Schema.Class<NarrationLine>("site/NarrationLi
   end: Schema.Finite,
 }) {}
 
+export const ActivityKind = Schema.Literals(["think", "look", "act", "wait", "report"]);
+
+export type ActivityKind = typeof ActivityKind.Type;
+
+/**
+ * What the agent was doing over a stretch of the run, from its trace: thinking is a model call;
+ * looking, a screenshot it took or a tool that reads the page; acting, a tool that works the page;
+ * waiting, one that watches it; reporting, its answer.
+ */
+export class Activity extends Schema.Class<Activity>("site/Activity")({
+  kind: ActivityKind,
+  /** The tool it ran, for all but a model call and a screenshot. */
+  tool: Schema.optional(Schema.String),
+  start: Schema.Finite,
+  end: Schema.Finite,
+  failed: Schema.Boolean,
+}) {}
+
+/** What each tool does to the page, where it does not work it. */
+const toolKinds: Readonly<Record<string, ActivityKind>> = {
+  observe: "look",
+  inspect: "look",
+  snapshot: "look",
+  screenshot: "look",
+  zoom: "look",
+  find_text: "look",
+  wait: "wait",
+  wait_still: "wait",
+  done: "report",
+  give_up: "report",
+};
+
+/** What a tool does: looks at the page, waits on it, reports, or else acts on it. */
+export const kindOfTool = (tool: string): ActivityKind =>
+  toolKinds[tool.replace(/^browser_/, "")] ?? "act";
+
+/**
+ * The agent's activity from a recording's trace spans, oldest first: only what it did and when,
+ * none of the spans' attributes, which can carry a hosted session's id.
+ */
+export const activityOf = (spans: ReadonlyArray<RecordedSpan>): ReadonlyArray<Activity> => {
+  const byId = new Map(spans.map((span) => [span.id, span]));
+
+  const agents = (span: RecordedSpan) => {
+    for (let parent = byId.get(span.parent ?? ""); parent !== undefined;) {
+      if (parent.name.startsWith("invoke_agent")) return true;
+      parent = byId.get(parent.parent ?? "");
+    }
+
+    return false;
+  };
+
+  return spans
+    .flatMap((span) => {
+      const tool = span.name.match(/^execute_tool (.+)$/)?.[1];
+
+      const kind =
+        span.name === "AgentRuntime.model"
+          ? "think"
+          : span.name === "Page.screenshot" && agents(span)
+            ? "look"
+            : tool === undefined
+              ? undefined
+              : kindOfTool(tool);
+
+      return kind === undefined
+        ? []
+        : [new Activity({ kind, tool, start: span.start, end: span.end, failed: span.failed })];
+    })
+    .toSorted((left, right) => left.start - right.start);
+};
+
+/** The most words a caption shows at once: two short lines. */
+const captionWords = 14;
+
+/**
+ * A spoken line as captions a viewer reads at a glance: pieces of at most two short lines, broken
+ * after a sentence or a clause where one ends near enough, each timed by its share of the line's
+ * letters from `at` to `end`.
+ */
+export const captionChunks = (
+  text: string,
+  at: number,
+  end: number,
+): ReadonlyArray<{ readonly text: string; readonly at: number; readonly end: number }> => {
+  const words = text.split(/\s+/).filter((word) => word !== "");
+  const pieces: Array<Array<string>> = [];
+  let piece: Array<string> = [];
+
+  const clauseEnds = (word: string) => /[,;:—]["”’)]*$/.test(word);
+
+  for (const [index, word] of words.entries()) {
+    piece.push(word);
+    const left = words.length - index - 1;
+    const sentence = /[.?!…]["”’)]*$/.test(word) && piece.length >= 2;
+
+    if (left === 0) break;
+    if (sentence || (clauseEnds(word) && piece.length >= 8)) {
+      pieces.push(piece);
+      piece = [];
+    } else if (piece.length >= captionWords) {
+      // A full piece ends at its last clause, if it has one far enough in, and carries the rest.
+      const cut = piece.findLastIndex((each, at) => at >= 4 && clauseEnds(each)) + 1;
+
+      pieces.push(cut > 0 ? piece.slice(0, cut) : piece);
+      piece = cut > 0 ? piece.slice(cut) : [];
+    }
+  }
+  if (piece.length > 0) pieces.push(piece);
+
+  const total = words.join(" ").length || 1;
+  let done = 0;
+
+  return pieces.map((part) => {
+    const said = part.join(" ");
+    const from = at + ((end - at) * done) / total;
+
+    done += said.length + 1;
+
+    return { text: said, at: from, end: Math.min(end, at + ((end - at) * done) / total) };
+  });
+};
+
 export class Replay extends Schema.Class<Replay>("site/Replay")({
   ...kept,
   video: Schema.Struct({
@@ -36,6 +159,8 @@ export class Replay extends Schema.Class<Replay>("site/Replay")({
     height: Schema.Finite,
     frames: Schema.Int,
   }),
+  /** What the agent was doing when; absent from a replay packed before it was kept. */
+  activity: Schema.optional(Schema.Array(Activity)),
   /** Absent from a replay packed without a voice. */
   narration: Schema.optional(
     Schema.Struct({

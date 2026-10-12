@@ -6,7 +6,14 @@ import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { describeCall, doing, items } from "../present.ts";
-import { type Replay, track } from "../replay.ts";
+import {
+  type Activity,
+  ActivityKind,
+  captionChunks,
+  kindOfTool,
+  type Replay,
+  track,
+} from "../replay.ts";
 
 const Point = { at: Schema.Finite, x: Schema.Finite, y: Schema.Finite };
 
@@ -30,6 +37,8 @@ export const Span = Schema.Struct({
 export type Span = typeof Span.Type;
 
 export const CallWords = Schema.Struct({
+  /** What the call does, so the transcript marks it as the video does. */
+  kind: ActivityKind,
   text: Schema.String,
   failed: Schema.Boolean,
   why: Schema.optional(Schema.String),
@@ -50,6 +59,8 @@ export const Entry = defineTaggedUnion({
     at: Schema.Finite,
     first: Schema.Int,
     last: Schema.Int,
+    /** How long the agent thought before the step, when the replay kept it. */
+    thought: Schema.Option(Schema.Finite),
     said: Schema.String,
     calls: Schema.Array(CallWords),
     rejected: Schema.Option(Schema.String),
@@ -94,7 +105,8 @@ const lines = (replay: Replay): ReadonlyArray<Entry> =>
           at: line.at,
           end: line.end,
           text: line.text,
-          moment: replay.moments.findIndex((moment) => moment.at === line.until),
+          // The moment the line's window ended at, or the last one shown before the turn it spoke.
+          moment: replay.moments.findLastIndex((moment) => moment.at <= line.until),
         }),
       );
 
@@ -119,23 +131,40 @@ const subjectsOf = (replay: Replay, from: number, until: number) => {
   return (ref: string) => named.get(ref);
 };
 
-const steps = (replay: Replay): ReadonlyArray<Entry> =>
-  replay.steps.map((step, index) =>
+/** The model call that ended at a step: it comes back at the step's time, give or take. */
+const thinkingBefore = (replay: Replay, at: number): Activity | undefined =>
+  replay.activity?.findLast(
+    (activity) => activity.kind === "think" && Math.abs(activity.end - at) < 250,
+  );
+
+/** The turns whose words were spoken: a line heard for them is their words, so a step omits them. */
+const spokenTurns = (replay: Replay) =>
+  new Set(replay.narration?.lines.map((line) => line.from) ?? []);
+
+const steps = (replay: Replay): ReadonlyArray<Entry> => {
+  const spoken = spokenTurns(replay);
+
+  return replay.steps.map((step, index) =>
     Entry.Steps({
       at: step.at,
       first: step.step,
       last: step.step,
-      said: step.text.trim(),
-      calls: step.calls.map((call, order) =>
-        describeCall(
+      thought: Option.fromNullishOr(thinkingBefore(replay, step.at)).pipe(
+        Option.map((thinking) => thinking.end - thinking.start),
+      ),
+      said: spoken.has(step.at) ? "" : step.text.trim(),
+      calls: step.calls.map((call, order) => ({
+        kind: kindOfTool(call.name),
+        ...describeCall(
           call,
           step.results[order],
           subjectsOf(replay, step.at - 500, replay.steps[index + 1]?.at ?? Infinity),
         ),
-      ),
+      })),
       rejected: step.rejected === undefined ? Option.none() : Option.some(step.rejected),
     }),
   );
+};
 
 const sameSteps = (left: Entry, right: Entry) =>
   left._tag === "Steps" &&
@@ -345,20 +374,145 @@ export const lineAt = (entries: ReadonlyArray<Entry>, now: number) =>
       entry._tag === "Line" && entry.at <= now && now < entry.end,
   );
 
-/** What the browser is doing at `now`, for the status line over the video. */
-export const statusAt = (
+/** The piece of the line being spoken at `now` that its caption shows. */
+export const captionAt = (entries: ReadonlyArray<Entry>, now: number) => {
+  const line = lineAt(entries, now);
+
+  return line === undefined
+    ? undefined
+    : captionChunks(line.text, line.at, line.end).find((piece) => now < piece.end);
+};
+
+/** What the agent is doing at one instant, for the video to show. */
+export interface Phase {
+  readonly kind: ActivityKind;
+  readonly label: string;
+  /** When it started, so the video can say how long it has gone on. */
+  readonly since: number;
+  readonly failed: boolean;
+}
+
+/** How long a look shows: a screenshot takes an instant, too short to see. */
+export const lookMillis = 800;
+
+/** When an activity stops showing: a look after a moment at least. */
+const shownUntil = (activity: Activity) =>
+  activity.kind === "look" ? Math.max(activity.end, activity.start + lookMillis) : activity.end;
+
+const lookWords: Readonly<Record<string, string>> = {
+  observe: "Reading the page",
+  inspect: "Reading the page",
+  snapshot: "Reading the page",
+  zoom: "Looking closer",
+  find_text: "Searching the page",
+};
+
+const actWords: Readonly<Record<string, string>> = {
+  click: "Clicking",
+  click_at: "Clicking",
+  type: "Typing",
+  type_text: "Typing",
+  press: "Pressing keys",
+  press_keys: "Pressing keys",
+  scroll: "Scrolling",
+  wheel: "Scrolling",
+  navigate: "Loading the page",
+  back: "Going back",
+  select: "Choosing an option",
+};
+
+const wordsFor = (activity: Activity) => {
+  const tool = activity.tool?.replace(/^browser_/, "") ?? "";
+
+  switch (activity.kind) {
+    case "think":
+      return "Thinking";
+    case "look":
+      return lookWords[tool] ?? "Looking at the screen";
+    case "wait":
+      return tool === "wait_still" ? "Watching the screen settle" : "Waiting";
+    case "report":
+      return "Writing the report";
+    case "act":
+      return actWords[tool] ?? "Working the page";
+  }
+};
+
+/**
+ * What the agent is doing at `now`: a browser action, named for what it acted on; a look at the
+ * screen; or the model call or tool under way. A replay packed before its activity was kept knows
+ * only its actions, and that the agent thought between them.
+ */
+export const phaseAt = (
   replay: Replay,
   spans: ReadonlyArray<Span>,
   now: number,
-): { readonly text: string; readonly tone: "act" | "fail" | "wait" } | undefined => {
+): Phase | undefined => {
   const action = spans.findLast((span) => span.start <= now && span.end >= now);
 
-  if (action !== undefined) return { text: action.label, tone: action.ok ? "act" : "fail" };
-  const lastStep = replay.steps.at(-1);
+  if (action !== undefined)
+    return { kind: "act", label: action.label, since: action.start, failed: !action.ok };
 
-  return lastStep !== undefined && now < lastStep.at && replay.run.model !== null
-    ? { text: "Deciding the next step…", tone: "wait" }
-    : undefined;
+  if (replay.activity === undefined) {
+    const lastStep = replay.steps.at(-1);
+    const since = replay.steps.findLast((step) => step.at <= now)?.at ?? replay.video.startsAt;
+
+    return lastStep !== undefined && now < lastStep.at && replay.run.model !== null
+      ? { kind: "think", label: "Thinking", since, failed: false }
+      : undefined;
+  }
+
+  const showing = replay.activity.filter(
+    (activity) => activity.start <= now && now < shownUntil(activity),
+  );
+
+  // A look shows over the call it starts, so a screenshot is seen before the thinking on it.
+  const activity = showing.findLast((shown) => shown.kind === "look") ?? showing.at(-1);
+
+  return activity === undefined
+    ? undefined
+    : {
+        kind: activity.kind,
+        label: wordsFor(activity),
+        since: activity.start,
+        failed: activity.failed,
+      };
+};
+
+/** The screenshot the agent took at `now`, as how far through its look it is, from 0 to 1. */
+export const glanceAt = (replay: Replay, now: number) => {
+  const glance = replay.activity?.findLast(
+    (activity) =>
+      activity.kind === "look" &&
+      activity.tool === undefined &&
+      activity.start <= now &&
+      now < activity.start + lookMillis,
+  );
+
+  return glance === undefined ? undefined : (now - glance.start) / lookMillis;
+};
+
+/**
+ * What the agent last decided, from its latest step at `now`, and whether it is thinking about the
+ * next; nothing before its first step.
+ */
+export const decisionAt = (replay: Replay, now: number) => {
+  const step = replay.steps.findLast(
+    (candidate) => candidate.at <= now && candidate.text.trim() !== "",
+  );
+
+  if (step === undefined) return undefined;
+
+  const thinking =
+    replay.activity?.some(
+      (activity) =>
+        activity.kind === "think" &&
+        activity.start > step.at &&
+        activity.start <= now &&
+        now < activity.end,
+    ) ?? false;
+
+  return { text: step.text.trim(), at: step.at, thinking };
 };
 
 /** The viewport the pointer moved in, in CSS pixels; the video covers exactly this area. */

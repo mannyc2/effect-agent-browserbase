@@ -1,4 +1,4 @@
-// The player's view: the video with the recorded pointer and the narrator's captions over it, its
+// The player's view: the video with the recorded pointer and the spoken captions over it, its
 // chapters on the timeline, and beside it the transcript that follows along. Under them, what the
 // run found, each finding with the place in the video it was found, and how the run was made.
 import { Option } from "effect";
@@ -6,16 +6,18 @@ import { createLazy, type Html, type HtmlBuilder } from "foldkit/html";
 import { defineView } from "foldkit/submodel";
 
 import { clock, cost, duration, type Field, fields, items } from "../present.ts";
-import { pointerAt, recentMark, type Replay } from "../replay.ts";
+import { type ActivityKind, pointerAt, recentMark, type Replay } from "../replay.ts";
 import {
   type CallWords,
+  captionAt,
   type Chapter,
   chapterAt,
   currentEntry,
+  decisionAt,
   type Derived,
   type Entry,
-  lineAt,
-  statusAt,
+  glanceAt,
+  phaseAt,
   viewportOf,
 } from "./derive.ts";
 import { Message, type Speed } from "./message.ts";
@@ -23,7 +25,7 @@ import { baseOf, feedIdOf, Load, type Model, videoIdOf, WatchVideo } from "./pla
 
 type H = HtmlBuilder<Message>;
 
-const speeds: ReadonlyArray<Speed> = [1, 2, 4];
+const speeds: ReadonlyArray<Speed> = [1, 1.5, 2, 4];
 
 const icon = (h: H, path: string, size = "size-5") =>
   h.svg(
@@ -39,8 +41,49 @@ const soundIcon = "M4 9v6h4l5 4V5L8 9H4zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 
 const mutedIcon =
   "M4 9v6h4l5 4V5L8 9H4zm15.6 3 2.1-2.1-1.4-1.4-2.1 2.1-2.1-2.1-1.4 1.4 2.1 2.1-2.1 2.1 1.4 1.4 2.1-2.1 2.1 2.1 1.4-1.4z";
 
-/** The agent's mark in the transcript: a small pointer. */
-const agentIcon = "M6 3l12.5 9.2-5.6.9 3.3 6.4-2.4 1.2-3.3-6.5L6 18.2z";
+interface KindLook {
+  readonly icon: string;
+  /** The chip over the video. */
+  readonly chip: string;
+  /** The icon's colour in the transcript. */
+  readonly mark: string;
+  /** Its stretches on the timeline. */
+  readonly bar: string;
+}
+
+/** Each kind of thing the agent does, marked the same way over the video and in the transcript. */
+const kinds: Readonly<Record<ActivityKind, KindLook>> = {
+  think: {
+    icon: "M12 2l1.9 5.6 5.6 1.9-5.6 1.9L12 17l-1.9-5.6-5.6-1.9 5.6-1.9zM19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9z",
+    chip: "bg-violet-600/90 text-white",
+    mark: "text-violet-600 dark:text-violet-400",
+    bar: "bg-violet-500",
+  },
+  look: {
+    icon: "M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+    chip: "bg-sky-600/90 text-white",
+    mark: "text-sky-600 dark:text-sky-400",
+    bar: "bg-sky-500",
+  },
+  act: {
+    icon: "M6 3l12.5 9.2-5.6.9 3.3 6.4-2.4 1.2-3.3-6.5L6 18.2z",
+    chip: "bg-white/95 text-stone-900 [&_svg]:text-orange-600",
+    mark: "text-orange-600 dark:text-orange-400",
+    bar: "bg-orange-500",
+  },
+  wait: {
+    icon: "M6 2v6l4 4-4 4v6h12v-6l-4-4 4-4V2zm10 14.5V20H8v-3.5l4-4zm-4-5-4-4V4h8v3.5z",
+    chip: "bg-stone-800/85 text-white",
+    mark: "text-stone-500 dark:text-stone-400",
+    bar: "bg-stone-400 dark:bg-stone-500",
+  },
+  report: {
+    icon: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zm-3.1 16-3.5-3.5 1.4-1.4 2.1 2.1 4.2-4.2 1.4 1.4zM13 9V3.5L18.5 9z",
+    chip: "bg-emerald-600/90 text-white",
+    mark: "text-emerald-600 dark:text-emerald-400",
+    bar: "bg-emerald-500",
+  },
+};
 
 const checkIcon = "M9.5 16.2 5.3 12l-1.4 1.4 5.6 5.6 11-11-1.4-1.4z";
 
@@ -107,36 +150,101 @@ const overlay = (replay: Replay, derived: Derived, now: number, h: H): Html => {
   );
 };
 
-const statusView = (replay: Replay, derived: Derived, now: number, h: H): Html => {
-  const status = statusAt(replay, derived.spans, now);
+/**
+ * What the agent is doing, over the video's corner: a chip marked for thinking, looking, acting,
+ * waiting or reporting, and under it what it last decided, dimmed while it thinks about the next.
+ */
+const activityView = (replay: Replay, derived: Derived, now: number, h: H): Html => {
+  const phase = phaseAt(replay, derived.spans, now);
+  const decision = decisionAt(replay, now);
 
-  return status === undefined
+  return phase === undefined && decision === undefined
     ? h.empty
-    : h.span(
+    : h.div(
         [
           h.Class(
-            `pointer-events-none absolute top-3 left-3 rounded-md px-2.5 py-1 text-xs font-medium shadow-sm backdrop-blur ${
-              status.tone === "fail"
-                ? "bg-red-600/90 text-white"
-                : status.tone === "wait"
-                  ? "bg-black/60 text-white/90"
-                  : "bg-white/90 text-stone-900"
-            }`,
+            "pointer-events-none absolute top-3 left-3 flex max-w-[min(26rem,calc(100%-1.5rem))] flex-col items-start gap-1.5",
           ),
+          h.DataAttribute("testid", "activity"),
         ],
-        [status.text],
+        [
+          phase === undefined
+            ? h.empty
+            : h.span(
+                [
+                  h.Class(
+                    `flex items-center gap-1.5 rounded-full py-1 pr-2.5 pl-2 text-xs font-medium shadow-sm backdrop-blur ${
+                      phase.failed ? "bg-red-600/90 text-white" : kinds[phase.kind].chip
+                    }`,
+                  ),
+                ],
+                [
+                  h.span(
+                    [h.Class(phase.kind === "think" ? "animate-pulse" : "")],
+                    [icon(h, kinds[phase.kind].icon, "size-3.5")],
+                  ),
+                  phase.label,
+                  phase.kind === "think" || phase.kind === "wait"
+                    ? h.span(
+                        [h.Class("font-mono tabular-nums opacity-75")],
+                        [`${((now - phase.since) / 1000).toFixed(1)}s`],
+                      )
+                    : h.empty,
+                ],
+              ),
+          decision === undefined
+            ? h.empty
+            : h.keyed("p")(
+                `decision-${decision.at}`,
+                [
+                  h.Class(
+                    `hidden rounded-lg px-2.5 py-1.5 text-xs leading-snug shadow-sm backdrop-blur transition-colors duration-300 sm:block sm:text-[0.8125rem] ${
+                      decision.thinking ? "bg-black/45 text-white/65" : "bg-black/65 text-white"
+                    }`,
+                  ),
+                ],
+                [h.span([h.Class("line-clamp-2")], [decision.text])],
+              ),
+        ],
       );
 };
 
-const captionView = (model: Model, derived: Derived, h: H): Html => {
-  const line = lineAt(derived.entries, model.now);
+/** The agent taking a screenshot: the frame it saw flashes and is framed, as by a viewfinder. */
+const glanceView = (replay: Replay, now: number, h: H): Html => {
+  const progress = glanceAt(replay, now);
 
-  return model.captions === "Hidden" || line === undefined
+  if (progress === undefined) return h.empty;
+  const corner = (place: string) => h.span([h.Class(`absolute size-6 border-white ${place}`)]);
+
+  return h.div(
+    [
+      h.Class("pointer-events-none absolute inset-2"),
+      h.Style({ opacity: String(1 - progress) }),
+      h.AriaHidden(true),
+    ],
+    [
+      h.span([
+        h.Class("absolute -inset-2 bg-white"),
+        h.Style({ opacity: String(Math.max(0, 0.16 - progress * 0.5)) }),
+      ]),
+      corner("top-0 left-0 rounded-tl-md border-t-2 border-l-2"),
+      corner("top-0 right-0 rounded-tr-md border-t-2 border-r-2"),
+      corner("bottom-0 left-0 rounded-bl-md border-b-2 border-l-2"),
+      corner("right-0 bottom-0 rounded-br-md border-r-2 border-b-2"),
+    ],
+  );
+};
+
+/** The narration as captions: the piece of the line being spoken, two short lines at most. */
+const captionView = (model: Model, derived: Derived, h: H): Html => {
+  const piece = captionAt(derived.entries, model.now);
+
+  return model.captions === "Hidden" || piece === undefined
     ? h.empty
     : h.p(
         [
           h.Class(
-            "pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-6 text-center",
+            "pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-6 text-center",
           ),
           h.AriaLive("off"),
           h.DataAttribute("testid", "caption"),
@@ -145,10 +253,10 @@ const captionView = (model: Model, derived: Derived, h: H): Html => {
           h.span(
             [
               h.Class(
-                "max-w-[46rem] rounded-md bg-black/80 px-3 py-1.5 text-sm leading-snug text-white sm:text-base",
+                "max-w-[36rem] rounded-md bg-black/75 px-2.5 py-1 text-sm leading-snug text-balance text-white sm:text-base",
               ),
             ],
-            [line.text],
+            [piece.text],
           ),
         ],
       );
@@ -186,7 +294,8 @@ const screenView = (model: Model, replay: Replay, derived: Derived, h: H): Html 
             ],
       ),
       overlay(replay, derived, model.now, h),
-      statusView(replay, derived, model.now, h),
+      glanceView(replay, model.now, h),
+      activityView(replay, derived, model.now, h),
       captionView(model, derived, h),
       h.button(
         [
@@ -235,6 +344,19 @@ const timelineView = (model: Model, replay: Replay, derived: Derived, h: H): Htm
   return h.div(
     [h.Class("group/timeline relative h-5")],
     [
+      ...(replay.activity ?? []).map((activity) => {
+        const from = fractionOf(replay, activity.start);
+
+        return h.span([
+          h.Class(
+            `pointer-events-none absolute top-0 h-[3px] min-w-px rounded-full ${activity.failed ? "bg-red-500" : kinds[activity.kind].bar}`,
+          ),
+          h.Style({
+            left: `${from * 100}%`,
+            width: `${(fractionOf(replay, activity.end) - from) * 100}%`,
+          }),
+        ]);
+      }),
       ...segments.map((segment, index) => {
         const from = fractionOf(replay, segment.at);
         const to = fractionOf(replay, segments[index + 1]?.at ?? ends);
@@ -362,6 +484,71 @@ const soundView = (model: Model, h: H): Html => {
   );
 };
 
+/**
+ * The speed it plays at, as one button that opens the other speeds above it. A click outside or
+ * Escape closes them.
+ */
+const speedView = (model: Model, h: H): Html => {
+  const open = model.speeds === "Open";
+
+  return h.div(
+    [
+      h.Class("relative flex items-center"),
+      ...(open ? [h.OnKeyDown((key) => Message.PressedKeyInSpeeds({ key }))] : []),
+    ],
+    [
+      open
+        ? h.button([
+            h.Type("button"),
+            h.Tabindex(-1),
+            h.AriaHidden(true),
+            h.Class("fixed inset-0 z-10 cursor-default"),
+            h.OnClick(Message.DismissedSpeeds()),
+          ])
+        : h.empty,
+      h.button(
+        [
+          h.Type("button"),
+          h.AriaLabel(`Playback speed, ${model.speed}×`),
+          h.Title("Playback speed"),
+          h.AriaHasPopup("menu"),
+          h.AriaExpanded(open),
+          h.Class(
+            "relative flex h-8 min-w-10 items-center justify-center rounded-md px-1.5 font-mono text-sm font-medium text-stone-700 tabular-nums hover:bg-stone-200 aria-expanded:bg-stone-200 dark:text-stone-200 dark:hover:bg-stone-800 dark:aria-expanded:bg-stone-800",
+          ),
+          h.OnClick(Message.ClickedSpeed()),
+        ],
+        [`${model.speed}×`],
+      ),
+      open
+        ? h.div(
+            [
+              h.Role("menu"),
+              h.AriaLabel("Playback speed"),
+              h.Class(
+                "absolute right-0 bottom-full z-20 mb-2 flex w-24 flex-col rounded-lg border border-stone-200 bg-white p-1 shadow-lg dark:border-stone-700 dark:bg-stone-900",
+              ),
+            ],
+            speeds.map((speed) =>
+              h.button(
+                [
+                  h.Type("button"),
+                  h.Role("menuitemradio"),
+                  h.AriaChecked(model.speed === speed),
+                  h.Class(
+                    "flex items-center justify-between rounded-md px-2 py-1 text-left font-mono text-sm text-stone-700 tabular-nums hover:bg-stone-100 aria-checked:font-semibold aria-checked:text-stone-950 dark:text-stone-300 dark:hover:bg-stone-800 dark:aria-checked:text-white",
+                  ),
+                  h.OnClick(Message.SelectedSpeed({ speed })),
+                ],
+                [`${speed}×`, model.speed === speed ? icon(h, checkIcon, "size-3.5") : h.empty],
+              ),
+            ),
+          )
+        : h.empty,
+    ],
+  );
+};
+
 const controlsView = (model: Model, replay: Replay, derived: Derived, h: H): Html => {
   const { startsAt, durationMillis } = replay.video;
   const playing = model.playback === "Playing";
@@ -405,15 +592,7 @@ const controlsView = (model: Model, replay: Replay, derived: Derived, h: H): Htm
           h.div(
             [h.Class("ml-auto flex shrink-0 items-center")],
             [
-              ...speeds.map((speed) =>
-                controlButton(
-                  h,
-                  `Play at ${speed}× speed`,
-                  Option.some(model.speed === speed),
-                  Message.SelectedSpeed({ speed }),
-                  [`${speed}×`],
-                ),
-              ),
+              speedView(model, h),
               controlButton(
                 h,
                 "Captions",
@@ -432,15 +611,26 @@ const controlsView = (model: Model, replay: Replay, derived: Derived, h: H): Htm
 
 // TRANSCRIPT
 
-const callView = (call: CallWords, h: H): Html =>
+/** One line of a step, after the mark of its kind. */
+const markedView = (
+  kind: ActivityKind,
+  h: H,
+  attributes: ReadonlyArray<ReturnType<H["Title"]>>,
+  text: string,
+  tone: string,
+) =>
   h.span(
-    [
-      h.Class(
-        `block text-xs ${call.failed ? "text-red-700 dark:text-red-400" : "text-stone-500 dark:text-stone-400"}`,
-      ),
-      ...(call.technical === undefined ? [] : [h.Title(call.technical)]),
-    ],
-    [call.failed ? `${call.text}, ${call.why ?? "failed"}` : call.text],
+    [h.Class(`flex items-start gap-1.5 text-xs ${tone}`), ...attributes],
+    [h.span([h.Class(`pt-0.5 ${kinds[kind].mark}`)], [icon(h, kinds[kind].icon, "size-3")]), text],
+  );
+
+const callView = (call: CallWords, h: H): Html =>
+  markedView(
+    call.kind,
+    h,
+    call.technical === undefined ? [] : [h.Title(call.technical)],
+    call.failed ? `${call.text}, ${call.why ?? "failed"}` : call.text,
+    call.failed ? "text-red-700 dark:text-red-400" : "text-stone-500 dark:text-stone-400",
   );
 
 const framesView = (model: Model, replay: Replay, moment: number, h: H): Html => {
@@ -461,7 +651,7 @@ const framesView = (model: Model, replay: Replay, moment: number, h: H): Html =>
             [
               h.img([
                 h.Src(`${baseOf(model.id)}/${frame.file}`),
-                h.Alt(`What the narrator saw, frame ${order + 1}`),
+                h.Alt(`What was on screen, frame ${order + 1}`),
                 h.Loading("lazy"),
                 h.Class(
                   "aspect-video w-full rounded object-cover ring-1 ring-stone-200 dark:ring-stone-700",
@@ -493,10 +683,20 @@ const stepsContent = (replay: Replay, entry: Extract<Entry, { _tag: "Steps" }>, 
   h.span(
     [h.Class("flex gap-1.5")],
     [
-      h.span([h.Class("pt-1 text-stone-400 dark:text-stone-500")], [icon(h, agentIcon, "size-3")]),
       h.span(
         [h.Class("flex min-w-0 flex-col gap-0.5")],
         [
+          Option.match(entry.thought, {
+            onNone: () => h.empty,
+            onSome: (millis) =>
+              markedView(
+                "think",
+                h,
+                [],
+                `Thought for ${(millis / 1000).toFixed(1)}s`,
+                "text-stone-500 dark:text-stone-400",
+              ),
+          }),
           entry.said === ""
             ? h.empty
             : h.span(
@@ -506,7 +706,8 @@ const stepsContent = (replay: Replay, entry: Extract<Entry, { _tag: "Steps" }>, 
           ...entry.calls.map((call) => callView(call, h)),
           Option.match(entry.rejected, {
             onNone: () => h.empty,
-            onSome: (rejected) => callView({ text: rejected, failed: true, why: "rejected" }, h),
+            onSome: (rejected) =>
+              callView({ kind: "act", text: rejected, failed: true, why: "rejected" }, h),
           }),
           entry.last > entry.first
             ? h.span(
@@ -559,8 +760,8 @@ const entryView = (
             ],
             [
               Option.contains(model.maybeOpenMoment, entry.moment)
-                ? "Hide what the narrator saw"
-                : "What the narrator saw",
+                ? "Hide what was on screen"
+                : "What was on screen",
             ],
           ),
           Option.contains(model.maybeOpenMoment, entry.moment)
@@ -595,7 +796,7 @@ const entryView = (
 const transcript = createLazy();
 
 /**
- * The narrator's lines and the agent's steps in time order, each opening a chapter under the
+ * The spoken lines and the agent's steps in time order, each opening a chapter under the
  * chapter's name, with the entry playing now marked and kept in view.
  */
 const transcriptView = (
@@ -854,7 +1055,7 @@ const aboutView = (model: Model, replay: Replay, h: H): Html => {
       : ([
           ["Agent steps", String(replay.steps.length)],
           ["Model calls", `${outcome.calls}, for ${cost(outcome.knownUsd)}`],
-          ["Agent and narrator", run.model],
+          ["Model", run.model],
         ] as const)),
     ...(replay.narration === undefined ? [] : ([["Voice", replay.narration.voice]] as const)),
     [

@@ -12,8 +12,8 @@ export const casino = "https://www.marlowecasino.com";
 
 export const studio = "https://launch.larkspurgaming.net";
 
-/** The seed whose first spins make a good six-spin session: four wins, the last a big one. */
-export const defaultSeed = 828;
+/** A fresh seed for the game server's draws, an unsigned 32-bit integer. */
+export const freshSeed = (): number => crypto.getRandomValues(new Uint32Array(1))[0]!;
 
 /** One spin as the game server decided and paid it. */
 export interface Spin {
@@ -72,12 +72,13 @@ const configuration = (session: Session) => ({
 });
 
 /**
- * Serve the casino and its game to every page of `browser` while the scope is open, and return
- * the spins the game server has decided, oldest first.
+ * Serve the casino and its game to every page of `browser` while the scope is open, with the game
+ * server drawing its spins from `seed`, a fresh one unless given. Returns the seed, so a session
+ * can be dealt again, and the spins the game server has decided, oldest first.
  */
 export const serve = Effect.fn("Casino.serve")(function* (
   browser: Browser.Service,
-  seed = defaultSeed,
+  seed: number = freshSeed(),
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -92,7 +93,7 @@ export const serve = Effect.fn("Casino.serve")(function* (
   let nextRound = 4_183_207;
 
   const open = (): Session => {
-    // The first session draws from the seed itself, so its spins are the ones chosen for it.
+    // The first session draws from the seed itself; each later one from a seed of its own.
     const session: Session = {
       id: `ls-${(0x5f3a91c + opened * 7919).toString(36)}-${(seed * 31 + opened).toString(36)}`,
       draw: Slot.random(seed + opened * 0x9e3779b9),
@@ -195,5 +196,5 @@ export const serve = Effect.fn("Casino.serve")(function* (
       ).pipe(Effect.ignore),
   );
 
-  return { spins: Effect.sync((): ReadonlyArray<Spin> => [...spins]) };
+  return { seed, spins: Effect.sync((): ReadonlyArray<Spin> => [...spins]) };
 });

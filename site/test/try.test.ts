@@ -103,7 +103,7 @@ describe("view", () => {
   test("on the visitor's machine it lists what a take still needs and holds the button", () => {
     Scene.scene(
       { update, view },
-      Scene.given(local(["OPENROUTER_API_KEY: the agent, narrator and voice run on it"])),
+      Scene.given(local(["OPENROUTER_API_KEY: the agent and its voice run on it"])),
       Scene.expect(Scene.text("Before a take can start:")).toExist(),
       Scene.expect(Scene.role("button", { name: "Record a take" })).toBeDisabled(),
     );

@@ -13,6 +13,7 @@ import {
   PlayVideo,
   ScrollFeed,
   SeekVideo,
+  SetPlaybackRate,
   SetSound,
   update,
   videoIdOf,
@@ -157,7 +158,30 @@ describe("update", () => {
     );
   });
 
-  test("a narrator line opens the frames its moment held", () => {
+  test("the speeds open from one button, and close on a choice, Escape or a click outside", () => {
+    story(
+      update,
+      given(ready()),
+      message(Message.ClickedSpeed()),
+      model((model) => expect(model.speeds).toBe("Open")),
+      message(Message.SelectedSpeed({ speed: 1.5 })),
+      Command.resolve(SetPlaybackRate({ videoId, rate: 1.5 }), Message.CompletedSetPlaybackRate()),
+      model((model) => {
+        expect(model.speed).toBe(1.5);
+        expect(model.speeds).toBe("Closed");
+      }),
+      message(Message.ClickedSpeed()),
+      message(Message.PressedKeyInSpeeds({ key: "ArrowDown" })),
+      model((model) => expect(model.speeds).toBe("Open")),
+      message(Message.PressedKeyInSpeeds({ key: "Escape" })),
+      model((model) => expect(model.speeds).toBe("Closed")),
+      message(Message.ClickedSpeed()),
+      message(Message.DismissedSpeeds()),
+      model((model) => expect(model.speeds).toBe("Closed")),
+    );
+  });
+
+  test("a spoken line opens the frames its moment held", () => {
     story(
       update,
       given(ready()),
@@ -183,6 +207,38 @@ describe("view", () => {
       Scene.click(Scene.role("button", { name: "Captions" })),
       Scene.expect(Scene.testId("caption")).not.toExist(),
       Scene.expect(Scene.role("button", { name: "Captions" })).toHaveAttr("aria-pressed", "false"),
+    );
+  });
+
+  test("marks what the agent is doing over the video, with what it last decided", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(ready(10_500)),
+      watched,
+      Scene.expect(Scene.testId("activity")).toContainText("Thinking"),
+      Scene.expect(Scene.testId("activity")).toContainText("1.1s"),
+    );
+    Scene.scene(
+      { update, view },
+      Scene.given(ready(12_500)),
+      watched,
+      Scene.expect(Scene.testId("activity")).toContainText("Opening the ceasefire market."),
+      Scene.expect(Scene.text("Thought for 2.6s")).toExist(),
+    );
+  });
+
+  test("keeps the speeds behind the one showing", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(ready()),
+      watched,
+      Scene.expect(Scene.role("menu", { name: "Playback speed" })).not.toExist(),
+      Scene.click(Scene.role("button", { name: "Playback speed, 1×" })),
+      Scene.expect(Scene.role("menuitemradio", { name: "1×" })).toHaveAttr("aria-checked", "true"),
+      Scene.click(Scene.role("menuitemradio", { name: "2×" })),
+      Scene.Command.resolve(SetPlaybackRate, Message.CompletedSetPlaybackRate()),
+      Scene.expect(Scene.role("menu", { name: "Playback speed" })).not.toExist(),
+      Scene.expect(Scene.role("button", { name: "Playback speed, 2×" })).toExist(),
     );
   });
 

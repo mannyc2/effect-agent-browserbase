@@ -1,9 +1,12 @@
-// The casino demo's slot maths, the session its seed deals, and the check of the agent's report.
+// The casino demo's slot maths, the session a seed deals, and the check of the agent's report.
 import { assert, describe, it } from "@effect/vitest";
 
 import { type Answer, grade, symbolOf } from "../demo/casino.ts";
-import { defaultSeed, type Spin } from "../demo/casino/site.ts";
+import type { Spin } from "../demo/casino/site.ts";
 import * as Slot from "../demo/casino/slot.ts";
+
+/** A seed whose first six spins at $2 win four times, the last a big one. */
+const goodSeed = 828;
 
 /** A session's first spins at `bet`, as the game server deals them from `seed`. */
 const session = (seed: number, bet: number, count: number): ReadonlyArray<Spin> => {
@@ -46,9 +49,9 @@ describe("Slot.evaluate", () => {
   });
 });
 
-describe("the default seed", () => {
-  it("deals four wins in six spins, the last a big one", () => {
-    const spins = session(defaultSeed, 200, 6);
+describe("a seed", () => {
+  it("deals the same spins every time", () => {
+    const spins = session(goodSeed, 200, 6);
 
     assert.deepStrictEqual(
       spins.map((spin) => spin.win),
@@ -59,13 +62,14 @@ describe("the default seed", () => {
 });
 
 describe("grade", () => {
-  const spins = session(defaultSeed, 200, 6);
+  const spins = session(goodSeed, 200, 6);
 
   const right: Answer = {
     fiveCrowns: 200,
     bet: 2,
     wins: [0, 2, 2, 4, 0, 50],
     balance: 1046,
+    lowest: 998,
     biggest: { symbol: "Emeralds", count: 5 },
   };
 
@@ -73,19 +77,23 @@ describe("grade", () => {
     const checked = grade(right, spins);
 
     assert.isTrue(checked.pass);
-    assert.strictEqual(checked.matched, 6);
+    assert.strictEqual(checked.matched, 7);
   });
 
   it("misses a misread win and the balance it implies", () => {
     const checked = grade({ ...right, wins: [0, 2, 2, 4, 0, 23.08], balance: 1019.08 }, spins);
 
     assert.isFalse(checked.pass);
-    assert.strictEqual(checked.matched, 4);
+    assert.strictEqual(checked.matched, 5);
     assert.include(checked.detail, "MISS wins");
   });
 
+  it("misses a lowest balance that was not the lowest after any spin", () => {
+    assert.include(grade({ ...right, lowest: 1000 }, spins).detail, "MISS lowest balance");
+  });
+
   it("counts only the last session's spins, as the game's balance does", () => {
-    const earlier = session(defaultSeed + 1, 100, 2).map((spin) => ({ ...spin, session: "old" }));
+    const earlier = session(goodSeed + 1, 100, 2).map((spin) => ({ ...spin, session: "old" }));
 
     assert.isTrue(grade(right, [...earlier, ...spins]).pass);
   });

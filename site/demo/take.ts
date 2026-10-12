@@ -1,7 +1,6 @@
 // One take of the demo, run the way the bench runs a trial: model calls behind the bench's opt-in
-// and budget, a recorded local Chromium, and the outcome classified and checked. The take is then packed
-// with the narrator's voice, which has a cap of its own within the take's.
-import { OpenRouterLanguageModel } from "@effect/ai-openrouter";
+// and budget, a recorded local Chromium, and the outcome classified and checked. The take is then
+// packed with the agent's words spoken, by a voice with a cap of its own within the take's.
 import { BenchError, modelRunner, optedIn, refuse } from "bench/Budget.ts";
 import * as Recorder from "bench/Recorder.ts";
 import { errorText } from "bench/run.ts";
@@ -34,13 +33,11 @@ export interface TakeOptions {
   readonly demo: DemoName;
   /** The replay this take is packed as, under public/replays/. */
   readonly id: string;
-  /** An OpenRouter model id, for the agent and the narrator. */
+  /** An OpenRouter model id, for the agent. */
   readonly model: string;
   readonly reasoning: "none" | "low" | "medium" | "high";
-  /** USD for the agent, narrator and voice together. */
+  /** USD for the agent and the voice together. */
   readonly maxUsd: number;
-  /** How often the narrator speaks. */
-  readonly every: Duration.Duration;
   readonly maxSteps: number;
   /** Show Chromium's window. */
   readonly headed: boolean;
@@ -91,12 +88,7 @@ export const take = Effect.fn("demo.take")(function* (options: TakeOptions) {
 
   const work = runner.withModel(
     Effect.provide(
-      explore(options.demo, {
-        every: options.every,
-        maxSteps: options.maxSteps,
-        trace: recorder.trace,
-        captionCall: OpenRouterLanguageModel.withConfigOverride({ reasoning: { effort: "none" } }),
-      }),
+      explore(options.demo, { maxSteps: options.maxSteps, trace: recorder.trace }),
       FetchHttpClient.layer,
     ),
     options.reasoning,
@@ -124,7 +116,8 @@ export const take = Effect.fn("demo.take")(function* (options: TakeOptions) {
     task: { name: task.name, kind: task.kind, summary: task.summary, prompt: task.prompt },
     run: {
       trial: 1,
-      seed: 0,
+      // The casino's game server draws its spins from a seed of its own each take.
+      seed: value !== undefined && "seed" in value ? value.seed : 0,
       model: options.model,
       reasoning: options.reasoning,
       browser: "chromium",

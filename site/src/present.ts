@@ -375,10 +375,19 @@ export const doing = (action: {
   readonly name: string;
   readonly text?: string | undefined;
   readonly target?: string | undefined;
+  readonly subject?: { readonly role?: string | null; readonly name?: string | null } | undefined;
 }) => {
+  const named = action.subject?.name?.trim() ?? "";
+
   switch (action.name) {
     case "click":
-      return "Clicking";
+      // A click on a point of a frame, such as a game's canvas, is in the frame; one on a control
+      // names it, when its name is short enough to read at a glance.
+      return action.subject?.role === "iframe" && named !== ""
+        ? `Clicking in “${named}”`
+        : named !== "" && named.length <= 40
+          ? `Clicking “${named}”`
+          : "Clicking";
     case "type":
       return action.text === undefined ? "Typing" : `Typing ${quoted(action.text)}`;
     case "select":

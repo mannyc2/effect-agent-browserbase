@@ -49,8 +49,8 @@ describe("update", () => {
       Command.resolve(ScrollTo, Message.CompletedScroll()),
       model((model) => {
         expect(model.route).toEqual(AppRoute.Doc({ slug: "moments-and-narration" }));
-        expect(Object.keys(model.players)).toEqual(["polymarket"]);
-        expect(model.players.polymarket?.load._tag).toBe("Missing");
+        expect(Object.keys(model.players)).toEqual(["casino"]);
+        expect(model.players.casino?.load._tag).toBe("Missing");
       }),
     );
   });

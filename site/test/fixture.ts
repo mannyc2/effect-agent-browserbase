@@ -1,5 +1,6 @@
-// A small narrated replay, for tests of the player and the site: two agent steps, one narrated
-// moment and an answer that checked out, on a 30 second video starting at host time 1000.
+// A small narrated replay, for tests of the player and the site: two agent steps, what the agent
+// was doing around them, one narrated moment and an answer that checked out, on a 30 second video
+// starting at host time 1000.
 import { Schema } from "effect";
 
 import { Replay } from "../src/replay.ts";
@@ -78,6 +79,15 @@ export const replay = Schema.decodeSync(Replay)({
     height: 720,
     frames: 900,
   },
+  // A screenshot, then thinking until each step, the first reading the page and the second acting.
+  activity: [
+    { kind: "look", start: 900, end: 950, failed: false },
+    { kind: "think", start: 950, end: 2000, failed: false },
+    { kind: "look", tool: "observe", start: 2000, end: 2040, failed: false },
+    { kind: "look", start: 9350, end: 9400, failed: false },
+    { kind: "think", start: 9400, end: 12_000, failed: false },
+    { kind: "act", tool: "act", start: 12_000, end: 13_500, failed: false },
+  ],
   narration: {
     voice: "openai/gpt-audio-mini, voice marin",
     captions: "captions.vtt",

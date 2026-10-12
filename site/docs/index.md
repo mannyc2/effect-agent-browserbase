@@ -21,6 +21,6 @@ An agent explores [Polymarket](https://polymarket.com) on its own while a second
 
 - [Get started](/docs/get-started): install the packages and run an agent in a local Chromium.
 - [Run the demo yourself](/docs/run-the-demo): record your own narrated take, on your machine.
-- [Moments and narration](/docs/moments-and-narration): how the narrator sees the page.
+- [Moments and narration](/docs/moments-and-narration): how an agent sees what a page did, in its thread.
 - [Watched browsing](/docs/watched-browsing): input performed at a person's pace, and clean cuts between pages.
 - [For AI agents](/docs/for-agents): every page here is also plain markdown.

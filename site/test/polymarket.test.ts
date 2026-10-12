@@ -1,10 +1,7 @@
-// The demo's check against Polymarket's API, and the voice's test that it said its line.
+// The demo's check against Polymarket's API.
 import { assert, describe, it } from "@effect/vitest";
-import { Duration } from "effect";
 
 import { apiChance, type ApiEvent } from "../demo/polymarket.ts";
-import { wordsFor } from "../demo/show.ts";
-import { says } from "../demo/voice.ts";
 
 const events: ReadonlyArray<ApiEvent> = [
   {
@@ -100,24 +97,5 @@ describe("apiChance", () => {
     assert.deepStrictEqual(apiChance(reported("Fed decision in December?", "Yes"), events), {
       missing: '"Yes" is none of its options, 25 bps decrease, No change',
     });
-  });
-});
-
-describe("wordsFor", () => {
-  it("fits a line in its interval, within bounds", () => {
-    assert.strictEqual(wordsFor(Duration.seconds(6)), 13);
-    assert.strictEqual(wordsFor(Duration.seconds(8)), 17);
-    assert.strictEqual(wordsFor(Duration.seconds(1)), 8);
-    assert.strictEqual(wordsFor(Duration.seconds(30)), 20);
-  });
-});
-
-describe("says", () => {
-  it("accepts the line as read, and refuses one with words dropped or added", () => {
-    const line = "A rate cut sits at 71 percent.";
-
-    assert.ok(says("A rate cut sits at 71 percent", line));
-    assert.ok(!says("A rate cut", line));
-    assert.ok(!says(`${line} And that is all from me for tonight, folks, goodnight.`, line));
   });
 });

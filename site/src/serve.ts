@@ -121,7 +121,7 @@ export const replayMarkdown = (id: string) =>
     "",
     `Watch it at [/replay/${id}](/replay/${id}). Its data:`,
     "",
-    `- [replay.json](/replays/${id}/replay.json): every browser event on one host clock, the agent's steps and tool calls, the narrated moments, the narration lines and the graded outcome.`,
+    `- [replay.json](/replays/${id}/replay.json): every browser event on one host clock, the agent's steps and tool calls, when it thought, looked, acted, waited and reported, the narrated moments, the narration lines and the graded outcome.`,
     `- [captions.vtt](/replays/${id}/captions.vtt): the narration as WebVTT, timed from the video's start.`,
     `- [video.mp4](/replays/${id}/video.mp4): the screencast, H.264, with the narration as its audio track.`,
     "",
