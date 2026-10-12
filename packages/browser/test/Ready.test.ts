@@ -1,6 +1,7 @@
 import { assert, it, layer } from "@effect/vitest";
 import { Clock, Duration, Effect, Fiber, Schedule, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
+import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
@@ -320,6 +321,12 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const createSession = context.newCDPSession.bind(context);
         let resize: "off" | "waiting" | "delivered" = "off";
 
+        const waitFor = (phase: string) =>
+          Effect.timeoutOrElse({
+            duration: "5 seconds",
+            orElse: () => Effect.die(new Error(`foreground fixture timed out: ${phase}`)),
+          });
+
         context.newCDPSession = async (target) => {
           const cdp = await createSession(target);
           const send = cdp.send.bind(cdp);
@@ -330,30 +337,24 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
           const emit = emitter.emit.bind(emitter);
 
-          // Deliver the first real resized frame; later duplicates cannot turn acceptance into
-          // a new receipt. Chromium's unacknowledged-frame bound stops further duplicate paints.
-          emitter.emit = (event, ...args) => {
-            if (event === "Page.screencastFrame" && resize !== "off") {
-              const frame = args[0] as { metadata: { deviceWidth: number } };
-
-              if (frame.metadata.deviceWidth === 640) {
-                if (resize === "delivered") return true;
-                resize = "delivered";
-              }
-            }
-
-            return emit(event, ...args);
-          };
+          // The viewport request proves an eligible resize is queued; earlier native frames can
+          // still be late or malformed. Hold later notifications until the context closes.
+          emitter.emit = (event, ...args) =>
+            event === "Page.screencastFrame" && resize === "delivered"
+              ? true
+              : emit(event, ...args);
 
           const observed: CDPSession["send"] = (method, params) => {
             const response = send(method, params);
 
             if (
+              resize === "waiting" &&
               method === "Runtime.evaluate" &&
               params !== undefined &&
               "expression" in params &&
               params.expression.endsWith(".__effectBrowser.viewport()")
             ) {
+              resize = "delivered";
               viewportRead.resolve();
 
               return response.then((value) => viewportReply.promise.then(() => value));
@@ -409,11 +410,25 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
               }, color),
             );
             yield* page.captureStats().pipe(
+              Effect.flatMap(({ accepted }) =>
+                page.state.pipe(
+                  Effect.map(({ frame }) => {
+                    if (accepted <= before || frame === undefined) return false;
+                    const picture = jpegjs.decode(frame.data, { useTArray: true });
+                    const green = picture.data[(50 * picture.width + 100) * 4 + 1];
+
+                    // A queued older frame must not let the next paint erase this one unseen.
+                    return (
+                      green !== undefined && Math.abs(green - (color === "white" ? 255 : 0)) < 16
+                    );
+                  }),
+                ),
+              ),
               Effect.repeat({
                 schedule: Schedule.spaced("5 millis"),
-                until: ({ accepted }) => accepted > before,
+                until: (seen) => seen,
               }),
-              Effect.timeout("5 seconds"),
+              waitFor(`captured ${color} paint`),
             );
           });
 
@@ -424,7 +439,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           .ready({ still: "foreground", quietMillis: 300, timeout: "5 seconds" })
           .pipe(Effect.forkScoped);
 
-        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("5 seconds"));
+        yield* Effect.promise(() => entered.promise).pipe(waitFor("first readiness look"));
         yield* Effect.sleep("350 millis");
         yield* paint("white");
         yield* paint("black");
@@ -441,7 +456,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         resize = "waiting";
         yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 360 }));
-        yield* Effect.promise(() => viewportRead.promise).pipe(Effect.timeout("5 seconds"));
+        yield* Effect.promise(() => viewportRead.promise).pipe(waitFor("resize viewport request"));
         const heldFrames = yield* page.captureStats();
 
         assert.isAbove(heldFrames.received, before.received);
@@ -454,7 +469,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           .ready({ still: "foreground", quietMillis: 300, timeout: "5 seconds" })
           .pipe(Effect.forkScoped);
 
-        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("5 seconds"));
+        yield* Effect.promise(() => entered.promise).pipe(waitFor("resized readiness look"));
         yield* Effect.sleep("350 millis");
         viewportReply.resolve();
 
@@ -463,7 +478,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             schedule: Schedule.spaced("5 millis"),
             until: ({ accepted }) => accepted > before.accepted,
           }),
-          Effect.timeout("5 seconds"),
+          waitFor("resized frame acceptance"),
         );
 
         const delivered = yield* browser.now;
