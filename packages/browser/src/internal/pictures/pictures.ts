@@ -4,7 +4,7 @@
  * one call where a device pixel is a CSS pixel and nothing is cropped, and two otherwise, unless
  * Playwright emulates the viewport. The page's first clipped picture also holds the screen it reads.
  */
-import { Duration, Effect, Option, Schedule, Schema, Semaphore } from "effect";
+import { Duration, Effect, Option, Schedule, Schema } from "effect";
 
 import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
@@ -156,7 +156,7 @@ const ScreenSize = Schema.Struct({ width: Schema.Int, height: Schema.Int });
 // A new picture in CSS pixels. Where a device pixel is not a CSS pixel, or for a crop, it is
 // Playwright's clip over fresh layout metrics: document coordinates from the visual viewport's
 // place, and its pinch scale divided by the device's. Chromium draws such a capture into a
-// running screencast, so the capture leaves out what is painted meanwhile.
+// running screencast, so the native capture pauses for the whole camera operation and restoration.
 //
 // Chromium takes a clipped picture through the device emulation of the session that asks for it,
 // then restores the view's size and what that session emulated. The page's own session emulated
@@ -170,41 +170,33 @@ const camera = (
   viewport: Viewport,
   capture: Capture.Controller,
 ) => {
-  const { playwright, settings, native, within } = page;
+  const { playwright, native, within } = page;
   const { send } = page.protocol;
-  const actionMillis = Duration.toMillis(settings.actionTimeout);
   // Device pixels per CSS pixel, as the page's layout metrics last gave it. A picture taken in one
   // call is checked by its size, so a page whose ratio changes is measured again.
   let ratio = 1;
-  const alone = Semaphore.makeUnsafe(1).withPermits(1);
   let screenHeld = false;
 
   // The copy has the screen alone: the view keeps its own size, and the device its pixel ratio.
-  const holdScreen = (operation: string) =>
-    Effect.suspend(() =>
-      screenHeld
-        ? Effect.void
-        : bridge.evaluate(operation, scriptCall("screenSize")).pipe(
-            Effect.flatMap(decodeWith(operation, ScreenSize)),
-            Effect.flatMap(({ width, height }) =>
-              native(operation, () =>
-                send("Emulation.setDeviceMetricsOverride", {
-                  width: 0,
-                  height: 0,
-                  deviceScaleFactor: 0,
-                  mobile: false,
-                  screenWidth: width,
-                  screenHeight: height,
-                }),
-              ).pipe(alone),
-            ),
-            Effect.andThen(
-              Effect.sync(() => {
-                screenHeld = true;
-              }),
-            ),
-          ),
+  const holdScreen = Effect.fnUntraced(function* (operation: string) {
+    if (screenHeld) return;
+
+    const { width, height } = yield* bridge
+      .evaluate(operation, scriptCall("screenSize"))
+      .pipe(Effect.flatMap(decodeWith(operation, ScreenSize)));
+
+    yield* native(operation, () =>
+      send("Emulation.setDeviceMetricsOverride", {
+        width: 0,
+        height: 0,
+        deviceScaleFactor: 0,
+        mobile: false,
+        screenWidth: width,
+        screenHeight: height,
+      }),
     );
+    screenHeld = true;
+  });
 
   const decoded = (operation: string, data: Uint8Array, format: Format) => {
     const size = format === "png" ? pngSize(data) : jpegSize(data);
@@ -217,41 +209,36 @@ const camera = (
       : Effect.succeed(new Image({ data, mediaType: `image/${format}`, ...size }));
   };
 
+  const take = (operation: string, format: Format, run: () => Promise<Uint8Array>) =>
+    native(operation, run).pipe(
+      untilPainted,
+      Effect.flatMap((data) => decoded(operation, data, format)),
+    );
+
   const shot = (
     operation: string,
     format: Format,
     quality: number,
     clip?: Capture.Size & { readonly x: number; readonly y: number; readonly scale: number },
   ) =>
-    native(operation, () =>
+    take(operation, format, () =>
       send("Page.captureScreenshot", {
         format,
         ...(format === "jpeg" ? { quality } : {}),
         ...(clip === undefined ? {} : { clip }),
-      }),
-    ).pipe(
-      alone,
-      untilPainted,
-      Effect.flatMap(({ data }) => decoded(operation, Buffer.from(data, "base64"), format)),
+      }).then(({ data }) => Buffer.from(data, "base64")),
     );
 
-  // Playwright's own picture, taken on the session where it emulates the viewport.
+  // Playwright's promise owns native restoration; the outer Effect alone bounds callers.
   const emulatedShot = (operation: string, format: Format, quality: number, crop?: Region) =>
-    native(
-      operation,
-      () =>
-        playwright.screenshot({
-          type: format,
-          ...(format === "jpeg" ? { quality } : {}),
-          scale: "css",
-          timeout: actionMillis,
-          ...(crop === undefined ? {} : { clip: crop }),
-        }),
-      actionMillis,
-    ).pipe(
-      alone,
-      untilPainted,
-      Effect.flatMap((data) => decoded(operation, data, format)),
+    take(operation, format, () =>
+      playwright.screenshot({
+        type: format,
+        ...(format === "jpeg" ? { quality } : {}),
+        scale: "css",
+        timeout: 0,
+        ...(crop === undefined ? {} : { clip: crop }),
+      }),
     );
 
   return (operation: string, quality: number, crop?: Region, format: Format = "jpeg") =>
@@ -269,17 +256,12 @@ const camera = (
       if (emulated !== null) {
         if (whole !== undefined) ratio = whole.width / emulated.width;
 
-        return yield* capture.excluding(emulatedShot(operation, format, quality, crop));
+        return yield* emulatedShot(operation, format, quality, crop);
       }
 
-      const [metrics] = yield* Effect.all(
-        [
-          native(operation, () => send("Page.getLayoutMetrics")).pipe(
-            Effect.flatMap(decodeWith(operation, LayoutMetrics)),
-          ),
-          crop === undefined ? Effect.void : holdScreen(operation),
-        ],
-        { concurrency: 2 },
+      const [metrics] = yield* native(operation, () => send("Page.getLayoutMetrics")).pipe(
+        Effect.flatMap(decodeWith(operation, LayoutMetrics)),
+        Effect.zip(crop === undefined ? Effect.void : holdScreen(operation), { concurrent: true }),
       );
 
       const measured = metrics.contentSize.width / metrics.cssContentSize.width;
@@ -297,19 +279,14 @@ const camera = (
 
       yield* holdScreen(operation);
 
-      // A crop on this session draws its frames at the crop's own size, so only those leave the
-      // capture, and the page's own keep flowing.
-      return yield* capture.excluding(
-        shot(operation, format, quality, {
-          x: pageX + rect.x,
-          y: pageY + rect.y,
-          width: Math.floor(rect.width / scale + 1e-3),
-          height: Math.floor(rect.height / scale + 1e-3),
-          scale: scale / ratio,
-        }),
-        crop !== undefined,
-      );
-    }).pipe(within(operation));
+      return yield* shot(operation, format, quality, {
+        x: pageX + rect.x,
+        y: pageY + rect.y,
+        width: Math.floor(rect.width / scale + 1e-3),
+        height: Math.floor(rect.height / scale + 1e-3),
+        scale: scale / ratio,
+      });
+    }).pipe(capture.excluding, within(operation));
 };
 
 // A duration in milliseconds, or NaN for an input that is no duration.

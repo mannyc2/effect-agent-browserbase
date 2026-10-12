@@ -607,7 +607,7 @@ timestamp field.
 minute: received and accepted frames, missing timestamps, `late` frames (Chromium encodes several at
 once and finished these after a newer one; they are dropped, never reordered, and a busy machine
 makes more of them), frames dropped for their size (`foreignSize`) or for coming during one of the
-library's own clipped pictures (`duringPictures`), frames a reader `lost` by falling behind, and
+library's own pictures (`duringPictures`), frames a reader `lost` by falling behind, and
 paint-time gap totals/minimum/maximum/last. `ackBacklog` is the acknowledgements still unanswered:
 Chromium sends a frame only while few are, so a backlog over a slow connection means fewer frames.
 Chromium draws a clipped or scaled screenshot of the page, taken
@@ -617,15 +617,17 @@ returning drops them, while the page reporting a viewport of their size, or thei
 delivers them as a real resize, so a page that cannot answer, or that measures in other units as
 under browser zoom, is never stalled. `foreignSize` therefore also counts some of the page's own
 frames: those of a new size still unconfirmed when another size replaced it, when the capture
-stopped, or beyond the 16 held. The library's own clipped pictures are left out while they are
-taken: from the picture's call until 50 ms after its reply, by when a frame arrived or by its paint
-time widened by the clock's uncertainty either side. A crop on the page's own session, as over CDP
-and on Browserbase, is drawn at the crop's own size, so there only frames of another size are left
-out, and the page's own keep reaching readers. Where Playwright emulates the viewport, as
-`Chromium.layer` does, a crop keeps the device's size, so every frame in that window is left out,
-the page's own included: the capture pauses for the picture's round trip, plus 50 ms, plus twice
-the clock's uncertainty, about 100 ms a zoom locally, and a crop with the viewport's own
-proportions never reaches readers either. A clip someone else takes passes where Chromium keeps
+stopped, or beyond the 16 held. Before taking any new library picture, including an uncropped
+forced screenshot, the running native capture stops. It restarts with the same readers and settings
+only after the actual screenshot promise and viewport restoration settle, and after reading the
+current viewport. A frame received during that pause is acknowledged and discarded as
+`duringPictures`; the pause can produce no callbacks, leaving the count at zero. Cached-frame reuse
+still costs no call. A forced picture with capture running adds stop, viewport refresh and restart
+calls to its usual cost. Caller cancellation retains the actual native replies: the next picture or
+capture waits for them, cleanup is bounded to two seconds, and unconfirmed restoration fails the
+capture rather than resuming it early. Readiness requires current post-resume frame evidence, so
+paused capture cannot certify that a still-painting page is quiet.
+A clip someone else takes passes where Chromium keeps
 the device's size during it and the clip has the viewport's proportions, and on a page that paints
 nothing after it, a clip of any shape lasts long enough to pass for a resize.
 Each page's own session holds focus emulation, so a tab behind another keeps painting and its

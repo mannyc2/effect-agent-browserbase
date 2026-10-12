@@ -13,7 +13,7 @@
  * stillness starts that record itself and ignores capture silence. Each new document starts a
  * new observation, while retries of destroyed script contexts share the caller's deadline.
  */
-import { Duration, Effect, Schedule, Stream } from "effect";
+import { Duration, Effect, Option, Schedule, Stream } from "effect";
 
 import { Timeout } from "../../BrowserError.ts";
 import type { ReadyOptions } from "../../Page.ts";
@@ -59,8 +59,14 @@ export const make =
         let stirred = running ? page.now() : Number.POSITIVE_INFINITY;
 
         // How long the screen has been still: since a frame, or an unanswered acknowledgement.
-        const look = Effect.map(capture.stats(), (stats) => {
-          if (stats.received !== received || stats.ackBacklog > 0) {
+        const look = Effect.gen(function* () {
+          const stats = yield* capture.stats();
+
+          if (
+            !Option.exists(yield* capture.latest, capture.current) ||
+            stats.received !== received ||
+            stats.ackBacklog > 0
+          ) {
             received = stats.received;
             stirred = page.now();
           }
