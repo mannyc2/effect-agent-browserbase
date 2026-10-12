@@ -29,6 +29,7 @@ interface World {
   readonly releasing: Set<number>;
   readonly released: Set<number>;
   readonly outcomes: Array<Lifecycle.Released>;
+  readonly attempts: Map<number, Array<Lifecycle.Released>>;
   /** Left running as the supervisor stopped, never released. */
   readonly left: Set<number>;
   readonly watched: Set<number>;
@@ -65,6 +66,20 @@ const advance = (world: World, number: number, state: Lifecycle.GenerationState)
   );
   if (state._tag === "Closed" && state.released === undefined)
     assert.strictEqual(known.phase, "opening", "only an open that never finished has no release");
+  if (
+    (known.phase === "opening" || world.attempts.has(number)) &&
+    (state._tag === "Closed" || state._tag === "Down")
+  ) {
+    const attempts = world.attempts.get(number) ?? [];
+
+    assert.strictEqual(
+      state.released,
+      attempts.find((outcome) => outcome._tag === "Unconfirmed") ?? attempts.at(-1),
+      "terminal opening reports its own first uncertainty or last settled cleanup",
+    );
+  }
+  if (state._tag === "Open" || state._tag === "Closed" || state._tag === "Down")
+    world.attempts.delete(number);
   known.phase = to;
 };
 
@@ -123,6 +138,14 @@ const apply = (world: World, input: Lifecycle.Input<string, number>) => {
     step.state.released,
     world.outcomes.find((outcome) => outcome._tag === "Unconfirmed") ?? world.outcomes.at(-1),
     "admission preserves the first uncertainty across later releases and opens",
+  );
+  assert.deepStrictEqual(
+    [...(step.state.attempts ?? [])],
+    [...world.attempts].map(([number, outcomes]) => [
+      number,
+      outcomes.find((outcome) => outcome._tag === "Unconfirmed") ?? outcomes.at(-1),
+    ]),
+    "only pending openings retain their own attempt cleanup",
   );
   for (const number of world.released) {
     assert.isUndefined(Lifecycle.lookup(step.state, number), "released generations are forgotten");
@@ -263,7 +286,11 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
               : new Lifecycle.Settled();
 
             world.outcomes.push(released);
-            apply(world, { _tag: "AttemptReleased", released });
+            const attempts = world.attempts.get(opening.number) ?? [];
+
+            attempts.push(released);
+            world.attempts.set(opening.number, attempts);
+            apply(world, { _tag: "AttemptReleased", number: opening.number, released });
           },
         ]);
     }
@@ -313,7 +340,10 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
             ? new Lifecycle.Unconfirmed({ detail: `generation ${number} running` })
             : new Lifecycle.Settled();
 
-        if (released !== undefined) world.outcomes.push(released);
+        if (released !== undefined) {
+          world.outcomes.push(released);
+          world.attempts.get(number)?.push(released);
+        }
         apply(world, {
           _tag: "Released",
           number,
@@ -393,6 +423,7 @@ const run = (
     releasing: new Set(),
     released: new Set(),
     outcomes: [],
+    attempts: new Map(),
     left: new Set(),
     watched: new Set(),
     fired: new Set(),

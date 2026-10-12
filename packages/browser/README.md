@@ -908,8 +908,12 @@ generation skips provider release, `Kept`; its application scopes still close. O
 are released normally.
 
 `states` streams `Opening`, `Reopening`, `Open`, `Draining`, `Lost`, `Down`, `Closed` and `Kept`.
-`Closed.released` preserves `Settled` or `Unconfirmed`; the latter does not establish that a
-provider stopped the browser or its billing. `Generation.at` is wall-clock epoch milliseconds;
+`Down.released` and an opening generation's `Closed.released` publish that generation's reported
+failed-try cleanup, even when no later admission follows. The first `Unconfirmed` stays visible
+after later tries settle; no reported cleanup leaves `released` undefined. A successful `Open`
+ends this opening record, while `Admission.after` keeps earlier uncertainty. `Closed.released`
+also preserves the serving generation's provider release. `Unconfirmed` does not establish that
+a provider stopped the browser or its billing. `Generation.at` is wall-clock epoch milliseconds;
 `hostTime` and `revokeAt` are host monotonic milliseconds from the supervisor's Effect `Clock`.
 They can be compared with browser event and frame times when those use that same clock and host,
 not across processes or against a provider's wall-clock timestamps. A generation event is

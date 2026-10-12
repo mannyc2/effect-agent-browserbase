@@ -2,6 +2,15 @@
 
 ## 0.3
 
+The `0.3.0-beta.16` release publishes failed-try cleanup on terminal supervisor states, so the
+last try and retirement report outcomes without requiring another admission. `Down.released`
+and an opening generation's `Closed.released` retain that generation's first `Unconfirmed`,
+including retirement winning a late successful acquisition; later admission and acquisition
+failure causes stay unchanged. Completed openings drop their local outcome records. Public
+fake-provider and randomized lifecycle tests cover this evidence boundary, without establishing
+hosted billing or actual provider release confirmation. Input guard and boundary definitions
+also share their existing implementation without changing action checkpoints or document binding.
+
 The `0.3.0-beta.15` release extends `Admission.after` to every earlier session that stopped
 serving: failed acquisition attempts and older generations still draining are included. Awaiting
 `after` waits for all pending releases; the first `Unconfirmed` outcome stays visible to later

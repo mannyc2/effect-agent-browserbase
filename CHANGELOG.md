@@ -4,6 +4,17 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.16
+
+- Terminal supervisor states publish failed-acquisition cleanup. `Down.released` and an opening
+  generation's `Closed.released` combine that generation's reported outcomes, retaining its first
+  `Unconfirmed` even if a later try settles. This also holds when retirement wins a late successful
+  acquisition. No cleanup report leaves the field absent; later admission and the original failure
+  cause remain unchanged. Public fake-provider regressions and randomized lifecycle tests cover
+  ownership, interruption and outcome routing; they do not establish hosted billing.
+- Input actions share guard validation and pending-input cleanup while preserving their checkpoints
+  and approved document binding. Point data and page-script result types use shared boundary shapes.
+
 ## 0.3.0-beta.15
 
 - `Supervisor.Admission.after` covers every earlier session that stopped serving, including failed
