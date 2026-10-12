@@ -319,6 +319,7 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     lane,
     pointer,
     now,
+    scope,
     owned,
     span,
     protocol,

@@ -117,22 +117,25 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(frame.timing._tag, "BrowserPaint");
         assert.isAbove(frame.timestamp ?? 0, 1_000_000_000_000);
         assert.closeTo(frame.hostTime, 5000, 1000);
+        // The library's clock stood still while the browser's ran on, so a frame reads as late as
+        // the machine was slow to paint it once the clocks were mapped: up to 6000 here. At 7000
+        // no frame the capture delivered is young enough to be reused.
         time.wall -= 3_600_000;
-        time.monotonic = 5500;
+        time.monotonic = 7000;
         const callerTime = { wall: 1_800_000_000_000, monotonic: 900_000 };
 
-        const capture = Moment.capture(page, { since: Duration.seconds(1) }).pipe(
+        const capture = Moment.capture(page, { since: Duration.seconds(3) }).pipe(
           Effect.provideService(Clock.Clock, controlledClock(live, callerTime)),
         );
 
         const moment = yield* capture;
 
-        assert.strictEqual(moment.until, 5500);
+        assert.strictEqual(moment.until, 7000);
         // That capture has stopped, so its frame leads up to a new screenshot of the moment.
         assert.strictEqual(moment.frames.length, 2);
         assert.strictEqual(moment.frames[0], frame);
         assert.strictEqual(moment.frames[1]?.timing._tag, "Screenshot");
-        assert.strictEqual(moment.frames[1]?.hostTime, 5500);
+        assert.strictEqual(moment.frames[1]?.hostTime, 7000);
         assert.isAbove(moment.events.length, 0);
         assert.isTrue(moment.events.every((event) => event.at === 5000));
         assert.include(
@@ -143,18 +146,18 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
                 : [],
             )
             .join("\n"),
-          "-0.5s navigated",
+          "-2.0s navigated",
         );
 
-        time.monotonic = 7000;
+        time.monotonic = 11_000;
         const later = yield* capture;
 
-        assert.strictEqual(later.until, 7000);
+        assert.strictEqual(later.until, 11_000);
         assert.isEmpty(later.events);
-        assert.strictEqual(later.frames[0]?.receivedAt, 7000);
+        assert.strictEqual(later.frames[0]?.receivedAt, 11_000);
         assert.strictEqual(later.frames[0]?.timestamp, undefined);
         assert.strictEqual(later.frames[0]?.timing._tag, "Screenshot");
-        assert.strictEqual(later.frames[0]?.hostTime, 7000);
+        assert.strictEqual(later.frames[0]?.hostTime, 11_000);
       }),
   );
   it.effect("generation events and frames retain one host clock across wall-clock changes", () =>

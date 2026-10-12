@@ -373,6 +373,14 @@ export const make = Effect.fnUntraced(function* (
     watch: bridge.currentDocument("screencast"),
     frameHistory: settings.frameHistory,
     viewport: Effect.suspend(() => viewport.viewportFor("screencast")),
+    // An uncropped snapshot waits for the restored compositor surface. Its pixels are discarded;
+    // a renderer animation frame or viewport size alone cannot prove the compositor caught up.
+    restore: () =>
+      page.protocol.send("Page.captureScreenshot", {
+        format: "jpeg",
+        quality: 0,
+        optimizeForSpeed: true,
+      }),
     imageSize: jpegSize,
     error,
   });

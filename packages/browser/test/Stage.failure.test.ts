@@ -9,7 +9,6 @@ import {
   Fiber,
   Option,
   Queue,
-  Schedule,
   Schema,
   Scope,
   Stream,
@@ -128,11 +127,11 @@ it.effect("keeps the shown timeline monotonic through prepared switches and late
       observed.push(yield* Queue.take(seen));
       yield* TestClock.adjust("170 millis");
       model.push({ tag: "Painted", at: start + 30, captured: start + 30 });
-      model.push({ tag: "Stalled", at: start + 200, captured: start + 30 });
+      model.push({ tag: "Stalled", at: start + 130, captured: start + 30 });
       observed.push(yield* Queue.take(seen));
       yield* fixture.paintAt(start + 40);
       observed.push(yield* Queue.take(seen));
-      model.push({ tag: "Painted", at: start + 200, captured: start + 40 });
+      model.push({ tag: "Painted", at: start + 130, captured: start + 40 });
     }
     assert.deepStrictEqual(
       observed.map((value) => ({
@@ -355,31 +354,40 @@ it.live(
     ),
 );
 
-it.live("continuous paint resets the silence deadline", () =>
+// On the test clock a paint lands every 10 ms however slowly the host runs; a live clock under load
+// leaves real gaps longer than the hold, which the stage rightly reports.
+it.effect("continuous paint resets the silence deadline", () =>
   Effect.gen(function* () {
     const fixture = yield* scripted("painting");
     const stage = yield* Stage.make();
-    const seen: Array<Stage.Shown> = [];
+    const seen = yield* Queue.unbounded<Stage.Shown>();
 
     yield* stage.shown({ hold: "80 millis" }).pipe(
-      Stream.runForEach((value) =>
-        Effect.sync(() => {
-          seen.push(value);
-        }),
-      ),
+      Stream.runForEach((value) => Queue.offer(seen, value)),
       Effect.forkScoped,
     );
     const cue = yield* stage.cue(fixture.page);
 
     yield* fixture.paint;
     yield* cue.commit();
-    yield* fixture.paint.pipe(
-      Effect.repeat({ schedule: Schedule.spaced("10 millis") }),
-      Effect.forkScoped,
-    );
-    yield* Effect.sleep("250 millis");
-    assert.isAtLeast(seen.filter((value) => value._tag === "Painted").length, 10);
-    assert.isTrue(seen.every((value) => value._tag === "Painted"));
+    for (let at = 10; at <= 250; at += 10) {
+      yield* TestClock.adjust("10 millis");
+      yield* fixture.paint;
+      // Each paint reaches the reader before time moves on, with nothing else first. The reader
+      // may have subscribed before or after the commit's own paint.
+      let shown = yield* Queue.take(seen);
+
+      while (shown._tag === "Painted" && shown.frame.receivedAt < at)
+        shown = yield* Queue.take(seen);
+      assert.deepStrictEqual([shown._tag, shown.at], ["Painted", at]);
+    }
+    // The deadline was live all along: silence is told by the probe after the first full hold.
+    yield* TestClock.adjust("79 millis");
+    assert.strictEqual(yield* Queue.size(seen), 0);
+    yield* TestClock.adjust("1 millis");
+    const stalled = yield* Queue.take(seen);
+
+    assert.deepStrictEqual([stalled._tag, stalled.at], ["Stalled", 330]);
   }),
 );
 
