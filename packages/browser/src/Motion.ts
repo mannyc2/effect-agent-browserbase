@@ -13,8 +13,7 @@ export const Point = Schema.Struct({ x: Schema.Finite, y: Schema.Finite });
 export type Point = typeof Point.Type;
 
 export const Sample = Schema.Struct({
-  x: Schema.Finite,
-  y: Schema.Finite,
+  ...Point.fields,
   afterMillis: Schema.Finite.check(
     Schema.isGreaterThanOrEqualTo(0),
     Schema.isLessThanOrEqualTo(maximumDurationMillis),

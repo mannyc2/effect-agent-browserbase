@@ -27,12 +27,10 @@ import * as Guard from "./internal/input/guard.inpage.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
 import * as Url from "./internal/page/url.ts";
 import type { Window } from "./Moment.ts";
+import * as Motion from "./Motion.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 
-export interface Point {
-  readonly x: number;
-  readonly y: number;
-}
+export type Point = Motion.Point;
 
 /** A ref from a snapshot, such as `"e12"`, or a viewport point. */
 export type Target = string | Point;
@@ -54,7 +52,7 @@ export class Zoom extends Schema.Class<Zoom>("effect-browser/Zoom")({
 
 /** The target as it read before input. Point coordinates are never snapped to another position. */
 export class ResolvedTarget extends Schema.Class<ResolvedTarget>("effect-browser/ResolvedTarget")({
-  point: Schema.Struct({ x: Schema.Finite, y: Schema.Finite }),
+  point: Motion.Point,
   element: Schema.String,
   /** The element's lowercase tag name. */
   tag: Schema.String,
@@ -131,9 +129,7 @@ export interface ScreenshotOptions {
   /** The oldest a reused frame may be, as for `frame`. Defaults to 250 milliseconds. */
   readonly maxAge?: Duration.Input | undefined;
   /** A region of the viewport, captured in CSS pixels at the viewport's own scale; always new. */
-  readonly clip?:
-    | { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
-    | undefined;
+  readonly clip?: Box | undefined;
   /** JPEG quality, 0 to 100. Defaults to 80. */
   readonly quality?: number | undefined;
   /** `"jpeg"`, the default, or `"png"`, which is always a new picture. */
@@ -335,7 +331,7 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Inp
   target: Schema.optional(Schema.String),
   element: Schema.optional(Schema.String),
   /** Literal pixel targets only; ref coordinates are resolved after the policy allows them. */
-  point: Schema.optional(Schema.Struct({ x: Schema.Finite, y: Schema.Finite })),
+  point: Schema.optional(Motion.Point),
   text: Schema.optional(Schema.String),
   role: Schema.optional(Schema.NullOr(Schema.String)),
   name: Schema.optional(Schema.String),

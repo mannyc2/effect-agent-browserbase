@@ -32,12 +32,11 @@ const partsOf = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
 
   return {
     page,
-    bridge,
     ...settling,
     viewportFor: viewport.viewportFor,
     perform: Perform.make(page, dispatch),
     ...guard,
-    ...Targets.make(bridge, viewport, guard, pointer, dispatch, settling),
+    ...Targets.make(viewport, guard, pointer, dispatch, settling),
     ...pointer,
     ...Keyboard.make(page, bridge, dispatch),
     sendMouse: dispatch.sendMouse,
@@ -110,16 +109,19 @@ const click = (input: Parts) => {
           yield* marks.at(point);
           yield* marks.on(resolved);
           yield* moveTo("click", marks, point, resolved.cursor);
-          if (approval !== undefined) yield* approval.check({ presses: [{ index: 0, ...point }] });
+          yield* Guard.check(approval, { presses: [{ index: 0, ...point }] });
           const before = mark();
 
           yield* marks.sent;
           for (let index = 1; index <= count; index++) {
             // An earlier click of a multi-click can replace the approved control under the
             // pointer. Under a guard, its handlers run before the next press is checked and sent.
-            if (approval !== undefined && index > 1) {
-              yield* flush("click", marks.input);
-              yield* approval.check({ presses: [{ index: 0, ...point }] }).pipe(
+            if (index > 1)
+              yield* Guard.check(
+                approval,
+                { presses: [{ index: 0, ...point }] },
+                flush("click", marks.input),
+              ).pipe(
                 Effect.catchIf(
                   (error) => error.reason._tag === "StaleRef",
                   () =>
@@ -132,7 +134,6 @@ const click = (input: Parts) => {
                     ),
                 ),
               );
-            }
             yield* sendMouse("click", marks.input, {
               type: "mousePressed",
               ...point,
@@ -236,13 +237,12 @@ const drag = (input: Parts) => {
           yield* moveTo("drag", marks, start.point, start.cursor);
           // Both ends are checked before the button goes down: once it is down, a release cannot
           // be withheld, and a dragged element under the pointer would hide the drop target.
-          if (approval !== undefined)
-            yield* approval.check({
-              presses: [
-                { index: 0, ...start.point },
-                { index: 1, ...end.point },
-              ],
-            });
+          yield* Guard.check(approval, {
+            presses: [
+              { index: 0, ...start.point },
+              { index: 1, ...end.point },
+            ],
+          });
           yield* marks.sent;
           yield* sendMouse("drag", marks.input, {
             type: "mousePressed",
@@ -267,7 +267,7 @@ const drag = (input: Parts) => {
 
 const typeText = (input: Parts) => {
   const { settings, now } = input.page;
-  const { perform, preparePolicy, mutate, targetFor, moveTo, sendMouse, flush, bridge } = input;
+  const { perform, preparePolicy, mutate, targetFor, moveTo, sendMouse, flush, evaluate } = input;
   const { currentDocument, sameDocument, keyStroke, typeEvent, mark, settle } = input;
 
   return (text: string, typeOptions: TypeOptions = {}, style: Style = plain) =>
@@ -301,11 +301,9 @@ const typeText = (input: Parts) => {
           // those before any input, on every path.
           const asked = scriptCall("typeable", into ?? null, typeOptions.secret === true);
 
-          const typeable = yield* (
-            approval === undefined
-              ? bridge.evaluate("type", asked)
-              : mutate("type", asked, approval)
-          ).pipe(Effect.flatMap(decodeWith("type", Script.TypeableResultSchema)));
+          const typeable = yield* evaluate("type", asked, approval).pipe(
+            Effect.flatMap(decodeWith("type", Script.TypeableResultSchema)),
+          );
 
           if ("error" in typeable)
             return yield* failWith(
@@ -327,8 +325,7 @@ const typeText = (input: Parts) => {
             // Viewers see the pointer click into the field.
             if (marks.style.shown) {
               yield* moveTo("type", marks, target.point, target.cursor);
-              if (approval !== undefined)
-                yield* approval.check({ presses: [{ index: 0, ...target.point }] });
+              yield* Guard.check(approval, { presses: [{ index: 0, ...target.point }] });
               yield* marks.sent;
               for (const type of ["mousePressed", "mouseReleased"] as const)
                 yield* sendMouse("type", marks.input, {
@@ -354,7 +351,7 @@ const typeText = (input: Parts) => {
             secret ||= focused.secret;
           }
           if (!secret) yield* marks.reveal;
-          if (approval !== undefined) yield* approval.check({ focused: true });
+          yield* Guard.check(approval, { focused: true });
           yield* marks.sent;
 
           // A key's handlers can move focus, and later keys then reach a control nobody approved.
@@ -362,10 +359,7 @@ const typeText = (input: Parts) => {
           // handler can split, and keys typed one at a time check that the field still has focus,
           // once the keys before are answered, before each space, which could press a button, and
           // after the last key.
-          const focusHeld =
-            approval === undefined
-              ? Effect.void
-              : flush("type", marks.input).pipe(Effect.andThen(approval.check({ focused: true })));
+          const focusHeld = Guard.check(approval, { focused: true }, flush("type", marks.input));
 
           if (text === "" && replace && into !== undefined) {
             yield* sameDocument("type", since);
@@ -396,7 +390,7 @@ const typeText = (input: Parts) => {
           yield* flush("type", marks.input);
           if (typeOptions.submit === true) {
             // Typing can move focus or change the form; Enter goes only to the approved field.
-            if (approval !== undefined) yield* approval.check({ focused: true });
+            yield* Guard.check(approval, { focused: true });
             yield* sameDocument("type", since);
             const before = mark();
 
@@ -447,7 +441,7 @@ const press = (input: Parts) => {
             );
 
             if ("error" in focused) return yield* Guard.editFailure("press", on, focused);
-            if (approval !== undefined) yield* approval.check({ focused: true });
+            yield* Guard.check(approval, { focused: true });
           }
           const before = mark();
           let due = now();
@@ -456,10 +450,8 @@ const press = (input: Parts) => {
           for (let index = 0; index < times; index++) {
             // A repeated key stays in the document it began in. Under a guard, a repeated Enter
             // or Space must also reach the approved element after the previous press settled.
-            if (index > 0 && approval !== undefined && activates) {
-              yield* flush("press", marks.input);
-              yield* approval.check({ focused: true });
-            }
+            if (index > 0 && activates)
+              yield* Guard.check(approval, { focused: true }, flush("press", marks.input));
             yield* sameDocument("press", since);
             yield* keyStroke("press", marks.input, parts, hold);
             if (index + 1 < times) {

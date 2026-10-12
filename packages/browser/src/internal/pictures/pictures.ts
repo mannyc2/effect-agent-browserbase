@@ -8,6 +8,7 @@ import { Duration, Effect, Option, Schedule, Schema } from "effect";
 
 import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
+import type { Point } from "../../Motion.ts";
 import { type FrameOptions, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext, reasonOf, undispatched } from "../page/context.ts";
@@ -219,7 +220,7 @@ const camera = (
     operation: string,
     format: Format,
     quality: number,
-    clip?: Capture.Size & { readonly x: number; readonly y: number; readonly scale: number },
+    clip?: Capture.Size & Point & { readonly scale: number },
   ) =>
     take(operation, format, () =>
       send("Page.captureScreenshot", {

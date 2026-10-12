@@ -22,7 +22,7 @@ import type { BrowserEvent } from "../../BrowserEvent.ts";
 import type { InputGuard, Point } from "../../Page.ts";
 import type { Gate } from "../input/gate.ts";
 import { Current } from "../input/replies.ts";
-import type * as BrowserClock from "../pictures/clock.ts";
+import * as BrowserClock from "../pictures/clock.ts";
 import * as Lane from "./lane.ts";
 import type { Openings } from "./openings.ts";
 import * as Url from "./url.ts";
@@ -168,7 +168,7 @@ export const decodeWith =
 
 export const make = (options: MakeOptions, scope: Scope.Scope) => {
   const { id, clock } = options;
-  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  const now = () => BrowserClock.monotonicMillis(clock);
   // Deadlines and pacing guard the page's lane, so page operations run on the owner's clock; a
   // caller's clock, such as a TestClock, cannot stall or stretch them.
   const owned = Effect.provideService(Clock.Clock, clock);

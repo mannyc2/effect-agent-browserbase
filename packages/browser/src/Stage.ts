@@ -26,6 +26,7 @@ import { type BrowserError, Closed, consequence, InvalidRequest, Timeout } from 
 import type { CaptureStats, Frame, ScreencastOptions } from "./Frame.ts";
 import { failWith, undispatched } from "./internal/page/context.ts";
 import { internalsOf } from "./internal/page/page.ts";
+import { monotonicMillis } from "./internal/pictures/clock.ts";
 import type { Page } from "./Page.ts";
 
 export interface Options extends ScreencastOptions {
@@ -390,7 +391,7 @@ export const make = Effect.fn("Stage.make")(function* (
 ): Effect.fn.Return<Stage, BrowserError, Scope.Scope> {
   const clock = yield* Clock.Clock;
   const owner = yield* Effect.scope;
-  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  const now = () => monotonicMillis(clock);
   const waited = Duration.fromInput(options.firstFrame ?? Duration.seconds(5));
 
   if (

@@ -22,6 +22,13 @@ export interface PolicyPlan {
   readonly validate: Effect.Effect<Approval, BrowserError>;
 }
 
+/** Recheck an approval, after any pending input it must see; neither runs without a guard. */
+export const check = (
+  approval: Approval | undefined,
+  options: Script.ValidationOptions = {},
+  before: Effect.Effect<void, BrowserError> = Effect.void,
+) => (approval === undefined ? Effect.void : before.pipe(Effect.andThen(approval.check(options))));
+
 // A ref that names nothing is stale on every path, named by the target that failed.
 export const inputFailure = (
   operation: string,
@@ -178,7 +185,11 @@ export const make = (page: PageContext, bridge: Bridge) => {
       ),
     );
 
-  return { preparePolicy, mutate };
+  /** A read may follow the current document only when no approval binds it to one. */
+  const evaluate = (operation: string, call: string, approval: Approval | undefined) =>
+    approval === undefined ? bridge.evaluate(operation, call) : mutate(operation, call, approval);
+
+  return { preparePolicy, mutate, evaluate };
 };
 
 export type Guard = ReturnType<typeof make>;

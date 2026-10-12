@@ -3,6 +3,8 @@
  * read to; and a condition `Page.waitFor` waits for. See `names.inpage.ts` for what a page-side part
  * may use.
  */
+import { Schema } from "effect";
+
 import type { Control } from "../../Snapshot.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
@@ -17,7 +19,7 @@ export interface ConditionRequest {
 }
 
 /** Whether the condition held by the deadline, or why the selector is not CSS. */
-export type ConditionResult = { readonly met: boolean } | { readonly invalid: string };
+export type ConditionResult = typeof ConditionResultSchema.Encoded;
 
 export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: Texts) => {
   const { clean, isDisabled, isHtml, isInput, isSelect, isTextArea, refFor, textOf } = names;
@@ -156,3 +158,8 @@ export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: 
 };
 
 export type Controls = ReturnType<typeof controls>;
+
+export const ConditionResultSchema = Schema.Union([
+  Schema.Struct({ met: Schema.Boolean }),
+  Schema.Struct({ invalid: Schema.String }),
+]);

@@ -33,6 +33,7 @@ import {
 } from "./BrowserEvent.ts";
 import { undispatched } from "./internal/page/context.ts";
 import { Ambiguous, choose, Drifted, Missing } from "./internal/reading/choose.ts";
+import { Point as ViewportPoint } from "./Motion.ts";
 import {
   type Found,
   type Page,
@@ -43,8 +44,6 @@ import {
 } from "./Page.ts";
 
 export { Ambiguous, Drifted, Missing } from "./internal/reading/choose.ts";
-
-const ViewportPoint = Schema.Struct({ x: Schema.Finite, y: Schema.Finite });
 
 export const StepAction = Schema.Literals([
   "navigate",
