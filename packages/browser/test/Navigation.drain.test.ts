@@ -76,10 +76,9 @@ it.live("a link's unanswered settling read does not retain input authority", () 
   Effect.gen(function* () {
     const { url } = yield* site;
 
-    const browser = yield* Chromium.open({
-      actionTimeout: "300 millis",
-      navigationTimeout: "300 millis",
-    });
+    // Leave time for the native input to reach its settling read under load. The held-reply
+    // regression below exercises the earlier deadline during input acknowledgement.
+    const browser = yield* Chromium.open({ actionTimeout: "2 seconds" });
 
     const page = yield* browser.newPage(url);
     const [link] = yield* page.find({ role: "link", name: "Hang" });
@@ -128,6 +127,102 @@ it.live("a refused history traversal sends no stop-loading mutation", () =>
     assert.isFalse(error.dispatched);
     assert.strictEqual(stops, 0);
   }).pipe(Effect.scoped),
+);
+
+// 98077ec only stopped a link's navigation after its settling read began. A held input reply
+// forces the earlier deadline without depending on machine load, and preserves real Chromium.
+it.live(
+  "stops interrupted input's navigation after acknowledgement and retains cleanup authority",
+  () =>
+    Effect.gen(function* () {
+      const { url } = yield* site;
+
+      const browser = yield* Chromium.open({
+        actionTimeout: "2 seconds",
+        navigationTimeout: "200 millis",
+      });
+
+      const create = browser.context.newCDPSession.bind(browser.context);
+      const arrived = Promise.withResolvers<void>();
+      const acknowledge = Promise.withResolvers<void>();
+      const stopReply = Promise.withResolvers<void>();
+      let releases = 0;
+      let stops = 0;
+
+      browser.context.newCDPSession = async (target) => {
+        const session = await create(target);
+        const send = session.send.bind(session);
+
+        session.send = (method, params) => {
+          const reply = send(method, params);
+
+          if (
+            method === "Input.dispatchMouseEvent" &&
+            params !== undefined &&
+            "type" in params &&
+            params.type === "mouseReleased"
+          ) {
+            releases++;
+
+            return reply.then(async (value) => {
+              arrived.resolve();
+              await acknowledge.promise;
+
+              return value;
+            });
+          }
+          if (method === "Page.stopLoading") {
+            stops++;
+
+            return reply.then(async (value) => {
+              await stopReply.promise;
+
+              return value;
+            });
+          }
+
+          return reply;
+        };
+
+        return session;
+      };
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          acknowledge.resolve();
+          stopReply.resolve();
+          browser.context.newCDPSession = create;
+        }),
+      );
+      const page = yield* browser.newPage(url);
+      const [link] = yield* page.find({ role: "link", name: "Hang" });
+      const clicking = yield* page.click(link!.ref).pipe(Effect.flip, Effect.forkChild);
+
+      yield* Effect.promise(() => arrived.promise);
+      const error = yield* Fiber.join(clicking);
+
+      const pending = yield* browser
+        .suspend({ drain: "40 millis" })
+        .pipe(Effect.scoped, Effect.flip);
+
+      assert.strictEqual(error.reason._tag, "Timeout");
+      assert.isTrue(error.dispatched);
+      assert.strictEqual(pending.reason._tag, "Busy");
+      assert.strictEqual(stops, 0, "stop must follow the actual input acknowledgement");
+      acknowledge.resolve();
+      // A bounded read can only finish once cleanup has stopped the unanswered navigation.
+      const readable = yield* page.text().pipe(Effect.result);
+
+      const cleaning = yield* browser
+        .suspend({ drain: "40 millis" })
+        .pipe(Effect.scoped, Effect.result);
+
+      stopReply.resolve();
+      assert.isTrue(Result.isSuccess(readable), "acknowledged input must leave the page readable");
+      assert.isTrue(Result.isFailure(cleaning) && cleaning.failure.reason._tag === "Busy");
+      assert.strictEqual(stops, 1);
+      assert.strictEqual(releases, 1, "interrupted input must never be replayed");
+      yield* browser.suspend({ drain: "200 millis" }).pipe(Effect.scoped);
+    }).pipe(Effect.scoped),
 );
 
 it.live("bounds a missing stop reply without surrendering its input authority", () =>

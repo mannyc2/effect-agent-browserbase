@@ -141,12 +141,9 @@ it.live("captures an unsized page at its CSS viewport and reuses current frames"
   }).pipe(Effect.scoped, Effect.provide(attachedWith(["--force-device-scale-factor=2"]))),
 );
 
-// Over CDP a crop is taken on the page's own session, and Chromium draws it into the running
-// screencast at the crop's own size. So only frames of another size are the crop's: they never
-// reach readers, nor even the size filter, which holds a run of them until it could pass for a
-// resize, as it would on a still page. The page's own frames keep reaching readers, so on a page
-// that keeps painting they arrive right after each crop, within the 50 ms the library would
-// otherwise wait past its reply.
+// A crop can outlive its screenshot reply in the compositor, even with the viewport's shape.
+// Capture stays stopped until an uncropped snapshot copies the restored surface, so no crop
+// reaches the size filter or readers. The page's own frames resume after each crop.
 it.live("keeps a crop's frames out of a running capture, but not the page's own", () =>
   Effect.gen(function* () {
     const proxy = yield* behindProxy();

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Exit } from "effect";
+import { Duration, Effect, Exit, Schedule } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import { Subject } from "../src/BrowserEvent.ts";
@@ -70,10 +70,20 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
           new Plan.Step({ action: "click", url, subject: named("Buy") }),
         ]);
 
-        yield* Plan.take(page, plan, 0, { settle });
-        const result = yield* Plan.take(page, plan, 1, { settle }).pipe(Effect.exit);
+        // On a busy host a still page can take longer than the refusal's second to show its quiet.
+        const steady = { ...settle, timeout: "10 seconds" } as const;
 
-        assert.strictEqual(fixture.requests.filter((path) => path === "/bought").length, 1);
+        yield* Plan.take(page, plan, 0, { settle: steady });
+        const result = yield* Plan.take(page, plan, 1, { settle: steady }).pipe(Effect.exit);
+        const bought = () => fixture.requests.filter((path) => path === "/bought").length;
+
+        // The step returns once the click is acknowledged; the request the click sent may still be
+        // on its way to this server.
+        yield* Effect.sync(bought).pipe(
+          Effect.repeat({ until: (count) => count > 0, schedule: Schedule.spaced("10 millis") }),
+          Effect.timeoutOption("5 seconds"),
+        );
+        assert.strictEqual(bought(), 1);
         assert.isTrue(Exit.isSuccess(result), "acknowledged input needs its receipt");
         if (Exit.isSuccess(result)) assert.strictEqual(result.value.outcome, "taken");
         const refused = yield* page.ready(settle).pipe(Effect.exit);

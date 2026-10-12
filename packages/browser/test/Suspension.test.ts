@@ -59,9 +59,11 @@ const delayedReply = Effect.fnUntraced(function* (page: Page, kind: "press" | "n
 describe("Scoped browser input authority", () => {
   it.live("retains a dispatched script mutation until its actual acknowledgement arrives", () =>
     Effect.gen(function* () {
+      // The timeouts that end the selection and the first cut fall while the reply is retained,
+      // whatever their length. Every other step has to finish within them, under load too.
       const browser = yield* Chromium.open({
-        actionTimeout: "300 millis",
-        navigationTimeout: "300 millis",
+        actionTimeout: "2 seconds",
+        navigationTimeout: "2 seconds",
       });
 
       const create = browser.context.newCDPSession.bind(browser.context);
