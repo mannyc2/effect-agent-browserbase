@@ -7,8 +7,8 @@
     "build": "vp build",
     "check": "tsc --noEmit -p tsconfig.json",
     "demo": "node --conditions=@effect-browser/source demo/main.ts",
-    "deploy": "alchemy deploy",
-    "destroy": "alchemy destroy",
+    "deploy": "env -u npm_execpath -u npm_config_user_agent node node_modules/.bin/alchemy deploy",
+    "destroy": "env -u npm_execpath -u npm_config_user_agent node node_modules/.bin/alchemy destroy",
     "dev": "vp dev",
     "test": "vp test --run",
     "upload": "node --conditions=@effect-browser/source upload.ts"
