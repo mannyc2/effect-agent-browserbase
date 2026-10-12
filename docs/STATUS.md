@@ -2,6 +2,16 @@
 
 ## 0.3
 
+The `0.3.0-beta.14` release adds declared generation loss and per-attempt recovery admission:
+`lease.lose(detail)` revokes serving work before returning, and `Admission.after` supplies the
+preceding generation's actual release once it stops serving. `Browserbase.supervise` exposes
+`admit` and `definite`; permanent context-policy refusal stops before provider requests. Completed
+terminal plan input returns its receipt without waiting for continuous page updates to settle.
+Moment pictures include completed input and account for navigation once. Stage output has its own
+nondecreasing `Painted.at` clock, and a released cue refuses reuse without claiming browser loss.
+Local Chromium and fake-provider regressions cover these boundaries; they do not establish hosted
+billing or provider release behavior.
+
 The `0.3.0-beta.13` release fixes navigation waits retaining input authority after their deadline,
 so corrective input, suspension and Stage cuts can proceed after bounded loading cleanup. Actual
 mutation acknowledgements remain tracked after cancellation. Plan expectations no longer count

@@ -4,6 +4,23 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.14
+
+- `Plan.take` returns the receipt of acknowledged terminal input without waiting for a continuously
+  updating page to settle. Readiness still runs before each later step, including navigation.
+  `Moment.capture` refreshes pictures that predate completed input and records its navigation once.
+- `Supervisor.Lease.lose(detail)` revokes an unusable serving generation before returning, including
+  when its declaring work immediately returns. Stale declarations have no effect. Recovery admission
+  runs before every acquisition attempt; `Admission.after` lets a consumer await the predecessor's
+  actual release after loss or a failed reopen without blocking a healthy nonexclusive rotation.
+- `Browserbase.supervise` exposes `admit` and `definite`, and `ContextLease.ContextRefused` stops retries
+  for permanent context-policy refusal before any provider request. Temporary context holds still retry.
+  The Browserbase package requires `effect-browser` from this release for those APIs.
+- `Stage.shown`'s `Painted.at` measures output time separately from frame capture time. Prepared cuts
+  use `Presented.at`; silence, delayed frames and paused readers keep output times nondecreasing.
+- An abandoned cue or normally ended capture fails with `InvalidRequest`, without reporting a healthy
+  browser as lost. Actual page and connection losses preserve their causes; the page can be cued again.
+
 ## 0.3.0-beta.13
 
 - A failed or interrupted navigation stops loading within a bound so later input, browser
