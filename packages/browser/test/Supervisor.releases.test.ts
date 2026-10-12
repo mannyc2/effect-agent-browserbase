@@ -29,7 +29,7 @@ for (const outcome of [
       const supervisor = yield* Supervisor.make({
         open: Effect.gen(function* () {
           const number = ++opens;
-          const browser = yield* Chromium.open();
+          const browser = yield* Chromium.open().pipe(Effect.mapError(String));
 
           return {
             browser,
