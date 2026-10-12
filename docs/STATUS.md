@@ -2,11 +2,17 @@
 
 ## 0.3
 
-Unreleased browser fixes retain paused capture until an uncropped native snapshot confirms the
-restored surface, so a crop with the viewport's aspect ratio cannot become a screencast frame.
-Interrupted input stops pending loading after its actual replies arrive, retaining input authority
-through cleanup. Stage schedules silence checks from the last paint without adding another hold
-when a frame arrives during the wait.
+The `0.3.0-beta.17` release adds browser moments in the agent's thread, with native conversation
+compaction and the latest three moments' images retained separately. Foreground stillness checks
+newly accepted frames while ignoring animation already present before input; gaps in newly accepted
+frame history restart quiet, and without pre-input history all motion counts. Presented typing
+follows a same-name focused field replacing the field just
+pressed, while secret and guarded actions remain bound to the original field. Paused capture waits
+for an uncropped native snapshot of the restored surface, keeping same-aspect-ratio crop pixels out
+of screencast frames. Interrupted input retains authority through loading cleanup after its actual
+replies arrive, and Stage schedules silence checks from the last paint. Local Chromium and scripted
+agent regressions cover these boundaries; hosted behavior and model-specific image budgets still
+need consumer qualification.
 
 The `0.3.0-beta.16` release publishes failed-try cleanup on terminal supervisor states, so the
 last try and retirement report outcomes without requiring another admission. `Down.released`
