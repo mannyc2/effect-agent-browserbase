@@ -4,7 +4,7 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
-## 0.3.0-beta.18
+## 0.3.0-beta.19
 
 - Presented typing follows a focused text field of the same name when a page replaces the field
   just pressed. Secret fields, guarded actions, differently named replacements and unfocused

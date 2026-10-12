@@ -42,7 +42,7 @@
     },
     "packages/agent-browser": {
       "name": "effect-agent-browser",
-      "version": "0.3.0-beta.18",
+      "version": "0.3.0-beta.19",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
@@ -58,12 +58,12 @@
       "peerDependencies": {
         "@yielded/agent": "0.1.0-beta.168",
         "effect": "~4.0.0",
-        "effect-browser": "^0.3.0-beta.18",
+        "effect-browser": "^0.3.0-beta.19",
       },
     },
     "packages/browser": {
       "name": "effect-browser",
-      "version": "0.3.0-beta.18",
+      "version": "0.3.0-beta.19",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
@@ -81,7 +81,7 @@
     },
     "packages/browserbase": {
       "name": "effect-browserbase",
-      "version": "0.3.0-beta.18",
+      "version": "0.3.0-beta.19",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",
@@ -101,7 +101,7 @@
     },
     "packages/human-strokes": {
       "name": "effect-browser-human-strokes",
-      "version": "0.3.0-beta.18",
+      "version": "0.3.0-beta.19",
       "devDependencies": {
         "@effect/vitest": "4.0.0",
         "@types/node": "26.1.2",

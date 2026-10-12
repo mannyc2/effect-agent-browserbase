@@ -397,18 +397,21 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         yield* show(page, '<canvas width="200" height="100"></canvas>');
 
+        const draw = (color: string) =>
+          Effect.promise(() =>
+            page.playwright.evaluate((color) => {
+              const context = document.querySelector("canvas")!.getContext("2d")!;
+
+              context.fillStyle = color;
+              context.fillRect(0, 0, 200, 100);
+            }, color),
+          );
+
         const paint = (color: string) =>
           Effect.gen(function* () {
             const before = (yield* page.captureStats()).accepted;
 
-            yield* Effect.promise(() =>
-              page.playwright.evaluate((color) => {
-                const context = document.querySelector("canvas")!.getContext("2d")!;
-
-                context.fillStyle = color;
-                context.fillRect(0, 0, 200, 100);
-              }, color),
-            );
+            yield* draw(color);
             yield* page.captureStats().pipe(
               Effect.flatMap(({ accepted }) =>
                 page.state.pipe(
@@ -456,7 +459,20 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         resize = "waiting";
         yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 360 }));
-        yield* Effect.promise(() => viewportRead.promise).pipe(waitFor("resize viewport request"));
+        // A resize and its first paint can coalesce without a capture frame. Keep changing pixels
+        // until a real resized frame reaches the held viewport request, then stop the producer.
+        let bright = false;
+
+        const repainting = yield* Effect.suspend(() => {
+          bright = !bright;
+
+          return draw(bright ? "white" : "black");
+        }).pipe(Effect.repeat({ schedule: Schedule.spaced("40 millis") }), Effect.forkScoped);
+
+        yield* Effect.promise(() => viewportRead.promise).pipe(
+          waitFor("resize viewport request"),
+          Effect.ensuring(Fiber.interrupt(repainting)),
+        );
         const heldFrames = yield* page.captureStats();
 
         assert.isAbove(heldFrames.received, before.received);
