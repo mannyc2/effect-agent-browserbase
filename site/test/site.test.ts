@@ -105,7 +105,7 @@ describe("update", () => {
       Command.resolve(Try.LoadStatus, Try.Message.FailedLoadStatus()),
       Command.resolve(ScrollTo, Message.CompletedScroll()),
       model((model) => expect(model.tryPage.runner._tag).toBe("Remote")),
-      message(Message.ChangedUrl({ url: url("/docs/run-the-demo") })),
+      message(Message.ChangedUrl({ url: url("/docs/get-started") })),
       Command.resolve(ScrollTo, Message.CompletedScroll()),
       message(Message.ChangedUrl({ url: url("/try") })),
       Command.expectExact(ScrollTo),

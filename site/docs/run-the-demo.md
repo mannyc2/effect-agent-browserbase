@@ -103,6 +103,14 @@ From the United States, Polymarket opens with a notice about trading from the US
 
 The agent reports three markets: each one's title as its page shows it, the outcome it quotes and that outcome's chance. The check searches Polymarket's public Gamma API for each title and passes a market that is open and within 4 points of the chance the agent read, since odds move while it browses. For an event with several options, the agent must name the option, such as a date or a range; "Yes" alone is a miss, and the check lists the options it had. A market the API does not answer for counts as not checked, so the take fails its check and still packs.
 
+## The casino demo
+
+`bun run demo take --demo casino` records a second demo, an agent playing a slot machine. It starts in an online casino's lobby, finds the slot Opal Crown, opens it in demo mode, sets the bet, reads the paytable and plays six spins. The game is drawn on a canvas inside the game studio's iframe, as real casino games are. Its reels, balance, bet and wins are pictures with no text behind them, so the agent reads every result from screenshots and plays by clicking points on them.
+
+The casino, the studio and the game were made for this demo. The take serves them at their own HTTPS addresses by request interception, and nothing on them tells the agent so. The game server decides each spin from a fixed seed, which deals four wins in the first six spins at a $2 bet, the last of them a big one. It keeps its own record of every spin. The agent reports six things: what five Crowns pay, the bet it played at, each spin's win in order, the final balance and its biggest win's symbol and count. The check compares each one with that record, to the cent.
+
+::Replay{id="casino"}
+
 ## Hand it to your coding agent
 
 The repository's `site/AGENTS.md` tells a coding agent how to install, which key to ask you for and how to record a take. On the deployed site, the [Try page](/try) has a prompt to copy.
