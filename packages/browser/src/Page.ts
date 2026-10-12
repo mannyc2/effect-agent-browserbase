@@ -19,7 +19,7 @@ import { type Duration, Effect, Schema, type Stream } from "effect";
 import type { Page as PlaywrightPage } from "playwright-core";
 
 import { type BrowserError, type PolicyDenied } from "./BrowserError.ts";
-import { Box, type BrowserEvent, PageLoaded, Subject, SubjectContext } from "./BrowserEvent.ts";
+import { Box, type BrowserEvent, PageLoaded, Subject } from "./BrowserEvent.ts";
 import type { Changes } from "./Change.ts";
 import { type CaptureStats, Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
@@ -53,12 +53,8 @@ export class Zoom extends Schema.Class<Zoom>("effect-browser/Zoom")({
 /** The target as it read before input. Point coordinates are never snapped to another position. */
 export class ResolvedTarget extends Schema.Class<ResolvedTarget>("effect-browser/ResolvedTarget")({
   point: Motion.Point,
+  ...Subject.fields,
   element: Schema.String,
-  /** The element's lowercase tag name. */
-  tag: Schema.String,
-  role: Schema.NullOr(Schema.String),
-  name: Schema.String,
-  context: SubjectContext,
   /** For a point target, the box of what it found there. */
   box: Schema.optional(Box),
   cursor: Schema.String,

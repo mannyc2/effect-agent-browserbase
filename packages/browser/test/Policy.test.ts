@@ -1490,6 +1490,30 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  // Unguarded, a view's keys follow a field of the same name the page focuses in its place.
+  it.effect("types into no field a page put in place of the approved one as it was pressed", () =>
+    Effect.gen(function* () {
+      const { page } = yield* setup({ guard: () => Effect.void, performed: true });
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<input type="search" aria-label="Search"><script>' +
+            'document.querySelector("input").addEventListener("focus", (event) => {' +
+            'const field = document.createElement("input"); field.id = "replacement";' +
+            'field.setAttribute("aria-label", "Search"); event.target.replaceWith(field); field.focus() })' +
+            "</script>",
+        ),
+      );
+      const field = refOf(yield* page.snapshot(), "searchbox", "Search");
+
+      assert.deepStrictEqual(yield* failure(page.type("proof of work", { into: field })), {
+        tag: "StaleRef",
+        dispatched: true,
+      });
+      assert.strictEqual(yield* valueOf(page, "#replacement"), "");
+    }),
+  );
+
   it.effect("refuses navigation when the page changed while the policy was held", () =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();

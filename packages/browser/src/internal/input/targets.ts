@@ -31,18 +31,8 @@ const pointFailure = (
         : new NotActionable({ detail: result.detail }),
   );
 
-const resolvedTarget = (result: Script.ResolvedPoint): ResolvedTarget =>
-  new ResolvedTarget({
-    point: { x: result.x, y: result.y },
-    element: result.element,
-    tag: result.tag,
-    role: result.role,
-    name: result.name,
-    context: result.context,
-    box: result.box,
-    cursor: result.cursor,
-    ...(result.href === undefined ? {} : { href: result.href }),
-  });
+const resolvedTarget = ({ x, y, box, ...target }: Script.ResolvedPoint): ResolvedTarget =>
+  new ResolvedTarget({ point: { x, y }, box, ...target });
 
 export const make = (
   viewport: Viewport,

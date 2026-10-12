@@ -5,7 +5,7 @@
  */
 import { Schema } from "effect";
 
-import { Box, SubjectContext } from "../../BrowserEvent.ts";
+import { Box, Subject } from "../../BrowserEvent.ts";
 import { Point } from "../../Motion.ts";
 import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
@@ -262,11 +262,8 @@ export type Targets = ReturnType<typeof targets>;
 
 const ResolvedPointSchema = Schema.Struct({
   ...Point.fields,
+  ...Subject.fields,
   element: Schema.String,
-  tag: Schema.String,
-  role: Schema.NullOr(Schema.String),
-  name: Schema.String,
-  context: SubjectContext,
   box: Schema.optional(Box),
   cursor: Schema.String,
   href: Schema.optional(Schema.String),

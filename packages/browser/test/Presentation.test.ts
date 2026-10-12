@@ -198,6 +198,27 @@ const eventsOf = (browser: Browser["Service"], page: Page) =>
     ),
   );
 
+/**
+ * A field named Search the page replaces as it takes focus, as Wikipedia's typeahead does, with a
+ * field of this name, focused or not.
+ */
+const typeahead = (replacement: {
+  readonly name: string;
+  readonly focused: boolean;
+  readonly original?: "search" | "password";
+}) =>
+  `data:text/html,${encodeURIComponent(`<title>Search</title>
+<input type="${replacement.original ?? "search"}" aria-label="Search">
+<script>
+  document.querySelector("input").addEventListener("focus", (event) => {
+    const field = document.createElement("input");
+    field.setAttribute("role", "combobox");
+    field.setAttribute("aria-label", ${JSON.stringify(replacement.name)});
+    event.target.replaceWith(field);
+    if (${replacement.focused}) field.focus();
+  });
+</script>`)}`;
+
 layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
@@ -376,5 +397,55 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.isFalse(stopped?.complete);
       assert.deepStrictEqual(plans[3]?.from, { x: stopped?.x, y: stopped?.y });
     }),
+  );
+
+  // A view presses the field before it types, and the field is gone by the time the keys go.
+  it.effect(
+    "types into a field the page puts in place of the one it pressed, named and focused as it was",
+    () =>
+      Effect.gen(function* () {
+        const browser = yield* Browser;
+        const presenter = yield* Presentation.make({ pacing: unpaused });
+
+        const typed = (replacement: Parameters<typeof typeahead>[0]) =>
+          Effect.gen(function* () {
+            const page = yield* browser.newPage(typeahead(replacement));
+            const role = replacement.original === "password" ? "textbox" : "searchbox";
+            const field = refOf(yield* page.snapshot(), role, "Search");
+
+            const result = yield* presenter
+              .view(page)
+              .type("proof of work", { into: field })
+              .pipe(
+                Effect.as("typed"),
+                Effect.catch((error) => Effect.succeed(error.reason._tag)),
+              );
+
+            const { controls } = yield* page.snapshot();
+
+            yield* page.close;
+
+            return { result, value: controls.find((control) => control.editable)?.value };
+          });
+
+        assert.deepStrictEqual(yield* typed({ name: "Search", focused: true }), {
+          result: "typed",
+          value: "proof of work",
+        });
+        // Focus on a field of another name, or on none, is not the field the press was for.
+        assert.deepStrictEqual(yield* typed({ name: "Find", focused: true }), {
+          result: "StaleRef",
+          value: "",
+        });
+        assert.deepStrictEqual(yield* typed({ name: "Search", focused: false }), {
+          result: "StaleRef",
+          value: "",
+        });
+        // Nor do keys for a secret field, which its replacement may not keep.
+        assert.deepStrictEqual(
+          yield* typed({ name: "Search", focused: true, original: "password" }),
+          { result: "StaleRef", value: "" },
+        );
+      }),
   );
 });
