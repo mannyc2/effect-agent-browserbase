@@ -137,7 +137,7 @@ const confirm = (client: Service, id: string, settle: Duration.Duration | undefi
 
     if (!confirmed)
       return new Supervisor.Unconfirmed({
-        detail: `${last} ${Duration.format(releaseDeadline)} after its release`,
+        detail: `Session ${id}: ${last} ${Duration.format(releaseDeadline)} after its release`,
       });
     if (settle !== undefined) yield* Effect.sleep(settle);
 
@@ -429,6 +429,11 @@ const adoptable = Effect.fnUntraced(function* (
 const start = Effect.fnUntraced(function* (options: Options, keeping: Keeping | undefined) {
   const client = yield* BrowserbaseClient;
   const lease = yield* ContextLease;
+  const reporting = yield* Effect.serviceOption(Supervisor.Releasing);
+
+  const report = (outcome: Supervisor.Released) =>
+    Option.isSome(reporting) ? reporting.value.released(outcome) : Effect.void;
+
   const context = options.session?.browserSettings?.context;
   const persisting = context?.persist === true ? context.id : undefined;
   const local = yield* Scope.fork(yield* Effect.scope);
@@ -496,13 +501,18 @@ const start = Effect.fnUntraced(function* (options: Options, keeping: Keeping | 
         return yield* ending(session);
       }),
       ({ release, leave }, exit) =>
-        keeping !== undefined && Exit.isSuccess(exit) ? leave : Effect.asVoid(release),
+        keeping !== undefined && Exit.isSuccess(exit)
+          ? leave
+          : release.pipe(
+              Effect.flatMap((outcome) => (Exit.isFailure(exit) ? report(outcome) : Effect.void)),
+            ),
     ).pipe(
       // A session nobody can see bills until its timeout, and one that saves to the context would
       // write beside the next writer: end it, found by its create's own label.
       Effect.tapError((error) =>
         adopted === undefined && mayHaveCreated(error)
           ? endOrphan(client, own, writing && settle).pipe(
+              Effect.tap(report),
               Effect.flatMap((outcome) => writing?.lost(outcome) ?? Effect.void),
             )
           : Effect.void,

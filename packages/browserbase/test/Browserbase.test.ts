@@ -1381,6 +1381,134 @@ describe("Browserbase.supervise", () => {
     }).pipe(Effect.scoped, Effect.provide(hostedFake())),
   );
 
+  // #286: a failed attempt's session is visible to admission even without a stored context.
+  it.effect.each(["connect", "create"] as const)(
+    "refuses retry after a failed %s leaves an unconfirmed session",
+    (failure) =>
+      Effect.gen(function* () {
+        const outcomes: Array<Supervisor.Released | undefined> = [];
+
+        const sessions = yield* Browserbase.supervise({
+          reopen: Schedule.recurs(1),
+          waitTimeout: "5 minutes",
+          admit: ({ after }) =>
+            Effect.gen(function* () {
+              const released = after === undefined ? undefined : yield* after;
+
+              outcomes.push(released);
+              if (released?._tag === "Unconfirmed")
+                return yield* Effect.fail("release unconfirmed");
+            }),
+          definite: (error) => error === "release unconfirmed",
+        });
+
+        const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
+        const rows = yield* kept;
+
+        assert.strictEqual(error.reason, "down");
+        assert.strictEqual(error.cause, "release unconfirmed");
+        assert.deepStrictEqual(
+          outcomes.map((outcome) => outcome?._tag),
+          [undefined, "Unconfirmed"],
+        );
+        assert.deepStrictEqual(
+          rows.map(({ status, releases }) => [status, releases]),
+          [["RUNNING", 1]],
+        );
+        const outcome = outcomes[1];
+
+        assert.strictEqual(outcome?._tag, "Unconfirmed");
+        if (outcome?._tag === "Unconfirmed") assert.include(outcome.detail, rows[0]!.id);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          hostedFake({
+            ...(failure === "create" ? { creates: [{ _tag: "Lost" }] } : {}),
+            releases: [
+              { _tag: "Refused", status: 403 },
+              { _tag: "Refused", status: 403 },
+            ],
+          }),
+        ),
+      ),
+  );
+
+  it.effect("admits retry after a failed connect's release settles", () =>
+    Effect.gen(function* () {
+      const outcomes: Array<Supervisor.Released | undefined> = [];
+
+      const sessions = yield* Browserbase.supervise({
+        reopen: Schedule.recurs(1),
+        admit: ({ after }) =>
+          Effect.gen(function* () {
+            outcomes.push(after === undefined ? undefined : yield* after);
+          }),
+      });
+
+      const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
+
+      assert.strictEqual(error.reason, "down");
+      assert.isTrue(Schema.is(BrowserbaseError)(error.cause));
+      assert.deepStrictEqual(
+        outcomes.map((outcome) => outcome?._tag),
+        [undefined, "Settled"],
+      );
+      assert.deepStrictEqual(
+        (yield* kept).map(({ status, releases }) => [status, releases]),
+        [
+          ["COMPLETED", 1],
+          ["COMPLETED", 1],
+        ],
+      );
+    }).pipe(Effect.scoped, Effect.provide(hostedFake({ releases: [{ _tag: "Ends" }] }))),
+  );
+
+  it.effect("refuses retry after a failed build leaves an unconfirmed session", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const outcomes: Array<Supervisor.Released | undefined> = [];
+        let builds = 0;
+
+        const sessions = yield* Browserbase.supervise({
+          reopen: Schedule.recurs(1),
+          waitTimeout: "5 minutes",
+          build: (hosted) =>
+            Effect.suspend(() =>
+              ++builds === 1 ? Effect.fail("build failed") : Effect.succeed(hosted.session),
+            ),
+          admit: ({ after }) =>
+            Effect.gen(function* () {
+              const released = after === undefined ? undefined : yield* after;
+
+              outcomes.push(released);
+              if (released?._tag === "Unconfirmed")
+                return yield* Effect.fail("release unconfirmed");
+            }),
+          definite: (error) => error === "release unconfirmed",
+        });
+
+        const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
+
+        assert.strictEqual(error.reason, "down");
+        assert.strictEqual(error.cause, "release unconfirmed");
+        assert.strictEqual(builds, 1);
+        assert.deepStrictEqual(
+          outcomes.map((outcome) => outcome?._tag),
+          [undefined, "Unconfirmed"],
+        );
+        assert.deepStrictEqual(
+          (yield* kept).map(({ status, releases }) => [status, releases]),
+          [["RUNNING", 1]],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(hostedFake({ connectUrl, releases: [{ _tag: "Refused", status: 403 }] })),
+      );
+    }),
+  );
+
   it.live("gives each generation its provider Session when no builder is supplied", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;

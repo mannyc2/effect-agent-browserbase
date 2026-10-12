@@ -104,12 +104,13 @@ export type State<A, H = unknown> = (
   | { readonly _tag: "Retired" }
 ) & {
   readonly draining: ReadonlyMap<number, Drain<A, H>>;
-  /** One bounded predecessor survives release and failed acquisitions for admission. */
-  readonly latest: Live<A> | undefined;
+  /** Retain the first unconfirmed end, otherwise the latest settled end, without its resources. */
+  readonly released?: Released | undefined;
 };
 
 export type Input<A, H = unknown> =
   | { readonly _tag: "Opened"; readonly live: Live<A> }
+  | { readonly _tag: "AttemptReleased"; readonly released: Released }
   | {
       readonly _tag: "Failed";
       readonly number: number;
@@ -140,7 +141,7 @@ export type Input<A, H = unknown> =
     };
 
 export type Command<A> =
-  | { readonly _tag: "Open"; readonly number: number; readonly after: Live<A> | undefined }
+  | { readonly _tag: "Open"; readonly number: number }
   | { readonly _tag: "Watch"; readonly live: Live<A> }
   /** Signal ending and arrange revocation. Repeated only when loss/retirement accelerates it. */
   | { readonly _tag: "Drain"; readonly live: Live<A>; readonly ending: Draining }
@@ -157,9 +158,9 @@ export interface Step<A, H = unknown> {
 }
 
 export const start = <A, H = unknown>(): Step<A, H> => ({
-  state: { _tag: "Opening", number: 1, serving: undefined, draining: new Map(), latest: undefined },
+  state: { _tag: "Opening", number: 1, serving: undefined, draining: new Map() },
   events: [[1, new Opening()]],
-  commands: [{ _tag: "Open", number: 1, after: undefined }],
+  commands: [{ _tag: "Open", number: 1 }],
 });
 
 const servingOf = <A, H>(state: State<A, H>) =>
@@ -270,8 +271,6 @@ const next = <A, H>(change: Change<A, H>, number: number, reopen: boolean) => {
   const { exclusive } = change;
   const current = servingOf(change.state);
 
-  const after = change.state.latest;
-
   if (current !== undefined && (reopen || exclusive))
     end(change, current, reopen ? "lost" : "rotated");
   change.state = {
@@ -279,10 +278,10 @@ const next = <A, H>(change: Change<A, H>, number: number, reopen: boolean) => {
     number,
     serving: reopen || exclusive ? undefined : current,
     draining: change.state.draining,
-    latest: after,
+    released: change.state.released,
   };
   change.events.push([number, reopen ? new Reopening() : new Opening()]);
-  change.commands.push({ _tag: "Open", number, after });
+  change.commands.push({ _tag: "Open", number });
 };
 
 const lost = <A, H>(
@@ -346,7 +345,7 @@ export const transition = <A, H = unknown>(
           _tag: "Open",
           serving: live,
           draining: change.state.draining,
-          latest: input.live,
+          released: change.state.released,
         };
       }
       break;
@@ -362,6 +361,9 @@ export const transition = <A, H = unknown>(
     case "Abandoned":
       change.events.push([input.number, new Closed({})]);
       break;
+    case "AttemptReleased":
+      change.state = { ...state, released: combine(state.released, input.released) };
+      break;
     case "Released": {
       const drain = state.draining.get(input.number);
 
@@ -369,7 +371,7 @@ export const transition = <A, H = unknown>(
       const draining = new Map(state.draining);
 
       draining.delete(input.number);
-      change.state = { ...state, draining };
+      change.state = { ...state, draining, released: combine(state.released, input.released) };
       change.events.push([
         input.number,
         input.released === undefined ? new Kept() : new Closed({ released: input.released }),
@@ -397,11 +399,19 @@ export const transition = <A, H = unknown>(
       if (state._tag === "Retired") break;
       for (const number of state.draining.keys()) revoke(change, number, "retired");
       if (state.serving !== undefined) end(change, state.serving, "retired", input._tag === "Keep");
-      change.state = { _tag: "Retired", draining: change.state.draining, latest: undefined };
+      change.state = {
+        _tag: "Retired",
+        draining: change.state.draining,
+        released: change.state.released,
+      };
   }
 
   return change;
 };
+
+/** Later confirmations cannot establish that an earlier unconfirmed session ended. */
+export const combine = (before: Released | undefined, next: Released | undefined) =>
+  before?._tag === "Unconfirmed" ? before : (next ?? before);
 
 export type Resolution<A> =
   | { readonly _tag: "Serve"; readonly live: Live<A> }

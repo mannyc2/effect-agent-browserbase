@@ -20,7 +20,7 @@ interface World {
   state: Lifecycle.State<string, number>;
   now: number;
   hold: number;
-  opening: { readonly number: number; readonly after: number | undefined } | undefined;
+  opening: { readonly number: number } | undefined;
   cancelling: boolean;
   retired: boolean;
   newest: number;
@@ -28,6 +28,7 @@ interface World {
   readonly ordered: Set<number>;
   readonly releasing: Set<number>;
   readonly released: Set<number>;
+  readonly outcomes: Array<Lifecycle.Released>;
   /** Left running as the supervisor stopped, never released. */
   readonly left: Set<number>;
   readonly watched: Set<number>;
@@ -78,13 +79,8 @@ const apply = (world: World, input: Lifecycle.Input<string, number>) => {
         assert.isUndefined(world.opening, "one open at a time");
         assert.isFalse(world.retired, "nothing opens once retired");
         assert.isAbove(command.number, world.newest, "generation numbers only grow");
-        assert.strictEqual(
-          command.after?.number,
-          [...world.opened].at(-1),
-          "admission follows the latest opened generation even after its release",
-        );
         world.newest = command.number;
-        world.opening = { number: command.number, after: command.after?.number };
+        world.opening = { number: command.number };
         break;
       case "Watch":
         world.watched.add(command.live.number);
@@ -122,6 +118,20 @@ const apply = (world: World, input: Lifecycle.Input<string, number>) => {
         world.watched.delete(command.live.number);
     }
   world.state = step.state;
+  // #281: an older unconfirmed generation or failed attempt still constrains later admission.
+  assert.strictEqual(
+    step.state.released,
+    world.outcomes.find((outcome) => outcome._tag === "Unconfirmed") ?? world.outcomes.at(-1),
+    "admission preserves the first uncertainty across later releases and opens",
+  );
+  for (const number of world.released) {
+    assert.isUndefined(Lifecycle.lookup(step.state, number), "released generations are forgotten");
+    assert.notDeepInclude(
+      Object.values(step.state),
+      { number, value: `browser ${number}` },
+      "completed releases retain facts, not browsers",
+    );
+  }
 
   const serving = step.state._tag === "Retired" ? undefined : step.state.serving;
 
@@ -216,12 +226,10 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
   const actions: Array<readonly [string, () => void]> = [];
   const { opening } = world;
 
-  // The open of a generation tries until it opens or its schedule gives up; a try that fails and
-  // is tried again changes nothing the transition sees. Exclusive ones try only once the
-  // generation before has been released.
+  // Failed tries retain their release outcomes before retrying. Exclusive ones try only once
+  // every preceding generation has completed release.
   if (opening !== undefined) {
-    const ready =
-      !world.exclusive || opening.after === undefined || !world.state.draining.has(opening.after);
+    const ready = !world.exclusive || world.state.draining.size === 0;
 
     const tried = (input: Lifecycle.Input<string, number>) => () => {
       if (world.exclusive)
@@ -232,7 +240,7 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
       apply(world, input);
     };
 
-    if (ready)
+    if (ready) {
       actions.push(
         [
           "succeed",
@@ -246,6 +254,19 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
           tried({ _tag: "Failed", number: opening.number, detail: "refused", cause: "refused" }),
         ],
       );
+      for (const unconfirmed of [false, true])
+        actions.push([
+          `retry ${unconfirmed ? "unconfirmed" : "settled"}`,
+          () => {
+            const released = unconfirmed
+              ? new Lifecycle.Unconfirmed({ detail: `attempt ${world.outcomes.length}` })
+              : new Lifecycle.Settled();
+
+            world.outcomes.push(released);
+            apply(world, { _tag: "AttemptReleased", released });
+          },
+        ]);
+    }
     if (world.cancelling)
       actions.push([
         "cancel",
@@ -285,14 +306,18 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
       () => {
         world.releasing.delete(number);
         if (!world.left.has(number)) world.released.add(number);
+
+        const released = world.left.has(number)
+          ? undefined
+          : number % 3 === 0
+            ? new Lifecycle.Unconfirmed({ detail: `generation ${number} running` })
+            : new Lifecycle.Settled();
+
+        if (released !== undefined) world.outcomes.push(released);
         apply(world, {
           _tag: "Released",
           number,
-          released: world.left.has(number)
-            ? undefined
-            : number % 3 === 0
-              ? new Lifecycle.Unconfirmed({ detail: "running" })
-              : new Lifecycle.Settled(),
+          released,
         });
       },
     ]);
@@ -359,7 +384,7 @@ const run = (
     state: started.state,
     now: 0,
     hold: 0,
-    opening: { number: 1, after: undefined },
+    opening: { number: 1 },
     cancelling: false,
     retired: false,
     newest: 1,
@@ -367,6 +392,7 @@ const run = (
     ordered: new Set(),
     releasing: new Set(),
     released: new Set(),
+    outcomes: [],
     left: new Set(),
     watched: new Set(),
     fired: new Set(),
