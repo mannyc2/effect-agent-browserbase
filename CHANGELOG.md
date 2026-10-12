@@ -6,6 +6,13 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 ## 0.3.0-beta.14
 
+- Library pictures pause native screencast capture through actual screenshot restoration, preserving
+  readers and settings. Delayed crop frames stay private even when both their paint stamp and arrival
+  outlast the screenshot reply. Cancellation retains native picture, stop and restart replies;
+  unconfirmed cleanup fails capture within two seconds and blocks overlapping pictures or captures
+  until actual settlement. Readiness cannot certify quietness during that pause and requires fresh
+  post-resume frame evidence. Cached-frame reuse remains free; forced pictures with capture running
+  add stop, viewport refresh and restart calls.
 - `Plan.take` returns the receipt of acknowledged terminal input without waiting for a continuously
   updating page to settle. Readiness still runs before each later step, including navigation.
   `Moment.capture` refreshes pictures that predate completed input and records its navigation once.

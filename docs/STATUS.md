@@ -266,8 +266,10 @@ Agent, the renamed Effect Agent:
   a screen another session emulates as it was; the page script is registered once per page session, so
   a document's first read is two calls and a warm read one, `ready` included however long the page
   takes, and a wait for a still screen two calls while a capture runs; the library's own clipped
-  pictures stay out of a running screencast, which keeps the page's own frames where the crop is on
-  the page's own session, as over CDP; and focus emulation keeps tabs behind painting. A native
+  pictures stay out of the screencast by pausing native capture through actual picture restoration,
+  retaining readers and settings. Forced pictures with capture running add stop, viewport refresh
+  and restart calls; cached frame reuse remains free, and readiness requires fresh frame evidence
+  after a pause. Focus emulation keeps tabs behind painting. A native
   suite holds these to their call budgets through a counting proxy.
 - Tracing: page operations with their phases and protocol cost, captures, page script round trips
   and opening a browser are Effect spans, and Yielded traces the agent's turns and tool calls with
@@ -312,8 +314,8 @@ and each becoming the next beta.
   page served after a navigation, replays that act in the wrong place, and a busy page's first
   capture failing or widening the clock's estimate. The pictures and clock fixes are in: reads show
   the document a navigation reached, a busy page's first capture starts with what its clock probes
-  could measure and narrows it while frames flow, a crop over CDP no longer pauses a running
-  capture, and a capture's start has a deadline. So are the replay and readiness fixes: replay
+  could measure and narrows it while frames flow, and a capture's start has a deadline. The current
+  release pauses native capture through actual screenshot restoration to keep all crop pixels private. So are the replay and readiness fixes: replay
   refuses the review's six drifts rather than act in the wrong place, `ready` waits out a loading
   screen in one call to the page, and a stalled connection no longer reads as a still screen. Its
   beta, `0.3.0-beta.1`, was never published; `0.3.0-beta.5` carries it.
