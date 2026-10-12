@@ -7,6 +7,7 @@
 import { Duration, Effect } from "effect";
 
 import { InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
+import type { Point } from "../../Motion.ts";
 import type { ClickOptions, PressOptions, ScrollOptions, Target, TypeOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext } from "../page/context.ts";
@@ -18,6 +19,7 @@ import * as Keyboard from "./keyboard.ts";
 import * as Keys from "./keys.ts";
 import * as Perform from "./perform.ts";
 import * as Pointer from "./pointer.ts";
+import type { Run } from "./replies.ts";
 import * as Settle from "./settle.ts";
 import { plain, type Style } from "./style.ts";
 import * as Targets from "./targets.ts";
@@ -39,7 +41,21 @@ const partsOf = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
     ...Targets.make(viewport, guard, pointer, dispatch, settling),
     ...pointer,
     ...Keyboard.make(page, bridge, dispatch),
-    sendMouse: dispatch.sendMouse,
+    sendButton: (
+      operation: string,
+      run: Run,
+      type: "mousePressed" | "mouseReleased",
+      point: Point,
+      button: NonNullable<ClickOptions["button"]> = "left",
+      clickCount = 1,
+    ) =>
+      dispatch.sendMouse(operation, run, {
+        type,
+        ...point,
+        button,
+        buttons: type === "mousePressed" ? buttonMask[button] : 0,
+        clickCount,
+      }),
     flush: dispatch.flush,
   };
 };
@@ -77,7 +93,7 @@ const pressed = (keys: string, options: PressOptions) => {
 
 const click = (input: Parts) => {
   const { settings } = input.page;
-  const { perform, preparePolicy, targetFor, moveTo, sendMouse, flush, mark, settle } = input;
+  const { perform, preparePolicy, targetFor, moveTo, sendButton, flush, mark, settle } = input;
 
   return (target: Target, clickOptions: ClickOptions = {}, style: Style = plain) =>
     perform(
@@ -134,26 +150,14 @@ const click = (input: Parts) => {
                     ),
                 ),
               );
-            yield* sendMouse("click", marks.input, {
-              type: "mousePressed",
-              ...point,
-              button,
-              buttons: buttonMask[button],
-              clickCount: index,
-            });
+            yield* sendButton("click", marks.input, "mousePressed", point, button, index);
 
             // A hold the caller asks for is the click's own; the style's is presentation.
             const hold = clickOptions.holdMillis ?? (yield* marks.style.hold);
 
             if (clickOptions.holdMillis === undefined) yield* marks.present(hold);
             if (hold > 0) yield* Effect.sleep(Duration.millis(hold));
-            yield* sendMouse("click", marks.input, {
-              type: "mouseReleased",
-              ...point,
-              button,
-              buttons: 0,
-              clickCount: index,
-            });
+            yield* sendButton("click", marks.input, "mouseReleased", point, button, index);
           }
           yield* flush("click", marks.input);
           yield* settle("click", before);
@@ -215,7 +219,7 @@ const aim = (input: Parts) => {
 
 const drag = (input: Parts) => {
   const { settings } = input.page;
-  const { perform, preparePolicy, targetFor, resolve, moveTo, sendMouse, flush } = input;
+  const { perform, preparePolicy, targetFor, resolve, moveTo, sendButton, flush } = input;
 
   return (from: Target, to: Target, style: Style = plain) =>
     perform(
@@ -244,21 +248,9 @@ const drag = (input: Parts) => {
             ],
           });
           yield* marks.sent;
-          yield* sendMouse("drag", marks.input, {
-            type: "mousePressed",
-            ...start.point,
-            button: "left",
-            buttons: 1,
-            clickCount: 1,
-          });
+          yield* sendButton("drag", marks.input, "mousePressed", start.point);
           yield* moveTo("drag", marks, end.point, end.cursor, "drag");
-          yield* sendMouse("drag", marks.input, {
-            type: "mouseReleased",
-            ...end.point,
-            button: "left",
-            buttons: 0,
-            clickCount: 1,
-          });
+          yield* sendButton("drag", marks.input, "mouseReleased", end.point);
           yield* flush("drag", marks.input);
         }),
       style,
@@ -267,7 +259,7 @@ const drag = (input: Parts) => {
 
 const typeText = (input: Parts) => {
   const { settings, now } = input.page;
-  const { perform, preparePolicy, mutate, targetFor, moveTo, sendMouse, flush, evaluate } = input;
+  const { perform, preparePolicy, mutate, targetFor, moveTo, sendButton, flush, evaluate } = input;
   const { currentDocument, sameDocument, keyStroke, typeEvent, mark, settle } = input;
 
   return (text: string, typeOptions: TypeOptions = {}, style: Style = plain) =>
@@ -328,13 +320,7 @@ const typeText = (input: Parts) => {
               yield* Guard.check(approval, { presses: [{ index: 0, ...target.point }] });
               yield* marks.sent;
               for (const type of ["mousePressed", "mouseReleased"] as const)
-                yield* sendMouse("type", marks.input, {
-                  type,
-                  ...target.point,
-                  button: "left",
-                  buttons: type === "mousePressed" ? 1 : 0,
-                  clickCount: 1,
-                });
+                yield* sendButton("type", marks.input, type, target.point);
               yield* flush("type", marks.input);
             }
 
