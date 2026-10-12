@@ -1,7 +1,7 @@
 /**
  * Where a page's screen moves, from its screencast frames: each frame decoded and cut into
  * 16-pixel blocks, a block moving where a few of its pixels, sampled every other one, changed by
- * more than JPEG's noise. Green carries most of a pixel's brightness, so it alone is compared.
+ * more than JPEG's noise in any color channel.
  * What moved among the frames before an input is the page's background, such as an idle
  * animation; foreground stillness ignores it.
  *
@@ -20,7 +20,7 @@ export type Picture = ReturnType<typeof jpegjs.decode>;
 
 export const picture = (frame: Frame): Picture => jpegjs.decode(frame.data, { useTArray: true });
 
-/** A sample changed where its green moved more than this, beyond JPEG's noise. */
+/** A sample changed where any color channel moved more than this, beyond JPEG's noise. */
 const noise = 32;
 
 /** The blocks where two pictures differ, by `row * columns + column`; -1 for different sizes. */
@@ -28,13 +28,14 @@ const moved = (from: Picture, to: Picture): ReadonlyArray<number> => {
   if (from.width !== to.width || from.height !== to.height) return [-1];
   const columns = Math.ceil(from.width / 16);
   const counts = new Map<number, number>();
+  const differs = (at: number) => Math.abs((from.data[at] ?? 0) - (to.data[at] ?? 0)) > noise;
 
   for (let y = 0; y < from.height; y += 2)
     for (let x = 0; x < from.width; x += 2) {
-      const at = (y * from.width + x) * 4 + 1;
+      const at = (y * from.width + x) * 4;
       const block = Math.floor(y / 16) * columns + Math.floor(x / 16);
 
-      if (Math.abs((from.data[at] ?? 0) - (to.data[at] ?? 0)) > noise)
+      if (differs(at) || differs(at + 1) || differs(at + 2))
         counts.set(block, (counts.get(block) ?? 0) + 1);
     }
 
