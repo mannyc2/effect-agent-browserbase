@@ -179,23 +179,28 @@ const text = (value: string) => ({ type: "text" as const, text: value });
 /** What the model sees before a turn: the current tab's screenshot, and the crops since its last. */
 const pictures = (controller: PageControl.Controller, zooms: Ref.Ref<Array<Page.Zoom>>) =>
   Effect.gen(function* () {
-    const crops = Moments.cropped(yield* Ref.getAndSet(zooms, []));
-
     // A look before a turn shows a tab an action opened, as `follow` says.
-    const screen = yield* Effect.flatMap(controller.look, (page) => page.screenshot()).pipe(
-      Effect.map((image) => [
-        text(
-          `The current tab's viewport, ${image.width}x${image.height}. Its pixel coordinates are viewport coordinates.`,
-        ),
-        { type: "file" as const, mediaType: image.mediaType, data: image.data },
-      ]),
+    const parts = yield* Effect.flatMap(controller.look, (page) =>
+      Effect.gen(function* () {
+        const crops = Moments.cropped(yield* Ref.getAndSet(zooms, []), page.id);
+        const screen = yield* page.screenshot();
+
+        return [
+          text(
+            `The current tab's viewport, ${screen.width}x${screen.height}. Its pixel coordinates are viewport coordinates.`,
+          ),
+          { type: "file" as const, mediaType: screen.mediaType, data: screen.data },
+          ...crops,
+        ];
+      }),
+    ).pipe(
       Effect.catch((error) =>
         Effect.succeed([text(`(no screenshot of the current tab: ${error.message})`)]),
       ),
       controller.withTask,
     );
 
-    return Prompt.make([{ role: "user", content: [...screen, ...crops] }]);
+    return Prompt.make([{ role: "user", content: parts }]);
   });
 
 // A point is the more specific of the two, such as a spot on a canvas a ref names.
@@ -277,7 +282,7 @@ const pointing = (
             Effect.flatMap((page) => page.zoom(new Page.Region(region))),
             Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
             Effect.map(() => ({
-              did: `Cropped (${region.x}, ${region.y}), ${region.width}x${region.height}: it is shown before your next turn.`,
+              did: `Cropped (${region.x}, ${region.y}), ${region.width}x${region.height}: it is shown before your next turn if this tab is still current.`,
               followed: [],
             })),
             Effect.mapError(PageControl.useError),

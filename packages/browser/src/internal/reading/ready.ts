@@ -67,7 +67,7 @@ export const make =
       Effect.gen(function* () {
         const running = yield* capture.active;
         const foreground = options.still === "foreground";
-        let { received } = yield* capture.stats();
+        let counts = yield* capture.stats();
         let stirred = running ? page.now() : Number.POSITIVE_INFINITY;
         let reference: Motion.Picture | undefined;
 
@@ -99,27 +99,35 @@ export const make =
         const look = Effect.gen(function* () {
           const stats = yield* capture.stats();
           const latest = Option.getOrUndefined(yield* capture.latest);
-          const arrived = stats.received !== received;
+          const arrived = stats.received !== counts.received;
+          const unseen = stats.accepted - counts.accepted;
 
-          received = stats.received;
+          counts = stats;
           if (latest === undefined || !capture.current(latest)) stirred = page.now();
           else if (!foreground ? arrived || stats.ackBacklog > 0 : !arrived && stats.ackBacklog > 0)
             stirred = page.now();
-          else if (foreground && (arrived || reference === undefined)) {
-            const seen = yield* decoded(latest);
+          else if (foreground && (unseen > 0 || reference === undefined)) {
+            // A move and its return between looks both count. Bound decoding; any frames lost
+            // from history, or beyond this batch, deny a quiet spell rather than hiding motion.
+            const frames = (yield* capture.recent).slice(-Math.max(1, Math.min(8, unseen)));
 
-            if (reference === undefined || Motion.stirs(reference, seen, mask)) {
-              reference = seen;
-              stirred = page.now();
+            if (unseen > frames.length) stirred = page.now();
+            for (const frame of frames) {
+              const seen = yield* decoded(frame);
+
+              if (reference === undefined || Motion.stirs(reference, seen, mask)) {
+                reference = seen;
+                stirred = page.now();
+              }
             }
           }
 
           return page.now() - stirred;
         });
 
-        // Decoding a frame costs milliseconds, so the foreground looks less often.
+        // Decode at a fixed cadence: adding a delay after a full batch lets its backlog grow.
         const spell = Effect.repeat(look, {
-          schedule: Schedule.spaced(Duration.millis(foreground ? 100 : 25)),
+          schedule: Schedule.fixed(Duration.millis(foreground ? 100 : 25)),
           until: (still) => still >= millis,
         });
 
@@ -130,10 +138,10 @@ export const make =
         const still = Effect.gen(function* () {
           for (;;) {
             yield* spell;
-            const before = received;
+            const before = counts.received;
 
             yield* Effect.all([settled(until), capture.sync], { concurrency: 2, discard: true });
-            if ((yield* look) >= millis && (foreground || received === before)) return;
+            if ((yield* look) >= millis && (foreground || counts.received === before)) return;
           }
         });
 

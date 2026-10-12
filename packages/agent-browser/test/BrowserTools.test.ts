@@ -7,7 +7,7 @@ import { estimateMessageTokens } from "@yielded/agent/compaction";
 import { ContextCompactor } from "@yielded/agent/context-compactor";
 import { ModelCallContext } from "@yielded/agent/context-window";
 import { RunContextPreparation } from "@yielded/agent/run-options";
-import { Duration, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Duration, Effect, Layer, Option, Result, Schema, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import type * as Moment from "effect-browser/Moment";
@@ -205,6 +205,61 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.include(textOf(prompts[1]!), "a crop cannot be shown");
     }),
   );
+
+  // #293 discussion_r4249413830: a lost page must stop preparation before another model call.
+  it.effect("fails moment preparation after the current page closes", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const model = scripted([() => calling(call("observe", {})), () => answer("Still running.")]);
+
+      const outcome = yield* AgentRuntime.run(agent, "Observe the form.").pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            tools.layer({ page }, { vision: "moments", onMoment: () => Effect.orDie(page.close) }),
+            InMemory.layer,
+            model.layer,
+          ),
+        ),
+        Effect.result,
+      );
+
+      assert.isTrue(Result.isFailure(outcome));
+      if (Result.isFailure(outcome)) assert.strictEqual(outcome.failure._tag, "AgentInputError");
+      assert.strictEqual(model.prompts.length, 1);
+    }),
+  );
+
+  // #293 discussion_r4249413869: a crop's coordinates cannot be used after selecting another tab.
+  for (const vision of [true, "moments"] as const)
+    it.effect(`keeps queued crops out of a newly selected tab with vision ${vision}`, () =>
+      Effect.gen(function* () {
+        const browser = yield* Chromium.open();
+        const site = yield* Site;
+
+        yield* browser.newPage(site.url("/form"));
+        yield* browser.newPage(site.url("/next"));
+
+        const model = scripted([
+          () => calling(call("observe", {})),
+          () =>
+            calling(
+              call("zoom", { x: 0, y: 0, width: 100, height: 100 }),
+              call("select_tab", { ref: "tab2" }),
+            ),
+          () => answer("Selected the next page."),
+        ]);
+
+        yield* AgentRuntime.run(agent, "Inspect the first tab, then select the next.").pipe(
+          Effect.provide(
+            Layer.mergeAll(tools.layer({ browser }, { vision }), InMemory.layer, model.layer),
+          ),
+        );
+        const shown = references(model.prompts.at(-1)!).at(-1);
+
+        assert.strictEqual(files(shown).length, 1, "the new tab has only its own screenshot");
+        assert.notInclude(textOf(Prompt.fromMessages([shown!])), "Zoom:");
+      }).pipe(Effect.scoped),
+    );
 
   // #292: ageing pictures changed a prefix already summarized by Yielded, ending long runs.
   // Exercise the real interpreter: short demos never reach either compaction or image expiry.

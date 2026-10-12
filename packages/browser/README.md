@@ -122,6 +122,12 @@ longer than `quietMillis` between phases reads as still. On the slot machine fix
 connection stalled for 450 to 900 ms toward either end while the reels spun, none of 132 waits
 ended early, where all 36 did before.
 
+`Page.ready({ still: "foreground", quietMillis })` allows motion already seen in the 1.5 seconds
+before the page's latest input, such as idle decoration. Motion elsewhere restarts the quiet
+interval. It compares newly accepted frames, including brief motion between polls and frames
+accepted after a viewport-size check; missing history or more than eight new frames in one poll
+restarts the interval conservatively. Without pre-input frame history, all motion counts.
+
 `Page.ready({ still: "content", quietMillis })` instead observes a full interval without visible
 recorded DOM changes. It starts the recorder itself and starts the interval again in each new
 document; navigation retries share the original timeout. Canvas animation can continue while DOM

@@ -88,15 +88,15 @@ export const grade = (answer: Answer, record: ReadonlyArray<Site.Spin>): Show.Ch
   const last = record.at(-1);
   const played = last === undefined ? [] : record.filter((spin) => spin.session === last.session);
 
-  const biggest = played.reduce<Site.Spin | undefined>(
-    (best, spin) => (best === undefined || spin.win > best.win ? spin : best),
-    undefined,
-  );
+  const biggest = Math.max(0, ...played.map((spin) => spin.win));
 
-  const line = biggest?.wins.reduce<Slot.LineWin | undefined>(
-    (best, win) => (best === undefined || win.pay > best.pay ? win : best),
-    undefined,
-  );
+  const lines = played
+    .filter((spin) => spin.win === biggest)
+    .flatMap((spin) => {
+      const highest = Math.max(0, ...spin.wins.map((win) => win.pay));
+
+      return spin.wins.filter((win) => win.pay === highest);
+    });
 
   const crowns = Math.round((bet * Slot.pays.CROWN[2]) / 10);
   const reported = answer.wins.map(cents);
@@ -131,10 +131,14 @@ export const grade = (answer: Answer, record: ReadonlyArray<Site.Spin>): Show.Ch
     },
     {
       ok:
-        line === undefined
+        lines.length === 0
           ? answer.biggest.count === 0
-          : symbolOf(answer.biggest.symbol) === line.symbol && answer.biggest.count === line.count,
-      line: `biggest win: reported ${answer.biggest.count} ${answer.biggest.symbol}, the server paid ${line === undefined ? "nothing" : `${line.count} ${Slot.names[line.symbol]} on line ${line.line}, ${dollars(line.pay)}`}`,
+          : lines.some(
+              (line) =>
+                symbolOf(answer.biggest.symbol) === line.symbol &&
+                answer.biggest.count === line.count,
+            ),
+      line: `biggest win: reported ${answer.biggest.count} ${answer.biggest.symbol}, the server paid ${lines.map((line) => `${line.count} ${Slot.names[line.symbol]} on line ${line.line}, ${dollars(line.pay)}`).join(" or ") || "nothing"}`,
     },
   ];
 
@@ -148,10 +152,10 @@ export const grade = (answer: Answer, record: ReadonlyArray<Site.Spin>): Show.Ch
 };
 
 /** One take: the agent plays and talks, and its report is checked. The take logs its seed. */
-export const explore = (options: Show.ExploreOptions) =>
+export const explore = (options: Show.ExploreOptions, seed = Site.freshSeed()) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const served = yield* Site.serve(browser);
+    const served = yield* Site.serve(browser, seed);
     const page = yield* browser.firstPage;
 
     yield* Console.log(`Opal Crown seed: ${served.seed}`);

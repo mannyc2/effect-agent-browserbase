@@ -2,7 +2,7 @@
 // track, the actions on the timeline, the chapters a run falls into and the transcript of narrator
 // lines and agent steps, each with the host time it belongs to. Every time is on the recording's
 // host clock, in milliseconds.
-import { Option, Schema } from "effect";
+import { Option, Result, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { describeCall, doing, items } from "../present.ts";
@@ -231,7 +231,11 @@ export const pageName = (address: string, names: ReadonlyArray<string>) => {
   const last = url.pathname.split("/").findLast((part) => part !== "");
 
   if (last === undefined) return url.hostname.replace(/^www\./, "");
-  const segment = decodeURIComponent(last).toLowerCase();
+
+  const segment = Result.getOrElse(
+    Result.try(() => decodeURIComponent(last).toLowerCase()),
+    () => last,
+  );
 
   const named = names
     .flatMap((name) => {

@@ -174,7 +174,9 @@ Agent, the renamed Effect Agent:
   thread holds instead, after each turn's tool results, a moment of the tab since the turn before,
   immutable accounts that Yielded can prune and summarize with the conversation. The latest three
   moments' frames remain as turn-labeled references outside compaction coverage, and older image
-  bytes are released. Bounded model contexts need a model-aware image-token estimator, composed
+  bytes are released. Lost pages and moments without usable pictures stop preparation before
+  another model call; queued zoom crops only accompany their original tab. Bounded model contexts
+  need a model-aware image-token estimator, composed
   with the tools' preparation as the package README shows. `wait_still` waits for
   foreground stillness. Yielded runs the agent: its loop,
   policy and budgets, approval, context and run events. Its browser interface is on Yielded's
@@ -203,7 +205,8 @@ Agent, the renamed Effect Agent:
   from the page's own evidence, so a blank canvas or a spinner alone is still loading; with
   `quietMillis` it also waits for the screen to be still, and a stalled connection is not stillness;
   `still: "foreground"` lets what was moving in the 1.5 s before the page's latest input, such as a
-  game's idle animation, go on moving.
+  game's idle animation, go on moving. Brief foreground motion between polls still restarts the
+  quiet interval; missing frame history cannot establish stillness.
 - Expectations: `Expect.attempt` names what an action is for, something that appears, goes or
   changes as `Page.find` finds it, or a navigation, and each `run` checks before it acts, so an
   action whose input went before it failed is sent again only where its effect did not come:

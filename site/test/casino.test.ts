@@ -80,6 +80,21 @@ describe("grade", () => {
     assert.strictEqual(checked.matched, 7);
   });
 
+  // bea3a16 kept only the first maximum after switching takes to fresh random seeds.
+  it("accepts either symbol tied for the biggest win", () => {
+    const tied = session(7, 200, 6);
+
+    const report = {
+      ...right,
+      wins: [2, 0, 0, 2, 0, 0],
+      balance: 992,
+      lowest: 992,
+    };
+
+    assert.isTrue(grade({ ...report, biggest: { symbol: "JACK", count: 3 } }, tied).pass);
+    assert.isTrue(grade({ ...report, biggest: { symbol: "TEN", count: 3 } }, tied).pass);
+  });
+
   it("misses a misread win and the balance it implies", () => {
     const checked = grade({ ...right, wins: [0, 2, 2, 4, 0, 23.08], balance: 1019.08 }, spins);
 

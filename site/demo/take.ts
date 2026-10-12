@@ -12,6 +12,7 @@ import * as Chromium from "effect-browser/Chromium";
 import { FetchHttpClient } from "effect/http";
 
 import * as Casino from "./casino.ts";
+import { freshSeed } from "./casino/site.ts";
 import type { DemoName } from "./defaults.ts";
 import { pack } from "./pack.ts";
 import * as Polymarket from "./polymarket.ts";
@@ -25,8 +26,9 @@ type Explored = ReturnType<typeof Casino.explore> | ReturnType<typeof Polymarket
 const explore = (
   demo: DemoName,
   options: ExploreOptions,
+  seed: number,
 ): Effect.Effect<Effect.Success<Explored>, Effect.Error<Explored>, Effect.Services<Explored>> =>
-  demo === "casino" ? Casino.explore(options) : Polymarket.explore(options);
+  demo === "casino" ? Casino.explore(options, seed) : Polymarket.explore(options);
 
 export interface TakeOptions {
   /** Which demo to record. */
@@ -85,10 +87,11 @@ export const take = Effect.fn("demo.take")(function* (options: TakeOptions) {
   yield* Console.log(`Take ${options.id}: ${options.model}, recording into ${directory}`);
 
   const task = tasks[options.demo];
+  const seed = options.demo === "casino" ? freshSeed() : 0;
 
   const work = runner.withModel(
     Effect.provide(
-      explore(options.demo, { maxSteps: options.maxSteps, trace: recorder.trace }),
+      explore(options.demo, { maxSteps: options.maxSteps, trace: recorder.trace }, seed),
       FetchHttpClient.layer,
     ),
     options.reasoning,
@@ -116,8 +119,7 @@ export const take = Effect.fn("demo.take")(function* (options: TakeOptions) {
     task: { name: task.name, kind: task.kind, summary: task.summary, prompt: task.prompt },
     run: {
       trial: 1,
-      // The casino's game server draws its spins from a seed of its own each take.
-      seed: value !== undefined && "seed" in value ? value.seed : 0,
+      seed,
       model: options.model,
       reasoning: options.reasoning,
       browser: "chromium",

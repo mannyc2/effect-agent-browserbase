@@ -29,8 +29,12 @@ describe("activityOf", () => {
       span("click", "agent", "execute_tool click_at", 10, 12),
       span("still", "agent", "execute_tool wait_still", 12, 20),
       span("done", "agent", "execute_tool done", 20, 21),
+      // bea3a16 omitted arm 6's automatic looks from the replay.
+      span("moment", "agent", "Moment.capture", 22, 25),
+      span("frame", "moment", "Page.frame", 23, 24),
       // The narrator's pictures are not the agent's looks.
       span("narrator", "run", "Page.screenshot", 5, 6),
+      span("narrated-moment", "run", "Moment.capture", 26, 27),
     ]);
 
     assert.deepStrictEqual(
@@ -41,6 +45,7 @@ describe("activityOf", () => {
         ["act", "click_at", 10],
         ["wait", "wait_still", 12],
         ["report", "done", 20],
+        ["look", undefined, 22],
       ],
     );
     assert.ok(activity.every((each) => !JSON.stringify(each).includes("session")));

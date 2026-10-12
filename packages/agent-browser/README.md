@@ -105,7 +105,8 @@ the layer serves every tool either way. `make({ mode: "single" })` lets `act` ta
 - Before each turn the model sees a screenshot of the current tab, and the crops `zoom` took since
   its last turn, as context the run never keeps, so only the current picture is ever in a request.
   Its pixel coordinates are viewport coordinates, which the pointer tools take. `vision: false`
-  leaves the pictures out, and `zoom` then refuses.
+  leaves the pictures out, and `zoom` then refuses. A queued crop is discarded if another tab
+  becomes current before the next turn, so its coordinates never describe that other tab.
 - An observation after an action begins with what followed it: a dialog and how the browser
   answered it, where the page went, a tab it opened and up to three changes its input caused,
   such as `"Full" became "Kept"`. A pointer tool's result says the same in `followed`.
@@ -126,6 +127,8 @@ pictures follow the thread as reference messages, labeled by turn, with each fra
 each crop's viewport origin. Retiring those pictures releases their bytes without rewriting
 earlier accounts. Without a screencast, each moment has one screenshot; with one, up to three
 frames. `onMoment` receives each captured moment once, for a consumer that records it.
+If the current page is lost or its moment has no usable picture, preparation fails with
+`AgentInputError` before another model call. A partial change record remains explicit in the moment.
 
 Yielded's native pruning and summarization can compact the accounts with the surrounding tool
 exchanges. The recent pictures remain available across compaction and never enter the summarizer.

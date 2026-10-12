@@ -1,5 +1,5 @@
 import { assert, it, layer } from "@effect/vitest";
-import { Duration, Effect, Fiber, Schedule, Stream } from "effect";
+import { Clock, Duration, Effect, Fiber, Schedule, Stream } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
@@ -292,6 +292,119 @@ const stage = (moving: "reels" | "counter", seconds: number) =>
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "Page.ready in the foreground",
   (it) => {
+    // bea3a16 compared only the newest frame at each look: motion and its return in between
+    // disappeared. Hold that look while real Chromium delivers both paints, then let it resume.
+    it.effect("counts foreground motion between looks and after deferred frame acceptance", () =>
+      Effect.gen(function* () {
+        const native = (yield* Browser).context.browser();
+
+        if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+        const context = yield* Effect.acquireRelease(
+          Effect.promise(() => native.newContext({ viewport: { width: 320, height: 180 } })),
+          (context) => Effect.promise(() => context.close()),
+        );
+
+        const clock = yield* Clock.Clock;
+        const entered = Promise.withResolvers<void>();
+        const resume = Promise.withResolvers<void>();
+        let held = false;
+
+        yield* Effect.addFinalizer(() => Effect.sync(() => resume.resolve()));
+
+        const browser = yield* makeBrowser(context, { id: "ready-pulse", provider: "test" }).pipe(
+          Effect.provideService(Clock.Clock, {
+            currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+            currentTimeMillis: clock.currentTimeMillis,
+            currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+            currentTimeNanos: clock.currentTimeNanos,
+            monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+            monotonicTimeNanos: clock.monotonicTimeNanos,
+            sleep: (duration) => {
+              if (Duration.toMillis(duration) !== 100 || held) return clock.sleep(duration);
+              held = true;
+              entered.resolve();
+
+              return Effect.promise(() => resume.promise);
+            },
+          }),
+        );
+
+        const page = yield* browser.newPage();
+
+        yield* show(page, '<canvas width="200" height="100"></canvas>');
+
+        const paint = (color: string) =>
+          Effect.gen(function* () {
+            const before = (yield* page.captureStats()).accepted;
+
+            yield* Effect.promise(() =>
+              page.playwright.evaluate((color) => {
+                const context = document.querySelector("canvas")!.getContext("2d")!;
+
+                context.fillStyle = color;
+                context.fillRect(0, 0, 200, 100);
+              }, color),
+            );
+            yield* page.captureStats().pipe(
+              Effect.repeat({
+                schedule: Schedule.spaced("5 millis"),
+                until: ({ accepted }) => accepted > before,
+              }),
+              Effect.timeout("5 seconds"),
+            );
+          });
+
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* paint("black");
+
+        const waiting = yield* page
+          .ready({ still: "foreground", quietMillis: 300, timeout: "5 seconds" })
+          .pipe(Effect.forkScoped);
+
+        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("5 seconds"));
+        yield* Effect.sleep("350 millis");
+        yield* paint("white");
+        yield* paint("black");
+        const returned = yield* browser.now;
+
+        resume.resolve();
+        yield* Fiber.join(waiting);
+        assert.isAtLeast((yield* browser.now) - returned, 300);
+
+        // A resize is accepted later when its size outlasts a screenshot. No new receipt wakes
+        // that acceptance: a poll between receipt and delivery must not consume the paint.
+        page.playwright.viewportSize = () => ({ width: 320, height: 180 });
+        const before = yield* page.captureStats();
+
+        const resizing = yield* page
+          .ready({ still: "foreground", quietMillis: 1500, timeout: "5 seconds" })
+          .pipe(Effect.forkScoped);
+
+        yield* Effect.sleep("150 millis");
+        yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 360 }));
+        yield* Effect.sleep("200 millis");
+        const heldFrames = yield* page.captureStats();
+
+        assert.isAbove(heldFrames.received, before.received);
+        assert.strictEqual(heldFrames.accepted, before.accepted);
+
+        const adopted = yield* page.captureStats().pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("5 millis"),
+            until: ({ accepted }) => accepted > before.accepted,
+          }),
+          Effect.timeout("5 seconds"),
+        );
+
+        const delivered = yield* browser.now;
+
+        assert.strictEqual(adopted.received, heldFrames.received);
+        yield* Fiber.join(resizing);
+        assert.isAtLeast((yield* browser.now) - delivered, 1500);
+      }),
+    );
+
     const clicked = (moving: "reels" | "counter", seconds: number) =>
       Effect.gen(function* () {
         const page = yield* blank;
