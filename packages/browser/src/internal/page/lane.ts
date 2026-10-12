@@ -17,6 +17,7 @@
 import { Context, Deferred, Duration, Effect, Exit, type Fiber, type Scope } from "effect";
 
 import { BrowserError, Busy } from "../../BrowserError.ts";
+import type { Gate } from "../input/gate.ts";
 
 export type Kind = "read" | "write";
 
@@ -128,6 +129,7 @@ export const make = (options: {
   readonly gone: (operation: string) => BrowserError;
   /** The page's scope, which shared reads run in. */
   readonly scope: Scope.Scope;
+  readonly inputGate?: Gate | undefined;
 }) => {
   const { now, actionTimeout } = options;
   let state = initial;
@@ -169,23 +171,30 @@ export const make = (options: {
           const ticket: Ticket = { id: ++tickets, kind };
           const askedAt = now();
 
+          if (kind === "write" && options.inputGate !== undefined)
+            yield* options.inputGate.check(operation);
+
           if ((yield* FailFast) && !admitsNow(state, kind)) return yield* busy(operation, askedAt);
           const admitted = Deferred.makeUnsafe<void>();
 
           admissions.set(ticket.id, admitted);
           apply({ _tag: "Ask", ticket });
 
+          const waiting = Deferred.await(admitted).pipe(
+            Effect.timeoutOrElse({
+              duration: wait,
+              orElse: () =>
+                Deferred.isDoneUnsafe(admitted)
+                  ? Effect.void
+                  : Effect.fail(busy(operation, askedAt, ticket.id)),
+            }),
+          );
+
           const given = yield* Effect.exit(
             restore(
-              Deferred.await(admitted).pipe(
-                Effect.timeoutOrElse({
-                  duration: wait,
-                  orElse: () =>
-                    Deferred.isDoneUnsafe(admitted)
-                      ? Effect.void
-                      : Effect.fail(busy(operation, askedAt, ticket.id)),
-                }),
-              ),
+              kind === "write" && options.inputGate !== undefined
+                ? Effect.raceFirst(waiting, options.inputGate.refused(operation))
+                : waiting,
             ),
           );
 
@@ -293,7 +302,8 @@ export const make = (options: {
     /** A turn alone, for an action: `wait` bounds the wait for it. */
     write: (operation: string, wait: Duration.Duration) => turn("write", operation, wait),
     /** A turn beside other reads, waited for within the action timeout. */
-    read: (operation: string) => turn("read", operation, actionTimeout),
+    read: (operation: string, wait: Duration.Duration = actionTimeout) =>
+      turn("read", operation, wait),
     shared,
   };
 };

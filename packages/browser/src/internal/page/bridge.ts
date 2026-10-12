@@ -90,7 +90,7 @@ const install = (
 ): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 18) return installed;
+  if (installed !== undefined && installed.version === 19) return installed;
   const named = makeNames();
   const walked = makeWalk(named);
   const placing = makeContext(named, walked);
@@ -105,10 +105,10 @@ const install = (
   const located = makeTargets(named, walked, placing);
   const guarded = makeGuard(named, located, makeEvidence(named, placing));
   const edited = makeEdit(named, guarded, placing);
-  const readiness = makeReady(walked, texts, kept);
+  const readiness = makeReady(walked, texts, kept, recorder);
 
   const api: PageApi = {
-    version: 18,
+    version: 19,
     snapshot: read.snapshot,
     find: subjected.find,
     until: makeExpectations(named, subjected).until,
@@ -246,7 +246,12 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     page.paging(operation).pipe(Effect.map(() => documents));
 
   /** What a frame that arrives now shows: its session, the page's current document and address. */
-  const frameTag = () => ({ session: page.session, document: documents, url });
+  const frameTag = () => ({
+    session: page.session,
+    connection: page.connection,
+    document: documents,
+    url,
+  });
 
   /** The document the main frame's latest commit of `loader` began, if this session counted it. */
   const documentOf = (loader: string) => loaders.get(loader);

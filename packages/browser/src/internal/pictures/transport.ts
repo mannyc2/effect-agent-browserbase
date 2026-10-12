@@ -43,6 +43,7 @@ export interface Transport {
   /** What a frame arriving now shows: its session, the document it followed and the address then. */
   readonly frameTag: () => {
     readonly session: string;
+    readonly connection: string;
     readonly document: number;
     readonly url: string;
   };
@@ -198,7 +199,7 @@ export const apart = (
             if (listening === on) listening = undefined;
           };
         },
-        frameTag: () => ({ session: page.session, ...tracked.tag() }),
+        frameTag: () => ({ session: page.session, connection: page.connection, ...tracked.tag() }),
       } satisfies Transport;
     }).pipe(Scope.provide(scope));
 

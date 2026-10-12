@@ -125,6 +125,7 @@ it.live(
 
           assert.isAbove(frames.length, 5);
           assert.isTrue(frames.every((frame) => frame.timing._tag === "BrowserPaint"));
+          assert.isTrue(frames.every((frame) => frame.connection === browser.connection));
           assert.isAtMost(stats.ackBacklog, 32);
           assert.isAtLeast(stats.received, stats.accepted);
           assert.isAtLeast(stats.accepted, frames.length);

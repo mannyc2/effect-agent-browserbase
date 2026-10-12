@@ -37,6 +37,13 @@ export class Busy extends Schema.TaggedError<Busy>()("Busy", {
   }
 }
 
+/** Input is withheld by a scoped suspension; nothing was dispatched. */
+export class Suspended extends Schema.TaggedError<Suspended>()("Suspended", {}) {
+  override get message() {
+    return "browser input is suspended";
+  }
+}
+
 /** The browser has as many pages open as `maxPages` allows, and none closed in time. */
 export class Limit extends Schema.TaggedError<Limit>()("Limit", {
   maxPages: Schema.Int,
@@ -158,6 +165,7 @@ export class Failed extends Schema.TaggedError<Failed>()("Failed", {
 export const Reason = Schema.Union([
   Timeout,
   Busy,
+  Suspended,
   Limit,
   StaleRef,
   NotFound,
@@ -207,6 +215,7 @@ export const consequence = ({ reason, dispatched }: BrowserError): Consequence =
         repeat,
       };
     case "Busy":
+    case "Suspended":
     case "Timeout":
     case "Failed":
     case "NavigationFailed":

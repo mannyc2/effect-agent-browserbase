@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Arbitrary, Duration, Effect, Exit, Layer, Schema } from "effect";
+import { Arbitrary, Duration, Effect, Exit, Fiber, Layer, Schema } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
@@ -296,10 +296,26 @@ describe("Plan.fromEvents", () => {
     const encoded = Schema.encodeSync(Plan.Plan)(plan);
 
     assert.deepStrictEqual(Schema.decodeSync(Plan.Plan)(encoded), plan);
-    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version: 2 })));
+    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version: 3 })));
     assert.isTrue(
       Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ steps: [{ id: "a", run: [] }] })),
     );
+  });
+
+  it("emits version 2 only for expected effects, refusing them inside a version 1 payload", () => {
+    const step = new Plan.Step({
+      action: "click",
+      url: "https://example.com/orders",
+      expect: { _tag: "Appeared", query: { text: "Order 42" }, durable: true },
+    });
+
+    const plan = Plan.Plan.new([step]);
+    const encoded = Schema.encodeSync(Plan.Plan)(plan);
+
+    assert.strictEqual(encoded.version, 2);
+    assert.deepStrictEqual(Schema.decodeSync(Plan.Plan)(encoded), plan);
+    assert.isTrue(Exit.isFailure(Schema.decodeExit(Plan.Plan)({ ...encoded, version: 1 })));
+    assert.strictEqual(Schema.encodeSync(Plan.Plan)(Plan.Plan.new([])).version, 1);
   });
 });
 
@@ -391,8 +407,18 @@ const expected = (operator: Operator, walk: Walk): string => {
   return "replayed";
 };
 
-const truthOf = (page: Page) =>
-  Effect.promise(() => page.playwright.evaluate(() => document.body.dataset["truth"] ?? ""));
+const truthOf = Effect.fnUntraced(function* (page: Page, arrival?: string) {
+  // Replay returns input receipts; this fixture's DOM oracle needs a parsed final document.
+  if (arrival !== undefined)
+    yield* Effect.promise(() =>
+      page.playwright.waitForURL(arrival, { waitUntil: "domcontentloaded", timeout: 5_000 }),
+    );
+  yield* page.ready({ timeout: "5 seconds" });
+
+  return yield* Effect.promise(() =>
+    page.playwright.evaluate(() => document.body.dataset["truth"] ?? ""),
+  );
+});
 
 layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
   excludeTestServices: true,
@@ -403,6 +429,71 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
 
     return yield* Effect.acquireRelease(browser.newPage(), (page) => Effect.ignore(page.close));
   });
+
+  it.effect("keeps action arrival addresses after a 16-event history loses its navigation", () =>
+    Effect.gen(function* () {
+      const site = yield* DriftSite;
+      const browser = yield* Chromium.open({ eventHistory: 16 });
+      const page = yield* browser.newPage(site.url("/news"));
+
+      for (let index = 0; index < 20; index++) yield* page.press("Shift");
+      const events = yield* page.recentEvents;
+      const steps = Plan.fromEvents(events).steps;
+
+      assert.isFalse(events.some((event) => event._tag === "Navigated"));
+      assert.isAbove(steps.length, 0);
+      assert.isTrue(steps.every((step) => step.url === site.url("/news")));
+    }),
+  );
+
+  // Regression at 0366e08: replay dropped a press's subject and sent keys to current focus.
+  it.effect("replays a targeted press on its recorded field despite different focus", () =>
+    Effect.gen(function* () {
+      const recording = yield* fresh;
+
+      const address = `data:text/html,${encodeURIComponent(`
+        <h1>Keyboard targets</h1><input aria-label="A" autofocus><input aria-label="B">
+        <script>document.addEventListener("keydown", event => {
+          if (event.key === "Enter") document.body.dataset.truth = event.target.ariaLabel;
+        });</script>`)}`;
+
+      yield* recording.goto(address);
+      yield* Effect.promise(() => recording.playwright.getByLabel("A").focus());
+      yield* recording.press("Enter", { on: yield* ref(recording, { name: "B" }) });
+      assert.strictEqual(yield* truthOf(recording), "B");
+      const plan = Plan.fromEvents(yield* recording.recentEvents);
+      const replayed = yield* fresh;
+
+      yield* Plan.replay(replayed, plan);
+      assert.strictEqual(yield* truthOf(replayed), "B");
+    }),
+  );
+
+  // Regression at 0366e08: typing into focus recorded no replace option, then replay selected all.
+  it.effect("replays focus typing as insertion while retaining the field's existing text", () =>
+    Effect.gen(function* () {
+      const recording = yield* fresh;
+      const address = `data:text/html,${encodeURIComponent('<input aria-label="Text" value="before ">')}`;
+
+      yield* recording.goto(address);
+      yield* Effect.promise(() => recording.playwright.getByLabel("Text").focus());
+      yield* Effect.promise(() => recording.playwright.getByLabel("Text").press("End"));
+      yield* recording.type("after");
+      assert.strictEqual(
+        yield* Effect.promise(() => recording.playwright.getByLabel("Text").inputValue()),
+        "before after",
+      );
+      const plan = Plan.fromEvents(yield* recording.recentEvents);
+      const replayed = yield* fresh;
+
+      yield* Plan.replay(replayed, plan, { inputs: { text: "after" } });
+      // Chromium focuses a fresh field at its start; replay preserves text, not an unrecorded caret.
+      assert.strictEqual(
+        yield* Effect.promise(() => replayed.playwright.getByLabel("Text").inputValue()),
+        "afterbefore ",
+      );
+    }),
+  );
 
   it.effect("says a walk that ends on another site drifted", () =>
     Effect.gen(function* () {
@@ -454,7 +545,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
 
       assert.deepStrictEqual(
         [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
-        [1, "InvalidRequest"],
+        [0, "InvalidRequest"],
       );
       assert.strictEqual(yield* unaddressed.url, "about:blank");
 
@@ -474,9 +565,65 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
 
       assert.deepStrictEqual(
         [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
-        [1, "InvalidRequest"],
+        [0, "InvalidRequest"],
       );
       assert.strictEqual(yield* page.url, "about:blank");
+    }),
+  );
+
+  it.effect("reads fixture truth after terminal input schedules a later navigation", () =>
+    Effect.gen(function* () {
+      const site = yield* DriftSite;
+      const recording = yield* fresh;
+
+      yield* site.drift({ operator: "none", seed: 1 });
+      yield* walks.buy(recording, site.url);
+      const plan = Plan.fromEvents(yield* recording.recentEvents);
+      const arrival = plan.steps.at(-1)?.url;
+
+      assert.strictEqual(arrival, site.url("/buy?coin=ETH"));
+      const page = yield* fresh;
+      const requested = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+
+      yield* Effect.addFinalizer(() => Effect.sync(() => released.resolve()));
+      yield* Effect.promise(() =>
+        page.playwright.route("**/defer-buy", async (route) => {
+          requested.resolve();
+          await released.promise;
+          await route.fulfill({ status: 200, body: "ok" });
+        }),
+      );
+      const final = plan.steps.length - 1;
+
+      for (let index = 0; index < final; index++) yield* Plan.take(page, plan, index);
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const link = document.querySelector<HTMLAnchorElement>('a[href="/buy?coin=ETH"]');
+
+          if (link === null) throw new Error("the buy link is missing");
+          link.onclick = (event) => {
+            event.preventDefault();
+            void fetch("/defer-buy").then(() => location.assign("/buy?coin=ETH"));
+          };
+        }),
+      );
+      const replaying = yield* Plan.take(page, plan, final).pipe(Effect.forkChild);
+
+      yield* Effect.promise(() => requested.promise);
+      const receipt = yield* Fiber.join(replaying);
+
+      assert.strictEqual(receipt.outcome, "taken");
+      const reading = yield* truthOf(page, arrival).pipe(Effect.forkChild);
+
+      yield* Effect.sleep("50 millis");
+      const before = reading.pollUnsafe();
+
+      released.resolve();
+      const truth = yield* Fiber.join(reading);
+
+      assert.isUndefined(before, "fixture truth must wait for the pending document");
+      assert.strictEqual(truth, "buy:ETH");
     }),
   );
 
@@ -517,7 +664,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
                   const started = performance.now();
 
                   outcomes[key] = yield* Plan.replay(page, plan, { inputs }).pipe(
-                    Effect.andThen(truthOf(page)),
+                    Effect.andThen(truthOf(page, plan.steps.at(-1)?.url)),
                     Effect.map((reached) =>
                       reached === truth ? "replayed" : `wrong place: ${reached}`,
                     ),

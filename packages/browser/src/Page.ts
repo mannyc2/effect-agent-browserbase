@@ -222,7 +222,9 @@ export interface WaitCondition {
 }
 
 export interface ReadyOptions {
-  /** How long the screen must also stay still, as for reels coming to rest. */
+  /** What must stay still during quietMillis: screen paint (default), or recorded content. */
+  readonly still?: "screen" | "content" | undefined;
+  /** How long the selected evidence must stay still; screen paint by default. */
   readonly quietMillis?: number | undefined;
   readonly timeout?: Duration.Input | undefined;
 }

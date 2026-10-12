@@ -28,9 +28,16 @@ export class Reopening extends Schema.TaggedClass<Reopening>()("Reopening", {}) 
 /** Open: `browser` gives this generation until the next one opens. */
 export class Open extends Schema.TaggedClass<Open>()("Open", {}) {}
 
-/** Lost: its connection dropped, or its provider ended its session, as `cause` says. */
+/** No longer serving; holds end at this host-monotonic deadline or when their owners let go. */
+export class Draining extends Schema.TaggedClass<Draining>()("Draining", {
+  reason: Schema.Literals(["rotated", "lost", "retired"]),
+  revokeAt: Schema.Finite,
+}) {}
+
+/** Lost through disconnection or a consumer's declaration that it is unusable. */
 export class Lost extends Schema.TaggedClass<Lost>()("Lost", {
-  cause: DisconnectCause,
+  cause: Schema.Union([DisconnectCause, Schema.Literal("declared")]),
+  detail: Schema.optional(Schema.String),
 }) {}
 
 /**
@@ -53,7 +60,16 @@ export class Closed extends Schema.TaggedClass<Closed>()("Closed", {
  */
 export class Kept extends Schema.TaggedClass<Kept>()("Kept", {}) {}
 
-export const GenerationState = Schema.Union([Opening, Reopening, Open, Lost, Down, Closed, Kept]);
+export const GenerationState = Schema.Union([
+  Opening,
+  Reopening,
+  Open,
+  Draining,
+  Lost,
+  Down,
+  Closed,
+  Kept,
+]);
 
 export type GenerationState = typeof GenerationState.Type;
 
@@ -63,169 +79,339 @@ export interface Live<A> {
   readonly value: A;
 }
 
-/**
- * At most one generation opens and at most one serves. Both do while a rotation makes the next
- * before it breaks the current, and `Down` keeps serving one that a rotation failed to replace.
- */
-export type State<A> =
-  | { readonly _tag: "Opening"; readonly number: number; readonly serving: Live<A> | undefined }
-  | { readonly _tag: "Open"; readonly serving: Live<A> }
+export interface Held<A, H> extends Live<A> {
+  readonly holds: ReadonlySet<H>;
+}
+
+/** Release ownership remains here until the provider and generation scope have finished. */
+export interface Drain<A, H> {
+  readonly _tag: "Draining" | "Releasing" | "Leaving";
+  readonly live: Held<A, H>;
+  readonly ending: Draining;
+}
+
+/** One serving generation, one shared acquisition, and prior generations still owned. */
+export type State<A, H = unknown> = (
+  | { readonly _tag: "Opening"; readonly number: number; readonly serving: Held<A, H> | undefined }
+  | { readonly _tag: "Open"; readonly serving: Held<A, H> }
   | {
       readonly _tag: "Down";
       readonly number: number;
       readonly detail: string;
       readonly cause: unknown;
-      readonly serving: Live<A> | undefined;
+      readonly serving: Held<A, H> | undefined;
     }
-  | { readonly _tag: "Retired" };
+  | { readonly _tag: "Retired" }
+) & {
+  readonly draining: ReadonlyMap<number, Drain<A, H>>;
+  /** Retain the first unconfirmed end, otherwise the latest settled end, without its resources. */
+  readonly released?: Released | undefined;
+};
 
-export type Input<A> =
+export type Input<A, H = unknown> =
   | { readonly _tag: "Opened"; readonly live: Live<A> }
-  /** The open of `number` failed for good. */
+  | { readonly _tag: "AttemptReleased"; readonly released: Released }
   | {
       readonly _tag: "Failed";
       readonly number: number;
       readonly detail: string;
       readonly cause: unknown;
     }
-  /** The open of `number` was stopped, as on retiring, before it opened. */
   | { readonly _tag: "Abandoned"; readonly number: number }
-  | { readonly _tag: "Lost"; readonly number: number; readonly cause: DisconnectCause }
-  /** A caller asks for the next generation, or the rotation time of `due` came. */
+  | {
+      readonly _tag: "Lost";
+      readonly number: number;
+      readonly cause: Lost["cause"];
+      readonly detail?: string | undefined;
+    }
   | { readonly _tag: "Rotate"; readonly due?: number | undefined }
   | { readonly _tag: "Retire" }
-  /** Stop as `Retire` does, but leave the serving generation running. */
   | { readonly _tag: "Keep" }
-  | { readonly _tag: "Released"; readonly number: number; readonly released: Released };
+  | {
+      readonly _tag: "Hold";
+      readonly number?: number | undefined;
+      readonly hold: H;
+    }
+  | { readonly _tag: "Let"; readonly number: number; readonly hold: H }
+  | { readonly _tag: "Revoke"; readonly number: number }
+  | {
+      readonly _tag: "Released";
+      readonly number: number;
+      readonly released?: Released | undefined;
+    };
 
 export type Command<A> =
-  /** Open `number`, after the release of `after` has finished. */
-  | { readonly _tag: "Open"; readonly number: number; readonly after: number | undefined }
-  /** Watch a generation that opened for its loss and its rotation time. */
+  | { readonly _tag: "Open"; readonly number: number }
   | { readonly _tag: "Watch"; readonly live: Live<A> }
-  | { readonly _tag: "Release"; readonly live: Live<A> }
-  /** Close its scope without asking its provider to release it. */
-  | { readonly _tag: "Leave"; readonly live: Live<A> };
+  /** Signal ending and arrange revocation. Repeated only when loss/retirement accelerates it. */
+  | { readonly _tag: "Drain"; readonly live: Live<A>; readonly ending: Draining }
+  /** Revoke/close holds, await their Let inputs, release the provider, then close its scope. */
+  | { readonly _tag: "Release"; readonly live: Live<A>; readonly ending: Draining }
+  | { readonly _tag: "Leave"; readonly live: Live<A>; readonly ending: Draining };
 
-export interface Step<A> {
-  readonly state: State<A>;
-  /** Generation numbers and their new states, to publish in this order. */
+export interface Step<A, H = unknown> {
+  readonly state: State<A, H>;
   readonly events: ReadonlyArray<readonly [number, GenerationState]>;
   readonly commands: ReadonlyArray<Command<A>>;
-  /** For `Rotate`, the generation to wait for, unless retired. */
   readonly reply?: number | undefined;
+  readonly borrowed?: Live<A> | undefined;
 }
 
-export const start = <A>(): Step<A> => ({
-  state: { _tag: "Opening", number: 1, serving: undefined },
+export const start = <A, H = unknown>(): Step<A, H> => ({
+  state: { _tag: "Opening", number: 1, serving: undefined, draining: new Map() },
   events: [[1, new Opening()]],
-  commands: [{ _tag: "Open", number: 1, after: undefined }],
+  commands: [{ _tag: "Open", number: 1 }],
 });
 
-const servingOf = <A>(state: State<A>) => (state._tag === "Retired" ? undefined : state.serving);
+const servingOf = <A, H>(state: State<A, H>) =>
+  state._tag === "Retired" ? undefined : state.serving;
 
-/** The state after `input`, with the events to publish and the commands to run. */
-export const transition = <A>(state: State<A>, input: Input<A>, exclusive: boolean): Step<A> => {
-  const release = (live: Live<A>): Command<A> => ({ _tag: "Release", live });
-  const stay: Step<A> = { state, events: [], commands: [] };
+/** The holds still owned for a generation, including one whose release has begun. */
+export const lookup = <A, H>(state: State<A, H>, number: number): Held<A, H> | undefined =>
+  servingOf(state)?.number === number ? servingOf(state) : state.draining.get(number)?.live;
 
-  /**
-   * Open `number`, ending `current` now if it `ends`; exclusive generations open only once its
-   * release has finished. Otherwise `current` serves until the next one opens.
-   */
-  const next = (
-    number: number,
-    reopen: boolean,
-    current: Live<A> | undefined,
-    ends: boolean,
-  ): Step<A> => ({
-    state: { _tag: "Opening", number, serving: ends ? undefined : current },
-    events: [[number, reopen ? new Reopening() : new Opening()]],
-    commands: [
-      ...(ends && current !== undefined ? [release(current)] : []),
-      { _tag: "Open", number, after: ends && exclusive ? current?.number : undefined },
-    ],
+/** A transition's local result builder; input state and its collections remain immutable. */
+interface Change<A, H> {
+  readonly now: number;
+  readonly handover: number;
+  readonly exclusive: boolean;
+  state: State<A, H>;
+  events: Array<readonly [number, GenerationState]>;
+  commands: Array<Command<A>>;
+  reply?: number;
+  borrowed?: Live<A>;
+}
+
+/** The sole writer of a drain's ending and phase; each release command is emitted once. */
+const draining = <A, H>(change: Change<A, H>, drain: Drain<A, H>) => {
+  const before = change.state.draining.get(drain.live.number);
+  const { live, ending, _tag } = drain;
+
+  change.state = {
+    ...change.state,
+    draining: new Map(change.state.draining).set(live.number, drain),
+  };
+  if (before?.ending !== ending) {
+    change.events.push([live.number, ending]);
+    change.commands.push({ _tag: "Drain", live, ending });
+  }
+  if (_tag !== "Draining" && before?._tag !== _tag)
+    change.commands.push({ _tag: _tag === "Leaving" ? "Leave" : "Release", live, ending });
+};
+
+const end = <A, H>(
+  change: Change<A, H>,
+  live: Held<A, H>,
+  reason: Draining["reason"],
+  keep = false,
+) => {
+  const ending = new Draining({
+    reason,
+    revokeAt: change.now + (reason === "rotated" ? change.handover : 0),
   });
 
-  switch (input._tag) {
-    case "Opened": {
-      const { live } = input;
+  draining(change, {
+    live,
+    ending,
+    _tag: keep
+      ? "Leaving"
+      : live.holds.size === 0 || ending.revokeAt <= change.now
+        ? "Releasing"
+        : "Draining",
+  });
+};
 
-      // A generation nobody waits for any more, as after `Retire`, is released at once.
-      if (state._tag !== "Opening" || state.number !== live.number)
-        return { ...stay, commands: [release(live)] };
+const revoke = <A, H>(change: Change<A, H>, number: number, reason?: "lost" | "retired") => {
+  const drain = change.state.draining.get(number);
 
-      return {
-        state: { _tag: "Open", serving: live },
-        events: [[live.number, new Open()]],
-        commands: [
-          { _tag: "Watch", live },
-          ...(state.serving === undefined ? [] : [release(state.serving)]),
-        ],
-      };
-    }
-    case "Failed": {
-      const { number, detail, cause } = input;
-      const events = [[number, new Down({ detail, cause })] as const];
+  if (drain?._tag !== "Draining" || (reason === undefined && change.now < drain.ending.revokeAt))
+    return;
+  draining(change, {
+    ...drain,
+    _tag: "Releasing",
+    ending: reason === undefined ? drain.ending : new Draining({ reason, revokeAt: change.now }),
+  });
+};
 
-      if (state._tag !== "Opening" || state.number !== input.number) return { ...stay, events };
+const holds = <A, H>(
+  change: Change<A, H>,
+  input: Extract<Input<A, H>, { readonly _tag: "Hold" | "Let" }>,
+) => {
+  const number = input.number ?? servingOf(change.state)?.number;
+  const live = number === undefined ? undefined : lookup(change.state, number);
 
-      return {
-        state: { _tag: "Down", number, detail, cause, serving: state.serving },
-        events,
-        commands: [],
-      };
-    }
-    case "Abandoned":
-      return { ...stay, events: [[input.number, new Closed({})]] };
-    case "Released":
-      return { ...stay, events: [[input.number, new Closed({ released: input.released })]] };
-    case "Lost": {
-      const lost = servingOf(state);
+  if (live === undefined) return;
+  const drain = change.state.draining.get(live.number);
 
-      if (state._tag === "Retired" || lost?.number !== input.number) return stay;
-      const events = [[lost.number, new Lost({ cause: input.cause })] as const];
+  if (
+    input._tag === "Hold" &&
+    drain !== undefined &&
+    (drain._tag !== "Draining" || change.now >= drain.ending.revokeAt)
+  )
+    return;
+  if (live.holds.has(input.hold) === (input._tag === "Hold")) return;
+  const holds = new Set(live.holds);
 
-      // A rotation already opening the next generation carries on without the lost one.
-      if (state._tag === "Opening")
-        return { state: { ...state, serving: undefined }, events, commands: [release(lost)] };
+  if (input._tag === "Hold") {
+    holds.add(input.hold);
+    change.borrowed = live;
+  } else holds.delete(input.hold);
+  const held = { ...live, holds };
 
-      const reopened = next(
-        (state._tag === "Open" ? lost.number : state.number) + 1,
-        true,
-        lost,
-        true,
-      );
+  if (drain !== undefined)
+    draining(change, {
+      ...drain,
+      live: held,
+      _tag: drain._tag === "Draining" && holds.size === 0 ? "Releasing" : drain._tag,
+    });
+  else if (change.state._tag !== "Retired") change.state = { ...change.state, serving: held };
+};
 
-      return { ...reopened, events: [...events, ...reopened.events] };
-    }
-    case "Rotate": {
-      if (state._tag === "Retired") return stay;
-      // A rotation time comes only for the generation still serving with nothing opening.
-      if (input.due !== undefined && (state._tag !== "Open" || state.serving.number !== input.due))
-        return stay;
-      if (state._tag === "Opening") return { ...stay, reply: state.number };
-      const number = (state._tag === "Open" ? state.serving.number : state.number) + 1;
+const next = <A, H>(change: Change<A, H>, number: number, reopen: boolean) => {
+  const { exclusive } = change;
+  const current = servingOf(change.state);
 
-      return { ...next(number, false, state.serving, exclusive), reply: number };
-    }
-    case "Retire":
-    case "Keep": {
-      const current = servingOf(state);
+  if (current !== undefined && (reopen || exclusive))
+    end(change, current, reopen ? "lost" : "rotated");
+  change.state = {
+    _tag: "Opening",
+    number,
+    serving: reopen || exclusive ? undefined : current,
+    draining: change.state.draining,
+    released: change.state.released,
+  };
+  change.events.push([number, reopen ? new Reopening() : new Opening()]);
+  change.commands.push({ _tag: "Open", number });
+};
 
-      if (state._tag === "Retired") return stay;
-      if (current === undefined) return { state: { _tag: "Retired" }, events: [], commands: [] };
+const lost = <A, H>(
+  change: Change<A, H>,
+  input: Extract<Input<A, H>, { readonly _tag: "Lost" }>,
+) => {
+  const { state } = change;
+  const drain = state.draining.get(input.number);
+  const current = servingOf(state);
 
-      return input._tag === "Retire"
-        ? { state: { _tag: "Retired" }, events: [], commands: [release(current)] }
-        : {
-            state: { _tag: "Retired" },
-            events: [[current.number, new Kept()]],
-            commands: [{ _tag: "Leave", live: current }],
-          };
+  if (input.cause === "declared" && current?.number !== input.number) return;
+  if (drain?._tag === "Draining") {
+    change.events.push([input.number, new Lost({ cause: input.cause })]);
+    revoke(change, input.number, "lost");
+  } else if (state._tag !== "Retired" && current?.number === input.number) {
+    change.events.push([input.number, new Lost({ cause: input.cause, detail: input.detail })]);
+    if (state._tag !== "Opening")
+      next(change, (state._tag === "Open" ? current.number : state.number) + 1, true);
+    else {
+      change.state = { ...state, serving: undefined };
+      end(change, current, "lost");
     }
   }
 };
+
+/** Pure admission and lifecycle changes. A rejected hold preserves state identity. */
+export const transition = <A, H = unknown>(
+  state: State<A, H>,
+  input: Input<A, H>,
+  exclusive: boolean,
+  now = 0,
+  handover = 30_000,
+): Step<A, H> => {
+  const change: Change<A, H> = {
+    state,
+    events: [],
+    commands: [],
+    exclusive,
+    handover,
+    now,
+  };
+
+  switch (input._tag) {
+    case "Hold":
+    case "Let":
+      holds(change, input);
+      break;
+    case "Revoke":
+      revoke(change, input.number);
+      break;
+    case "Opened": {
+      const live = { ...input.live, holds: new Set<H>() };
+
+      if (lookup(state, live.number) !== undefined) break;
+      if (state._tag !== "Opening" || state.number !== live.number) end(change, live, "retired");
+      else {
+        change.events.push([live.number, new Open()]);
+        change.commands.push({ _tag: "Watch", live });
+        if (state.serving !== undefined) end(change, state.serving, "rotated");
+        change.state = {
+          _tag: "Open",
+          serving: live,
+          draining: change.state.draining,
+          released: change.state.released,
+        };
+      }
+      break;
+    }
+    case "Failed": {
+      const { number, detail, cause } = input;
+
+      if (state._tag === "Opening" && state.number === number)
+        change.state = { ...state, _tag: "Down", detail, cause };
+      change.events.push([number, new Down({ detail, cause })]);
+      break;
+    }
+    case "Abandoned":
+      change.events.push([input.number, new Closed({})]);
+      break;
+    case "AttemptReleased":
+      change.state = { ...state, released: combine(state.released, input.released) };
+      break;
+    case "Released": {
+      const drain = state.draining.get(input.number);
+
+      if (drain === undefined || drain._tag === "Draining" || drain.live.holds.size > 0) break;
+      const draining = new Map(state.draining);
+
+      draining.delete(input.number);
+      change.state = { ...state, draining, released: combine(state.released, input.released) };
+      change.events.push([
+        input.number,
+        input.released === undefined ? new Kept() : new Closed({ released: input.released }),
+      ]);
+      break;
+    }
+    case "Lost":
+      lost(change, input);
+      break;
+    case "Rotate": {
+      if (
+        state._tag === "Retired" ||
+        (input.due !== undefined && (state._tag !== "Open" || state.serving.number !== input.due))
+      )
+        break;
+      change.reply =
+        state._tag === "Opening"
+          ? state.number
+          : (state._tag === "Open" ? state.serving.number : state.number) + 1;
+      if (state._tag !== "Opening") next(change, change.reply, false);
+      break;
+    }
+    case "Keep":
+    case "Retire":
+      if (state._tag === "Retired") break;
+      for (const number of state.draining.keys()) revoke(change, number, "retired");
+      if (state.serving !== undefined) end(change, state.serving, "retired", input._tag === "Keep");
+      change.state = {
+        _tag: "Retired",
+        draining: change.state.draining,
+        released: change.state.released,
+      };
+  }
+
+  return change;
+};
+
+/** Later confirmations cannot establish that an earlier unconfirmed session ended. */
+export const combine = (before: Released | undefined, next: Released | undefined) =>
+  before?._tag === "Unconfirmed" ? before : (next ?? before);
 
 export type Resolution<A> =
   | { readonly _tag: "Serve"; readonly live: Live<A> }
@@ -236,30 +422,20 @@ export type Resolution<A> =
       readonly cause?: unknown;
     };
 
-/**
- * What a caller waiting for generation `target`, or for any when it is undefined, gets in
- * `state`; undefined while it should go on waiting.
- */
-export const resolve = <A>(
-  state: State<A>,
+/** An unheld browser resolution; use obtains its hold atomically through Hold instead. */
+export const resolve = <A, H>(
+  state: State<A, H>,
   target: number | undefined,
 ): Resolution<A> | undefined => {
-  const serve = (live: Live<A>) => ({ _tag: "Serve" as const, live });
+  if (state._tag === "Retired")
+    return { _tag: "Unavailable", reason: "retired", detail: "the supervisor was retired" };
+  if (
+    state.serving !== undefined &&
+    (target === undefined || (state._tag === "Open" && state.serving.number >= target))
+  )
+    return { _tag: "Serve", live: state.serving };
+  if (state._tag === "Down" && (target === undefined || state.number >= target))
+    return { _tag: "Unavailable", reason: "down", detail: state.detail, cause: state.cause };
 
-  switch (state._tag) {
-    case "Retired":
-      return { _tag: "Unavailable", reason: "retired", detail: "the supervisor was retired" };
-    case "Open":
-      return target === undefined || state.serving.number >= target
-        ? serve(state.serving)
-        : undefined;
-    case "Opening":
-      return target === undefined && state.serving !== undefined ? serve(state.serving) : undefined;
-    case "Down":
-      if (target === undefined && state.serving !== undefined) return serve(state.serving);
-
-      return target === undefined || state.number >= target
-        ? { _tag: "Unavailable", reason: "down", detail: state.detail, cause: state.cause }
-        : undefined;
-  }
+  return undefined;
 };

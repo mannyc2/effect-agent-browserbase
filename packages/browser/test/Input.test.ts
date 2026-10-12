@@ -223,6 +223,7 @@ const setup = Effect.fnUntraced(function* (
   const plain = yield* PageImpl.make({
     id: targetInfo.targetId,
     session: "input-test",
+    connection: "fixture-connection",
     playwright,
     cdp,
     clock,

@@ -36,6 +36,7 @@ import {
   Random,
   Redacted,
   Schedule,
+  Schema,
   Scope,
 } from "effect";
 import * as Browser from "effect-browser/Browser";
@@ -50,7 +51,7 @@ import {
   type SessionOptions,
 } from "./BrowserbaseClient.ts";
 import { BrowserbaseError, Decode, InvalidRequest, isTransient } from "./BrowserbaseError.ts";
-import { ContextHeld, ContextLease } from "./ContextLease.ts";
+import { ContextHeld, ContextLease, ContextRefused } from "./ContextLease.ts";
 import * as CaptureConnection from "./internal/captureConnection.ts";
 
 export interface Options extends Browser.Options {
@@ -136,7 +137,7 @@ const confirm = (client: Service, id: string, settle: Duration.Duration | undefi
 
     if (!confirmed)
       return new Supervisor.Unconfirmed({
-        detail: `${last} ${Duration.format(releaseDeadline)} after its release`,
+        detail: `Session ${id}: ${last} ${Duration.format(releaseDeadline)} after its release`,
       });
     if (settle !== undefined) yield* Effect.sleep(settle);
 
@@ -428,6 +429,11 @@ const adoptable = Effect.fnUntraced(function* (
 const start = Effect.fnUntraced(function* (options: Options, keeping: Keeping | undefined) {
   const client = yield* BrowserbaseClient;
   const lease = yield* ContextLease;
+  const reporting = yield* Effect.serviceOption(Supervisor.Releasing);
+
+  const report = (outcome: Supervisor.Released) =>
+    Option.isSome(reporting) ? reporting.value.released(outcome) : Effect.void;
+
   const context = options.session?.browserSettings?.context;
   const persisting = context?.persist === true ? context.id : undefined;
   const local = yield* Scope.fork(yield* Effect.scope);
@@ -495,13 +501,18 @@ const start = Effect.fnUntraced(function* (options: Options, keeping: Keeping | 
         return yield* ending(session);
       }),
       ({ release, leave }, exit) =>
-        keeping !== undefined && Exit.isSuccess(exit) ? leave : Effect.asVoid(release),
+        keeping !== undefined && Exit.isSuccess(exit)
+          ? leave
+          : release.pipe(
+              Effect.flatMap((outcome) => (Exit.isFailure(exit) ? report(outcome) : Effect.void)),
+            ),
     ).pipe(
       // A session nobody can see bills until its timeout, and one that saves to the context would
       // write beside the next writer: end it, found by its create's own label.
       Effect.tapError((error) =>
         adopted === undefined && mayHaveCreated(error)
           ? endOrphan(client, own, writing && settle).pipe(
+              Effect.tap(report),
               Effect.flatMap((outcome) => writing?.lost(outcome) ?? Effect.void),
             )
           : Effect.void,
@@ -627,12 +638,16 @@ export const verifyContext = Effect.fn("Browserbase.verifyContext")(function* <A
   return yield* check(browser);
 }, Effect.scoped);
 
-export interface SuperviseOptions
+export interface SuperviseOptions<A = Session, E = never, R = never>
   extends
     Options,
     Pick<
-      Supervisor.Options<BrowserError | BrowserbaseError | ContextHeld, BrowserbaseClient>,
-      "reopen" | "rotateBefore" | "waitTimeout"
+      Supervisor.Options<
+        BrowserError | BrowserbaseError | ContextHeld | ContextRefused | E,
+        Scope.Scope | BrowserbaseClient | ContextLease | R,
+        A
+      >,
+      "reopen" | "rotateBefore" | "waitTimeout" | "handover" | "admit" | "definite"
     > {
   /**
    * Keep the session past the supervisor's scope, under this name: 1 to 64 letters, digits, `_`,
@@ -643,14 +658,17 @@ export interface SuperviseOptions
    * kept session bills until it is adopted and released, or until its timeout ends it.
    */
   readonly keep?: string | undefined;
+  /** Build the generation's value in its scope. Without a builder, its value is its Session. */
+  readonly build?: ((hosted: Hosted) => Effect.Effect<A, E, R>) | undefined;
 }
 
 /**
- * Browserbase refused the request: no new try mends a refused key, request or id. A context held
- * is not among them, since each try ends its sessions again.
+ * No new try mends a refused key, request, id or context policy. A context held temporarily is
+ * not among them, since each try can take its lease and end its sessions again.
  */
-const refused = (error: BrowserError | BrowserbaseError | ContextHeld) =>
-  error._tag === "BrowserbaseError" && !isTransient(error) && error.reason._tag !== "Decode";
+const refused = (error: unknown) =>
+  Schema.is(ContextRefused)(error) ||
+  (Schema.is(BrowserbaseError)(error) && !isTransient(error) && error.reason._tag !== "Decode");
 
 /**
  * Keep Browserbase sessions open as `Supervisor` generations, each a new session made from
@@ -659,37 +677,62 @@ const refused = (error: BrowserError | BrowserbaseError | ContextHeld) =>
  * refused, as for a bad key or an invalid request, is `Down` at once. With `keep`, closing the
  * scope leaves the current session running for the next `supervise` under that name to adopt.
  */
-export const supervise = (options: SuperviseOptions = {}) =>
-  Effect.suspend(() => {
+export function supervise<A, E, R>(
+  options: SuperviseOptions<A, E, R> & {
+    readonly build: (hosted: Hosted) => Effect.Effect<A, E, R>;
+  },
+): Effect.Effect<
+  Supervisor.Supervisor<A>,
+  never,
+  Scope.Scope | BrowserbaseClient | ContextLease | Exclude<R, Scope.Scope>
+>;
+
+export function supervise<A = Session, E = never, R = never>(
+  options?: SuperviseOptions<A, E, R>,
+): Effect.Effect<
+  Supervisor.Supervisor<A | Session>,
+  never,
+  Scope.Scope | BrowserbaseClient | ContextLease | Exclude<R, Scope.Scope>
+>;
+
+export function supervise<A = Session, E = never, R = never>(
+  options: SuperviseOptions<A, E, R> = {},
+) {
+  return Effect.suspend(() => {
     const { keep } = options;
     // Only the first generation adopts a kept session: a later one would find its own.
     let opened = false;
 
     return Supervisor.make({
-      open: Effect.suspend(() =>
-        start(options, keep === undefined ? undefined : { name: keep, adopt: !opened }),
-      ).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            opened = true;
-          }),
-        ),
-        Effect.withSpan("Browserbase.open", {}, { captureStackTrace: false }),
-      ),
+      open: Effect.gen(function* () {
+        const hosted = yield* start(
+          options,
+          keep === undefined ? undefined : { name: keep, adopt: !opened },
+        );
+
+        opened = true;
+        // The generation owns resources acquired by build, including on failure or cancellation.
+        const value = options.build === undefined ? hosted.session : yield* options.build(hosted);
+
+        return { ...hosted, value };
+      }).pipe(Effect.withSpan("Browserbase.open", {}, { captureStackTrace: false })),
       exclusive: options.session?.browserSettings?.context?.persist === true,
       keep: keep !== undefined,
       reopen: options.reopen,
-      definite: refused,
+      admit: options.admit,
+      definite: (error) => refused(error) || options.definite?.(error) === true,
       rotateBefore: options.rotateBefore,
       waitTimeout: options.waitTimeout,
+      handover: options.handover,
     });
   });
+}
 
 export const layer = (
   options: Options = {},
 ): Layer.Layer<
   Browser.Browser,
-  BrowserError | BrowserbaseError | ContextHeld,
+  BrowserError | BrowserbaseError | ContextHeld | ContextRefused,
   BrowserbaseClient | ContextLease
 > =>
   Layer.effect(

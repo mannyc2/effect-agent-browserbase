@@ -7,6 +7,7 @@ import * as Chromium from "../src/Chromium.ts";
 import type { Frame } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
 import * as Presentation from "../src/Presentation.ts";
+import * as Supervisor from "../src/Supervisor.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 
 const refOf = (text: string, role: string, name: string) =>
@@ -156,6 +157,51 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.strictEqual(later.frames[0]?.hostTime, 7000);
       }),
   );
+  it.effect("generation events and frames retain one host clock across wall-clock changes", () =>
+    Effect.gen(function* () {
+      const live = yield* Clock.Clock;
+      const time = { wall: 1_900_000_000_000, monotonic: 5000 };
+      const clock = controlledClock(live, time);
+      const states: Array<Supervisor.Generation> = [];
+
+      const sessions = yield* Supervisor.make({
+        open: setup(clock).pipe(Effect.map(({ browser, page }) => ({ browser, value: page }))),
+      }).pipe(Effect.provideService(Clock.Clock, clock));
+
+      yield* sessions.states.pipe(
+        Stream.runForEach((event) => Effect.sync(() => void states.push(event))),
+        Effect.forkScoped,
+      );
+      const browser = yield* sessions.browser;
+      const page = yield* browser.firstPage;
+
+      yield* page.goto((yield* Site).url("/form"));
+      const frame = yield* page.frame();
+
+      yield* Effect.yieldNow;
+      const opened = states.find((event) => event.state._tag === "Open");
+
+      assert.isDefined(opened);
+      assert.strictEqual(opened?.hostTime, frame.hostTime);
+      assert.strictEqual(opened?.at, time.wall);
+      assert.strictEqual(frame.connection, browser.connection);
+      time.wall -= 3_600_000;
+      time.monotonic = 5500;
+      const rotated = yield* sessions.rotate.pipe(Effect.provide(TestClock.layer()));
+      const after = yield* (yield* rotated.firstPage).frame();
+
+      yield* Effect.yieldNow;
+      const next = states.find((event) => event.number === 2 && event.state._tag === "Open");
+
+      assert.isDefined(next);
+      assert.strictEqual(next?.hostTime, after.hostTime);
+      assert.strictEqual(next?.hostTime, 5500);
+      assert.strictEqual(next?.at, time.wall);
+      assert.notStrictEqual(after.connection, frame.connection);
+      assert.strictEqual(after.connection, rotated.connection);
+    }),
+  );
+
   // A capture on air runs for hours, so its frames must not keep the estimate it started with.
   it.effect("times a running capture's later frames by the browser's newest clock estimate", () =>
     Effect.gen(function* () {

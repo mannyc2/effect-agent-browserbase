@@ -7,18 +7,20 @@
  * as a named input slot, never the text itself. A navigation to an address whose credentials the
  * events withheld is an input slot too, so replay goes where the caller says, or nowhere, and
  * never to the address without them. `replay` takes the steps in turn. Before a step
- * that acts on the page, it waits for `Page.ready`; then it finds the one element the step's
+ * except an opening navigate, back or reload, it waits for `Page.ready`; then it finds the element its
  * subject names, by role and name among those that repeat all its recorded context, and acts on
  * it. Text typed into focus was typed into the focused field, which replay finds the same way, and
  * text typed into a secret field goes into nothing else. An element step never falls back to
  * coordinates, and a step recorded at a point acts there only while the element found for it still
- * covers that point. Replay stops at the first step it cannot take and says why: `Missing`,
- * `Ambiguous`, `Drifted`, or the step's own `BrowserError`. Nothing is replayed automatically, and
- * a plan of another version, such as one 0.2 stored, does not decode.
+ * covers that point. `take` and `replay` return receipts; failure preserves a stopping point and
+ * earlier receipts. Unknown consequential input is never resent. Only a positive durable read-back
+ * can reconcile it; restoration follows the same rule. The consumer journals begun steps before
+ * calling, treating interruption or a missing receipt as unknown. Plain recordings use version 1;
+ * authored expected effects use version 2. Old 0.2 plans and unknown versions do not decode.
  *
  * @since 0.3.0
  */
-import { Duration, Effect, Schedule, Schema } from "effect";
+import { Duration, Effect, Exit, Option, Schedule, Schema } from "effect";
 
 import { BrowserError, InvalidRequest } from "./BrowserError.ts";
 import {
@@ -58,10 +60,47 @@ export const StepAction = Schema.Literals([
 
 export type StepAction = typeof StepAction.Type;
 
+const Query = Schema.Struct({
+  role: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+  text: Schema.optional(Schema.String),
+});
+
+/**
+ * What a step leaves. `durable` asserts an author-chosen, lasting read-back of this operation,
+ * such as its uniquely named saved receipt or exact operation URL. Only Appeared and an exact
+ * Navigated URL allow it; a toast, absence or relative navigation cannot establish recovery.
+ * Relative navigation measures observed change from dispatch, without asserting causality.
+ */
+export const Expected = Schema.Union([
+  Schema.TaggedStruct("Checked", { checked: Schema.Boolean }),
+  Schema.TaggedStruct("Appeared", {
+    query: Query,
+    durable: Schema.optional(Schema.Literal(true)),
+  }),
+  Schema.TaggedStruct("Gone", {
+    query: Query,
+    durable: Schema.optional(Schema.Never),
+  }),
+  Schema.TaggedStruct("Navigated", {
+    url: Schema.String,
+    durable: Schema.optional(Schema.Literal(true)),
+  }),
+  Schema.TaggedStruct("Navigated", {
+    url: Schema.optional(Schema.Never),
+    durable: Schema.optional(Schema.Never),
+  }),
+]);
+
+export type Expected = typeof Expected.Type;
+
 /** One recorded step: the action, what it acted on, and what else it was asked. */
 export class Step extends Schema.Class<Step>("effect-browser/Plan/Step")({
   action: StepAction,
-  /** Where the page was once the step was done, as recorded; empty when unknown. */
+  /**
+   * The ending address, or a later recorded navigation before the next action began. Empty when
+   * unknown; a delayed navigation can be stronger arrival evidence than the action's ending URL.
+   */
   url: Schema.String,
   /** A navigation's requested address, or the keys a press pressed. */
   target: Schema.optional(Schema.String),
@@ -81,23 +120,66 @@ export class Step extends Schema.Class<Step>("effect-browser/Plan/Step")({
   /** The slot's text went into a secret field, so replay types it into nothing else. */
   secret: Schema.optional(Schema.Literal(true)),
   options: Schema.optional(ActionOptions),
+  expect: Schema.optional(Expected),
 }) {}
 
-export class Plan extends Schema.Class<Plan>("effect-browser/Plan")({
-  version: Schema.Literal(1),
+const PlanData = Schema.Struct({
+  version: Schema.Literals([1, 2]),
   steps: Schema.Array(Step),
-}) {
+}).check(
+  Schema.makeFilter((plan) =>
+    plan.version === (plan.steps.some((step) => step.expect !== undefined) ? 2 : 1)
+      ? undefined
+      : "only plans with expected effects use version 2",
+  ),
+);
+
+export class Plan extends Schema.Class<Plan>("effect-browser/Plan")(PlanData) {
+  /** Choose the encoding version from the steps; simple recordings remain version 1. */
+  static new(steps: ReadonlyArray<Step>): Plan {
+    return new Plan({ version: steps.some((step) => step.expect !== undefined) ? 2 : 1, steps });
+  }
+
   /** The input slots its steps type, in order; replay needs text for each. */
   get inputs(): ReadonlyArray<string> {
     return this.steps.flatMap((step) => (step.input === undefined ? [] : [step.input]));
   }
 }
 
-/** Where replay stopped, counting steps from 0, and why. */
+/** One completed step, on the page's host clock. `verified` means its expected effect was seen. */
+export class Receipt extends Schema.Class<Receipt>("effect-browser/Plan/Receipt")({
+  step: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  outcome: Schema.Literals(["taken", "verified", "skipped"]),
+  startedAt: Schema.Finite,
+  at: Schema.Finite,
+}) {}
+
+/** Durable stopping data. A begun step without a receipt must be restored as `unknown`. */
+export class Stopped extends Schema.Class<Stopped>("effect-browser/Plan/Stopped")({
+  step: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  input: Schema.Literals(["unsent", "unknown"]),
+}) {}
+
+/** Repeating this step could repeat an unresolved effect; the consumer must reconcile it. */
+export class Uncertain extends Schema.TaggedError<Uncertain>()("Uncertain", {
+  detail: Schema.String,
+}) {
+  override get message() {
+    return this.detail;
+  }
+}
+
+/** Where replay stopped, counting steps from 0, why, and the steps that completed before it. */
 export class ReplayError extends Schema.TaggedError<ReplayError>()("ReplayError", {
   step: Schema.Int,
-  reason: Schema.Union([Missing, Ambiguous, Drifted, BrowserError]),
+  reason: Schema.Union([Missing, Ambiguous, Drifted, BrowserError, Uncertain]),
+  input: Schema.Literals(["unsent", "unknown"]),
+  receipts: Schema.Array(Receipt),
 }) {
+  get stopped(): Stopped {
+    return new Stopped({ step: this.step, input: this.input });
+  }
+
   override get message() {
     return `step ${this.step} failed: ${this.reason.message}`;
   }
@@ -152,11 +234,13 @@ export const fromEvents = (events: Iterable<BrowserEvent>): Plan => {
     steps: steps.map((action, index) => {
       const drag = action.name === "drag" ? (action.target ?? "").split(" -> ") : undefined;
       const point = pointIn(drag === undefined ? action.target : drag[0]);
+      const until = steps[index + 1]?.startedAt ?? Number.POSITIVE_INFINITY;
+      const arrival = moves.findLast((move) => move.at > action.at && move.at <= until);
 
       // Only a navigation and a press keep their target: an address, or keys.
       return new Step({
         action: action.name,
-        url: before(steps[index + 1]?.startedAt ?? Number.POSITIVE_INFINITY),
+        url: arrival?.url ?? action.url ?? before(until),
         target: action.name === "navigate" || action.name === "press" ? action.target : undefined,
         subject: action.subject,
         to: action.to,
@@ -239,7 +323,7 @@ const aim = (page: Page, subject: Subject | undefined, point?: Point, recorded?:
   );
 };
 
-const take = (
+const dispatch = (
   page: Page,
   step: Step,
   text: string,
@@ -254,7 +338,11 @@ const take = (
     case "reload":
       return page.reload;
     case "press":
-      return page.press(step.target ?? "", options);
+      return step.subject === undefined
+        ? page.press(step.target ?? "", options)
+        : Effect.flatMap(locate(page, step.subject), ({ ref }) =>
+            page.press(step.target ?? "", { ...options, on: ref }),
+          );
     case "click":
       return aim(page, step.subject, step.point, step.box).pipe(
         Effect.flatMap((at) => page.click(at, options)),
@@ -292,58 +380,295 @@ const take = (
   }
 };
 
-export interface ReplayOptions {
-  /** How each step waits for the page first, as `Page.ready` takes it, or false not to wait. */
+export interface TakeOptions {
+  /** How each step waits first, except an opening navigation, or false. No final-step wait. */
   readonly settle?: ReadyOptions | false | undefined;
-  /** The text for each of the plan's input slots. */
   readonly inputs?: Readonly<Record<string, string>> | undefined;
+  /**
+   * Bound for recorded arrival and expected effect, each. Defaults to 5 seconds. Zero makes one
+   * read without polling; that read retains the page operation's timeout.
+   */
+  readonly arrival?: Duration.Input | undefined;
 }
 
-/** Take a plan's steps on a page, in order, stopping at the first that cannot be taken. */
-export const replay = (page: Page, plan: Plan, options: ReplayOptions = {}) =>
-  Effect.gen(function* () {
-    const inputs = options.inputs ?? {};
-    const settle = options.settle === false ? Effect.void : page.ready(options.settle);
+export interface ReplayOptions extends TakeOptions {
+  readonly from?: number | Stopped | undefined;
+}
 
-    const at =
-      (step: number) =>
-      <A>(effect: Effect.Effect<A, Missing | Ambiguous | Drifted | BrowserError>) =>
-        effect.pipe(Effect.mapError((reason) => new ReplayError({ step, reason })));
+/**
+ * Input that can be repeated without repeating a commitment. `take` also validates a Checked
+ * target's boolean state before input. Back/reload can resubmit a form.
+ */
+export const repeatable = (step: Step): boolean =>
+  ["navigate", "hover", "scroll", "select"].includes(step.action) ||
+  (step.action === "type" &&
+    step.subject !== undefined &&
+    step.options?.replace !== false &&
+    step.options?.submit !== true) ||
+  (step.action === "click" && step.expect?._tag === "Checked");
 
-    // A step arrived where the recording did, on the same site; a moved path is not drift.
-    const arrived = (index: number) => {
-      const recorded = plan.steps[index]?.url ?? "";
+type StepError = Missing | Ambiguous | Drifted | BrowserError | Uncertain;
 
-      return page.url.pipe(
-        Effect.flatMap((url) =>
-          recorded === "" || URL.parse(url)?.origin === URL.parse(recorded)?.origin
-            ? Effect.void
-            : Effect.fail(
-                new Drifted({ detail: `the page is at ${url}, not on ${recorded}'s site` }),
-              ),
-        ),
-        at(index),
+// Zero waits make one read; positive waits bound all reads and never repeat input.
+const within = (check: Effect.Effect<boolean, StepError>, millis: number) =>
+  millis === 0
+    ? check
+    : check.pipe(
+        Effect.repeat({ until: (held) => held, schedule: Schedule.spaced(Duration.millis(25)) }),
+        Effect.timeoutOrElse({
+          duration: Duration.millis(millis),
+          orElse: () => Effect.succeed(false),
+        }),
       );
-    };
 
+const sameSite = (url: string, recorded: string) => {
+  const origin = URL.parse(recorded)?.origin;
+
+  return (
+    recorded === "" ||
+    (origin === undefined || origin === "null"
+      ? url === recorded
+      : URL.parse(url)?.origin === origin)
+  );
+};
+
+const arrived = (page: Page, urls: ReadonlyArray<string>, millis: number) =>
+  within(
+    Effect.map(page.url, (url) => urls.some((recorded) => sameSite(url, recorded))),
+    millis,
+  ).pipe(
+    Effect.filterOrFail(
+      (held) => held,
+      () =>
+        new Drifted({ detail: "the page did not reach the recorded site within the arrival wait" }),
+    ),
+    Effect.asVoid,
+  );
+
+const checkEffect = (
+  page: Page,
+  step: Step,
+  first?: { readonly url: string; readonly document: number },
+) => {
+  const expected = step.expect;
+
+  if (expected === undefined) return Effect.succeed(false);
+  switch (expected._tag) {
+    case "Checked":
+      return step.subject === undefined
+        ? Effect.fail(invalid("a checked effect needs a subject"))
+        : Effect.flatMap(locate(page, step.subject), (found) =>
+            found.state.checked === undefined
+              ? Effect.fail(invalid("a checked effect needs a checkable subject"))
+              : Effect.succeed(found.state.checked === expected.checked),
+          );
+    case "Navigated":
+      if (expected.url === undefined && first === undefined) return Effect.succeed(false);
+
+      return Effect.map(page.state, (now) =>
+        expected.url === undefined
+          ? now.url !== first?.url || now.document !== first?.document
+          : now.url === expected.url,
+      );
+    case "Appeared":
+    case "Gone":
+      return Effect.map(page.find({ ...expected.query, scope: "document" }), (found) =>
+        expected._tag === "Appeared" ? found.length > 0 : found.length === 0,
+      );
+  }
+};
+
+/**
+ * Take one step. Unknown non-repeatable input is never resent: only positive durable read-back
+ * can skip it. An interrupted call remains interrupted; persist begun-before-call in the consumer
+ * and treat a missing receipt as Stopped{input: "unknown"}, including after process restart.
+ */
+export const take = Effect.fn("Plan.take")(function* (
+  page: Page,
+  plan: Plan,
+  at: number | Stopped,
+  options: TakeOptions = {},
+): Effect.fn.Return<Receipt, ReplayError> {
+  const index = typeof at === "number" ? at : at.step;
+  let input: Stopped["input"] = typeof at === "number" ? "unsent" : at.input;
+
+  const work = Effect.gen(function* (): Effect.fn.Return<Receipt, StepError> {
+    const step = plan.steps[index];
+
+    if (!Number.isInteger(index) || index < 0 || step === undefined)
+      return yield* invalid("the step index is outside the plan");
+    const duration = Duration.fromInput(options.arrival ?? Duration.seconds(5));
+
+    if (
+      Option.isNone(duration) ||
+      Duration.isNegative(duration.value) ||
+      !Duration.isFinite(duration.value)
+    )
+      return yield* invalid("arrival must be a finite nonnegative duration");
+    const millis = Duration.toMillis(duration.value);
+    const first = yield* page.state;
+
+    const uncertain = new Uncertain({
+      detail: "the step may have been sent; reconcile its durable effect before continuing",
+    });
+
+    const unresolved = input === "unknown" && !repeatable(step);
+    const expected = step.expect;
+
+    const durable =
+      expected !== undefined &&
+      (expected._tag === "Appeared" ||
+        (expected._tag === "Navigated" && typeof expected.url === "string")) &&
+      expected.durable === true;
+
+    if (
+      !durable &&
+      (unresolved || (expected !== undefined && "durable" in expected && expected.durable === true))
+    )
+      return yield* uncertain;
+    if (
+      options.settle !== false &&
+      (index > 0 || !["navigate", "back", "reload"].includes(step.action))
+    )
+      yield* page.ready(options.settle);
+    const before = plan.steps[index - 1]?.url;
+
+    if (before !== undefined)
+      yield* arrived(page, unresolved ? [before, step.url] : [before], millis);
+    const check = checkEffect(page, step);
+
+    const read =
+      millis === 0
+        ? check
+        : check.pipe(
+            Effect.timeoutOrElse({
+              duration: Duration.millis(millis),
+              orElse: () =>
+                Effect.fail(new Drifted({ detail: "the expected-effect read timed out" })),
+            }),
+          );
+
+    const held = yield* read.pipe(Effect.mapError((error) => (unresolved ? uncertain : error)));
+
+    const receipt = (outcome: Receipt["outcome"]) =>
+      Effect.gen(function* () {
+        yield* arrived(page, [step.url], millis);
+        const now = yield* page.state;
+
+        return new Receipt({ step: index, outcome, startedAt: first.at, at: now.at });
+      });
+
+    if (held) return yield* receipt("skipped");
+    if (unresolved) return yield* uncertain;
+    const text = step.input === undefined ? "" : options.inputs?.[step.input];
+
+    if (text === undefined) return yield* invalid(`no text for the input "${step.input ?? ""}"`);
+    const verify = checkEffect(page, step, yield* page.state);
+    const acted = yield* Effect.exit(dispatch(page, step, text));
+
+    if (Exit.isFailure(acted)) {
+      const error = Exit.findErrorOption(acted);
+
+      if (Option.isSome(error) && error.value._tag === "BrowserError" && error.value.dispatched) {
+        input = "unknown";
+        if (expected !== undefined && (repeatable(step) || durable)) {
+          const observed = yield* Effect.exit(within(verify, millis));
+
+          if (Exit.isSuccess(observed) && observed.value) return yield* receipt("verified");
+        }
+      }
+
+      return yield* Effect.failCause(acted.cause);
+    }
+    input = "unknown";
+    if (expected !== undefined && !(yield* within(verify, millis)))
+      return yield* new Drifted({ detail: "the step's expected effect did not arrive" });
+
+    return yield* receipt(expected === undefined ? "taken" : "verified");
+  });
+
+  return yield* work.pipe(
+    Effect.mapError(
+      (reason) =>
+        new ReplayError({
+          step: index,
+          reason,
+          input,
+          receipts: [],
+        }),
+    ),
+  );
+});
+
+const run = Effect.fnUntraced(function* (
+  page: Page,
+  plan: Plan,
+  options: TakeOptions,
+  from: number | Stopped,
+  until: number,
+  restoring: boolean,
+) {
+  const receipts: Array<Receipt> = [];
+  const start = typeof from === "number" ? from : from.step;
+
+  if (
+    !Number.isInteger(start) ||
+    start < 0 ||
+    start > plan.steps.length ||
+    !Number.isInteger(until) ||
+    until < start ||
+    until > plan.steps.length
+  )
+    return yield* new ReplayError({
+      step: start,
+      input: "unsent",
+      receipts,
+      reason: invalid("the run bounds are outside the plan"),
+    });
+  // Fresh runs still ask for all input slots before changing the page. Restoration checks first.
+  if (!restoring && typeof from === "number") {
     const unfilled = plan.steps.findIndex(
-      (step) => step.input !== undefined && inputs[step.input] === undefined,
+      (step, index) =>
+        index >= start && step.input !== undefined && options.inputs?.[step.input] === undefined,
     );
 
     if (unfilled !== -1)
-      return yield* at(unfilled)(
-        Effect.fail(invalid(`no text for the input "${plan.steps[unfilled]?.input ?? ""}"`)),
-      );
-    for (const [index, step] of plan.steps.entries()) {
-      if (step.action !== "navigate" && step.action !== "back" && step.action !== "reload")
-        yield* at(index)(settle);
-      if (index > 0) yield* arrived(index - 1);
-      yield* at(index)(
-        take(page, step, step.input === undefined ? "" : (inputs[step.input] ?? "")),
-      );
-    }
-    if (plan.steps.length > 0) {
-      yield* at(plan.steps.length - 1)(settle);
-      yield* arrived(plan.steps.length - 1);
-    }
-  }).pipe(Effect.withSpan("Plan.replay", { attributes: { steps: plan.steps.length } }));
+      return yield* new ReplayError({
+        step: start,
+        input: "unsent",
+        receipts,
+        reason: invalid(`no text for the input "${plan.steps[unfilled]?.input ?? ""}"`),
+      });
+  }
+  for (let index = start; index < until; index++) {
+    const at = restoring
+      ? new Stopped({ step: index, input: "unknown" })
+      : index === start
+        ? from
+        : index;
+
+    const receipt = yield* take(page, plan, at, options).pipe(
+      Effect.mapError((error) => new ReplayError({ ...error, receipts: [...receipts] })),
+    );
+
+    receipts.push(receipt);
+  }
+
+  return receipts;
+});
+
+/** Take a plan's steps from a fresh index or durable stopping point, returning completed receipts. */
+export const replay = (page: Page, plan: Plan, options: ReplayOptions = {}) =>
+  run(page, plan, options, options.from ?? 0, plan.steps.length, false).pipe(
+    Effect.withSpan("Plan.replay"),
+  );
+
+/** Restore prior steps on a fresh page; unresolved commitments require positive durable evidence. */
+export const restore = (
+  page: Page,
+  plan: Plan,
+  options: TakeOptions & { readonly upTo?: number | undefined } = {},
+) =>
+  run(page, plan, options, 0, options.upTo ?? plan.steps.length, true).pipe(
+    Effect.withSpan("Plan.restore"),
+  );

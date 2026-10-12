@@ -5,9 +5,9 @@
  * so `TestClock` drives their end. A `Script` decides how creates, releases and session reads
  * answer, in turn, so a test can lose a create, leave a release pending or fail status reads.
  *
- * It keeps sessions and stored contexts and nothing else: any other endpoint fails the test with a
- * defect. It doesn't model regions, quotas or billing, and a context is only a record, with no
- * browser state. Every session hands out the script's `connectUrl`, such as the DevTools address
+ * It keeps sessions and stored contexts, and supplies synthetic Live View links: any other endpoint
+ * fails the test with a defect. It doesn't model quotas or billing, and a context is only a record,
+ * with no browser state. Every session hands out the script's `connectUrl`, such as the DevTools address
  * of a local Chromium. Its ids are UUIDs, as Browserbase's are, and as Browserbase does, it refuses
  * a session or context id of any other shape as invalid, where it answers an unknown one as not
  * found.
@@ -33,7 +33,11 @@ import {
   HttpClientResponse,
 } from "effect/http";
 
-import { type BrowserbaseClient, layer as clientLayer } from "../BrowserbaseClient.ts";
+import {
+  type BrowserbaseClient,
+  layer as clientLayer,
+  type SessionOptions,
+} from "../BrowserbaseClient.ts";
 
 const Refusal = Schema.Int.check(Schema.isBetween({ minimum: 400, maximum: 599 }));
 
@@ -91,6 +95,8 @@ export type Script = typeof Script.Type;
 export interface Kept {
   readonly id: string;
   readonly status: string;
+  /** The create options as sent, without provider defaults. Only the test handle exposes them. */
+  readonly options: SessionOptions;
   readonly userMetadata: Readonly<Record<string, unknown>> | undefined;
   readonly releases: number;
   /** Whether it was created to outlive its connections, until released or timed out. */
@@ -118,14 +124,59 @@ export const apiKey = "test-browserbase-key";
 
 const CreateBody = Schema.fromJsonString(
   Schema.Struct({
+    projectId: Schema.optional(Schema.String),
+    extensionId: Schema.optional(Schema.String),
     timeout: Schema.optional(Schema.Finite),
     keepAlive: Schema.optional(Schema.Boolean),
+    region: Schema.optional(
+      Schema.Literals(["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]),
+    ),
+    proxies: Schema.optional(
+      Schema.Union([
+        Schema.Boolean,
+        Schema.Array(
+          Schema.Union([
+            Schema.Struct({
+              type: Schema.Literal("browserbase"),
+              geolocation: Schema.optional(
+                Schema.Struct({
+                  country: Schema.String,
+                  state: Schema.optional(Schema.String),
+                  city: Schema.optional(Schema.String),
+                }),
+              ),
+              domainPattern: Schema.optional(Schema.String),
+            }),
+            Schema.Struct({
+              type: Schema.Literal("external"),
+              server: Schema.String,
+              username: Schema.optional(Schema.String),
+              password: Schema.optional(Schema.String),
+              domainPattern: Schema.optional(Schema.String),
+            }),
+            Schema.Struct({
+              type: Schema.Literal("none"),
+              domainPattern: Schema.optional(Schema.String),
+            }),
+          ]),
+        ),
+      ]),
+    ),
     userMetadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
     browserSettings: Schema.optional(
       Schema.Struct({
         context: Schema.optional(
           Schema.Struct({ id: Schema.String, persist: Schema.optional(Schema.Boolean) }),
         ),
+        viewport: Schema.optional(Schema.Struct({ width: Schema.Finite, height: Schema.Finite })),
+        blockAds: Schema.optional(Schema.Boolean),
+        solveCaptchas: Schema.optional(Schema.Boolean),
+        recordSession: Schema.optional(Schema.Boolean),
+        logSession: Schema.optional(Schema.Boolean),
+        verified: Schema.optional(Schema.Boolean),
+        os: Schema.optional(Schema.Literals(["windows", "mac", "linux", "mobile", "tablet"])),
+        allowedDomains: Schema.optional(Schema.Array(Schema.String)),
+        ignoreCertificateErrors: Schema.optional(Schema.Boolean),
       }),
     ),
   }),
@@ -137,6 +188,7 @@ const ReleaseBody = Schema.fromJsonString(
 
 interface Row {
   readonly id: string;
+  readonly options: SessionOptions;
   readonly createdAt: number;
   /** When a list first shows it. */
   readonly listedAt: number;
@@ -193,11 +245,11 @@ const describe = (fake: Fake, row: Row, connect: boolean) => {
     updatedAt: iso(end?.at ?? row.createdAt),
     startedAt: iso(row.createdAt),
     expiresAt: iso(row.expiresAt),
-    projectId: "test-project",
+    projectId: row.options.projectId ?? "test-project",
     status: end?.status ?? "RUNNING",
     proxyBytes: 0,
     keepAlive: row.keepAlive,
-    region: "us-west-2",
+    region: row.options.region ?? "us-west-2",
     ...(end === undefined ? {} : { endedAt: iso(end.at) }),
     ...(row.context === undefined ? {} : { contextId: row.context.id }),
     ...(row.userMetadata === undefined ? {} : { userMetadata: row.userMetadata }),
@@ -281,16 +333,19 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
             : { "retry-after": `${reply.retryAfterSeconds}` },
         );
       const body = Option.getOrUndefined(Schema.decodeOption(CreateBody)(bodyText(request)));
-      const loaded = body?.browserSettings?.context;
+
+      if (body === undefined) return answer(400, { message: "Invalid session settings" });
+      const loaded = body.browserSettings?.context;
       const createdAt = fake.now();
 
       const created: Row = {
         id: nextId(fake),
+        options: body,
         createdAt,
         listedAt: createdAt + (reply._tag === "Lost" ? (reply.listedAfter ?? 0) : 0),
-        expiresAt: createdAt + (body?.timeout ?? 300) * 1000,
-        keepAlive: body?.keepAlive ?? false,
-        userMetadata: body?.userMetadata,
+        expiresAt: createdAt + (body.timeout ?? 300) * 1000,
+        keepAlive: body.keepAlive ?? false,
+        userMetadata: body.userMetadata,
         context:
           loaded === undefined ? undefined : { id: loaded.id, persist: loaded.persist ?? false },
         ends: undefined,
@@ -334,6 +389,14 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
         ? answer(404, { message: "Session not found" })
         : answer(200, describe(fake, row, true));
     }
+    case "GET sessions id debug":
+      return row === undefined
+        ? answer(404, { message: "Session not found" })
+        : answer(200, {
+            debuggerFullscreenUrl: `https://live.browserbase.test/${row.id}/fullscreen`,
+            debuggerUrl: `https://live.browserbase.test/${row.id}`,
+            pages: [],
+          });
     case "POST sessions id": {
       if (row === undefined) return answer(404, { message: "Session not found" });
       if (Option.isNone(Schema.decodeOption(ReleaseBody)(bodyText(request))))
@@ -411,6 +474,7 @@ export const make = Effect.fnUntraced(function* (script: Script = {}) {
     sessions: Effect.sync(() =>
       [...fake.sessions.values()].map((row) => ({
         id: row.id,
+        options: row.options,
         status: endOf(fake, row)?.status ?? "RUNNING",
         userMetadata: row.userMetadata,
         releases: row.releases,
