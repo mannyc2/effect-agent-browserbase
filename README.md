@@ -13,11 +13,11 @@ evidence; applications own their decisions and durable business records.
 | Package                                                  | What it is                                                         |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
 | [`effect-browser`](packages/browser)                     | The browser, its pages and moments, over Playwright                |
-| [`effect-agent-browser`](packages/agent-browser)                 | Its pages as Yielded Agent's browser ports, with the agent's tools |
+| [`effect-agent-browser`](packages/agent-browser)         | Its pages as Yielded Agent's browser ports, with the agent's tools |
 | [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
 | [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
-| [`demos`](demos) (private)                               | A site that replays recorded bench runs, graded                    |
+| [`site`](site) (private)                                 | The docs site, its narrated demo and a player for recorded runs    |
 
 `effect-agent-browser` needs `@yielded/agent` `0.1.0-beta.168`, which is not on npm yet: its
 [README](packages/agent-browser/README.md) gives the archive to install in its place.

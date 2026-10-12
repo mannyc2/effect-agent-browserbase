@@ -231,15 +231,10 @@
       "rules": { "exports/public-entrypoint": "error" }
     },
     {
-      // Tests, the bench and the demo site drive the platform itself: they serve pages, launch
+      // Tests, the bench and the site drive the platform itself: they serve pages, launch
       // Chromium, read their environment, write records and fetch replays. They may also unwrap,
       // cast and use `any`-typed test utilities; a wrong guess fails the run.
-      "files": [
-        "**/packages/*/test/**/*.ts",
-        "**/bench/**/*.ts",
-        "**/demos/**/*.ts",
-        "**/demos/**/*.tsx"
-      ],
+      "files": ["**/packages/*/test/**/*.ts", "**/bench/**/*.ts", "**/site/**/*.ts"],
       "rules": {
         "effecttsgo/async-function": "off",
         "effecttsgo/crypto-random-uuid": "off",
@@ -265,6 +260,16 @@
         "typescript/no-unsafe-member-access": "off",
         "typescript/no-unsafe-return": "off",
         "typescript/no-unsafe-type-assertion": "off"
+      }
+    },
+    {
+      // The site's Story and Scene tests assert inside `story` and `scene` steps.
+      "files": ["**/site/test/**/*.ts"],
+      "rules": {
+        "vitest/expect-expect": [
+          "error",
+          { "assertFunctionNames": ["expect", "assert", "assert.*", "story", "Scene.scene"] }
+        ]
       }
     },
     {

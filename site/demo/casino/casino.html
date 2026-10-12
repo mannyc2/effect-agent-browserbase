@@ -1,0 +1,1645 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Marlowe Casino | Online Slots, Table Games &amp; Live Casino</title>
+    <meta
+      name="description"
+      content="Play hundreds of online slots, table games and live dealer games at Marlowe Casino."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0c14'/%3E%3Cpath d='M16 4l9 12-9 12-9-12z' fill='%23e2b857'/%3E%3Cpath d='M16 9l5 7-5 7-5-7z' fill='%230b0c14'/%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0b0c14;
+        --surface: #141625;
+        --surface2: #1c1f33;
+        --line: #272b44;
+        --text: #eef0f6;
+        --muted: #969cb6;
+        --gold: #e2b857;
+        --gold2: #b98d2e;
+        --green: #36c98b;
+        --red: #e5484d;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          15px/1.45 Inter,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      button {
+        font: inherit;
+        cursor: pointer;
+        color: inherit;
+      }
+      .wrap {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 0 28px;
+      }
+      header.top {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: rgba(11, 12, 20, 0.94);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--line);
+      }
+      header.top .wrap {
+        display: flex;
+        align-items: center;
+        height: 64px;
+        gap: 36px;
+      }
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .logo svg {
+        width: 30px;
+        height: 30px;
+      }
+      .logo b {
+        font:
+          800 22px/1 Cinzel,
+          Georgia,
+          serif;
+        letter-spacing: 0.16em;
+        color: #f5e6c2;
+      }
+      .logo small {
+        display: block;
+        font:
+          600 9px/1 Inter,
+          sans-serif;
+        letter-spacing: 0.42em;
+        color: var(--gold);
+        margin-top: 3px;
+      }
+      nav.main {
+        display: flex;
+        gap: 26px;
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      nav.main a.on,
+      nav.main a:hover {
+        color: var(--text);
+      }
+      nav.main a.on {
+        box-shadow: inset 0 -2px 0 var(--gold);
+        padding-bottom: 20px;
+        margin-bottom: -22px;
+      }
+      .account {
+        margin-left: auto;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .btn {
+        border: 0;
+        border-radius: 999px;
+        padding: 9px 20px;
+        font-weight: 700;
+        font-size: 14px;
+      }
+      .btn.ghost {
+        background: transparent;
+        border: 1px solid #3a3f5f;
+      }
+      .btn.ghost:hover {
+        border-color: var(--muted);
+      }
+      .btn.gold {
+        background: linear-gradient(180deg, #f2cf72, #d4a43c);
+        color: #1a1205;
+        box-shadow: 0 2px 14px rgba(226, 184, 87, 0.25);
+      }
+      .btn.gold:hover {
+        filter: brightness(1.06);
+      }
+      .hero {
+        position: relative;
+        margin: 22px 0 0;
+        border-radius: 18px;
+        overflow: hidden;
+        height: 280px;
+        background: #120f22;
+      }
+      .hero canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .hero .copy {
+        position: relative;
+        padding: 40px 48px;
+        max-width: 640px;
+      }
+      .hero .kicker {
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        color: #1a1205;
+        background: var(--gold);
+        border-radius: 4px;
+        padding: 3px 8px;
+      }
+      .hero h1 {
+        font:
+          800 38px/1.08 Cinzel,
+          Georgia,
+          serif;
+        margin: 14px 0 10px;
+        color: #fff6df;
+      }
+      .hero p {
+        margin: 0 0 20px;
+        color: #d9d4e8;
+        font-size: 16px;
+        max-width: 520px;
+      }
+      .hero .terms {
+        position: absolute;
+        right: 120px;
+        bottom: 14px;
+        font-size: 11px;
+        color: #a49fb8;
+      }
+      .dots {
+        position: absolute;
+        right: 24px;
+        bottom: 18px;
+        display: flex;
+        gap: 7px;
+      }
+      .dots i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #ffffff40;
+      }
+      .dots i.on {
+        background: #fff;
+        width: 22px;
+        border-radius: 5px;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 22px 0 6px;
+      }
+      .chip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 8px 16px;
+        font-weight: 600;
+        font-size: 14px;
+        color: #c9cde0;
+      }
+      .chip svg {
+        width: 16px;
+        height: 16px;
+        opacity: 0.85;
+      }
+      .chip.on {
+        background: var(--text);
+        color: #0b0c14;
+        border-color: var(--text);
+      }
+      .search {
+        margin-left: auto;
+        position: relative;
+      }
+      .search input {
+        width: 280px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 9px 16px 9px 38px;
+        color: var(--text);
+        font: inherit;
+        font-size: 14px;
+        outline: none;
+      }
+      .search input:focus {
+        border-color: #4b5178;
+      }
+      .search svg {
+        position: absolute;
+        left: 13px;
+        top: 10px;
+        width: 17px;
+        height: 17px;
+        opacity: 0.6;
+      }
+      section.row {
+        margin: 22px 0 8px;
+      }
+      section.row h2 {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        font-size: 19px;
+        font-weight: 700;
+        margin: 0 0 12px;
+      }
+      section.row h2 a {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 16px;
+      }
+      .tile {
+        position: relative;
+        display: block;
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--surface);
+        transition: transform 0.15s;
+      }
+      .tile:hover {
+        transform: translateY(-3px);
+      }
+      .tile img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 19/15;
+        object-fit: cover;
+        background: #1c1f33;
+      }
+      .tile .meta {
+        padding: 9px 11px 11px;
+      }
+      .tile .name {
+        display: block;
+        font-weight: 700;
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tile .provider {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .badge {
+        position: absolute;
+        top: 9px;
+        left: 9px;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        border-radius: 4px;
+        padding: 3px 6px;
+        background: var(--gold);
+        color: #1a1205;
+      }
+      .badge.hot {
+        background: var(--red);
+        color: #fff;
+      }
+      .badge.live {
+        background: var(--green);
+        color: #06150e;
+      }
+      .badge.jackpot {
+        background: #8b5cf6;
+        color: #fff;
+      }
+      .tile .hover {
+        position: absolute;
+        inset: 0;
+        bottom: 56px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(8, 9, 16, 0.55);
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      .tile:hover .hover {
+        opacity: 1;
+      }
+      .tile .hover span {
+        background: var(--gold);
+        color: #1a1205;
+        font-weight: 800;
+        border-radius: 999px;
+        padding: 9px 22px;
+        font-size: 14px;
+      }
+      .empty {
+        grid-column: 1/-1;
+        color: var(--muted);
+        padding: 30px 0;
+        text-align: center;
+      }
+      .providers {
+        display: flex;
+        gap: 14px;
+        margin: 30px 0 0;
+        flex-wrap: wrap;
+      }
+      .providers span {
+        flex: 1;
+        min-width: 150px;
+        text-align: center;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 0;
+        color: #7d84a3;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        font-size: 13px;
+      }
+      footer {
+        margin-top: 44px;
+        border-top: 1px solid var(--line);
+        background: #090a11;
+        color: #7d84a3;
+        font-size: 13px;
+      }
+      footer .cols {
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr 1fr;
+        gap: 28px;
+        padding: 36px 0 18px;
+      }
+      footer h4 {
+        color: #c9cde0;
+        font-size: 13px;
+        margin: 0 0 10px;
+      }
+      footer ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 7px;
+      }
+      footer .legal {
+        border-top: 1px solid #1b1e30;
+        padding: 16px 0 28px;
+        display: flex;
+        gap: 18px;
+        align-items: center;
+      }
+      .age {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 2px solid #7d84a3;
+        font-weight: 800;
+        color: #c9cde0;
+      }
+      .cookie {
+        position: fixed;
+        left: 24px;
+        right: 24px;
+        bottom: 22px;
+        z-index: 40;
+        max-width: 1232px;
+        margin: 0 auto;
+        background: #171a2c;
+        border: 1px solid #2e3354;
+        border-radius: 14px;
+        padding: 18px 22px;
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      }
+      .cookie p {
+        margin: 0;
+        font-size: 14px;
+        color: #c9cde0;
+        flex: 1;
+      }
+      .cookie p b {
+        color: var(--text);
+      }
+      .cookie a {
+        color: var(--gold);
+        text-decoration: underline;
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        background: rgba(4, 5, 10, 0.72);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .modal .box {
+        width: 400px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 28px;
+        position: relative;
+      }
+      .modal h3 {
+        margin: 0 0 4px;
+        font-size: 21px;
+      }
+      .modal p {
+        margin: 0 0 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .modal label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        margin: 12px 0 6px;
+        color: #c9cde0;
+      }
+      .modal input {
+        width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 11px 12px;
+        color: var(--text);
+        font: inherit;
+      }
+      .modal .btn {
+        width: 100%;
+        margin-top: 20px;
+        padding: 12px;
+      }
+      .modal .x {
+        position: absolute;
+        right: 14px;
+        top: 12px;
+        background: none;
+        border: 0;
+        font-size: 22px;
+        color: var(--muted);
+      }
+      .modal .error {
+        color: #ff8a8d;
+        font-size: 13px;
+        margin-top: 12px;
+      }
+      .crumbs {
+        font-size: 13px;
+        color: var(--muted);
+        margin: 18px 0 12px;
+      }
+      .crumbs a:hover {
+        color: var(--text);
+      }
+      .gamehead {
+        display: grid;
+        grid-template-columns: 1fr 300px;
+        gap: 22px;
+      }
+      .stage {
+        position: relative;
+        border-radius: 16px;
+        overflow: hidden;
+        aspect-ratio: 16/9;
+        background: #0f1020;
+      }
+      .stage canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        filter: brightness(0.42) blur(1px);
+        transform: scale(1.03);
+      }
+      .stage .play {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        text-align: center;
+      }
+      .stage .play h1 {
+        font:
+          800 46px/1 Cinzel,
+          Georgia,
+          serif;
+        margin: 0;
+        color: #fff6df;
+        text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+      }
+      .stage .play .by {
+        color: #d7d3e6;
+        margin: 0 0 10px;
+      }
+      .stage .play .btns {
+        display: flex;
+        gap: 12px;
+      }
+      .stage .play .btn {
+        padding: 13px 30px;
+        font-size: 15px;
+      }
+      .stage .play .note {
+        font-size: 12px;
+        color: #b6b2c6;
+        margin: 4px 0 0;
+      }
+      .info {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 20px 22px;
+      }
+      .info h3 {
+        margin: 0 0 12px;
+        font-size: 16px;
+      }
+      .info dl {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px 12px;
+        margin: 0;
+        font-size: 14px;
+      }
+      .info dt {
+        color: var(--muted);
+      }
+      .info dd {
+        margin: 0;
+        font-weight: 600;
+        text-align: right;
+      }
+      .info .fav {
+        margin-top: 18px;
+        width: 100%;
+        border: 1px solid var(--line);
+        background: transparent;
+        border-radius: 10px;
+        padding: 10px;
+        font-weight: 600;
+        color: #c9cde0;
+      }
+      .about {
+        max-width: 860px;
+        color: #c3c7da;
+        margin: 26px 0 0;
+      }
+      .about h2 {
+        color: var(--text);
+        font-size: 19px;
+        margin: 0 0 8px;
+      }
+      .theatre {
+        margin: 0 -28px;
+      }
+      .theatre iframe {
+        display: block;
+        width: 100%;
+        height: calc(100vh - 64px - 44px);
+        border: 0;
+        background: #000;
+      }
+      .gamebar {
+        height: 44px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 0 20px;
+        background: #0f1020;
+        border-top: 1px solid var(--line);
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .gamebar b {
+        color: var(--text);
+        font-weight: 700;
+      }
+      .gamebar .tag {
+        border: 1px solid #3a3f5f;
+        border-radius: 4px;
+        padding: 2px 7px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: #c9cde0;
+      }
+      .gamebar .tools {
+        margin-left: auto;
+        display: flex;
+        gap: 6px;
+      }
+      .gamebar .tools button {
+        background: transparent;
+        border: 0;
+        border-radius: 8px;
+        width: 34px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #c9cde0;
+      }
+      .gamebar .tools button:hover {
+        background: var(--surface2);
+      }
+      .gamebar svg {
+        width: 18px;
+        height: 18px;
+      }
+      .unavailable {
+        margin-top: 10px;
+        font-size: 13px;
+        color: #d7d3e6;
+        background: rgba(0, 0, 0, 0.35);
+        padding: 6px 12px;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap">
+        <a class="logo" href="/" aria-label="Marlowe Casino home">
+          <svg viewBox="0 0 32 32" aria-hidden="true">
+            <defs>
+              <linearGradient id="lg" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#f6dc93" />
+                <stop offset="1" stop-color="#c0902f" />
+              </linearGradient>
+            </defs>
+            <path d="M16 2l11 14-11 14L5 16z" fill="url(#lg)" />
+            <path d="M16 8l6.2 8L16 24l-6.2-8z" fill="#0b0c14" />
+            <path d="M16 12l3 4-3 4-3-4z" fill="url(#lg)" />
+          </svg>
+          <span><b>MARLOWE</b><small>CASINO</small></span>
+        </a>
+        <nav class="main" aria-label="Main">
+          <a href="/" class="on">Casino</a><a href="/" data-soon="Live Casino">Live Casino</a
+          ><a href="/" data-soon="Promotions">Promotions</a
+          ><a href="/" data-soon="Marlowe Club">Marlowe Club</a>
+        </nav>
+        <div class="account">
+          <button class="btn ghost" data-open="login">Log in</button
+          ><button class="btn gold" data-open="join">Join now</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap" id="view"></main>
+
+    <footer>
+      <div class="wrap">
+        <div class="cols">
+          <div>
+            <a class="logo" href="/"
+              ><span><b style="font-size: 18px">MARLOWE</b><small>CASINO</small></span></a
+            >
+            <p style="max-width: 380px; margin: 14px 0 0">
+              Slots, table games and live dealers, with new releases every week. Play responsibly:
+              set deposit limits and take breaks from your account settings at any time.
+            </p>
+          </div>
+          <div>
+            <h4>Casino</h4>
+            <ul>
+              <li><a href="/">Slots</a></li>
+              <li><a href="/">Jackpots</a></li>
+              <li><a href="/">Table games</a></li>
+              <li><a href="/">Live casino</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>Help</h4>
+            <ul>
+              <li><a href="/">Help centre</a></li>
+              <li><a href="/">Payments</a></li>
+              <li><a href="/">Contact us</a></li>
+              <li><a href="/">Safer gambling</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>About</h4>
+            <ul>
+              <li><a href="/">Terms &amp; conditions</a></li>
+              <li><a href="/">Privacy notice</a></li>
+              <li><a href="/">Cookie policy</a></li>
+              <li><a href="/">Affiliates</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span class="age">18+</span
+          ><span
+            >Gambling can be addictive. Please play responsibly. &copy; 2026 Marlowe Interactive.
+            All rights reserved.</span
+          >
+        </div>
+      </div>
+    </footer>
+
+    <div class="cookie" id="cookie" role="dialog" aria-label="Cookie consent">
+      <p>
+        <b>We value your privacy.</b> We use cookies to keep you signed in, remember your
+        preferences and understand how our site is used. See our <a href="/">cookie policy</a>.
+      </p>
+      <button class="btn ghost" id="cookie-settings">Manage preferences</button>
+      <button class="btn ghost" id="cookie-reject">Reject non-essential</button>
+      <button class="btn gold" id="cookie-accept">Accept all</button>
+    </div>
+
+    <script>
+      const games = [
+        {
+          slug: "copper-comet",
+          name: "Copper Comet",
+          provider: "Larkspur Gaming",
+          art: "comet",
+          hue: ["#1b1440", "#3d1f5c"],
+          tags: ["new", "slots", "popular"],
+          badge: "new",
+        },
+        {
+          slug: "opal-crown",
+          name: "Opal Crown",
+          provider: "Larkspur Gaming",
+          art: "opal",
+          hue: ["#21123d", "#0f3b4f"],
+          tags: ["new", "slots"],
+          badge: "new",
+          demo: true,
+          about:
+            "Opal Crown is a five-reel, ten-line jewel slot from Larkspur Gaming. Rubies, sapphires and emeralds line up beside the royal letters, and the iridescent Opal Wild lands on the middle three reels to complete wins. Five Crowns on a line pays a thousand times the line bet.",
+          facts: [
+            ["Provider", "Larkspur Gaming"],
+            ["Reels", "5 × 3"],
+            ["Paylines", "10"],
+            ["Min bet", "$0.10"],
+            ["Max bet", "$10.00"],
+            ["Volatility", "Medium"],
+            ["Released", "September 2026"],
+          ],
+        },
+        {
+          slug: "tidal-pearls",
+          name: "Tidal Pearls",
+          provider: "Northtide Studios",
+          art: "pearls",
+          hue: ["#06324a", "#0c6a7a"],
+          tags: ["new", "slots"],
+          badge: "new",
+        },
+        {
+          slug: "saffron-sun",
+          name: "Saffron Sun",
+          provider: "Brightforge",
+          art: "sun",
+          hue: ["#4a1606", "#b8540f"],
+          tags: ["new", "slots", "popular"],
+        },
+        {
+          slug: "wolfpine-gold",
+          name: "Wolfpine Gold",
+          provider: "Northtide Studios",
+          art: "moon",
+          hue: ["#0b1830", "#22385e"],
+          tags: ["new", "slots", "jackpots"],
+          badge: "jackpot",
+        },
+        {
+          slug: "lantern-bazaar",
+          name: "Lantern Bazaar",
+          provider: "Brightforge",
+          art: "lantern",
+          hue: ["#3a0610", "#7a1420"],
+          tags: ["new", "slots"],
+        },
+        {
+          slug: "velvet-sevens",
+          name: "Velvet Sevens",
+          provider: "Larkspur Gaming",
+          art: "sevens",
+          hue: ["#2a0630", "#5c0f4a"],
+          tags: ["slots", "popular"],
+          badge: "hot",
+        },
+        {
+          slug: "glacier-gems",
+          name: "Glacier Gems",
+          provider: "Brightforge",
+          art: "glacier",
+          hue: ["#0a2440", "#3a7bb0"],
+          tags: ["slots", "popular"],
+        },
+        {
+          slug: "thunder-orchard",
+          name: "Thunder Orchard",
+          provider: "Kettlebrook Games",
+          art: "orchard",
+          hue: ["#13230c", "#3f6b1a"],
+          tags: ["slots", "popular"],
+          badge: "hot",
+        },
+        {
+          slug: "jade-fortune",
+          name: "Jade Fortune",
+          provider: "Northtide Studios",
+          art: "jade",
+          hue: ["#062a1c", "#0f6046"],
+          tags: ["slots", "popular", "jackpots"],
+          badge: "jackpot",
+        },
+        {
+          slug: "neon-drifters",
+          name: "Neon Drifters",
+          provider: "Kettlebrook Games",
+          art: "neon",
+          hue: ["#0a0a26", "#2b0b5a"],
+          tags: ["slots", "popular"],
+        },
+        {
+          slug: "golden-fleet",
+          name: "Golden Fleet",
+          provider: "Larkspur Gaming",
+          art: "fleet",
+          hue: ["#0c2034", "#865d1a"],
+          tags: ["slots", "popular"],
+        },
+        {
+          slug: "european-roulette",
+          name: "European Roulette",
+          provider: "Brightforge",
+          art: "roulette",
+          hue: ["#08200f", "#14522a"],
+          tags: ["table"],
+        },
+        {
+          slug: "classic-blackjack",
+          name: "Classic Blackjack",
+          provider: "Kettlebrook Games",
+          art: "cards",
+          hue: ["#081c2a", "#12415a"],
+          tags: ["table"],
+        },
+        {
+          slug: "punto-banco",
+          name: "Punto Banco",
+          provider: "Brightforge",
+          art: "chips",
+          hue: ["#2a0808", "#6a1414"],
+          tags: ["table"],
+        },
+        {
+          slug: "lightning-roulette-live",
+          name: "Grand Roulette Live",
+          provider: "Marlowe Live",
+          art: "roulette",
+          hue: ["#1a1208", "#5a3a0c"],
+          tags: ["table", "live"],
+          badge: "live",
+        },
+        {
+          slug: "speed-blackjack-live",
+          name: "Speed Blackjack Live",
+          provider: "Marlowe Live",
+          art: "cards",
+          hue: ["#0a1a14", "#1c4a3a"],
+          tags: ["table", "live"],
+          badge: "live",
+        },
+        {
+          slug: "three-card-poker",
+          name: "Three Card Poker",
+          provider: "Kettlebrook Games",
+          art: "chips",
+          hue: ["#12082a", "#341a6a"],
+          tags: ["table"],
+        },
+      ];
+
+      // Each game's artwork, painted once into an image.
+      const motifs = {
+        opal(g, w, h) {
+          const cx = w / 2,
+            cy = h * 0.42;
+          for (let i = 0; i < 26; i++) {
+            g.fillStyle = `rgba(255,255,255,${0.15 + (i % 5) * 0.08})`;
+            const x = (i * 97) % w,
+              y = (i * 53) % (h * 0.8);
+            g.beginPath();
+            g.arc(x, y, 1 + (i % 3), 0, 7);
+            g.fill();
+          }
+          const glow = g.createRadialGradient(cx, cy, 10, cx, cy, w * 0.45);
+          glow.addColorStop(0, "rgba(120,220,255,.35)");
+          glow.addColorStop(1, "rgba(0,0,0,0)");
+          g.fillStyle = glow;
+          g.fillRect(0, 0, w, h);
+          opalGem(g, cx, cy + 8, w * 0.2, h * 0.2);
+          crown(g, cx, cy - h * 0.2, w * 0.24);
+        },
+        comet(g, w, h) {
+          for (let i = 0; i < 40; i++) {
+            g.fillStyle = `rgba(255,255,255,${0.2 + (i % 4) * 0.15})`;
+            g.fillRect((i * 131) % w, (i * 71) % h, 2, 2);
+          }
+          const tail = g.createLinearGradient(w * 0.1, h * 0.15, w * 0.68, h * 0.5);
+          tail.addColorStop(0, "rgba(255,140,60,0)");
+          tail.addColorStop(1, "rgba(255,170,90,.95)");
+          g.strokeStyle = tail;
+          g.lineWidth = h * 0.12;
+          g.lineCap = "round";
+          g.beginPath();
+          g.moveTo(w * 0.08, h * 0.12);
+          g.lineTo(w * 0.66, h * 0.46);
+          g.stroke();
+          const head = g.createRadialGradient(w * 0.68, h * 0.47, 2, w * 0.68, h * 0.47, h * 0.13);
+          head.addColorStop(0, "#fff7e0");
+          head.addColorStop(0.4, "#ffb35c");
+          head.addColorStop(1, "rgba(200,90,30,0)");
+          g.fillStyle = head;
+          g.beginPath();
+          g.arc(w * 0.68, h * 0.47, h * 0.13, 0, 7);
+          g.fill();
+        },
+        pearls(g, w, h) {
+          for (let k = 0; k < 4; k++) {
+            g.fillStyle = `rgba(120,230,240,${0.08 + k * 0.05})`;
+            g.beginPath();
+            g.moveTo(0, h * (0.55 + k * 0.08));
+            for (let x = 0; x <= w; x += 10)
+              g.lineTo(x, h * (0.55 + k * 0.08) + Math.sin(x / 26 + k) * 8);
+            g.lineTo(w, h);
+            g.lineTo(0, h);
+            g.fill();
+          }
+          [
+            [0.38, 0.38, 0.11],
+            [0.6, 0.33, 0.08],
+            [0.52, 0.5, 0.06],
+          ].forEach(([x, y, r]) => {
+            const p = g.createRadialGradient(
+              w * x - h * r * 0.3,
+              h * y - h * r * 0.3,
+              1,
+              w * x,
+              h * y,
+              h * r,
+            );
+            p.addColorStop(0, "#ffffff");
+            p.addColorStop(0.5, "#f1e6f5");
+            p.addColorStop(1, "#9fb4c8");
+            g.fillStyle = p;
+            g.beginPath();
+            g.arc(w * x, h * y, h * r, 0, 7);
+            g.fill();
+          });
+        },
+        sun(g, w, h) {
+          g.save();
+          g.translate(w / 2, h * 0.5);
+          for (let i = 0; i < 24; i++) {
+            g.rotate(Math.PI / 12);
+            g.fillStyle = i % 2 ? "rgba(255,200,80,.18)" : "rgba(255,160,40,.1)";
+            g.beginPath();
+            g.moveTo(0, 0);
+            g.lineTo(w, -26);
+            g.lineTo(w, 26);
+            g.fill();
+          }
+          g.restore();
+          const s = g.createRadialGradient(w / 2, h * 0.45, 4, w / 2, h * 0.45, h * 0.24);
+          s.addColorStop(0, "#fff3c4");
+          s.addColorStop(0.5, "#ffc23d");
+          s.addColorStop(1, "#e0760f");
+          g.fillStyle = s;
+          g.beginPath();
+          g.arc(w / 2, h * 0.45, h * 0.24, 0, 7);
+          g.fill();
+        },
+        moon(g, w, h) {
+          g.fillStyle = "#f4ecd2";
+          g.beginPath();
+          g.arc(w * 0.68, h * 0.28, h * 0.13, 0, 7);
+          g.fill();
+          [
+            ["#0e1a33", 0.62, 0.3],
+            ["#13284a", 0.7, 0.55],
+          ].forEach(([c, base, peak]) => {
+            g.fillStyle = c;
+            g.beginPath();
+            g.moveTo(0, h * base);
+            for (let x = 0; x <= w; x += w / 8)
+              g.lineTo(x, h * base - Math.abs(Math.sin(x / 37)) * h * peak * 0.6);
+            g.lineTo(w, h);
+            g.lineTo(0, h);
+            g.fill();
+          });
+          for (let i = 0; i < 5; i++)
+            coin(g, w * (0.2 + i * 0.15), h * 0.62 + (i % 2) * 8, h * 0.07);
+        },
+        lantern(g, w, h) {
+          [
+            [0.28, 0.32, 0.13],
+            [0.62, 0.24, 0.1],
+            [0.78, 0.52, 0.08],
+            [0.45, 0.58, 0.07],
+          ].forEach(([x, y, r]) => {
+            const l = g.createRadialGradient(w * x, h * y, 2, w * x, h * y, h * r * 1.8);
+            l.addColorStop(0, "rgba(255,180,90,.6)");
+            l.addColorStop(1, "rgba(255,80,40,0)");
+            g.fillStyle = l;
+            g.fillRect(0, 0, w, h);
+            g.fillStyle = "#d8261f";
+            g.beginPath();
+            g.ellipse(w * x, h * y, h * r * 0.9, h * r, 0, 0, 7);
+            g.fill();
+            g.strokeStyle = "#ffcf6b";
+            g.lineWidth = 2;
+            for (let k = -1; k <= 1; k++) {
+              g.beginPath();
+              g.ellipse(w * x, h * y, h * r * 0.35 * Math.abs(k * 2 || 0.3), h * r, 0, 0, 7);
+              g.stroke();
+            }
+            g.fillStyle = "#ffcf6b";
+            g.fillRect(w * x - h * r * 0.4, h * y - h * r - 4, h * r * 0.8, 6);
+            g.fillRect(w * x - h * r * 0.4, h * y + h * r - 2, h * r * 0.8, 6);
+          });
+        },
+        sevens(g, w, h) {
+          g.font = `900 ${h * 0.42}px Cinzel, Georgia, serif`;
+          g.textAlign = "center";
+          g.textBaseline = "middle";
+          [
+            [0.3, "#ff3d8b"],
+            [0.5, "#ffd23d"],
+            [0.7, "#3dd4ff"],
+          ].forEach(([x, c]) => {
+            g.shadowColor = c;
+            g.shadowBlur = 24;
+            g.fillStyle = c;
+            g.fillText("7", w * x, h * 0.42);
+          });
+          g.shadowBlur = 0;
+        },
+        glacier(g, w, h) {
+          for (let i = 0; i < 7; i++) {
+            const x = w * (0.15 + i * 0.12),
+              y = h * (0.3 + (i % 3) * 0.12),
+              r = h * (0.08 + (i % 2) * 0.05);
+            g.fillStyle = `rgba(${180 + i * 8},${230},255,.85)`;
+            g.beginPath();
+            g.moveTo(x, y - r);
+            g.lineTo(x + r * 0.8, y);
+            g.lineTo(x, y + r * 1.2);
+            g.lineTo(x - r * 0.8, y);
+            g.fill();
+            g.fillStyle = "rgba(255,255,255,.5)";
+            g.beginPath();
+            g.moveTo(x, y - r);
+            g.lineTo(x + r * 0.8, y);
+            g.lineTo(x, y);
+            g.fill();
+          }
+        },
+        orchard(g, w, h) {
+          g.strokeStyle = "#fff59a";
+          g.lineWidth = 5;
+          g.shadowColor = "#fff59a";
+          g.shadowBlur = 16;
+          g.beginPath();
+          g.moveTo(w * 0.58, 0);
+          g.lineTo(w * 0.5, h * 0.25);
+          g.lineTo(w * 0.6, h * 0.28);
+          g.lineTo(w * 0.48, h * 0.55);
+          g.stroke();
+          g.shadowBlur = 0;
+          [
+            [0.3, 0.42, "#d61f3a"],
+            [0.38, 0.47, "#e8304a"],
+            [0.72, 0.44, "#f2c21b"],
+            [0.62, 0.55, "#7ac142"],
+          ].forEach(([x, y, c]) => {
+            const f = g.createRadialGradient(w * x - 6, h * y - 6, 2, w * x, h * y, h * 0.1);
+            f.addColorStop(0, "#fff");
+            f.addColorStop(0.25, c);
+            f.addColorStop(1, "#300");
+            g.fillStyle = f;
+            g.beginPath();
+            g.arc(w * x, h * y, h * 0.1, 0, 7);
+            g.fill();
+          });
+        },
+        jade(g, w, h) {
+          for (let i = 0; i < 5; i++) {
+            const x = w * (0.22 + i * 0.14),
+              y = h * (0.36 + (i % 2) * 0.14),
+              r = h * 0.12;
+            const j = g.createRadialGradient(x - r * 0.3, y - r * 0.3, 2, x, y, r);
+            j.addColorStop(0, "#c8ffe0");
+            j.addColorStop(0.5, "#2fbf7a");
+            j.addColorStop(1, "#0b5a36");
+            g.fillStyle = j;
+            g.beginPath();
+            g.arc(x, y, r, 0, 7);
+            g.fill();
+            g.fillStyle = "rgba(4,40,24,.9)";
+            g.fillRect(x - r * 0.28, y - r * 0.28, r * 0.56, r * 0.56);
+          }
+        },
+        neon(g, w, h) {
+          g.strokeStyle = "#ff3df2";
+          g.lineWidth = 2;
+          for (let i = 0; i < 9; i++) {
+            g.globalAlpha = 0.25 + i * 0.07;
+            g.beginPath();
+            g.moveTo(w / 2, h * 0.45);
+            g.lineTo((i * w) / 8, h);
+            g.stroke();
+          }
+          g.globalAlpha = 1;
+          g.strokeStyle = "#3df0ff";
+          for (let i = 0; i < 5; i++) {
+            g.beginPath();
+            g.moveTo(0, h * (0.62 + i * i * 0.025));
+            g.lineTo(w, h * (0.62 + i * i * 0.025));
+            g.stroke();
+          }
+          const s = g.createLinearGradient(0, h * 0.15, 0, h * 0.45);
+          s.addColorStop(0, "#ffde4a");
+          s.addColorStop(1, "#ff3d8b");
+          g.fillStyle = s;
+          g.beginPath();
+          g.arc(w / 2, h * 0.45, h * 0.2, Math.PI, 0);
+          g.fill();
+        },
+        fleet(g, w, h) {
+          g.fillStyle = "rgba(255,210,120,.25)";
+          g.beginPath();
+          g.arc(w * 0.75, h * 0.3, h * 0.16, 0, 7);
+          g.fill();
+          for (let i = 0; i < 3; i++) {
+            const x = w * (0.22 + i * 0.25),
+              y = h * 0.52;
+            g.fillStyle = "#3a2410";
+            g.beginPath();
+            g.moveTo(x - 30, y);
+            g.lineTo(x + 30, y);
+            g.lineTo(x + 20, y + 14);
+            g.lineTo(x - 20, y + 14);
+            g.fill();
+            g.fillStyle = "#f3e2b4";
+            g.beginPath();
+            g.moveTo(x, y - 46);
+            g.lineTo(x + 22, y - 6);
+            g.lineTo(x, y - 6);
+            g.fill();
+            g.beginPath();
+            g.moveTo(x - 2, y - 40);
+            g.lineTo(x - 20, y - 6);
+            g.lineTo(x - 2, y - 6);
+            g.fill();
+          }
+          g.fillStyle = "rgba(10,30,50,.7)";
+          g.fillRect(0, h * 0.6, w, h);
+        },
+        roulette(g, w, h) {
+          const cx = w / 2,
+            cy = h * 0.44,
+            r = h * 0.3;
+          for (let i = 0; i < 37; i++) {
+            g.fillStyle = i === 0 ? "#1f9a4a" : i % 2 ? "#c41d2a" : "#141414";
+            g.beginPath();
+            g.moveTo(cx, cy);
+            g.arc(cx, cy, r, (i / 37) * Math.PI * 2, ((i + 1) / 37) * Math.PI * 2);
+            g.fill();
+          }
+          g.strokeStyle = "#e2b857";
+          g.lineWidth = 6;
+          g.beginPath();
+          g.arc(cx, cy, r, 0, 7);
+          g.stroke();
+          const c = g.createRadialGradient(cx, cy, 2, cx, cy, r * 0.55);
+          c.addColorStop(0, "#f6dc93");
+          c.addColorStop(1, "#7a5418");
+          g.fillStyle = c;
+          g.beginPath();
+          g.arc(cx, cy, r * 0.55, 0, 7);
+          g.fill();
+        },
+        cards(g, w, h) {
+          [
+            ["A", -0.12, -0.18],
+            ["K", 0.1, 0.12],
+          ].forEach(([v, dx, a]) => {
+            g.save();
+            g.translate(w * (0.5 + dx), h * 0.46);
+            g.rotate(a);
+            g.fillStyle = "#fbfbf7";
+            g.beginPath();
+            g.roundRect(-h * 0.17, -h * 0.24, h * 0.34, h * 0.48, 8);
+            g.fill();
+            g.fillStyle = "#141414";
+            g.font = `800 ${h * 0.16}px Georgia, serif`;
+            g.textAlign = "center";
+            g.textBaseline = "middle";
+            g.fillText(v, 0, -h * 0.03);
+            g.fillText("♠", 0, h * 0.13);
+            g.restore();
+          });
+        },
+        chips(g, w, h) {
+          [
+            [0.35, 0.44, "#c41d2a"],
+            [0.5, 0.36, "#1f5fbf"],
+            [0.64, 0.46, "#1c1c1c"],
+          ].forEach(([x, y, c]) => {
+            g.fillStyle = c;
+            g.beginPath();
+            g.arc(w * x, h * y, h * 0.14, 0, 7);
+            g.fill();
+            g.strokeStyle = "#fff";
+            g.setLineDash([9, 9]);
+            g.lineWidth = 6;
+            g.beginPath();
+            g.arc(w * x, h * y, h * 0.115, 0, 7);
+            g.stroke();
+            g.setLineDash([]);
+            g.fillStyle = "rgba(255,255,255,.9)";
+            g.beginPath();
+            g.arc(w * x, h * y, h * 0.06, 0, 7);
+            g.fill();
+          });
+        },
+      };
+
+      function coin(g, x, y, r) {
+        const c = g.createRadialGradient(x - r * 0.3, y - r * 0.3, 1, x, y, r);
+        c.addColorStop(0, "#fff2b8");
+        c.addColorStop(0.6, "#e2b857");
+        c.addColorStop(1, "#8a6216");
+        g.fillStyle = c;
+        g.beginPath();
+        g.arc(x, y, r, 0, 7);
+        g.fill();
+      }
+
+      function opalGem(g, x, y, rx, ry) {
+        const o = g.createLinearGradient(x - rx, y - ry, x + rx, y + ry);
+        o.addColorStop(0, "#7ff3ff");
+        o.addColorStop(0.3, "#b18cff");
+        o.addColorStop(0.55, "#ff9ad5");
+        o.addColorStop(0.8, "#8affc1");
+        o.addColorStop(1, "#5ab8ff");
+        g.fillStyle = "#c79a3b";
+        g.beginPath();
+        g.ellipse(x, y, rx * 1.12, ry * 1.12, 0, 0, 7);
+        g.fill();
+        g.fillStyle = o;
+        g.beginPath();
+        g.ellipse(x, y, rx, ry, 0, 0, 7);
+        g.fill();
+        g.fillStyle = "rgba(255,255,255,.45)";
+        g.beginPath();
+        g.ellipse(x - rx * 0.3, y - ry * 0.4, rx * 0.4, ry * 0.2, -0.4, 0, 7);
+        g.fill();
+      }
+
+      function crown(g, x, y, width) {
+        const s = width / 100,
+          gr = g.createLinearGradient(0, y - 40 * s, 0, y + 20 * s);
+        gr.addColorStop(0, "#fff0b0");
+        gr.addColorStop(0.5, "#e2b857");
+        gr.addColorStop(1, "#8a6216");
+        g.fillStyle = gr;
+        g.beginPath();
+        g.moveTo(x - 50 * s, y + 18 * s);
+        g.lineTo(x - 50 * s, y - 22 * s);
+        g.lineTo(x - 25 * s, y);
+        g.lineTo(x, y - 36 * s);
+        g.lineTo(x + 25 * s, y);
+        g.lineTo(x + 50 * s, y - 22 * s);
+        g.lineTo(x + 50 * s, y + 18 * s);
+        g.closePath();
+        g.fill();
+        g.fillStyle = "#e5484d";
+        g.beginPath();
+        g.arc(x, y + 6 * s, 6 * s, 0, 7);
+        g.fill();
+      }
+
+      function paintArt(game, w, h, titled = true) {
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const g = canvas.getContext("2d");
+        const bg = g.createLinearGradient(0, 0, w * 0.4, h);
+        bg.addColorStop(0, game.hue[0]);
+        bg.addColorStop(1, game.hue[1]);
+        g.fillStyle = bg;
+        g.fillRect(0, 0, w, h);
+        motifs[game.art](g, w, h);
+        const shade = g.createLinearGradient(0, h * 0.55, 0, h);
+        shade.addColorStop(0, "rgba(0,0,0,0)");
+        shade.addColorStop(1, "rgba(0,0,0,.7)");
+        g.fillStyle = shade;
+        g.fillRect(0, 0, w, h);
+        if (!titled) return canvas;
+        let size = h * 0.15;
+        g.font = `800 ${size}px Cinzel, Georgia, serif`;
+        const title = game.name.toUpperCase();
+        while (g.measureText(title).width > w * 0.88 && size > 10) {
+          size -= 2;
+          g.font = `800 ${size}px Cinzel, Georgia, serif`;
+        }
+        g.textAlign = "center";
+        g.textBaseline = "alphabetic";
+        const tg = g.createLinearGradient(0, h * 0.8 - size, 0, h * 0.84);
+        tg.addColorStop(0, "#fff8e0");
+        tg.addColorStop(1, "#e2b857");
+        g.lineWidth = size * 0.16;
+        g.strokeStyle = "rgba(20,10,0,.85)";
+        g.strokeText(title, w / 2, h * 0.86);
+        g.fillStyle = tg;
+        g.fillText(title, w / 2, h * 0.86);
+        return canvas;
+      }
+
+      const view = document.getElementById("view");
+      const art = new Map();
+      const artFor = (game) => {
+        if (!art.has(game.slug))
+          art.set(game.slug, paintArt(game, 380, 300).toDataURL("image/jpeg", 0.9));
+        return art.get(game.slug);
+      };
+
+      const tile = (game) =>
+        `<a class="tile" href="/games/${game.slug}"><img alt="${game.name}" src="${artFor(game)}" width="190" height="150">${game.badge ? `<span class="badge ${game.badge}">${game.badge.toUpperCase()}</span>` : ""}<span class="hover" aria-hidden="true"><span>Play</span></span><span class="meta"><span class="name">${game.name}</span><span class="provider">${game.provider}</span></span></a>`;
+
+      const icons = {
+        lobby:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+        new: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.6 6.6L21 9.3l-5 4.4 1.5 6.8L12 17l-5.5 3.5L8 13.7 3 9.3l6.4-.7z"/></svg>',
+        slots:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M9 5v14M15 5v14"/></svg>',
+        jackpots:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 7v10M9.5 9.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>',
+        table:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="11" height="15" rx="2"/><path d="M18 7l2 1-4 12-6-2"/></svg>',
+        live: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M6.3 6.3a8 8 0 0 0 0 11.4M17.7 6.3a8 8 0 0 1 0 11.4"/></svg>',
+        search:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>',
+      };
+
+      const categories = [
+        ["lobby", "Lobby"],
+        ["new", "New"],
+        ["slots", "Slots"],
+        ["jackpots", "Jackpots"],
+        ["table", "Table games"],
+        ["live", "Live casino"],
+      ];
+
+      function heroArt(canvas) {
+        const w = (canvas.width = 1224 * 2),
+          h = (canvas.height = 270 * 2),
+          g = canvas.getContext("2d");
+        const bg = g.createLinearGradient(0, 0, w, h);
+        bg.addColorStop(0, "#130d2a");
+        bg.addColorStop(0.55, "#2a1546");
+        bg.addColorStop(1, "#4a1d3c");
+        g.fillStyle = bg;
+        g.fillRect(0, 0, w, h);
+        g.save();
+        g.translate(w * 0.72, 0);
+        motifs.comet(g, w * 0.4, h);
+        g.restore();
+        const fade = g.createLinearGradient(0, 0, w * 0.6, 0);
+        fade.addColorStop(0, "rgba(19,13,42,.95)");
+        fade.addColorStop(1, "rgba(19,13,42,0)");
+        g.fillStyle = fade;
+        g.fillRect(0, 0, w, h);
+      }
+
+      function lobbyView() {
+        const params = new URLSearchParams(location.search);
+        const current = params.get("category") ?? "lobby";
+        const query = (params.get("q") ?? "").trim().toLowerCase();
+        const matching = games.filter(
+          (game) =>
+            (current === "lobby" || game.tags.includes(current)) &&
+            (query === "" || `${game.name} ${game.provider}`.toLowerCase().includes(query)),
+        );
+        const sections =
+          query !== "" || current !== "lobby"
+            ? [
+                [
+                  query !== ""
+                    ? `Results for “${params.get("q")}”`
+                    : categories.find(([key]) => key === current)[1],
+                  matching,
+                ],
+              ]
+            : [
+                ["New releases", games.filter((game) => game.tags.includes("new"))],
+                [
+                  "Popular slots",
+                  games.filter(
+                    (game) => game.tags.includes("popular") && !game.tags.includes("new"),
+                  ),
+                ],
+                ["Table games & live dealers", games.filter((game) => game.tags.includes("table"))],
+              ];
+        document.title = "Marlowe Casino | Online Slots, Table Games & Live Casino";
+        view.innerHTML = `
+    <div class="hero"><canvas id="hero-art"></canvas><div class="copy">
+      <span class="kicker">NEW RELEASE</span><h1>Ride the Copper Comet</h1>
+      <p>Larkspur Gaming's newest slot streaks into the lobby this week, with sticky wilds and a trail of multipliers.</p>
+      <a class="btn gold" href="/games/copper-comet" style="display:inline-block">Play now</a></div>
+      <span class="terms">18+. Play responsibly.</span><span class="dots"><i class="on"></i><i></i><i></i><i></i></span></div>
+    <div class="bar">${categories.map(([key, label]) => `<a class="chip${key === current && query === "" ? " on" : ""}" href="/?category=${key}">${icons[key]}${label}</a>`).join("")}
+      <form class="search" role="search" action="/">${icons.search}<input name="q" type="search" placeholder="Search games or providers" aria-label="Search games" value="${query === "" ? "" : params.get("q").replace(/"/g, "&quot;")}"></form></div>
+    ${sections.map(([title, list]) => `<section class="row"><h2>${title}<a href="/?category=${current === "lobby" ? (title.startsWith("New") ? "new" : title.startsWith("Popular") ? "slots" : "table") : current}">See all</a></h2><div class="grid">${list.length === 0 ? `<p class="empty">No games match your search.</p>` : list.map(tile).join("")}</div></section>`).join("")}
+    <div class="providers"><span>LARKSPUR GAMING</span><span>NORTHTIDE STUDIOS</span><span>BRIGHTFORGE</span><span>KETTLEBROOK GAMES</span><span>MARLOWE LIVE</span></div>`;
+        heroArt(document.getElementById("hero-art"));
+        const input = view.querySelector(".search input");
+        input.addEventListener("input", () => {
+          const q = input.value.trim().toLowerCase();
+          const grids = view.querySelectorAll(".grid");
+          if (q === "") return;
+          const found = games.filter((game) =>
+            `${game.name} ${game.provider}`.toLowerCase().includes(q),
+          );
+          view.querySelectorAll("section.row").forEach((section, index) => {
+            section.hidden = index > 0;
+          });
+          view.querySelector("section.row h2").firstChild.textContent =
+            `Results for “${input.value.trim()}”`;
+          grids[0].innerHTML =
+            found.length === 0
+              ? `<p class="empty">No games match your search.</p>`
+              : found.map(tile).join("");
+        });
+      }
+
+      function gameView(slug) {
+        const game = games.find((candidate) => candidate.slug === slug);
+        if (game === undefined) {
+          document.title = "Page not found | Marlowe Casino";
+          view.innerHTML = `<div style="padding:90px 0;text-align:center"><h1>We couldn't find that game</h1><p style="color:var(--muted)">It may have been removed from the lobby.</p><a class="btn gold" href="/">Back to the lobby</a></div>`;
+          return;
+        }
+        document.title = `${game.name} | Play Online at Marlowe Casino`;
+        const facts = game.facts ?? [
+          ["Provider", game.provider],
+          ["Type", game.tags.includes("table") ? "Table game" : "Video slot"],
+        ];
+        view.innerHTML = `
+    <div class="crumbs"><a href="/">Casino</a> &rsaquo; <a href="/?category=${game.tags.includes("table") ? "table" : "slots"}">${game.tags.includes("table") ? "Table games" : "Slots"}</a> &rsaquo; ${game.name}</div>
+    <div class="gamehead">
+      <div class="stage"><canvas id="stage-art"></canvas><div class="play">
+        <h1>${game.name}</h1><p class="by">by ${game.provider}</p>
+        <div class="btns"><button class="btn gold" data-open="login">Play for real</button>${game.demo ? `<button class="btn ghost" id="demo" style="background:rgba(11,12,20,.55)">Play demo</button>` : ""}</div>
+        ${game.demo ? `<p class="note">Demo play uses free credits. No deposit needed.</p>` : `<p class="unavailable">Demo play isn't available for this game.</p>`}
+      </div></div>
+      <aside class="info"><h3>Game info</h3><dl>${facts.map(([key, value]) => `<dt>${key}</dt><dd>${value}</dd>`).join("")}</dl><button class="fav" data-open="login">&#9825;&nbsp; Add to favourites</button></aside>
+    </div>
+    <div class="about"><h2>About ${game.name}</h2><p>${game.about ?? `${game.name} is available to play for real money at Marlowe Casino. Log in or join to play.`}</p></div>
+    <section class="row"><h2>You might also like</h2><div class="grid">${games
+      .filter((other) => other !== game && !other.tags.includes("table"))
+      .slice(0, 6)
+      .map(tile)
+      .join("")}</div></section>`;
+        const stage = document.getElementById("stage-art");
+        const painted = paintArt(game, 960, 540, false);
+        stage.width = 960;
+        stage.height = 540;
+        stage.getContext("2d").drawImage(painted, 0, 0);
+        document.getElementById("demo")?.addEventListener("click", () => launch(game));
+      }
+
+      function launch(game) {
+        const token = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
+        const src = `https://launch.larkspurgaming.net/opal-crown/index.html?${new URLSearchParams({ token: `demo-${token}`, mode: "fun", currency: "USD", lang: "en", operator: "marlowe", lobbyUrl: location.origin + "/" })}`;
+        document.title = `${game.name} (Demo) | Marlowe Casino`;
+        view.innerHTML = `<div class="theatre"><iframe title="${game.name}" src="${src}" allow="autoplay; fullscreen"></iframe>
+    <div class="gamebar"><b>${game.name}</b><span>${game.provider}</span><span class="tag">DEMO PLAY</span>
+      <div class="tools"><button title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button><button title="Close game" aria-label="Close game" id="close-game"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div></div>`;
+        document.querySelector("footer").hidden = true;
+        scrollTo(0, 0);
+        document.getElementById("close-game").addEventListener("click", () => {
+          document.querySelector("footer").hidden = false;
+          gameView(game.slug);
+        });
+      }
+
+      function modal(kind) {
+        const join = kind === "join";
+        const box = document.createElement("div");
+        box.className = "modal";
+        box.innerHTML = `<div class="box" role="dialog" aria-label="${join ? "Join Marlowe Casino" : "Log in"}"><button class="x" aria-label="Close">&times;</button>
+    <h3>${join ? "Join Marlowe Casino" : "Welcome back"}</h3><p>${join ? "Create your account in under a minute." : "Log in to play for real money."}</p>
+    <form>${join ? `<label>Email</label><input type="email" autocomplete="email"><label>Create a password</label><input type="password" autocomplete="new-password"><label>Date of birth</label><input placeholder="DD / MM / YYYY">` : `<label>Email</label><input type="email" autocomplete="email"><label>Password</label><input type="password" autocomplete="current-password">`}
+    <button class="btn gold" type="submit">${join ? "Create account" : "Log in"}</button><div class="error" hidden></div></form></div>`;
+        document.body.append(box);
+        const close = () => box.remove();
+        box.querySelector(".x").addEventListener("click", close);
+        box.addEventListener("click", (event) => {
+          if (event.target === box) close();
+        });
+        box.querySelector("form").addEventListener("submit", (event) => {
+          event.preventDefault();
+          const error = box.querySelector(".error");
+          error.hidden = false;
+          error.textContent = join
+            ? "We couldn't create your account right now. Please try again later."
+            : "That email and password don't match our records.";
+        });
+      }
+
+      document.addEventListener("click", (event) => {
+        const opener = event.target.closest("[data-open]");
+        if (opener) {
+          event.preventDefault();
+          modal(opener.dataset.open);
+        }
+      });
+
+      const consent = (() => {
+        try {
+          return localStorage.getItem("mc_consent");
+        } catch {
+          return null;
+        }
+      })();
+      const cookie = document.getElementById("cookie");
+      const decide = (value) => () => {
+        try {
+          localStorage.setItem("mc_consent", value);
+        } catch {}
+        cookie.remove();
+      };
+      document.getElementById("cookie-accept").addEventListener("click", decide("all"));
+      document.getElementById("cookie-reject").addEventListener("click", decide("essential"));
+      document.getElementById("cookie-settings").addEventListener("click", decide("essential"));
+      if (consent !== null) cookie.remove();
+
+      const route = () => {
+        const game = /^\/games\/([a-z0-9-]+)\/?$/.exec(location.pathname);
+        if (game) gameView(game[1]);
+        else lobbyView();
+      };
+      // The artwork is painted with the brand's typeface, so wait a moment for it.
+      Promise.race([
+        document.fonts.load("800 40px Cinzel"),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]).then(route, route);
+    </script>
+  </body>
+</html>

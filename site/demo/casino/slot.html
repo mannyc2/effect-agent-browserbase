@@ -1,0 +1,1904 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>Opal Crown</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;800;900&family=Inter:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #07040f;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        touch-action: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" aria-label="Opal Crown"></canvas>
+    <script>
+      "use strict";
+      const W = 1280,
+        H = 720;
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      const params = new URLSearchParams(location.search);
+
+      // ---------------------------------------------------------------- layout
+      const REEL_X = 265,
+        REEL_Y = 124,
+        CELL_W = 150,
+        CELL_H = 140;
+      const FRAME = { x: 248, y: 108, w: 784, h: 452 };
+      const LINE_COLOURS = [
+        "#ffd84d",
+        "#ff5c8a",
+        "#4dd2ff",
+        "#7dff6b",
+        "#ff9a3d",
+        "#c38bff",
+        "#3dffd8",
+        "#ff7ad9",
+        "#c8ff4d",
+        "#ffffff",
+      ];
+      const NAMES = {
+        TEN: "10",
+        JACK: "J",
+        QUEEN: "Q",
+        KING: "K",
+        ACE: "A",
+        EMERALD: "EMERALD",
+        SAPPHIRE: "SAPPHIRE",
+        RUBY: "RUBY",
+        CROWN: "CROWN",
+        WILD: "WILD",
+      };
+      const SYMBOLS = [
+        "TEN",
+        "JACK",
+        "QUEEN",
+        "KING",
+        "ACE",
+        "EMERALD",
+        "SAPPHIRE",
+        "RUBY",
+        "CROWN",
+        "WILD",
+      ];
+
+      let scale = 1,
+        offX = 0,
+        offY = 0,
+        dpr = 1;
+
+      function resize() {
+        dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.round(innerWidth * dpr);
+        canvas.height = Math.round(innerHeight * dpr);
+        scale = Math.min(innerWidth / W, innerHeight / H);
+        offX = (innerWidth - W * scale) / 2;
+        offY = (innerHeight - H * scale) / 2;
+        invalidate();
+      }
+
+      // ---------------------------------------------------------------- state
+      const game = {
+        phase: "loading", // loading, intro, idle, spinning, presenting, error
+        loadStarted: performance.now(),
+        loaded: false,
+        config: null,
+        session: null,
+        balance: 0,
+        shownBalance: 0,
+        bet: 100,
+        win: 0,
+        shownWin: 0,
+        message: "PLACE YOUR BETS",
+        grid: null,
+        result: null,
+        round: null,
+        reels: [],
+        presentation: null,
+        overlay: null, // { kind: "paytable", page } | { kind: "menu" }
+        bigWin: null,
+        sound: true,
+        hover: null,
+      };
+
+      const money = (cents) =>
+        "$" +
+        (cents / 100).toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+
+      // ---------------------------------------------------------------- symbol art
+      const SPRITE_W = 300,
+        SPRITE_H = 280;
+      const sprites = {},
+        blurred = {};
+
+      function makeCanvas(w, h) {
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        return c;
+      }
+
+      function glow(g, x, y, r, colour) {
+        const gr = g.createRadialGradient(x, y, 0, x, y, r);
+        gr.addColorStop(0, colour);
+        gr.addColorStop(1, "rgba(0,0,0,0)");
+        g.fillStyle = gr;
+        g.beginPath();
+        g.arc(x, y, r, 0, Math.PI * 2);
+        g.fill();
+      }
+
+      function mix(a, b, t) {
+        const pa = a.match(/\w\w/g).map((h) => parseInt(h, 16)),
+          pb = b.match(/\w\w/g).map((h) => parseInt(h, 16));
+        return "rgb(" + pa.map((v, i) => Math.round(v + (pb[i] - v) * t)).join(",") + ")";
+      }
+
+      function sparkle(g, x, y, r) {
+        g.save();
+        g.fillStyle = "rgba(255,255,255,.95)";
+        g.shadowColor = "#fff";
+        g.shadowBlur = r;
+        g.beginPath();
+        g.moveTo(x, y - r);
+        g.quadraticCurveTo(x, y, x + r, y);
+        g.quadraticCurveTo(x, y, x, y + r);
+        g.quadraticCurveTo(x, y, x - r, y);
+        g.quadraticCurveTo(x, y, x, y - r);
+        g.fill();
+        g.restore();
+      }
+
+      function facetGem(g, cx, cy, outer, inner, palette) {
+        glow(g, cx, cy, 150, palette.glow);
+        const light = [-0.55, -0.83];
+        for (let i = 0; i < outer.length; i++) {
+          const a = outer[i],
+            b = outer[(i + 1) % outer.length],
+            c = inner[(i + 1) % inner.length],
+            d = inner[i];
+          const mx = (a[0] + b[0]) / 2,
+            my = (a[1] + b[1]) / 2,
+            len = Math.hypot(mx, my) || 1;
+          const shade = Math.max(
+            0,
+            Math.min(1, ((mx / len) * light[0] + (my / len) * light[1]) * 0.5 + 0.5),
+          );
+          g.fillStyle = mix(palette.dark, palette.light, shade * 0.85);
+          g.beginPath();
+          g.moveTo(cx + a[0], cy + a[1]);
+          g.lineTo(cx + b[0], cy + b[1]);
+          g.lineTo(cx + c[0], cy + c[1]);
+          g.lineTo(cx + d[0], cy + d[1]);
+          g.closePath();
+          g.fill();
+        }
+        const table = g.createLinearGradient(cx - 60, cy - 70, cx + 60, cy + 70);
+        table.addColorStop(0, palette.light);
+        table.addColorStop(0.55, palette.mid);
+        table.addColorStop(1, palette.dark);
+        g.fillStyle = table;
+        g.beginPath();
+        inner.forEach(([x, y], i) => (i ? g.lineTo(cx + x, cy + y) : g.moveTo(cx + x, cy + y)));
+        g.closePath();
+        g.fill();
+        g.strokeStyle = "rgba(255,255,255,.28)";
+        g.lineWidth = 2;
+        for (let i = 0; i < outer.length; i++) {
+          g.beginPath();
+          g.moveTo(cx + outer[i][0], cy + outer[i][1]);
+          g.lineTo(cx + inner[i][0], cy + inner[i][1]);
+          g.stroke();
+        }
+        g.beginPath();
+        inner.forEach(([x, y], i) => (i ? g.lineTo(cx + x, cy + y) : g.moveTo(cx + x, cy + y)));
+        g.closePath();
+        g.stroke();
+        g.strokeStyle = palette.edge;
+        g.lineWidth = 6;
+        g.lineJoin = "round";
+        g.beginPath();
+        outer.forEach(([x, y], i) => (i ? g.lineTo(cx + x, cy + y) : g.moveTo(cx + x, cy + y)));
+        g.closePath();
+        g.stroke();
+        g.fillStyle = "rgba(255,255,255,.35)";
+        g.beginPath();
+        g.ellipse(cx + inner[0][0] * 0.35, cy + inner[0][1] * 0.55, 26, 9, -0.5, 0, Math.PI * 2);
+        g.fill();
+        sparkle(g, cx + outer[0][0] * 0.55, cy + outer[0][1] * 0.7, 16);
+      }
+
+      const polygon = (n, rx, ry, rotate = 0) =>
+        Array.from({ length: n }, (_, i) => {
+          const a = rotate + (i / n) * Math.PI * 2 - Math.PI / 2;
+          return [Math.cos(a) * rx, Math.sin(a) * ry];
+        });
+      const octagon = (w, h, c) => [
+        [-w / 2 + c, -h / 2],
+        [w / 2 - c, -h / 2],
+        [w / 2, -h / 2 + c],
+        [w / 2, h / 2 - c],
+        [w / 2 - c, h / 2],
+        [-w / 2 + c, h / 2],
+        [-w / 2, h / 2 - c],
+        [-w / 2, -h / 2 + c],
+      ];
+      const shrink = (points, k, dy = 0) => points.map(([x, y]) => [x * k, y * k + dy]);
+
+      function drawLetter(g, text, top, bottom, edge, size) {
+        g.save();
+        g.font = `800 ${size}px Cinzel, Georgia, serif`;
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        const x = SPRITE_W / 2,
+          y = SPRITE_H / 2 + 8;
+        glow(g, x, y, 130, top.replace("rgb", "rgba").replace(")", ",.25)"));
+        g.lineJoin = "round";
+        g.lineWidth = 22;
+        g.strokeStyle = "#12081f";
+        g.strokeText(text, x, y + 5);
+        g.lineWidth = 12;
+        g.strokeStyle = edge;
+        g.strokeText(text, x, y);
+        const fill = g.createLinearGradient(0, y - size / 2, 0, y + size / 2);
+        fill.addColorStop(0, "#ffffff");
+        fill.addColorStop(0.18, top);
+        fill.addColorStop(0.7, bottom);
+        fill.addColorStop(1, edge);
+        g.fillStyle = fill;
+        g.fillText(text, x, y);
+        g.globalCompositeOperation = "source-atop";
+        const gloss = g.createLinearGradient(0, y - size / 2, 0, y);
+        gloss.addColorStop(0, "rgba(255,255,255,.55)");
+        gloss.addColorStop(1, "rgba(255,255,255,0)");
+        g.fillStyle = gloss;
+        g.fillRect(0, 0, SPRITE_W, y - 4);
+        g.restore();
+        sparkle(g, x - size * 0.28, y - size * 0.3, 12);
+      }
+
+      function drawCrown(g) {
+        const x = SPRITE_W / 2,
+          y = SPRITE_H / 2 + 10;
+        glow(g, x, y, 150, "rgba(255,200,80,.45)");
+        const gold = g.createLinearGradient(0, y - 90, 0, y + 70);
+        gold.addColorStop(0, "#fff6c9");
+        gold.addColorStop(0.35, "#f2c94c");
+        gold.addColorStop(0.7, "#c48a1c");
+        gold.addColorStop(1, "#7a4e0a");
+        g.lineJoin = "round";
+        g.beginPath();
+        g.moveTo(x - 110, y + 40);
+        g.lineTo(x - 118, y - 62);
+        g.lineTo(x - 58, y - 8);
+        g.lineTo(x, y - 92);
+        g.lineTo(x + 58, y - 8);
+        g.lineTo(x + 118, y - 62);
+        g.lineTo(x + 110, y + 40);
+        g.closePath();
+        g.fillStyle = gold;
+        g.fill();
+        g.lineWidth = 7;
+        g.strokeStyle = "#5a3606";
+        g.stroke();
+        const band = g.createLinearGradient(0, y + 26, 0, y + 74);
+        band.addColorStop(0, "#ffe9a0");
+        band.addColorStop(0.5, "#d9a531");
+        band.addColorStop(1, "#8a5a0c");
+        g.fillStyle = band;
+        g.beginPath();
+        g.roundRect(x - 122, y + 28, 244, 46, 10);
+        g.fill();
+        g.stroke();
+        [
+          [-118, -62],
+          [0, -92],
+          [118, -62],
+        ].forEach(([dx, dy]) => {
+          const p = g.createRadialGradient(x + dx - 5, y + dy - 5, 1, x + dx, y + dy, 15);
+          p.addColorStop(0, "#fff");
+          p.addColorStop(1, "#d8cbe8");
+          g.fillStyle = p;
+          g.beginPath();
+          g.arc(x + dx, y + dy, 14, 0, Math.PI * 2);
+          g.fill();
+          g.lineWidth = 3;
+          g.stroke();
+        });
+        [
+          [-70, "#2f6bff"],
+          [0, "#ff2f55"],
+          [70, "#23c46e"],
+        ].forEach(([dx, colour]) => {
+          const j = g.createRadialGradient(x + dx - 6, y + 44, 2, x + dx, y + 51, 17);
+          j.addColorStop(0, "#fff");
+          j.addColorStop(0.35, colour);
+          j.addColorStop(1, "#14081f");
+          g.fillStyle = j;
+          g.beginPath();
+          g.ellipse(x + dx, y + 51, dx === 0 ? 20 : 15, 15, 0, 0, Math.PI * 2);
+          g.fill();
+          g.lineWidth = 3;
+          g.strokeStyle = "#5a3606";
+          g.stroke();
+        });
+        g.fillStyle = "rgba(255,255,255,.4)";
+        g.beginPath();
+        g.moveTo(x - 100, y + 30);
+        g.lineTo(x - 104, y - 40);
+        g.lineTo(x - 70, y - 6);
+        g.closePath();
+        g.fill();
+        sparkle(g, x + 4, y - 70, 18);
+        sparkle(g, x - 92, y + 36, 10);
+      }
+
+      function opal(g, x, y, rx, ry) {
+        const bezel = g.createLinearGradient(0, y - ry - 12, 0, y + ry + 12);
+        bezel.addColorStop(0, "#fff0b0");
+        bezel.addColorStop(0.5, "#d9a531");
+        bezel.addColorStop(1, "#7a4e0a");
+        g.fillStyle = bezel;
+        g.beginPath();
+        g.ellipse(x, y, rx + 12, ry + 12, 0, 0, Math.PI * 2);
+        g.fill();
+        g.lineWidth = 4;
+        g.strokeStyle = "#4a2a04";
+        g.stroke();
+        const body = g.createRadialGradient(x - rx * 0.3, y - ry * 0.3, 4, x, y, Math.max(rx, ry));
+        body.addColorStop(0, "#f4fbff");
+        body.addColorStop(1, "#7fa6c9");
+        g.fillStyle = body;
+        g.beginPath();
+        g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+        g.fill();
+        g.save();
+        g.clip();
+        const flecks = [
+          ["#ff5fb0", -0.4, -0.2],
+          ["#47e0ff", 0.35, -0.3],
+          ["#7dff9c", 0.1, 0.35],
+          ["#b78cff", -0.3, 0.4],
+          ["#ffd84d", 0.45, 0.25],
+          ["#ff8a3d", -0.05, -0.45],
+          ["#3df0d0", -0.55, 0.15],
+        ];
+        flecks.forEach(([colour, fx, fy]) => {
+          const f = g.createRadialGradient(
+            x + fx * rx,
+            y + fy * ry,
+            0,
+            x + fx * rx,
+            y + fy * ry,
+            rx * 0.55,
+          );
+          f.addColorStop(0, colour);
+          f.addColorStop(1, "rgba(255,255,255,0)");
+          g.globalAlpha = 0.75;
+          g.fillStyle = f;
+          g.fillRect(x - rx, y - ry, rx * 2, ry * 2);
+        });
+        g.globalAlpha = 1;
+        g.fillStyle = "rgba(255,255,255,.55)";
+        g.beginPath();
+        g.ellipse(x - rx * 0.35, y - ry * 0.45, rx * 0.4, ry * 0.18, -0.35, 0, Math.PI * 2);
+        g.fill();
+        g.restore();
+      }
+
+      function drawWild(g) {
+        const x = SPRITE_W / 2,
+          y = SPRITE_H / 2;
+        const panel = g.createLinearGradient(0, 12, 0, SPRITE_H - 12);
+        panel.addColorStop(0, "#5a2a9a");
+        panel.addColorStop(0.5, "#2a1060");
+        panel.addColorStop(1, "#160736");
+        g.fillStyle = panel;
+        g.beginPath();
+        g.roundRect(14, 10, SPRITE_W - 28, SPRITE_H - 20, 26);
+        g.fill();
+        const rim = g.createLinearGradient(0, 10, 0, SPRITE_H - 10);
+        rim.addColorStop(0, "#fff0b0");
+        rim.addColorStop(0.5, "#d9a531");
+        rim.addColorStop(1, "#8a5a0c");
+        g.lineWidth = 9;
+        g.strokeStyle = rim;
+        g.stroke();
+        glow(g, x, y - 26, 120, "rgba(150,220,255,.35)");
+        opal(g, x, y - 30, 70, 56);
+        g.font = "900 70px Cinzel, Georgia, serif";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.lineJoin = "round";
+        g.lineWidth = 14;
+        g.strokeStyle = "#1a0830";
+        g.strokeText("WILD", x, y + 78);
+        const fill = g.createLinearGradient(0, y + 50, 0, y + 106);
+        fill.addColorStop(0, "#fffbe6");
+        fill.addColorStop(0.45, "#ffd65c");
+        fill.addColorStop(1, "#c07a12");
+        g.fillStyle = fill;
+        g.fillText("WILD", x, y + 78);
+        sparkle(g, x + 52, y - 66, 14);
+      }
+
+      const GEMS = {
+        EMERALD: {
+          outer: octagon(158, 212, 42),
+          inner: shrink(octagon(158, 212, 42), 0.56, -4),
+          palette: {
+            light: "#c8ffe2",
+            mid: "#26c977",
+            dark: "#04512a",
+            edge: "#022515",
+            glow: "rgba(60,230,140,.32)",
+          },
+        },
+        SAPPHIRE: {
+          outer: polygon(12, 110, 110, Math.PI / 12),
+          inner: shrink(polygon(12, 110, 110, Math.PI / 12), 0.54, -4),
+          palette: {
+            light: "#d2e2ff",
+            mid: "#3170ff",
+            dark: "#0a1f78",
+            edge: "#040f3a",
+            glow: "rgba(80,140,255,.34)",
+          },
+        },
+        RUBY: {
+          outer: [
+            [-62, -98],
+            [62, -98],
+            [112, -34],
+            [0, 112],
+            [-112, -34],
+          ],
+          inner: [
+            [-36, -66],
+            [36, -66],
+            [64, -24],
+            [0, 52],
+            [-64, -24],
+          ],
+          palette: {
+            light: "#ffd0d8",
+            mid: "#ff2f55",
+            dark: "#7a0320",
+            edge: "#360010",
+            glow: "rgba(255,60,100,.34)",
+          },
+        },
+      };
+
+      const LETTERS = {
+        TEN: ["10", "#8af7e6", "#10a596", "#04463f", 150],
+        JACK: ["J", "#b4d4ff", "#2e62e0", "#0c2266", 186],
+        QUEEN: ["Q", "#f5c4ff", "#9a33d6", "#3c0b5c", 178],
+        KING: ["K", "#ffc0b0", "#d8322a", "#5c0b08", 180],
+        ACE: ["A", "#ffeaa0", "#e8840f", "#6a3404", 184],
+      };
+
+      function paintSymbol(symbol) {
+        const c = makeCanvas(SPRITE_W, SPRITE_H),
+          g = c.getContext("2d");
+        if (LETTERS[symbol]) {
+          const [text, top, bottom, edge, size] = LETTERS[symbol];
+          drawLetter(g, text, top, bottom, edge, size);
+        } else if (GEMS[symbol]) {
+          const gem = GEMS[symbol];
+          facetGem(g, SPRITE_W / 2, SPRITE_H / 2 + 4, gem.outer, gem.inner, gem.palette);
+        } else if (symbol === "CROWN") drawCrown(g);
+        else drawWild(g);
+        return c;
+      }
+
+      function blur(sprite) {
+        const c = makeCanvas(SPRITE_W, SPRITE_H + 80),
+          g = c.getContext("2d");
+        for (let i = -4; i <= 4; i++) {
+          g.globalAlpha = 0.16;
+          g.drawImage(sprite, 0, 40 + i * 9);
+        }
+        return c;
+      }
+
+      // ---------------------------------------------------------------- backdrop
+      let backdrop = null;
+
+      function paintBackdrop() {
+        const c = makeCanvas(W * 2, H * 2),
+          g = c.getContext("2d");
+        g.scale(2, 2);
+        const bg = g.createRadialGradient(W / 2, H * 0.42, 40, W / 2, H * 0.5, W * 0.75);
+        bg.addColorStop(0, "#3a1c6a");
+        bg.addColorStop(0.45, "#1d0d3d");
+        bg.addColorStop(1, "#07040f");
+        g.fillStyle = bg;
+        g.fillRect(0, 0, W, H);
+        g.save();
+        g.translate(W / 2, H + 40);
+        g.strokeStyle = "rgba(226,184,87,.07)";
+        g.lineWidth = 2;
+        for (let i = 0; i <= 36; i++) {
+          const a = Math.PI + (i / 36) * Math.PI;
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(Math.cos(a) * 1400, Math.sin(a) * 1400);
+          g.stroke();
+        }
+        for (let r = 260; r < 1100; r += 120) {
+          g.beginPath();
+          g.arc(0, 0, r, Math.PI, 0);
+          g.stroke();
+        }
+        g.restore();
+        for (let i = 0; i < 70; i++) {
+          const x = (i * 337) % W,
+            y = (i * 211) % (H * 0.9);
+          g.fillStyle = `rgba(255,${200 + (i % 5) * 10},${150 + (i % 7) * 15},${0.12 + (i % 4) * 0.08})`;
+          g.beginPath();
+          g.arc(x, y, 1 + (i % 3) * 0.8, 0, Math.PI * 2);
+          g.fill();
+        }
+        // Columns either side, art deco.
+        [
+          [90, 1],
+          [W - 90, -1],
+        ].forEach(([x]) => {
+          const col = g.createLinearGradient(x - 40, 0, x + 40, 0);
+          col.addColorStop(0, "rgba(226,184,87,0)");
+          col.addColorStop(0.5, "rgba(226,184,87,.16)");
+          col.addColorStop(1, "rgba(226,184,87,0)");
+          g.fillStyle = col;
+          g.fillRect(x - 40, 100, 80, 480);
+          g.strokeStyle = "rgba(226,184,87,.3)";
+          g.lineWidth = 1.5;
+          for (let k = 0; k < 7; k++) {
+            g.beginPath();
+            g.moveTo(x - 24, 150 + k * 60);
+            g.lineTo(x, 125 + k * 60);
+            g.lineTo(x + 24, 150 + k * 60);
+            g.stroke();
+          }
+        });
+        // The reel frame.
+        const { x, y, w, h } = FRAME;
+        g.shadowColor = "rgba(0,0,0,.7)";
+        g.shadowBlur = 40;
+        g.fillStyle = "#12072a";
+        g.beginPath();
+        g.roundRect(x, y, w, h, 22);
+        g.fill();
+        g.shadowBlur = 0;
+        const rim = g.createLinearGradient(0, y, 0, y + h);
+        rim.addColorStop(0, "#fff0b0");
+        rim.addColorStop(0.2, "#e2b857");
+        rim.addColorStop(0.55, "#8a5a0c");
+        rim.addColorStop(0.8, "#e2b857");
+        rim.addColorStop(1, "#6a420a");
+        g.lineWidth = 9;
+        g.strokeStyle = rim;
+        g.beginPath();
+        g.roundRect(x, y, w, h, 22);
+        g.stroke();
+        g.lineWidth = 2;
+        g.strokeStyle = "rgba(255,230,160,.45)";
+        g.beginPath();
+        g.roundRect(x + 9, y + 9, w - 18, h - 18, 15);
+        g.stroke();
+        for (let reel = 0; reel < 5; reel++) {
+          const rx = REEL_X + reel * CELL_W;
+          const lane = g.createLinearGradient(0, REEL_Y, 0, REEL_Y + CELL_H * 3);
+          lane.addColorStop(0, "#0d0420");
+          lane.addColorStop(0.18, "#2a1452");
+          lane.addColorStop(0.5, "#35196a");
+          lane.addColorStop(0.82, "#2a1452");
+          lane.addColorStop(1, "#0d0420");
+          g.fillStyle = lane;
+          g.fillRect(rx + 3, REEL_Y, CELL_W - 6, CELL_H * 3);
+        }
+        // The title.
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.font = "900 64px Cinzel, Georgia, serif";
+        g.lineJoin = "round";
+        g.lineWidth = 12;
+        g.strokeStyle = "#1a0830";
+        g.strokeText("OPAL CROWN", W / 2, 66);
+        const title = g.createLinearGradient(0, 36, 0, 98);
+        title.addColorStop(0, "#fffbe6");
+        title.addColorStop(0.45, "#f2c94c");
+        title.addColorStop(0.75, "#b9821a");
+        title.addColorStop(1, "#ffe9a0");
+        g.fillStyle = title;
+        g.fillText("OPAL CROWN", W / 2, 66);
+        opal(g, W / 2, 25, 11, 8);
+        sparkle(g, W / 2 + 205, 44, 12);
+        sparkle(g, W / 2 - 230, 84, 8);
+        // The control panel.
+        const panel = g.createLinearGradient(0, 604, 0, H);
+        panel.addColorStop(0, "#1a0d33");
+        panel.addColorStop(1, "#08040f");
+        g.fillStyle = panel;
+        g.fillRect(0, 604, W, H - 604);
+        const edge = g.createLinearGradient(0, 0, W, 0);
+        edge.addColorStop(0, "rgba(226,184,87,0)");
+        edge.addColorStop(0.5, "rgba(226,184,87,.9)");
+        edge.addColorStop(1, "rgba(226,184,87,0)");
+        g.fillStyle = edge;
+        g.fillRect(0, 603, W, 2);
+        return c;
+      }
+
+      // ---------------------------------------------------------------- reels
+      const MARKERS = (() => {
+        // Each line's marker beside the reels, at the row it starts and ends on.
+        const left = { 0: [2, 4, 6], 1: [10, 8, 1, 9], 2: [3, 5, 7] },
+          right = { 0: [2, 4, 7], 1: [10, 8, 1, 9], 2: [3, 5, 6] };
+        const place = (groups) => {
+          const at = {};
+          Object.entries(groups).forEach(([row, list]) =>
+            list.forEach((line, i) => {
+              at[line] =
+                REEL_Y + Number(row) * CELL_H + CELL_H / 2 + (i - (list.length - 1) / 2) * 31;
+            }),
+          );
+          return at;
+        };
+        return { left: place(left), right: place(right) };
+      })();
+
+      const cellCentre = (reel, row) => [
+        REEL_X + reel * CELL_W + CELL_W / 2,
+        REEL_Y + row * CELL_H + CELL_H / 2,
+      ];
+
+      function randomSymbol(reel) {
+        const strip = game.config.strips[reel];
+        return strip[Math.floor(Math.random() * strip.length)];
+      }
+
+      function startReels(now) {
+        game.reels = game.grid.map((column, reel) => {
+          // The tape runs upward from the symbols showing now: bottom, middle, top.
+          const tape = [column[2], column[1], column[0]];
+          return {
+            tape,
+            start: now + reel * 70,
+            speed: 17,
+            pos: 0,
+            stopAt: null,
+            stop: null,
+            landed: false,
+            target: null,
+          };
+        });
+      }
+
+      function tapeAt(reel, index) {
+        while (reel.tape.length <= index) reel.tape.push(randomSymbol(game.reels.indexOf(reel)));
+        return reel.tape[index];
+      }
+
+      function scheduleStops(now, grid) {
+        const base = Math.max(now + 160, game.reels[0].start + 820);
+        game.reels.forEach((reel, i) => {
+          reel.stopAt = base + i * 210;
+          reel.target = grid[i];
+        });
+      }
+
+      function updateReels(now) {
+        let moving = false;
+        for (const reel of game.reels) {
+          if (reel.landed) continue;
+          moving = true;
+          if (now < reel.start) continue;
+          const run = (now - reel.start) / 1000;
+          if (reel.stop === null) {
+            // Up to speed in a fifth of a second, then steady.
+            const ramp = Math.min(1, run / 0.2);
+            const pos = run < 0.2 ? (reel.speed * 0.2 * ramp * ramp) / 2 : reel.speed * (run - 0.1);
+            reel.pos = Math.max(-0.12 * Math.sin(Math.min(1, run / 0.12) * Math.PI), pos);
+            if (reel.stopAt !== null && now >= reel.stopAt) {
+              // Ease into the result: the tape gets the result's three symbols where the reel will stop.
+              const duration = 0.42,
+                distance = Math.max(3, Math.round((reel.speed * duration) / 2.6));
+              const land = Math.ceil(reel.pos) + distance;
+              tapeAt(reel, land + 4);
+              reel.tape[land] = reel.target[2];
+              reel.tape[land + 1] = reel.target[1];
+              reel.tape[land + 2] = reel.target[0];
+              reel.stop = { from: reel.pos, to: land, at: now, duration: duration * 1000 };
+            }
+          } else {
+            const u = Math.min(1, (now - reel.stop.at) / reel.stop.duration);
+            const c1 = 1.2,
+              c3 = c1 + 1,
+              eased = 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2);
+            reel.pos = reel.stop.from + (reel.stop.to - reel.stop.from) * eased;
+            if (u >= 1) {
+              reel.pos = reel.stop.to;
+              reel.landed = true;
+            }
+          }
+        }
+        return moving;
+      }
+
+      function drawReels(g, now) {
+        g.save();
+        g.beginPath();
+        g.rect(REEL_X, REEL_Y, CELL_W * 5, CELL_H * 3);
+        g.clip();
+        const spinning = game.phase === "spinning";
+        for (let reel = 0; reel < 5; reel++) {
+          const x = REEL_X + reel * CELL_W;
+          if (spinning && game.reels[reel] && !game.reels[reel].landed) {
+            const r = game.reels[reel];
+            const base = Math.floor(r.pos);
+            const fast =
+              r.stop === null ? now >= r.start + 120 : now - r.stop.at < r.stop.duration * 0.45;
+            for (let k = base - 1; k <= base + 3; k++) {
+              if (k < 0) continue;
+              const symbol = tapeAt(r, k);
+              const y = REEL_Y + 2 * CELL_H - (k - r.pos) * CELL_H;
+              if (fast)
+                g.drawImage(
+                  blurred[symbol],
+                  x,
+                  y - (CELL_H * 40) / SPRITE_H,
+                  CELL_W,
+                  (CELL_H * (SPRITE_H + 80)) / SPRITE_H,
+                );
+              else g.drawImage(sprites[symbol], x, y, CELL_W, CELL_H);
+            }
+          } else {
+            for (let row = 0; row < 3; row++) drawCell(g, reel, row, now);
+          }
+        }
+        g.restore();
+        // Shade the reels' top and bottom edges.
+        const top = g.createLinearGradient(0, REEL_Y, 0, REEL_Y + 26);
+        top.addColorStop(0, "rgba(8,3,18,.75)");
+        top.addColorStop(1, "rgba(8,3,18,0)");
+        g.fillStyle = top;
+        g.fillRect(REEL_X, REEL_Y, CELL_W * 5, 26);
+        const bottom = g.createLinearGradient(0, REEL_Y + CELL_H * 3 - 26, 0, REEL_Y + CELL_H * 3);
+        bottom.addColorStop(0, "rgba(8,3,18,0)");
+        bottom.addColorStop(1, "rgba(8,3,18,.75)");
+        g.fillStyle = bottom;
+        g.fillRect(REEL_X, REEL_Y + CELL_H * 3 - 26, CELL_W * 5, 26);
+        g.strokeStyle = "rgba(226,184,87,.35)";
+        g.lineWidth = 2;
+        for (let reel = 1; reel < 5; reel++) {
+          const x = REEL_X + reel * CELL_W;
+          g.beginPath();
+          g.moveTo(x, REEL_Y + 6);
+          g.lineTo(x, REEL_Y + CELL_H * 3 - 6);
+          g.stroke();
+        }
+      }
+
+      function drawCell(g, reel, row, now) {
+        const symbol = game.grid[reel][row];
+        const x = REEL_X + reel * CELL_W,
+          y = REEL_Y + row * CELL_H;
+        const p = game.presentation;
+        const lit = p && p.cells.has(reel * 3 + row);
+        const dim = p && p.phase !== "done" && !lit;
+        let s = 1;
+        if (lit && p.phase !== "done")
+          s = 1 + 0.07 * Math.max(0, Math.sin(((now - p.phaseAt) / 420) * Math.PI));
+        g.save();
+        if (dim) g.globalAlpha = 0.45;
+        g.translate(x + CELL_W / 2, y + CELL_H / 2);
+        g.scale(s, s);
+        g.drawImage(sprites[symbol], -CELL_W / 2, -CELL_H / 2, CELL_W, CELL_H);
+        g.restore();
+      }
+
+      // ---------------------------------------------------------------- wins
+      function linePoints(line) {
+        const rows = game.config.lines[line - 1];
+        const points = [[REEL_X - 14, MARKERS.left[line]]];
+        rows.forEach((row, reel) => points.push(cellCentre(reel, row)));
+        points.push([REEL_X + CELL_W * 5 + 14, MARKERS.right[line]]);
+        return points;
+      }
+
+      function drawLine(g, line, alpha) {
+        const colour = LINE_COLOURS[line - 1];
+        g.save();
+        g.globalAlpha = alpha;
+        g.lineJoin = "round";
+        g.lineCap = "round";
+        const pts = linePoints(line);
+        g.strokeStyle = "rgba(0,0,0,.55)";
+        g.lineWidth = 11;
+        g.beginPath();
+        pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+        g.stroke();
+        g.shadowColor = colour;
+        g.shadowBlur = 14;
+        g.strokeStyle = colour;
+        g.lineWidth = 6;
+        g.stroke();
+        g.restore();
+      }
+
+      function frameCells(g, cells, colour) {
+        g.save();
+        g.strokeStyle = colour;
+        g.lineWidth = 4;
+        g.shadowColor = colour;
+        g.shadowBlur = 16;
+        cells.forEach((cell) => {
+          const reel = Math.floor(cell / 3),
+            row = cell % 3;
+          g.beginPath();
+          g.roundRect(
+            REEL_X + reel * CELL_W + 6,
+            REEL_Y + row * CELL_H + 6,
+            CELL_W - 12,
+            CELL_H - 12,
+            14,
+          );
+          g.stroke();
+        });
+        g.restore();
+      }
+
+      const winCells = (win) => {
+        const rows = game.config.lines[win.line - 1];
+        return rows.slice(0, win.count).map((row, reel) => reel * 3 + row);
+      };
+
+      function present(now, result) {
+        const wins = result.wins;
+        const cells = new Set(wins.flatMap(winCells));
+        const big = result.win >= game.bet * 10;
+        game.presentation = {
+          wins,
+          cells,
+          phase: big ? "big" : "all",
+          phaseAt: now,
+          index: 0,
+          rollFrom: 0,
+        };
+        if (big) startBigWin(now, result.win);
+        game.message = big ? "" : "WIN " + money(result.win);
+      }
+
+      function updatePresentation(now) {
+        const p = game.presentation;
+        if (!p) return false;
+        const since = now - p.phaseAt;
+        if (p.phase === "big") {
+          if (!game.bigWin) {
+            p.phase = "all";
+            p.phaseAt = now;
+            game.shownWin = game.result.win;
+          }
+          return true;
+        }
+        if (p.phase === "all") {
+          game.shownWin = Math.round(game.result.win * Math.min(1, since / 900));
+          game.message = "WIN " + money(game.shownWin);
+          if (since >= 1500) {
+            game.shownWin = game.result.win;
+            game.shownBalance = game.balance;
+            if (p.wins.length > 1) {
+              p.phase = "each";
+              p.index = 0;
+              p.phaseAt = now;
+            } else {
+              finishPresentation();
+              return false;
+            }
+          }
+          return true;
+        }
+        if (p.phase === "each") {
+          const win = p.wins[p.index];
+          game.message = `LINE ${win.line} PAYS ${money(win.pay)}`;
+          if (since >= 1300) {
+            p.index++;
+            p.phaseAt = now;
+            if (p.index >= p.wins.length) {
+              finishPresentation();
+              return false;
+            }
+          }
+          return true;
+        }
+        return false;
+      }
+
+      function finishPresentation() {
+        const p = game.presentation;
+        p.phase = "done";
+        game.shownWin = game.result.win;
+        game.shownBalance = game.balance;
+        game.message =
+          p.wins.length === 1
+            ? `LINE ${p.wins[0].line} PAYS ${money(p.wins[0].pay)}`
+            : "TOTAL WIN " + money(game.result.win);
+        game.phase = "idle";
+      }
+
+      function drawPresentation(g, now) {
+        const p = game.presentation;
+        if (!p || p.phase === "big") return;
+        if (p.phase === "each") {
+          const win = p.wins[p.index];
+          drawLine(g, win.line, 1);
+          frameCells(g, winCells(win), LINE_COLOURS[win.line - 1]);
+          const [x, y] = cellCentre(win.count - 1, game.config.lines[win.line - 1][win.count - 1]);
+          badge(g, x, y + CELL_H / 2 - 16, money(win.pay), LINE_COLOURS[win.line - 1]);
+          return;
+        }
+        p.wins.forEach((win) => drawLine(g, win.line, p.phase === "done" ? 0.8 : 1));
+        p.wins.forEach((win) => frameCells(g, winCells(win), LINE_COLOURS[win.line - 1]));
+      }
+
+      function badge(g, x, y, text, colour) {
+        g.save();
+        g.font = "800 22px Inter, system-ui, sans-serif";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        const w = g.measureText(text).width + 28;
+        g.fillStyle = "rgba(10,4,24,.92)";
+        g.strokeStyle = colour;
+        g.lineWidth = 3;
+        g.beginPath();
+        g.roundRect(x - w / 2, y - 18, w, 36, 18);
+        g.fill();
+        g.stroke();
+        g.fillStyle = "#fff";
+        g.fillText(text, x, y + 1);
+        g.restore();
+      }
+
+      // ---------------------------------------------------------------- big win
+      function startBigWin(now, amount) {
+        const coins = Array.from({ length: 46 }, (_, i) => ({
+          x: W / 2 + (Math.random() - 0.5) * 120,
+          y: H * 0.46,
+          vx: (Math.random() - 0.5) * 900,
+          vy: -500 - Math.random() * 700,
+          spin: Math.random() * 10,
+          delay: (i % 12) * 60,
+        }));
+        game.bigWin = {
+          at: now,
+          amount,
+          coins,
+          label: amount >= game.bet * 50 ? "MEGA WIN" : "BIG WIN",
+        };
+      }
+
+      function updateBigWin(now) {
+        const b = game.bigWin;
+        if (!b) return false;
+        if (now - b.at > 3400) {
+          game.bigWin = null;
+          return true;
+        }
+        return true;
+      }
+
+      function drawBigWin(g, now) {
+        const b = game.bigWin;
+        if (!b) return;
+        const t = (now - b.at) / 1000;
+        const fade = t > 3.05 ? Math.max(0, 1 - (t - 3.05) / 0.35) : Math.min(1, t / 0.25);
+        g.save();
+        g.globalAlpha = fade;
+        g.fillStyle = "rgba(6,2,16,.72)";
+        g.fillRect(0, 0, W, H);
+        glow(g, W / 2, H * 0.44, 420, "rgba(255,190,60,.35)");
+        g.save();
+        g.translate(W / 2, H * 0.44);
+        g.rotate(t * 0.25);
+        for (let i = 0; i < 16; i++) {
+          g.rotate(Math.PI / 8);
+          g.fillStyle = "rgba(255,215,110,.08)";
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(700, -50);
+          g.lineTo(700, 50);
+          g.fill();
+        }
+        g.restore();
+        for (const coin of b.coins) {
+          const ct = t - coin.delay / 1000;
+          if (ct < 0) continue;
+          const x = coin.x + coin.vx * ct,
+            y = coin.y + coin.vy * ct + 900 * ct * ct;
+          if (y > H + 40) continue;
+          const squash = Math.abs(Math.cos(coin.spin + ct * 9));
+          const c = g.createRadialGradient(x - 4, y - 4, 1, x, y, 18);
+          c.addColorStop(0, "#fff6c9");
+          c.addColorStop(0.6, "#e2b857");
+          c.addColorStop(1, "#7a4e0a");
+          g.fillStyle = c;
+          g.beginPath();
+          g.ellipse(x, y, 17 * Math.max(0.15, squash), 17, 0, 0, Math.PI * 2);
+          g.fill();
+        }
+        const pop = Math.min(1, t / 0.35),
+          s = 0.6 + 0.4 * (1 - Math.pow(1 - pop, 3)) + 0.03 * Math.sin(t * 6);
+        g.save();
+        g.translate(W / 2, H * 0.38);
+        g.scale(s, s);
+        g.font = "900 124px Cinzel, Georgia, serif";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.lineJoin = "round";
+        g.lineWidth = 20;
+        g.strokeStyle = "#2a0f00";
+        g.strokeText(b.label, 0, 0);
+        const fill = g.createLinearGradient(0, -60, 0, 60);
+        fill.addColorStop(0, "#fffbe6");
+        fill.addColorStop(0.4, "#ffd65c");
+        fill.addColorStop(0.75, "#d0800f");
+        fill.addColorStop(1, "#ffe9a0");
+        g.fillStyle = fill;
+        g.shadowColor = "#ffb020";
+        g.shadowBlur = 30;
+        g.fillText(b.label, 0, 0);
+        g.restore();
+        const shown = Math.round(b.amount * Math.min(1, t / 1.6));
+        game.shownWin = shown;
+        g.font = "800 72px Inter, system-ui, sans-serif";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.lineWidth = 12;
+        g.strokeStyle = "#1a0830";
+        g.strokeText(money(shown), W / 2, H * 0.58);
+        g.fillStyle = "#ffffff";
+        g.fillText(money(shown), W / 2, H * 0.58);
+        g.restore();
+      }
+
+      // ---------------------------------------------------------------- controls
+      const BUTTONS = {
+        menu: { x: 52, y: 662, r: 24 },
+        info: { x: 112, y: 662, r: 24 },
+        sound: { x: 172, y: 662, r: 24 },
+        minus: { x: 486, y: 664, r: 22 },
+        plus: { x: 674, y: 664, r: 22 },
+        spin: { x: 1150, y: 660, r: 50 },
+      };
+
+      function circleButton(g, b, enabled, hovered, icon) {
+        g.save();
+        const fill = g.createLinearGradient(0, b.y - b.r, 0, b.y + b.r);
+        fill.addColorStop(0, hovered && enabled ? "#4a2f86" : "#36205f");
+        fill.addColorStop(1, "#1a0d33");
+        g.fillStyle = fill;
+        g.beginPath();
+        g.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+        g.fill();
+        g.lineWidth = 2;
+        g.strokeStyle = enabled ? "rgba(226,184,87,.85)" : "rgba(226,184,87,.25)";
+        g.stroke();
+        g.globalAlpha = enabled ? 1 : 0.32;
+        g.strokeStyle = "#f5e6c2";
+        g.fillStyle = "#f5e6c2";
+        g.lineWidth = 3;
+        g.lineCap = "round";
+        icon(g, b.x, b.y);
+        g.restore();
+      }
+
+      const iconMinus = (g, x, y) => {
+        g.beginPath();
+        g.moveTo(x - 9, y);
+        g.lineTo(x + 9, y);
+        g.stroke();
+      };
+      const iconPlus = (g, x, y) => {
+        iconMinus(g, x, y);
+        g.beginPath();
+        g.moveTo(x, y - 9);
+        g.lineTo(x, y + 9);
+        g.stroke();
+      };
+      const iconMenu = (g, x, y) => {
+        [-7, 0, 7].forEach((d) => {
+          g.beginPath();
+          g.moveTo(x - 10, y + d);
+          g.lineTo(x + 10, y + d);
+          g.stroke();
+        });
+      };
+      const iconInfo = (g, x, y) => {
+        g.font = "800 24px Georgia, serif";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.fillText("i", x, y + 1);
+      };
+      const iconSound = (g, x, y) => {
+        g.beginPath();
+        g.moveTo(x - 11, y - 5);
+        g.lineTo(x - 5, y - 5);
+        g.lineTo(x + 2, y - 11);
+        g.lineTo(x + 2, y + 11);
+        g.lineTo(x - 5, y + 5);
+        g.lineTo(x - 11, y + 5);
+        g.closePath();
+        g.fill();
+        if (game.sound) {
+          g.lineWidth = 2.5;
+          g.beginPath();
+          g.arc(x + 3, y, 8, -0.7, 0.7);
+          g.stroke();
+          g.beginPath();
+          g.arc(x + 3, y, 13, -0.7, 0.7);
+          g.stroke();
+        } else {
+          g.lineWidth = 2.5;
+          g.beginPath();
+          g.moveTo(x + 7, y - 5);
+          g.lineTo(x + 15, y + 5);
+          g.moveTo(x + 15, y - 5);
+          g.lineTo(x + 7, y + 5);
+          g.stroke();
+        }
+      };
+
+      function readout(g, x, label, value, colour = "#ffffff") {
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.font = "700 13px Inter, system-ui, sans-serif";
+        g.fillStyle = "rgba(226,200,150,.75)";
+        g.save();
+        g.letterSpacing = "2px";
+        g.fillText(label, x, 640);
+        g.restore();
+        g.font = "800 27px Inter, system-ui, sans-serif";
+        g.fillStyle = colour;
+        g.fillText(value, x, 672);
+      }
+
+      function drawControls(g, now) {
+        const idle = game.phase === "idle" && !game.overlay;
+        const levels = game.config.betLevels,
+          at = levels.indexOf(game.bet);
+        circleButton(g, BUTTONS.menu, true, game.hover === "menu", iconMenu);
+        circleButton(
+          g,
+          BUTTONS.info,
+          idle || game.overlay?.kind === "paytable",
+          game.hover === "info",
+          iconInfo,
+        );
+        circleButton(g, BUTTONS.sound, true, game.hover === "sound", iconSound);
+        readout(g, 330, "BALANCE", money(game.shownBalance));
+        circleButton(g, BUTTONS.minus, idle && at > 0, game.hover === "minus", iconMinus);
+        circleButton(
+          g,
+          BUTTONS.plus,
+          idle && at < levels.length - 1,
+          game.hover === "plus",
+          iconPlus,
+        );
+        readout(g, 580, "TOTAL BET", money(game.bet));
+        readout(g, 880, "WIN", money(game.shownWin), game.shownWin > 0 ? "#ffd65c" : "#ffffff");
+        // Spin.
+        const b = BUTTONS.spin,
+          ready = game.phase === "idle" && !game.overlay;
+        g.save();
+        g.shadowColor = ready ? "rgba(255,200,80,.55)" : "rgba(0,0,0,0)";
+        g.shadowBlur = 22;
+        const ring = g.createLinearGradient(0, b.y - b.r, 0, b.y + b.r);
+        ring.addColorStop(0, "#fff0b0");
+        ring.addColorStop(0.5, "#d9a531");
+        ring.addColorStop(1, "#7a4e0a");
+        g.fillStyle = ring;
+        g.beginPath();
+        g.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+        g.fill();
+        g.shadowBlur = 0;
+        const face = g.createRadialGradient(b.x - 14, b.y - 18, 4, b.x, b.y, b.r - 6);
+        if (ready) {
+          face.addColorStop(0, game.hover === "spin" ? "#8af0b8" : "#6fe0a4");
+          face.addColorStop(0.6, "#14a35a");
+          face.addColorStop(1, "#06532c");
+        } else {
+          face.addColorStop(0, "#9a9aa6");
+          face.addColorStop(1, "#3a3a46");
+        }
+        g.fillStyle = face;
+        g.beginPath();
+        g.arc(b.x, b.y, b.r - 6, 0, Math.PI * 2);
+        g.fill();
+        g.strokeStyle = "#ffffff";
+        g.fillStyle = "#ffffff";
+        g.lineWidth = 6;
+        g.lineCap = "round";
+        const turn = game.phase === "spinning" ? (now / 160) % (Math.PI * 2) : 0;
+        g.translate(b.x, b.y);
+        g.rotate(turn);
+        g.beginPath();
+        g.arc(0, 0, 22, -Math.PI * 0.15, Math.PI * 1.35);
+        g.stroke();
+        g.beginPath();
+        g.moveTo(22 * Math.cos(-Math.PI * 0.15) + 9, 22 * Math.sin(-Math.PI * 0.15) - 2);
+        g.lineTo(22 * Math.cos(-Math.PI * 0.15) - 6, 22 * Math.sin(-Math.PI * 0.15) - 12);
+        g.lineTo(22 * Math.cos(-Math.PI * 0.15) - 7, 22 * Math.sin(-Math.PI * 0.15) + 7);
+        g.closePath();
+        g.fill();
+        g.restore();
+        // Small print.
+        g.font = "600 11px Inter, system-ui, sans-serif";
+        g.textAlign = "left";
+        g.textBaseline = "middle";
+        g.fillStyle = "rgba(226,200,150,.5)";
+        g.fillText(
+          "DEMO PLAY  |  10 LINES" + (game.round ? "  |  ROUND " + game.round : ""),
+          24,
+          708,
+        );
+        g.textAlign = "right";
+        g.fillText("LARKSPUR GAMING  |  v1.4.2", W - 24, 708);
+      }
+
+      function drawMessage(g) {
+        if (!game.message) return;
+        g.save();
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.font = "800 21px Inter, system-ui, sans-serif";
+        g.letterSpacing = "3px";
+        g.fillStyle =
+          game.message.startsWith("LINE") || game.message.includes("WIN") ? "#ffd65c" : "#f5e6c2";
+        g.shadowColor = "rgba(0,0,0,.8)";
+        g.shadowBlur = 8;
+        g.fillText(game.message, W / 2, 582);
+        g.restore();
+      }
+
+      function drawMarkers(g) {
+        const p = game.presentation,
+          active =
+            p && p.phase !== "done"
+              ? p.phase === "each"
+                ? [p.wins[p.index].line]
+                : p.wins.map((w) => w.line)
+              : p
+                ? p.wins.map((w) => w.line)
+                : [];
+        for (let line = 1; line <= 10; line++) {
+          [
+            [REEL_X - 26, MARKERS.left[line]],
+            [REEL_X + CELL_W * 5 + 26, MARKERS.right[line]],
+          ].forEach(([x, y]) => {
+            const on = active.includes(line);
+            g.save();
+            g.fillStyle = on ? LINE_COLOURS[line - 1] : "#1d0f3a";
+            g.strokeStyle = LINE_COLOURS[line - 1];
+            g.lineWidth = 2;
+            if (on) {
+              g.shadowColor = LINE_COLOURS[line - 1];
+              g.shadowBlur = 12;
+            }
+            g.beginPath();
+            g.arc(x, y, 13, 0, Math.PI * 2);
+            g.fill();
+            g.stroke();
+            g.font = "800 13px Inter, system-ui, sans-serif";
+            g.textAlign = "center";
+            g.textBaseline = "middle";
+            g.fillStyle = on ? "#120624" : LINE_COLOURS[line - 1];
+            g.shadowBlur = 0;
+            g.fillText(String(line), x, y + 1);
+            g.restore();
+          });
+        }
+      }
+
+      // ---------------------------------------------------------------- paytable and menu
+      const CLOSE = { x: 1150, y: 92, r: 22 },
+        PREV = { x: 560, y: 560, r: 22 },
+        NEXT = { x: 720, y: 560, r: 22 };
+
+      function panel(g, title) {
+        g.fillStyle = "rgba(4,1,10,.8)";
+        g.fillRect(0, 0, W, H);
+        const fill = g.createLinearGradient(0, 60, 0, 600);
+        fill.addColorStop(0, "#26124a");
+        fill.addColorStop(1, "#12072a");
+        g.fillStyle = fill;
+        g.beginPath();
+        g.roundRect(100, 60, 1080, 540, 24);
+        g.fill();
+        g.lineWidth = 4;
+        g.strokeStyle = "#d9a531";
+        g.stroke();
+        g.font = "900 34px Cinzel, Georgia, serif";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.fillStyle = "#ffd65c";
+        g.fillText(title, W / 2, 104);
+        circleButton(g, CLOSE, true, game.hover === "close", (c, x, y) => {
+          c.beginPath();
+          c.moveTo(x - 8, y - 8);
+          c.lineTo(x + 8, y + 8);
+          c.moveTo(x + 8, y - 8);
+          c.lineTo(x - 8, y + 8);
+          c.stroke();
+        });
+      }
+
+      function drawPaytable(g) {
+        const page = game.overlay.page;
+        panel(g, page === 0 ? "PAYTABLE" : "PAYLINES");
+        if (page === 0) {
+          const order = [
+            "CROWN",
+            "RUBY",
+            "SAPPHIRE",
+            "EMERALD",
+            "ACE",
+            "KING",
+            "QUEEN",
+            "JACK",
+            "TEN",
+          ];
+          order.forEach((symbol, i) => {
+            const col = i % 3,
+              row = Math.floor(i / 3),
+              x = 150 + col * 250,
+              y = 150 + row * 128;
+            g.drawImage(sprites[symbol], x, y, 120, 112);
+            g.textAlign = "left";
+            g.textBaseline = "middle";
+            [5, 4, 3].forEach((count, k) => {
+              const pay = Math.round((game.bet * game.config.pays[symbol][count - 3]) / 10);
+              g.font = "800 19px Inter, system-ui, sans-serif";
+              g.fillStyle = "#ffd65c";
+              g.fillText(String(count), x + 128, y + 30 + k * 28);
+              g.font = "700 19px Inter, system-ui, sans-serif";
+              g.fillStyle = "#ffffff";
+              g.fillText(money(pay), x + 150, y + 30 + k * 28);
+            });
+          });
+          g.drawImage(sprites.WILD, 900, 150, 150, 140);
+          g.textAlign = "center";
+          g.fillStyle = "#ffd65c";
+          g.font = "900 24px Cinzel, Georgia, serif";
+          g.fillText("OPAL WILD", 975, 312);
+          g.font = "600 17px Inter, system-ui, sans-serif";
+          g.fillStyle = "#e9e1f5";
+          ["Substitutes for all", "symbols. Appears on", "reels 2, 3 and 4 only."].forEach(
+            (text, i) => g.fillText(text, 975, 348 + i * 26),
+          );
+          g.font = "600 15px Inter, system-ui, sans-serif";
+          g.fillStyle = "rgba(233,225,245,.7)";
+          g.fillText(
+            "Pays shown for the current total bet of " + money(game.bet) + ".",
+            W / 2,
+            532,
+          );
+        } else {
+          game.config.lines.forEach((rows, i) => {
+            const col = i % 5,
+              row = Math.floor(i / 5),
+              x = 170 + col * 192,
+              y = 150 + row * 130;
+            g.font = "800 15px Inter, system-ui, sans-serif";
+            g.textAlign = "left";
+            g.fillStyle = LINE_COLOURS[i];
+            g.fillText("LINE " + (i + 1), x, y - 12);
+            for (let reel = 0; reel < 5; reel++)
+              for (let r = 0; r < 3; r++) {
+                g.fillStyle = rows[reel] === r ? LINE_COLOURS[i] : "rgba(255,255,255,.12)";
+                g.fillRect(x + reel * 27, y + r * 27, 23, 23);
+              }
+          });
+          g.font = "600 16px Inter, system-ui, sans-serif";
+          g.textAlign = "center";
+          g.fillStyle = "#e9e1f5";
+          [
+            "All wins pay left to right on adjacent reels, starting from the leftmost reel. Only the highest win on each line",
+            "is paid, and wins on different lines are added. Line pays are multiples of the line bet: the total bet divided by 10.",
+            "Malfunction voids all pays and plays.",
+          ].forEach((text, i) => g.fillText(text, W / 2, 440 + i * 28));
+        }
+        circleButton(g, PREV, page > 0, game.hover === "prev", (c, x, y) => {
+          c.beginPath();
+          c.moveTo(x + 4, y - 9);
+          c.lineTo(x - 5, y);
+          c.lineTo(x + 4, y + 9);
+          c.stroke();
+        });
+        circleButton(g, NEXT, page < 1, game.hover === "next", (c, x, y) => {
+          c.beginPath();
+          c.moveTo(x - 4, y - 9);
+          c.lineTo(x + 5, y);
+          c.lineTo(x - 4, y + 9);
+          c.stroke();
+        });
+        g.font = "700 16px Inter, system-ui, sans-serif";
+        g.fillStyle = "#e9e1f5";
+        g.textAlign = "center";
+        g.fillText(`${page + 1} / 2`, W / 2, 561);
+      }
+
+      const MENU_ITEMS = [
+        ["sound", () => (game.sound ? "SOUND: ON" : "SOUND: OFF")],
+        ["history", () => "GAME HISTORY"],
+        ["lobby", () => "EXIT TO LOBBY"],
+      ];
+      function drawMenu(g) {
+        g.fillStyle = "rgba(4,1,10,.55)";
+        g.fillRect(0, 0, W, H);
+        g.fillStyle = "#1d0f3a";
+        g.strokeStyle = "#d9a531";
+        g.lineWidth = 3;
+        g.beginPath();
+        g.roundRect(30, 430, 280, 196, 16);
+        g.fill();
+        g.stroke();
+        MENU_ITEMS.forEach(([key, label], i) => {
+          const y = 470 + i * 56;
+          g.fillStyle = game.hover === "menu-" + key ? "rgba(226,184,87,.18)" : "rgba(0,0,0,0)";
+          g.fillRect(40, y - 24, 260, 48);
+          g.font = "700 17px Inter, system-ui, sans-serif";
+          g.textAlign = "left";
+          g.textBaseline = "middle";
+          g.fillStyle = key === "history" ? "rgba(245,230,194,.4)" : "#f5e6c2";
+          g.fillText(label(), 64, y);
+        });
+      }
+
+      // ---------------------------------------------------------------- loading and intro
+      function drawLoading(g, now) {
+        g.fillStyle = "#0b0716";
+        g.fillRect(0, 0, W, H);
+        const x = W / 2,
+          y = H / 2 - 50;
+        // The studio's mark: a larkspur spike.
+        for (let i = 0; i < 9; i++) {
+          const fy = y - 70 + i * 15,
+            fx = x + Math.sin(i * 1.3) * 4,
+            r = 13 - i * 0.6;
+          g.fillStyle = `hsl(${262 - i * 6}, 70%, ${62 - i * 2}%)`;
+          for (let p = 0; p < 5; p++) {
+            const a = (p / 5) * Math.PI * 2 + i;
+            g.beginPath();
+            g.ellipse(
+              fx + Math.cos(a) * r * 0.7,
+              fy + Math.sin(a) * r * 0.5,
+              r * 0.55,
+              r * 0.35,
+              a,
+              0,
+              Math.PI * 2,
+            );
+            g.fill();
+          }
+        }
+        g.strokeStyle = "#4f8a3a";
+        g.lineWidth = 3;
+        g.beginPath();
+        g.moveTo(x, y + 52);
+        g.lineTo(x, y + 110);
+        g.stroke();
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.font = "700 30px Inter, system-ui, sans-serif";
+        g.fillStyle = "#f2eefa";
+        g.save();
+        g.letterSpacing = "8px";
+        g.fillText("LARKSPUR", x, y + 150);
+        g.restore();
+        g.font = "600 13px Inter, system-ui, sans-serif";
+        g.fillStyle = "#9c8fc0";
+        g.save();
+        g.letterSpacing = "6px";
+        g.fillText("GAMING", x, y + 180);
+        g.restore();
+        const progress = Math.min(game.loaded ? 1 : 0.92, (now - game.loadStarted) / 1500);
+        g.fillStyle = "#231a3d";
+        g.beginPath();
+        g.roundRect(x - 160, y + 230, 320, 6, 3);
+        g.fill();
+        g.fillStyle = "#b48cff";
+        g.beginPath();
+        g.roundRect(x - 160, y + 230, 320 * progress, 6, 3);
+        g.fill();
+        g.font = "600 12px Inter, system-ui, sans-serif";
+        g.fillStyle = "#6f6590";
+        g.fillText(Math.round(progress * 100) + "%", x, y + 256);
+        return progress >= 1;
+      }
+
+      const CONTINUE = { x: W / 2 - 130, y: 560, w: 260, h: 60 };
+
+      function drawIntro(g) {
+        g.drawImage(backdrop, 0, 0, W, H);
+        g.fillStyle = "rgba(6,2,16,.92)";
+        g.fillRect(0, 0, W, H);
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.font = "900 96px Cinzel, Georgia, serif";
+        g.lineJoin = "round";
+        g.lineWidth = 16;
+        g.strokeStyle = "#1a0830";
+        g.strokeText("OPAL CROWN", W / 2, 150);
+        const title = g.createLinearGradient(0, 100, 0, 200);
+        title.addColorStop(0, "#fffbe6");
+        title.addColorStop(0.45, "#f2c94c");
+        title.addColorStop(0.8, "#b9821a");
+        title.addColorStop(1, "#ffe9a0");
+        g.fillStyle = title;
+        g.fillText("OPAL CROWN", W / 2, 150);
+        const features = [
+          ["WILD", "OPAL WILDS", "Land on reels 2, 3 and 4", "and substitute for all symbols."],
+          ["CROWN", "ROYAL PAYS", "Five Crowns pay 1,000 times", "the line bet."],
+          ["RUBY", "10 PAYLINES", "Wins pay left to right", "on adjacent reels."],
+        ];
+        features.forEach(([symbol, head, a, b], i) => {
+          const x = 280 + i * 360;
+          g.drawImage(sprites[symbol], x - 90, 220, 180, 168);
+          g.font = "900 26px Cinzel, Georgia, serif";
+          g.fillStyle = "#ffd65c";
+          g.fillText(head, x, 418);
+          g.font = "600 17px Inter, system-ui, sans-serif";
+          g.fillStyle = "#e9e1f5";
+          g.fillText(a, x, 452);
+          g.fillText(b, x, 476);
+        });
+        const c = CONTINUE;
+        const fill = g.createLinearGradient(0, c.y, 0, c.y + c.h);
+        fill.addColorStop(0, game.hover === "continue" ? "#8af0b8" : "#6fe0a4");
+        fill.addColorStop(1, "#0d7a42");
+        g.fillStyle = fill;
+        g.beginPath();
+        g.roundRect(c.x, c.y, c.w, c.h, 30);
+        g.fill();
+        g.lineWidth = 3;
+        g.strokeStyle = "#e2b857";
+        g.stroke();
+        g.font = "800 22px Inter, system-ui, sans-serif";
+        g.fillStyle = "#ffffff";
+        g.save();
+        g.letterSpacing = "3px";
+        g.fillText("CONTINUE", W / 2, c.y + c.h / 2 + 1);
+        g.restore();
+      }
+
+      // ---------------------------------------------------------------- frame loop
+      let frame = 0;
+      function invalidate() {
+        if (!frame) frame = requestAnimationFrame(render);
+      }
+
+      function render(now) {
+        frame = 0;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = "#07040f";
+        ctx.fillRect(0, 0, innerWidth, innerHeight);
+        ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
+        let again = false;
+        if (game.phase === "loading") {
+          const done = drawLoading(ctx, now);
+          if (done && game.loaded) {
+            game.phase = "intro";
+            again = true;
+          } else again = true;
+        } else if (game.phase === "intro") {
+          drawIntro(ctx);
+        } else if (game.phase === "error") {
+          ctx.drawImage(backdrop, 0, 0, W, H);
+          ctx.fillStyle = "rgba(6,2,16,.85)";
+          ctx.fillRect(0, 0, W, H);
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#fff";
+          ctx.font = "700 26px Inter, system-ui, sans-serif";
+          ctx.fillText(game.message, W / 2, H / 2);
+        } else {
+          if (game.phase === "spinning") {
+            const moving = updateReels(now);
+            if (!moving && game.result) {
+              game.phase = "presenting";
+              game.grid = game.result.grid;
+              game.reels = [];
+              afterSpin(now);
+            }
+            again = true;
+          }
+          if (game.phase === "presenting") again = updatePresentation(now) || again;
+          if (game.bigWin) again = updateBigWin(now) || again;
+          ctx.drawImage(backdrop, 0, 0, W, H);
+          drawReels(ctx, now);
+          drawPresentation(ctx, now);
+          drawMarkers(ctx);
+          drawMessage(ctx);
+          drawControls(ctx, now);
+          drawBigWin(ctx, now);
+          if (game.overlay?.kind === "paytable") drawPaytable(ctx);
+          if (game.overlay?.kind === "menu") drawMenu(ctx);
+          if (game.phase === "presenting" || game.bigWin) again = true;
+        }
+        if (again) invalidate();
+      }
+
+      function afterSpin(now) {
+        const result = game.result;
+        game.balance = result.balance;
+        game.round = result.roundId;
+        if (result.win > 0) present(now, result);
+        else {
+          game.presentation = null;
+          game.phase = "idle";
+          game.message = "PLACE YOUR BETS";
+          game.shownBalance = game.balance;
+        }
+      }
+
+      // ---------------------------------------------------------------- actions
+      async function spin() {
+        if (game.phase !== "idle" || game.overlay) return;
+        if (game.balance < game.bet) {
+          game.message = "INSUFFICIENT FUNDS";
+          invalidate();
+          return;
+        }
+        const now = performance.now();
+        game.phase = "spinning";
+        game.result = null;
+        game.presentation = null;
+        game.bigWin = null;
+        game.shownWin = 0;
+        game.win = 0;
+        game.message = "GOOD LUCK!";
+        game.shownBalance = game.balance - game.bet;
+        startReels(now);
+        invalidate();
+        try {
+          const response = await fetch("/api/v2/spin", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              sessionId: game.session,
+              bet: game.bet,
+              token: params.get("token"),
+            }),
+          });
+          if (!response.ok) throw new Error(String(response.status));
+          const result = await response.json();
+          game.result = result;
+          scheduleStops(performance.now(), result.grid);
+        } catch {
+          game.phase = "error";
+          game.message = "Connection lost. Please reload the game.";
+          invalidate();
+        }
+      }
+
+      function changeBet(step) {
+        if (game.phase !== "idle" || game.overlay) return;
+        const levels = game.config.betLevels,
+          at = levels.indexOf(game.bet),
+          next = levels[at + step];
+        if (next === undefined) return;
+        game.bet = next;
+        game.presentation = null;
+        game.message = "PLACE YOUR BETS";
+        invalidate();
+      }
+
+      // ---------------------------------------------------------------- input
+      const inCircle = (b, x, y) => Math.hypot(x - b.x, y - b.y) <= b.r + 4;
+      const inRect = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+
+      function toLogical(event) {
+        const box = canvas.getBoundingClientRect();
+        return [
+          (event.clientX - box.left - offX) / scale,
+          (event.clientY - box.top - offY) / scale,
+        ];
+      }
+
+      function target(x, y) {
+        if (game.phase === "loading" || game.phase === "error") return null;
+        if (game.phase === "intro") return inRect(CONTINUE, x, y) ? "continue" : "intro";
+        if (game.bigWin) return "skip";
+        if (game.overlay?.kind === "paytable")
+          return inCircle(CLOSE, x, y)
+            ? "close"
+            : inCircle(PREV, x, y)
+              ? "prev"
+              : inCircle(NEXT, x, y)
+                ? "next"
+                : null;
+        if (game.overlay?.kind === "menu") {
+          const i = MENU_ITEMS.findIndex(
+            (_, k) => x >= 40 && x <= 300 && Math.abs(y - (470 + k * 56)) <= 24,
+          );
+          return i >= 0 ? "menu-" + MENU_ITEMS[i][0] : "menu-close";
+        }
+        for (const [key, b] of Object.entries(BUTTONS)) if (inCircle(b, x, y)) return key;
+        return null;
+      }
+
+      canvas.addEventListener("pointermove", (event) => {
+        const [x, y] = toLogical(event),
+          hit = target(x, y);
+        const clickable = hit && hit !== "intro" && hit !== "menu-close";
+        canvas.style.cursor = clickable ? "pointer" : "default";
+        if (hit !== game.hover) {
+          game.hover = hit;
+          if (game.phase !== "spinning") invalidate();
+        }
+      });
+
+      canvas.addEventListener("click", (event) => {
+        const [x, y] = toLogical(event),
+          hit = target(x, y);
+        switch (hit) {
+          case "continue":
+          case "intro":
+            if (hit === "continue") {
+              game.phase = "idle";
+              game.hover = null;
+            }
+            break;
+          case "skip":
+            if (performance.now() - game.bigWin.at > 900) {
+              game.bigWin.at = performance.now() - 3050;
+            }
+            break;
+          case "spin":
+            if (game.phase === "presenting") {
+              finishPresentation();
+            }
+            spin();
+            break;
+          case "minus":
+            changeBet(-1);
+            break;
+          case "plus":
+            changeBet(1);
+            break;
+          case "info":
+            if (game.phase === "idle" || game.phase === "presenting") {
+              if (game.phase === "presenting") finishPresentation();
+              game.overlay = { kind: "paytable", page: 0 };
+            }
+            break;
+          case "close":
+            game.overlay = null;
+            break;
+          case "prev":
+            if (game.overlay.page > 0) game.overlay.page--;
+            break;
+          case "next":
+            if (game.overlay.page < 1) game.overlay.page++;
+            break;
+          case "menu":
+            game.overlay = game.overlay?.kind === "menu" ? null : { kind: "menu" };
+            break;
+          case "sound":
+          case "menu-sound":
+            game.sound = !game.sound;
+            break;
+          case "menu-lobby":
+            try {
+              top.location.href = params.get("lobbyUrl") || "/";
+            } catch {
+              location.href = params.get("lobbyUrl") || "/";
+            }
+            break;
+          case "menu-history":
+            break;
+          case "menu-close":
+            game.overlay = null;
+            break;
+        }
+        invalidate();
+      });
+
+      addEventListener("keydown", (event) => {
+        if (event.code === "Space" || event.code === "Enter") {
+          event.preventDefault();
+          if (game.phase === "intro") game.phase = "idle";
+          else if (game.overlay) return;
+          else {
+            if (game.phase === "presenting") finishPresentation();
+            spin();
+          }
+          invalidate();
+        } else if (event.code === "Escape" && game.overlay) {
+          game.overlay = null;
+          invalidate();
+        }
+      });
+
+      addEventListener("resize", resize);
+
+      // ---------------------------------------------------------------- start
+      async function load() {
+        resize();
+        invalidate();
+        const fonts = Promise.all(
+          [
+            "900 64px Cinzel",
+            "800 64px Cinzel",
+            "800 20px Inter",
+            "700 20px Inter",
+            "600 20px Inter",
+          ].map((font) => document.fonts.load(font)),
+        );
+        const session = fetch("/api/v2/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            gameId: "opal-crown",
+            token: params.get("token"),
+            mode: params.get("mode"),
+            currency: params.get("currency"),
+          }),
+        }).then((response) => {
+          if (!response.ok) throw new Error(String(response.status));
+          return response.json();
+        });
+        try {
+          const [config] = await Promise.all([
+            session,
+            Promise.race([fonts, new Promise((resolve) => setTimeout(resolve, 2500))]),
+          ]);
+          game.config = config;
+          game.session = config.sessionId;
+          game.balance = game.shownBalance = config.balance;
+          game.bet = config.defaultBet;
+          SYMBOLS.forEach((symbol) => {
+            sprites[symbol] = paintSymbol(symbol);
+            blurred[symbol] = blur(sprites[symbol]);
+          });
+          backdrop = paintBackdrop();
+          // The reels open on symbols from their own strips.
+          game.grid = config.strips.map((strip, reel) => {
+            const at = [3, 11, 19, 7, 25][reel] % strip.length;
+            return [strip[at], strip[(at + 1) % strip.length], strip[(at + 2) % strip.length]];
+          });
+          game.loaded = true;
+        } catch {
+          game.phase = "error";
+          game.message = "We couldn't load the game. Please try again later.";
+          backdrop = makeCanvas(1, 1);
+        }
+        invalidate();
+      }
+
+      load();
+    </script>
+  </body>
+</html>

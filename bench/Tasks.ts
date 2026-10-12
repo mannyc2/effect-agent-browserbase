@@ -107,22 +107,31 @@ const narrate = <E>(
     // Moments read the page's retained screencast frames, so one must be running.
     yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
     let previous: Moment.Moment | undefined;
+    // The first look is at once, and so is the first retry of a look or call that failed;
+    // otherwise the narrator waits `every` after its last try.
+    let first = true;
+    let failures = 0;
 
     for (;;) {
-      yield* Deferred.await(stop).pipe(
-        Effect.timeoutOrElse({ duration: every, orElse: () => Effect.void }),
-      );
+      if (!first && failures !== 1)
+        yield* Deferred.await(stop).pipe(
+          Effect.timeoutOrElse({ duration: every, orElse: () => Effect.void }),
+        );
+      first = false;
       if (yield* Deferred.isDone(stop)) return;
 
       // A moment says what it could not read, as mid-navigation, rather than fail; one that fails
-      // anyway leaves its window to the next caption.
+      // anyway, or whose caption fails, leaves its window to the next try.
       const captured = yield* Moment.capture(page, {
         frames: 3,
         since: previous ?? Duration.fromInputUnsafe(every),
         snapshot: false,
       }).pipe(Effect.option);
 
-      if (Option.isNone(captured)) continue;
+      if (Option.isNone(captured)) {
+        failures += 1;
+        continue;
+      }
       const moment = captured.value;
 
       const call = LanguageModel.generateObject({
@@ -136,8 +145,12 @@ const narrate = <E>(
         Effect.catchTag("AiError", () => Effect.succeedNone),
       );
 
+      if (Option.isNone(response)) {
+        failures += 1;
+        continue;
+      }
       previous = moment;
-      if (Option.isNone(response)) continue;
+      failures = 0;
       yield* options.onUsage(usageOf(response.value.usage));
       if (options.trace !== undefined)
         yield* options.trace({
@@ -285,6 +298,8 @@ export const operate = <A, I>(spec: {
           ? undefined
           : yield* Effect.forkScoped(narrate(page, options.narrate, stopNarrating, options));
 
+      // However the agent ends, the narrator finishes the caption it is writing and starts no
+      // other: interrupting a call already sent would leave its charge unknown.
       const result = yield* Arms.operate(options.arm ?? 5, page, spec.prompt, {
         answer: spec.answer,
         maxSteps: spec.maxSteps,
@@ -293,13 +308,17 @@ export const operate = <A, I>(spec: {
 
           return options.trace?.({ _tag: "Step", step }) ?? Effect.void;
         },
-      });
+      }).pipe(
+        Effect.ensuring(
+          Deferred.succeed(stopNarrating, undefined).pipe(
+            Effect.andThen(narrator === undefined ? Effect.void : Fiber.await(narrator)),
+          ),
+        ),
+      );
 
-      yield* options.onUsage(result.usage);
-
-      // The answer is in: the narrator finishes the caption it is writing, and starts no other.
-      yield* Deferred.succeed(stopNarrating, undefined);
+      // A narrator stops only on its own when its usage could not be counted, which fails the run.
       if (narrator !== undefined) yield* Fiber.join(narrator);
+      yield* options.onUsage(result.usage);
 
       const grade = yield* spec
         .grade(result.answer, page)

@@ -5,15 +5,15 @@
   "workspaces": [
     "packages/*",
     "bench",
-    "demos"
+    "site"
   ],
   "packageManager": "bun@1.4.2",
   "scripts": {
     "patch:tsgo": "effect-tsgo patch --typescript --oxlint",
     "postinstall": "bun run patch:tsgo",
-    "fmt": "vp fmt packages bench demos lint vite.config.ts",
-    "fmt:check": "vp fmt --check packages bench demos lint vite.config.ts",
-    "lint": "oxlint -c lint/.oxlintrc.json --deny-warnings --report-unused-disable-directives-severity=error packages bench demos",
+    "fmt": "vp fmt packages bench site lint vite.config.ts",
+    "fmt:check": "vp fmt --check packages bench site lint vite.config.ts",
+    "lint": "oxlint -c lint/.oxlintrc.json --deny-warnings --report-unused-disable-directives-severity=error packages bench site",
     "check": "bun run --filter '*' check",
     "test": "bun run --filter '*' test",
     "build": "bun run --filter '*' build",
