@@ -131,3 +131,7 @@ from tag `v0.2.0-beta.9` (`976d316`). Before that, `effect-browserbase` and
 0.3 publishes from this workflow. Its first release, `0.3.0-beta.5`, went out from tag
 `v0.3.0-beta.5` (`3af967f`). `v0.3.0-beta.4` (`312ecf8`) is tagged but was never published, and
 the repository's rulesets keep `v*` tags from moving or being deleted.
+
+`v0.3.0-beta.17` (`0b1e583`) was tagged but never published: its dry run exposed a timing
+assumption in the deferred-frame readiness test. The tag is retained; the corrected release is
+`0.3.0-beta.18`.
