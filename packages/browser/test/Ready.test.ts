@@ -397,18 +397,21 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         yield* show(page, '<canvas width="200" height="100"></canvas>');
 
+        const draw = (color: string) =>
+          Effect.promise(() =>
+            page.playwright.evaluate((color) => {
+              const context = document.querySelector("canvas")!.getContext("2d")!;
+
+              context.fillStyle = color;
+              context.fillRect(0, 0, 200, 100);
+            }, color),
+          );
+
         const paint = (color: string) =>
           Effect.gen(function* () {
             const before = (yield* page.captureStats()).accepted;
 
-            yield* Effect.promise(() =>
-              page.playwright.evaluate((color) => {
-                const context = document.querySelector("canvas")!.getContext("2d")!;
-
-                context.fillStyle = color;
-                context.fillRect(0, 0, 200, 100);
-              }, color),
-            );
+            yield* draw(color);
             yield* page.captureStats().pipe(
               Effect.flatMap(({ accepted }) =>
                 page.state.pipe(
@@ -456,6 +459,8 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         resize = "waiting";
         yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 360 }));
+        // Resizing a still canvas need not emit a frame; make new pixels without awaiting adoption.
+        yield* draw("white");
         yield* Effect.promise(() => viewportRead.promise).pipe(waitFor("resize viewport request"));
         const heldFrames = yield* page.captureStats();
 
