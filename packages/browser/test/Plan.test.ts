@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Arbitrary, Duration, Effect, Exit, Layer, Schema } from "effect";
+import { Arbitrary, Duration, Effect, Exit, Fiber, Layer, Schema } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
@@ -407,8 +407,18 @@ const expected = (operator: Operator, walk: Walk): string => {
   return "replayed";
 };
 
-const truthOf = (page: Page) =>
-  Effect.promise(() => page.playwright.evaluate(() => document.body.dataset["truth"] ?? ""));
+const truthOf = Effect.fnUntraced(function* (page: Page, arrival?: string) {
+  // Replay returns input receipts; this fixture's DOM oracle needs a parsed final document.
+  if (arrival !== undefined)
+    yield* Effect.promise(() =>
+      page.playwright.waitForURL(arrival, { waitUntil: "domcontentloaded", timeout: 5_000 }),
+    );
+  yield* page.ready({ timeout: "5 seconds" });
+
+  return yield* Effect.promise(() =>
+    page.playwright.evaluate(() => document.body.dataset["truth"] ?? ""),
+  );
+});
 
 layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
   excludeTestServices: true,
@@ -561,6 +571,62 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
     }),
   );
 
+  it.effect("reads fixture truth after terminal input schedules a later navigation", () =>
+    Effect.gen(function* () {
+      const site = yield* DriftSite;
+      const recording = yield* fresh;
+
+      yield* site.drift({ operator: "none", seed: 1 });
+      yield* walks.buy(recording, site.url);
+      const plan = Plan.fromEvents(yield* recording.recentEvents);
+      const arrival = plan.steps.at(-1)?.url;
+
+      assert.strictEqual(arrival, site.url("/buy?coin=ETH"));
+      const page = yield* fresh;
+      const requested = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+
+      yield* Effect.addFinalizer(() => Effect.sync(() => released.resolve()));
+      yield* Effect.promise(() =>
+        page.playwright.route("**/defer-buy", async (route) => {
+          requested.resolve();
+          await released.promise;
+          await route.fulfill({ status: 200, body: "ok" });
+        }),
+      );
+      const final = plan.steps.length - 1;
+
+      for (let index = 0; index < final; index++) yield* Plan.take(page, plan, index);
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          const link = document.querySelector<HTMLAnchorElement>('a[href="/buy?coin=ETH"]');
+
+          if (link === null) throw new Error("the buy link is missing");
+          link.onclick = (event) => {
+            event.preventDefault();
+            void fetch("/defer-buy").then(() => location.assign("/buy?coin=ETH"));
+          };
+        }),
+      );
+      const replaying = yield* Plan.take(page, plan, final).pipe(Effect.forkChild);
+
+      yield* Effect.promise(() => requested.promise);
+      const receipt = yield* Fiber.join(replaying);
+
+      assert.strictEqual(receipt.outcome, "taken");
+      const reading = yield* truthOf(page, arrival).pipe(Effect.forkChild);
+
+      yield* Effect.sleep("50 millis");
+      const before = reading.pollUnsafe();
+
+      released.resolve();
+      const truth = yield* Fiber.join(reading);
+
+      assert.isUndefined(before, "fixture truth must wait for the pending document");
+      assert.strictEqual(truth, "buy:ETH");
+    }),
+  );
+
   it.effect(
     "replays recorded walks under drift, and never in the wrong place",
     () =>
@@ -598,7 +664,7 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
                   const started = performance.now();
 
                   outcomes[key] = yield* Plan.replay(page, plan, { inputs }).pipe(
-                    Effect.andThen(truthOf(page)),
+                    Effect.andThen(truthOf(page, plan.steps.at(-1)?.url)),
                     Effect.map((reached) =>
                       reached === truth ? "replayed" : `wrong place: ${reached}`,
                     ),
