@@ -55,11 +55,11 @@
     "test": "vp test --run"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0",
+    "@effect/vitest": "4.0.2",
     "@types/node": "26.1.2",
-    "effect": "4.0.0",
+    "effect": "4.0.2",
     "effect-browser": "workspace:*",
-    "playwright-core": "1.63.0",
+    "playwright-core": "1.64.0",
     "typescript": "7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
     "vite-plus": "1.1.0",
