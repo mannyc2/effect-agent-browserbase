@@ -5,7 +5,8 @@ import { Agent, AgentRuntime, InMemory, Output } from "@yielded/agent";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
-import { AnthropicStructuredOutput, OpenAiStructuredOutput, type Prompt } from "effect/ai";
+import type * as Moment from "effect-browser/Moment";
+import { AnthropicStructuredOutput, OpenAiStructuredOutput, Prompt } from "effect/ai";
 
 import * as BrowserTools from "../src/BrowserTools.ts";
 import {
@@ -44,6 +45,10 @@ const pictures = (prompt: Prompt.Prompt) =>
   prompt.content.flatMap((message) =>
     message.role === "user" ? message.content.filter((part) => part.type === "file") : [],
   );
+
+// The run's input is its one user message; with moments, every other one is a moment.
+const moments = (prompt: Prompt.Prompt) =>
+  prompt.content.filter((message) => message.role === "user").slice(1);
 
 const run = (task: string, turns: ReadonlyArray<Turn>, options: BrowserTools.LayerOptions = {}) =>
   Effect.gen(function* () {
@@ -114,6 +119,61 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       // The crop is shown once, before the turn after it was taken.
       assert.strictEqual(pictures(prompts[1]!).length, 1);
     }),
+  );
+
+  it.effect(
+    "keeps a moment of the tab after each turn's results, pictured for the latest few",
+    () =>
+      Effect.gen(function* () {
+        const seen: Array<Moment.Moment> = [];
+
+        const { prompts } = yield* run(
+          "Press spin twice",
+          [
+            () =>
+              calling(call("click_at", { x: 300, y: 320 }), call("wait_still", { seconds: 10 })),
+            () => calling(call("zoom", { x: 50, y: 60, width: 150, height: 180 })),
+            () => calling(call("click_at", { x: 300, y: 320 })),
+            () => calling(call("wait_still", { seconds: 10 })),
+            () => answer("Spun twice."),
+          ],
+          { vision: "moments", onMoment: (moment) => Effect.sync(() => seen.push(moment)) },
+        );
+
+        assert.strictEqual(seen.length, 5);
+        assert.deepStrictEqual(
+          prompts.map((prompt) => moments(prompt).length),
+          [1, 2, 3, 4, 5],
+        );
+
+        for (const prompt of prompts) {
+          // The first moment follows the task; each later one, the results of the turn it shows.
+          const placed = prompt.content
+            .flatMap((message, index) =>
+              message.role === "user" ? [prompt.content[index - 1]?.role] : [],
+            )
+            .slice(1);
+
+          assert.deepStrictEqual(placed, ["user", ...placed.slice(1).map(() => "tool" as const)]);
+          assert.strictEqual(prompt.content.at(-1)?.role, "user");
+        }
+
+        // A moment is shown the same way every time, its pictures only while it is among the latest.
+        const last = prompts[4]!;
+
+        const files = (message: Prompt.Message | undefined) =>
+          message?.role === "user" ? message.content.filter((part) => part.type === "file") : [];
+
+        assert.deepStrictEqual(moments(prompts[2]!)[0], moments(prompts[0]!)[0]);
+        assert.deepStrictEqual(
+          moments(last).map((moment) => files(moment).length > 0),
+          [false, false, true, true, true],
+        );
+        assert.deepStrictEqual(moments(last)[0]?.content[0], moments(prompts[0]!)[0]?.content[0]);
+        assert.include(textOf(Prompt.fromMessages([moments(prompts[1]!)[1]!])), "(300, 320)");
+        // The crop is shown with the moment of the turn that took it.
+        assert.strictEqual(files(moments(prompts[2]!)[2]).length, seen[2]!.frames.length + 1);
+      }),
   );
 
   it.effect("shows no pictures without vision, and refuses a crop it could not show", () =>
