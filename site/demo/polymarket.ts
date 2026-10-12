@@ -1,6 +1,5 @@
-// The demo: an agent explores Polymarket while a host talks viewers through it. When the agent
-// reports the markets it found, each one is checked against Polymarket's public API, not taken on
-// its word.
+// The demo: an agent explores Polymarket and talks viewers through it as it goes. When it reports
+// the markets it found, each one is checked against Polymarket's public API, not taken on its word.
 import { Effect, Schedule, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -16,10 +15,8 @@ export const task = {
     "You are on Polymarket, a prediction market: each market asks a question, and an outcome's",
     "price, shown as a percent chance or in cents, is the market's odds for it.",
     "Stay on polymarket.com: if it offers a view-only mode, browse that way.",
-    "People are watching you explore, so explore it the way a curious visitor would, one thing",
-    "at a time, and before each action say in one short sentence what you are about to do and",
-    "why, for them to read: look at what is trending, switch to a topic tab that interests you, and search",
-    "for something you are curious about. Open at least three markets, and on each market's",
+    "Explore it the way a curious visitor would, one thing at a time: look at what is trending,",
+    "switch to a topic tab that interests you, and search for something you are curious about. Open at least three markets, and on each market's",
     "page scroll down to its chart to see how the odds have moved.",
     "Then report three markets you found interesting: each one's title exactly as its page shows",
     "it; the outcome you are quoting, which for a market with several options, such as dates or",
@@ -44,34 +41,14 @@ export const Answer = Schema.Struct({
 
 export type Answer = typeof Answer.Type;
 
-const opening = [
-  "This is the very start of the video, before the agent has done anything; the picture is the",
-  "page it starts on. Open the way a presenter opens a demo: greet the viewers, say in a few",
-  "words what Polymarket is, then what the agent is going to do and how, in the order it will,",
-  "and hand over to it, as in let's watch. Three or four short sentences, at most 50 words.",
-].join(" ");
-
-const closing = (answer: Answer, checked: Show.Checked) =>
-  [
-    "The agent has finished. It reported these markets:",
-    ...answer.markets.map(
-      (market, index) =>
-        `${index + 1}. "${market.title}", ${market.outcome} at ${market.chance} percent, because: ${market.why}`,
-    ),
-    `Each was then checked against Polymarket's own public data: ${checked.matched} of ${answer.markets.length} matched what the agent read.`,
-    "Close the video the way a presenter wraps up a demo: say the run is over, go over its picks",
-    "briefly with the odds it read for each, say how the check came out, and thank the viewers",
-    "for watching. Four or five short sentences, at most 70 words.",
-  ].join(" ");
-
-/** One take: the agent explores, the narrator speaks over it, and the answer is checked. */
+/** One take: the agent explores and talks, and its answer is checked. */
 export const explore = (options: Show.ExploreOptions) =>
   Effect.gen(function* () {
     const page = yield* (yield* Browser).firstPage;
 
     yield* page.goto(task.start);
 
-    return yield* Show.perform(page, { task, answer: Answer, opening, check, closing }, options);
+    return yield* Show.perform(page, { task, answer: Answer, check }, options);
   }).pipe(Effect.scoped);
 
 const ApiMarket = Schema.Struct({

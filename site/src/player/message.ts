@@ -8,7 +8,7 @@ import { Replay } from "../replay.ts";
 export const Playback = Schema.Literals(["Paused", "Playing", "Ended"]);
 export type Playback = typeof Playback.Type;
 
-export const Speed = Schema.Literals([1, 2, 4]);
+export const Speed = Schema.Literals([1, 1.5, 2, 4]);
 export type Speed = typeof Speed.Type;
 
 export const Message = defineMessageUnion({
@@ -27,7 +27,10 @@ export const Message = defineMessageUnion({
   UpdatedPlayhead: { seconds: Schema.Finite },
   UpdatedPlayback: { playback: Playback },
   UpdatedTimeline: { value: Schema.String },
+  ClickedSpeed: {},
   SelectedSpeed: { speed: Speed },
+  DismissedSpeeds: {},
+  PressedKeyInSpeeds: { key: Schema.String },
   ClickedSound: {},
   UpdatedVolume: { value: Schema.String },
   ClickedCaptions: {},

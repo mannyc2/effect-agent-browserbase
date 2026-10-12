@@ -13,7 +13,7 @@ The build writes each page's markdown, `llms.txt`, `llms-full.txt`, `/api/v1/pag
 
 ## Deploy
 
-`bun run deploy` runs `alchemy deploy`, which builds the app and deploys the Worker and the bucket. `bun run upload -- polymarket` then puts `public/replays/polymarket/` into the bucket. The build on its own needs no account:
+`bun run deploy` runs the local Alchemy CLI on Node, which builds the app and deploys the Worker and the bucket. The deploy and destroy scripts clear Bun's package-manager hints so Alchemy uses the installed Node platform services. `bun run deploy --help` checks that entry point without changing Cloudflare resources. `bun run upload -- polymarket` then puts `public/replays/polymarket/` into the bucket. The build on its own needs no account:
 
 :::Example
 ```sh

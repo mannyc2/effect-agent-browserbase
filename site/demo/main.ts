@@ -2,11 +2,11 @@
 // packs it for the site; `pack` packs a recording again, such as a bench trial's, with or without
 // the voice. Model calls cost money, so a take needs the bench's opt-in and an OpenRouter key.
 //
-//   bun run demo take [--demo casino] [--model <id>] [--max-usd 0.5] [--every 5] [--id casino]
+//   bun run demo take [--demo casino] [--model <id>] [--max-usd 0.5] [--id casino]
 //   bun run demo pack <recording directory> <replay id> [--voice]
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { errorText } from "bench/run.ts";
-import { Cause, Console, Duration, Effect, Option, Schema } from "effect";
+import { Cause, Console, Effect, Option, Schema } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
@@ -35,9 +35,7 @@ const takeCommand = Command.make(
     ),
     model: Flag.String("model").pipe(
       Flag.withDefault(defaults.model),
-      Flag.withDescription(
-        `OpenRouter model for the agent and narrator. Defaults to ${defaults.model}.`,
-      ),
+      Flag.withDescription(`OpenRouter model for the agent. Defaults to ${defaults.model}.`),
     ),
     reasoning: Flag.Literals("reasoning", ["none", "low", "medium", "high"]).pipe(
       Flag.withDefault(defaults.reasoning),
@@ -47,14 +45,7 @@ const takeCommand = Command.make(
       Flag.withSchema(Schema.Finite.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(5))),
       Flag.withDefault(defaults.maxUsd),
       Flag.withDescription(
-        `USD for the agent, narrator and voice together. Defaults to ${defaults.maxUsd}.`,
-      ),
-    ),
-    every: Flag.Finite("every").pipe(
-      Flag.withSchema(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(3))),
-      Flag.withDefault(Duration.toSeconds(defaults.every)),
-      Flag.withDescription(
-        `Seconds from the start of one of the host's lines to the next. Defaults to ${Duration.toSeconds(defaults.every)}.`,
+        `USD for the agent and its voice together. Defaults to ${defaults.maxUsd}.`,
       ),
     ),
     maxSteps: Flag.Int("max-steps").pipe(
@@ -75,7 +66,6 @@ const takeCommand = Command.make(
       ...options,
       id: Option.getOrElse(options.id, () => options.demo),
       maxSteps: Option.getOrElse(options.maxSteps, () => stepsFor[options.demo]),
-      every: Duration.seconds(options.every),
     }),
 ).pipe(Command.withDescription("Record a narrated take of a demo and pack it."));
 
@@ -86,7 +76,7 @@ const packCommand = Command.make(
     id: Argument.String("replay").pipe(Argument.withSchema(replayId)),
     voice: Flag.Boolean("voice").pipe(
       Flag.withDefault(false),
-      Flag.withDescription("Speak the narrator's captions, a paid call per line."),
+      Flag.withDescription("Speak the agent's words, a paid call per line."),
     ),
     maxUsd: Flag.Finite("max-usd").pipe(
       Flag.withDefault(0.25),

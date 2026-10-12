@@ -30,6 +30,8 @@ export const Model = Schema.Struct({
   /** The host time on screen. */
   now: Schema.Finite,
   speed: Speed,
+  /** The speeds stay out of the way until asked for. */
+  speeds: Schema.Literals(["Closed", "Open"]),
   sound: Schema.Literals(["On", "Muted"]),
   /** The narration's volume when it is on, from 0 to 1. */
   volume: Schema.Finite,
@@ -225,6 +227,7 @@ export const init = (id: string) => ({
     playback: "Paused",
     now: 0,
     speed: 1,
+    speeds: "Closed",
     sound: "On",
     volume: 1,
     captions: "Shown",
@@ -320,10 +323,20 @@ export const update = (model: Model, message: Message) =>
         Missing: () => ({ model }),
         Ready: ({ replay }) => seek(model, replay.video.startsAt + Number(value)),
       }),
+    ClickedSpeed: () => ({
+      model: modifyFields(model, {
+        speeds: (speeds) => (speeds === "Open" ? "Closed" : "Open"),
+      }),
+    }),
     SelectedSpeed: ({ speed }) => ({
-      model: modifyFields(model, { speed: () => speed }),
+      model: modifyFields(model, { speed: () => speed, speeds: () => "Closed" as const }),
       commands: [SetPlaybackRate({ videoId: videoIdOf(model.id), rate: speed })],
     }),
+    DismissedSpeeds: () => ({ model: modifyFields(model, { speeds: () => "Closed" as const }) }),
+    PressedKeyInSpeeds: ({ key }) =>
+      key === "Escape"
+        ? { model: modifyFields(model, { speeds: () => "Closed" as const }) }
+        : { model },
     ClickedSound: () => {
       // Unmuting a narration turned all the way down brings it back at full volume.
       const next =

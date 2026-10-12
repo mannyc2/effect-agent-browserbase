@@ -5,17 +5,11 @@
  */
 import { Deferred, Duration, Effect, Schedule } from "effect";
 
-import {
-  BrowserError,
-  InvalidRequest,
-  NavigationFailed,
-  NotActionable,
-  NotFound,
-} from "../../BrowserError.ts";
+import { BrowserError, NavigationFailed, NotActionable, NotFound } from "../../BrowserError.ts";
 import type { Guard } from "../input/guard.ts";
 import type { InputMarks, Perform } from "../input/perform.ts";
 import { Current } from "../input/replies.ts";
-import { failWith, type PageContext } from "./context.ts";
+import { failWith, type PageContext, refuse } from "./context.ts";
 import * as Url from "./url.ts";
 
 export const make = (
@@ -157,10 +151,7 @@ export const make = (
       parsed === null ||
       !["http:", "https:", "about:", "data:", "file:"].includes(parsed.protocol)
     )
-      return failWith(
-        "navigate",
-        new InvalidRequest({ detail: `"${Url.redact(url)}" is not a URL` }),
-      );
+      return refuse("navigate", `"${Url.redact(url)}" is not a URL`);
 
     return navigation(
       "navigate",

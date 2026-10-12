@@ -10,16 +10,27 @@
  * its connection, and a frame that arrives first starts the spell again. Where the page's changes
  * are recorded, its evidence includes them: nothing in view may have changed for the spell, which a
  * DOM page's changes show better than its paint, and no stall on the way can hide. Content
- * stillness starts that record itself and ignores capture silence. Each new document starts a
+ * stillness starts that record itself and ignores capture silence. Foreground stillness lets
+ * frames keep coming but compares them, so that only motion outside what was moving before the
+ * page's latest input counts; it still waits out unanswered acknowledgements while no frame
+ * comes, and its last look follows the round trip too. Each new document starts a
  * new observation, while retries of destroyed script contexts share the caller's deadline.
  */
 import { Duration, Effect, Option, Schedule, Stream } from "effect";
 
-import { Timeout } from "../../BrowserError.ts";
+import { Failed, Timeout } from "../../BrowserError.ts";
+import type { Frame } from "../../Frame.ts";
 import type { ReadyOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
+import {
+  contextGone,
+  decodeWith,
+  failWith,
+  type PageContext,
+  undispatched,
+} from "../page/context.ts";
 import type * as Capture from "../pictures/capture.ts";
+import * as Motion from "../pictures/motion.ts";
 import { ReadinessSchema } from "./ready.inpage.ts";
 
 export const make =
@@ -55,27 +66,68 @@ export const make =
     const quiet = (millis: number, until: number) =>
       Effect.gen(function* () {
         const running = yield* capture.active;
-        let { received } = yield* capture.stats();
+        const foreground = options.still === "foreground";
+        let counts = yield* capture.stats();
         let stirred = running ? page.now() : Number.POSITIVE_INFINITY;
+        let reference: Motion.Picture | undefined;
 
-        // How long the screen has been still: since a frame, or an unanswered acknowledgement.
+        const decoded = (frame: Frame) =>
+          Effect.try({
+            try: () => Motion.picture(frame),
+            catch: (error) =>
+              undispatched("ready", new Failed({ detail: `no picture: ${String(error)}` })),
+          });
+
+        // The background: what moved in up to eight frames of the document's 1.5 s before its
+        // latest input, as far back as the capture keeps them.
+        const { inputAt } = page.activity;
+        const document = Option.getOrUndefined(yield* capture.latest)?.document;
+
+        const before = (foreground ? yield* capture.recent : []).filter(
+          (frame) =>
+            frame.hostTime < inputAt &&
+            frame.hostTime >= inputAt - 1500 &&
+            frame.document === document,
+        );
+
+        const sampled = before.filter((_, index) => index % Math.ceil(before.length / 8) === 0);
+        const mask = Motion.background(yield* Effect.forEach(sampled, decoded));
+
+        // How long the screen has been still: since a frame, or an unanswered acknowledgement. In
+        // the foreground, since a frame moved outside the background, or acknowledgements went
+        // unanswered with no frame coming.
         const look = Effect.gen(function* () {
           const stats = yield* capture.stats();
+          const latest = Option.getOrUndefined(yield* capture.latest);
+          const arrived = stats.received !== counts.received;
+          const unseen = stats.accepted - counts.accepted;
 
-          if (
-            !Option.exists(yield* capture.latest, capture.current) ||
-            stats.received !== received ||
-            stats.ackBacklog > 0
-          ) {
-            received = stats.received;
+          counts = stats;
+          if (latest === undefined || !capture.current(latest)) stirred = page.now();
+          else if (!foreground ? arrived || stats.ackBacklog > 0 : !arrived && stats.ackBacklog > 0)
             stirred = page.now();
+          else if (foreground && (unseen > 0 || reference === undefined)) {
+            // A move and its return between looks both count. Bound decoding; any frames lost
+            // from history, or beyond this batch, deny a quiet spell rather than hiding motion.
+            const frames = (yield* capture.recent).slice(-Math.max(1, Math.min(8, unseen)));
+
+            if (unseen > frames.length) stirred = page.now();
+            for (const frame of frames) {
+              const seen = yield* decoded(frame);
+
+              if (reference === undefined || Motion.stirs(reference, seen, mask)) {
+                reference = seen;
+                stirred = page.now();
+              }
+            }
           }
 
           return page.now() - stirred;
         });
 
+        // Decode at a fixed cadence: adding a delay after a full batch lets its backlog grow.
         const spell = Effect.repeat(look, {
-          schedule: Schedule.spaced(Duration.millis(25)),
+          schedule: Schedule.fixed(Duration.millis(foreground ? 100 : 25)),
           until: (still) => still >= millis,
         });
 
@@ -86,10 +138,10 @@ export const make =
         const still = Effect.gen(function* () {
           for (;;) {
             yield* spell;
-            const before = received;
+            const before = counts.received;
 
             yield* Effect.all([settled(until), capture.sync], { concurrency: 2, discard: true });
-            if ((yield* look) >= millis && received === before) return;
+            if ((yield* look) >= millis && (foreground || counts.received === before)) return;
           }
         });
 

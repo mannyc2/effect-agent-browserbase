@@ -170,7 +170,15 @@ Agent, the renamed Effect Agent:
   and one after an action begins with what followed it: a dialog and how the browser answered it, a
   navigation, a tab it opened and what its input visibly changed. Every action result says whether
   its input reached the browser, and nothing is retried. Before each turn the model sees a
-  screenshot of the current tab, as context the run never keeps. Yielded runs the agent: its loop,
+  screenshot of the current tab, as context the run never keeps; with `vision: "moments"` its
+  thread holds instead, after each turn's tool results, a moment of the tab since the turn before,
+  immutable accounts that Yielded can prune and summarize with the conversation. The latest three
+  moments' frames remain as turn-labeled references outside compaction coverage, and older image
+  bytes are released. Lost pages and moments without usable pictures stop preparation before
+  another model call; queued zoom crops only accompany their original tab. Bounded model contexts
+  need a model-aware image-token estimator, composed
+  with the tools' preparation as the package README shows. `wait_still` waits for
+  foreground stillness. Yielded runs the agent: its loop,
   policy and budgets, approval, context and run events. Its browser interface is on Yielded's
   `main` but not yet on npm: the package pins `@yielded/agent` `0.1.0-beta.168`, which upstream's
   pending release publishes. Until then the repository's `overrides` install a commit-pinned pack
@@ -195,7 +203,10 @@ Agent, the renamed Effect Agent:
   review's three, under eleven drift operators, five seeds each, ended in the wrong place 0 times
   in 420 replays. `Page.ready` says, in one call to the page, whether a page is ready to be shown,
   from the page's own evidence, so a blank canvas or a spinner alone is still loading; with
-  `quietMillis` it also waits for the screen to be still, and a stalled connection is not stillness.
+  `quietMillis` it also waits for the screen to be still, and a stalled connection is not stillness;
+  `still: "foreground"` lets what was moving in the 1.5 s before the page's latest input, such as a
+  game's idle animation, go on moving. Brief foreground motion between polls still restarts the
+  quiet interval; missing frame history cannot establish stillness.
 - Expectations: `Expect.attempt` names what an action is for, something that appears, goes or
   changes as `Page.find` finds it, or a navigation, and each `run` checks before it acts, so an
   action whose input went before it failed is sent again only where its effect did not come:
@@ -313,18 +324,21 @@ Agent, the renamed Effect Agent:
   shared model admission budget. Every trial is graded, an infrastructure failure, denied or
   unrun, and summaries keep those
   denominators apart. `--arm` runs the paired experiment's arms 1 (Yielded's tools alone),
-  2 (vision first) and 5 (the default tools) on the same seeds, each a Yielded agent on the task's
+  2 (vision first), 5 (the default tools) and 6 (the default tools with moments in the thread) on
+  the same seeds, each a Yielded agent on the task's
   page, whose streamed model requests are sent and charged as single completions. The bench is an `effect/cli` program (`run`, `report`, `judges`) on `Config` and
   `FileSystem`; its results are versioned Schema records, and a report states its estimand and
   tests arms with exact paired tests. Paid runs remain opt-in.
 - `site` (private): the docs site, a Foldkit app on Cloudflare deployed with Alchemy. Its pages are
   markdown with replays placed in the prose, and each is also served as markdown for agents, with
-  `llms.txt`, `llms-full.txt` and a JSON index. The featured demo is one narrated take: an agent
-  explores Polymarket while a narrator captions moments of the page and a voice model speaks each
-  line, and the markets it reports are checked against Polymarket's API. The player shows the
-  screencast with the narration as audio and captions, the planned pointer path, the agent's steps
-  and the grade. `bun run dev` serves a local runner, so a visitor records their own take with
-  their key and cap; the site is not deployed yet.
+  `llms.txt`, `llms-full.txt` and a JSON index. Its demos are recorded takes of an agent that speaks
+  for itself: what it writes beside its tool calls, from the moments in its thread, is spoken by a
+  voice model. One explores Polymarket, its markets checked against Polymarket's API; one plays six
+  spins of a canvas slot in a made-up casino, dealt from a fresh seed, its report checked against
+  the game server's record. The player shows the screencast with the speech as audio and captions,
+  the planned pointer path, what the agent was doing when, its steps and the grade. `bun run dev`
+  serves a local runner, so a visitor records their own take with their key and cap. The site is
+  deployed to Cloudflare.
 
 `effect-agent-browser` is rebuilt on Yielded Agent in place of the 0.2 adapter on Effect Agent,
 and 0.3's own loop on `effect/ai`'s `Chat` went with the move. The tests run against real local Chromium, a fake Browserbase API

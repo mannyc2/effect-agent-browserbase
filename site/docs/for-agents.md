@@ -17,12 +17,12 @@ A replay embedded in a page appears in its markdown as links to the replay's dat
 
 A packed replay lives under `/replays/<id>/`:
 
-| File            | What it holds                                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `replay.json`   | The recording: every browser event on one host clock, the agent's turns, the moments the narrator captioned, the narration lines and the outcome |
-| `video.mp4`     | The browser's screencast, H.264, with the narration as its audio track                                                                           |
-| `captions.vtt`  | The narration as WebVTT, timed from the video's start                                                                                            |
-| `moments/*.jpg` | The frames each moment held                                                                                                                      |
+| File            | What it holds                                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `replay.json`   | The recording: every browser event on one host clock, the agent's turns, the moments the agent was shown, the spoken lines and the outcome |
+| `video.mp4`     | The browser's screencast, H.264, with the narration as its audio track                                                                     |
+| `captions.vtt`  | The narration as WebVTT, timed from the video's start                                                                                      |
+| `moments/*.jpg` | The frames each moment held                                                                                                                |
 
 ## Working on this repository
 

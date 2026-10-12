@@ -5,13 +5,13 @@
  */
 import { Duration, Effect, Option, Result, Schema } from "effect";
 
-import { type BrowserError, InvalidRequest } from "../../BrowserError.ts";
+import type { BrowserError } from "../../BrowserError.ts";
 import { type BrowserEvent, TrackEvent } from "../../BrowserEvent.ts";
 import type { Changes } from "../../Change.ts";
 import { Frame } from "../../Frame.ts";
 import { Window } from "../../Moment.ts";
 import type { ChangesOptions, WindowOptions } from "../../Page.ts";
-import { failWith, type PageContext } from "../page/context.ts";
+import { type PageContext, refuse } from "../page/context.ts";
 
 const isWindow = Schema.is(Window);
 const isFrame = Schema.is(Frame);
@@ -64,12 +64,7 @@ export const make =
       const asked = boundsOf({ since, until }, page.now());
 
       if (Option.isNone(asked))
-        return yield* failWith(
-          "window",
-          new InvalidRequest({
-            detail: "a window's bounds must be finite, its reach not negative",
-          }),
-        );
+        return yield* refuse("window", "a window's bounds must be finite, its reach not negative");
       const bounds = asked.value;
 
       // A previous window's changes go on exactly where they ended, on the page's own clock, and a

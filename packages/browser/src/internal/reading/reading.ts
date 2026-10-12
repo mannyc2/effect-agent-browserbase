@@ -5,11 +5,11 @@
  */
 import { Duration, Effect, Ref, Schema } from "effect";
 
-import { InvalidRequest, StaleRef, Timeout } from "../../BrowserError.ts";
+import { StaleRef, Timeout } from "../../BrowserError.ts";
 import { type FindQuery, Found, Text, type TextOptions, type WaitCondition } from "../../Page.ts";
 import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
+import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
 import * as Url from "../page/url.ts";
 import { type ConditionRequest, ConditionResultSchema } from "./controls.inpage.ts";
 import type { Want } from "./expect.inpage.ts";
@@ -68,8 +68,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
           Effect.flatMap(decodeWith("snapshot", SnapshotResultSchema)),
         );
 
-        if ("invalid" in result)
-          return yield* failWith("snapshot", new InvalidRequest({ detail: result.invalid }));
+        if ("invalid" in result) return yield* refuse("snapshot", result.invalid);
         const { text, truncated, url } = result.snapshot;
 
         yield* counted(result.nextRef);
@@ -115,10 +114,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
 
     return (
       scope !== "viewport" && !/^e\d+$/.test(scope)
-        ? failWith(
-            "text",
-            new InvalidRequest({ detail: `${scope} is neither "viewport" nor a ref such as e12` }),
-          )
+        ? refuse("text", `${scope} is neither "viewport" nor a ref such as e12`)
         : texts(
             JSON.stringify(request),
             Effect.gen(function* () {
@@ -159,7 +155,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext, bridge: Brid
       Effect.flatMap(decodeWith("waitFor", ConditionResultSchema)),
       Effect.flatMap((result) =>
         "invalid" in result
-          ? failWith("waitFor", new InvalidRequest({ detail: result.invalid }))
+          ? refuse("waitFor", result.invalid)
           : result.met
             ? Effect.void
             : unmet(),

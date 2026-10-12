@@ -1,13 +1,12 @@
-// When each narrator line is heard, and the voice's track and captions that follow from it. A
-// line is spoken where the window it describes ends, the last frame the narrator saw, or once the
-// line before has finished; a line that would start long after its window is stale and left
-// unsaid. A live stream would hear each line when its words arrived, seconds later, with the
-// screen moved on; a replay need not keep that delay.
+// When each spoken line is heard, and the voice's track and captions that follow from it. A line
+// is what the agent said beside one turn's tool calls, heard as that turn's actions start, or once
+// the line before has finished, so every line is said in order and none talks over another.
 import { Effect } from "effect";
 
+import { captionChunks } from "../src/replay.ts";
 import { sampleRate } from "./voice.ts";
 
-/** A narrator's caption as the recording holds it, on the recording's host clock. */
+/** A line to speak and the turn it belongs to, on the recording's host clock. */
 export interface Caption {
   readonly text: string;
   readonly from: number;
@@ -23,27 +22,19 @@ export interface Line extends Caption {
 /** The pause between two lines, in milliseconds. */
 export const breath = 250;
 
-/** How late a line may start after its window ends before it is stale, in milliseconds. */
-export const staleAfter = 3000;
-
-/**
- * Speaks captions in the order of their windows, each once it can be heard whole. `speak` gives a
- * caption's speech, or nothing to leave it unsaid, and is asked only for lines that are not stale.
- */
+/** Speaks captions in the order of their windows, each once the one before has been heard whole. */
 export const schedule = Effect.fnUntraced(function* <S extends { readonly millis: number }, E, R>(
   captions: ReadonlyArray<Caption>,
-  speak: (caption: Caption) => Effect.Effect<S | undefined, E, R>,
+  speak: (caption: Caption) => Effect.Effect<S, E, R>,
 ) {
   const lines: Array<Line & { readonly speech: S }> = [];
 
   for (const caption of captions.toSorted((left, right) => left.until - right.until)) {
     const previous = lines.at(-1);
     const at = Math.max(caption.until, previous === undefined ? 0 : previous.end + breath);
-
-    if (at - caption.until > staleAfter) continue;
     const speech = yield* speak(caption);
 
-    if (speech !== undefined) lines.push({ ...caption, at, end: at + speech.millis, speech });
+    lines.push({ ...caption, at, end: at + speech.millis, speech });
   }
 
   return lines;
@@ -77,12 +68,17 @@ const stamp = (millis: number) => {
   return `${part(Math.floor(total / 3_600_000))}:${part(Math.floor(total / 60_000) % 60)}:${part(Math.floor(total / 1000) % 60)}.${part(total % 1000, 3)}`;
 };
 
-/** The lines as WebVTT captions, timed from host time `startsAt`, the video's first instant. */
+/**
+ * The lines as WebVTT captions, timed from host time `startsAt`, the video's first instant: each in
+ * the pieces the player shows it in.
+ */
 export const captions = (lines: ReadonlyArray<Line>, startsAt: number) =>
   [
     "WEBVTT",
-    ...lines.map(
-      (line, index) =>
-        `${index + 1}\n${stamp(line.at - startsAt)} --> ${stamp(line.end - startsAt)}\n${line.text.replace(/-->/g, "→")}`,
-    ),
+    ...lines
+      .flatMap((line) => captionChunks(line.text, line.at, line.end))
+      .map(
+        (piece, index) =>
+          `${index + 1}\n${stamp(piece.at - startsAt)} --> ${stamp(piece.end - startsAt)}\n${piece.text.replace(/-->/g, "→")}`,
+      ),
   ].join("\n\n") + "\n";

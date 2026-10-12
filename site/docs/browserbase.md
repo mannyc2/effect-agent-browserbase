@@ -1,6 +1,6 @@
 # Browserbase
 
-`effect-browserbase` makes a [Browserbase](https://www.browserbase.com) session the same `Browser` a local Chromium is. Swap the layer; the agent, its tools and the narrator don't change.
+`effect-browserbase` makes a [Browserbase](https://www.browserbase.com) session the same `Browser` a local Chromium is. Swap the layer; the agent and its tools don't change.
 
 The program from [Get started](/docs/get-started), on a Browserbase session instead of a local Chromium:
 

@@ -222,8 +222,11 @@ export interface WaitCondition {
 }
 
 export interface ReadyOptions {
-  /** What must stay still during quietMillis: screen paint (default), or recorded content. */
-  readonly still?: "screen" | "content" | undefined;
+  /**
+   * What must stay still during quietMillis: screen paint (default); recorded content; or the
+   * `"foreground"`, the screen but for what was already moving before the page's latest input.
+   */
+  readonly still?: "screen" | "content" | "foreground" | undefined;
   /** How long the selected evidence must stay still; screen paint by default. */
   readonly quietMillis?: number | undefined;
   readonly timeout?: Duration.Input | undefined;
@@ -493,9 +496,12 @@ export interface Page {
    * view have loaded, and the viewport shows something. With `quietMillis`, the screen must then
    * also stay still that long: nothing in view changed, where the page's changes are recorded, and
    * no frame comes, counted from the first frame of a capture the wait starts itself. A canvas
-   * that keeps drawing, such as a live chart, is never still, and a page
-   * is never ready without a painted frame, as a hidden tab may be. `Timeout` after `timeout`,
-   * 15 seconds by default.
+   * that keeps drawing, such as a live chart, is never still. With `still: "foreground"`, frames
+   * may keep coming, but nothing may move in them outside what moved in the frames of the 1.5 s
+   * before the page's latest input, such as an idle animation; reels set spinning, or a counter
+   * set rolling, by the input keep the wait going. Without those frames, as where they are older
+   * than the browser's `frameHistory`, nothing may move at all. A page is never ready without a
+   * painted frame, as a hidden tab may be. `Timeout` after `timeout`, 15 seconds by default.
    */
   readonly ready: (options?: ReadyOptions) => Effect.Effect<void, BrowserError>;
 

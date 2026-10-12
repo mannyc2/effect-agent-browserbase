@@ -598,21 +598,20 @@ const makeScoped = Effect.fn("Supervisor.make")(function* <E, R, A>(
 
   const retire = yield* Effect.cached(stop({ _tag: "Retire" }));
 
+  // The browser of the generation serving, or of the one `target` names once it serves.
+  const browserOf = (target?: number) =>
+    Effect.map(waitFor(state, waitTimeout, clock, target), (live) => live.value.opened.browser);
+
   yield* Effect.addFinalizer(() => (options.keep === true ? stop({ _tag: "Keep" }) : retire));
   yield* perform(started);
 
   return {
-    browser: Effect.map(waitFor(state, waitTimeout, clock), (live) => live.value.opened.browser),
+    browser: browserOf(),
     use: leasing(state, apply, waitTimeout, now, clock),
     states: Stream.fromPubSubTake(events),
     rotate: apply({ _tag: "Rotate" }).pipe(
       Effect.flatMap(({ reply }) =>
-        reply === undefined
-          ? Effect.fail(retired())
-          : Effect.map(
-              waitFor(state, waitTimeout, clock, reply),
-              (live) => live.value.opened.browser,
-            ),
+        reply === undefined ? Effect.fail(retired()) : browserOf(reply),
       ),
     ),
     retire,

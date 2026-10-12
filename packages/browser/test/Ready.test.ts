@@ -1,5 +1,5 @@
 import { assert, it, layer } from "@effect/vitest";
-import { Duration, Effect, Fiber, Schedule, Stream } from "effect";
+import { Clock, Duration, Effect, Fiber, Schedule, Stream } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
@@ -266,6 +266,197 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
   },
 );
 
+// A corner that pulses from the start, as a slot's idle art does, and a region a click sets moving
+// for 1.5 s, or for good: a reel's large area, or a win counter's few digits.
+const stage = (moving: "reels" | "counter", seconds: number) =>
+  `<body style="margin:0"><canvas id=c width=640 height=360></canvas><script>
+  const g = c.getContext("2d");
+  let until = -1;
+  g.fillStyle = "#222"; g.fillRect(0, 0, 640, 360);
+  function draw(now) {
+    g.fillStyle = "hsl(" + Math.round(now / 4) % 360 + ", 80%, 50%)";
+    g.fillRect(600, 10, 30, 30);
+    if (now < until) {
+      g.fillStyle = "#222"; g.fillRect(20, 60, 400, 260);
+      g.fillStyle = ${moving === "reels"} ? "hsl(" + Math.round(now) % 360 + ", 70%, 40%)" : "#fff";
+      if (${moving === "reels"}) g.fillRect(20, 60, 400, 260);
+      else { g.font = "24px sans-serif"; g.fillText(String(Math.round(now)), 24, 84); }
+    } else if (until > 0 && window.stoppedAt === undefined) window.stoppedAt = performance.now();
+    requestAnimationFrame(draw);
+  }
+  c.onclick = () => { until = performance.now() + ${seconds * 1000}; };
+  requestAnimationFrame(draw);
+</script></body>`;
+
+// The screen's foreground: what an input set moving must stop, while what moved before it may not.
+layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
+  "Page.ready in the foreground",
+  (it) => {
+    // bea3a16 compared only the newest frame at each look: motion and its return in between
+    // disappeared. Hold that look while real Chromium delivers both paints, then let it resume.
+    it.effect("counts foreground motion between looks and after deferred frame acceptance", () =>
+      Effect.gen(function* () {
+        const native = (yield* Browser).context.browser();
+
+        if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+        const context = yield* Effect.acquireRelease(
+          Effect.promise(() => native.newContext({ viewport: { width: 320, height: 180 } })),
+          (context) => Effect.promise(() => context.close()),
+        );
+
+        const clock = yield* Clock.Clock;
+        const entered = Promise.withResolvers<void>();
+        const resume = Promise.withResolvers<void>();
+        let held = false;
+
+        yield* Effect.addFinalizer(() => Effect.sync(() => resume.resolve()));
+
+        const browser = yield* makeBrowser(context, { id: "ready-pulse", provider: "test" }).pipe(
+          Effect.provideService(Clock.Clock, {
+            currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+            currentTimeMillis: clock.currentTimeMillis,
+            currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+            currentTimeNanos: clock.currentTimeNanos,
+            monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+            monotonicTimeNanos: clock.monotonicTimeNanos,
+            sleep: (duration) => {
+              if (Duration.toMillis(duration) !== 100 || held) return clock.sleep(duration);
+              held = true;
+              entered.resolve();
+
+              return Effect.promise(() => resume.promise);
+            },
+          }),
+        );
+
+        const page = yield* browser.newPage();
+
+        yield* show(page, '<canvas width="200" height="100"></canvas>');
+
+        const paint = (color: string) =>
+          Effect.gen(function* () {
+            const before = (yield* page.captureStats()).accepted;
+
+            yield* Effect.promise(() =>
+              page.playwright.evaluate((color) => {
+                const context = document.querySelector("canvas")!.getContext("2d")!;
+
+                context.fillStyle = color;
+                context.fillRect(0, 0, 200, 100);
+              }, color),
+            );
+            yield* page.captureStats().pipe(
+              Effect.repeat({
+                schedule: Schedule.spaced("5 millis"),
+                until: ({ accepted }) => accepted > before,
+              }),
+              Effect.timeout("5 seconds"),
+            );
+          });
+
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* paint("black");
+
+        const waiting = yield* page
+          .ready({ still: "foreground", quietMillis: 300, timeout: "5 seconds" })
+          .pipe(Effect.forkScoped);
+
+        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("5 seconds"));
+        yield* Effect.sleep("350 millis");
+        yield* paint("white");
+        yield* paint("black");
+        const returned = yield* browser.now;
+
+        resume.resolve();
+        yield* Fiber.join(waiting);
+        assert.isAtLeast((yield* browser.now) - returned, 300);
+
+        // A resize is accepted later when its size outlasts a screenshot. No new receipt wakes
+        // that acceptance: a poll between receipt and delivery must not consume the paint.
+        page.playwright.viewportSize = () => ({ width: 320, height: 180 });
+        const before = yield* page.captureStats();
+
+        const resizing = yield* page
+          .ready({ still: "foreground", quietMillis: 1500, timeout: "5 seconds" })
+          .pipe(Effect.forkScoped);
+
+        yield* Effect.sleep("150 millis");
+        yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 360 }));
+        yield* Effect.sleep("200 millis");
+        const heldFrames = yield* page.captureStats();
+
+        assert.isAbove(heldFrames.received, before.received);
+        assert.strictEqual(heldFrames.accepted, before.accepted);
+
+        const adopted = yield* page.captureStats().pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("5 millis"),
+            until: ({ accepted }) => accepted > before.accepted,
+          }),
+          Effect.timeout("5 seconds"),
+        );
+
+        const delivered = yield* browser.now;
+
+        assert.strictEqual(adopted.received, heldFrames.received);
+        yield* Fiber.join(resizing);
+        assert.isAtLeast((yield* browser.now) - delivered, 1500);
+      }),
+    );
+
+    const clicked = (moving: "reels" | "counter", seconds: number) =>
+      Effect.gen(function* () {
+        const page = yield* blank;
+
+        yield* show(page, stage(moving, seconds));
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Effect.sleep("800 millis");
+        yield* page.click({ x: 200, y: 150 });
+
+        return page;
+      });
+
+    const quiet = (page: Page) =>
+      evaluate(
+        page,
+        () => performance.now() - (window as unknown as { stoppedAt: number }).stoppedAt,
+      );
+
+    for (const moving of ["reels", "counter"] as const)
+      it.effect(`waits for the ${moving} a click set moving, not for the idle art`, () =>
+        Effect.gen(function* () {
+          const page = yield* clicked(moving, 1.5);
+
+          yield* page.ready({
+            still: "foreground",
+            quietMillis: 600,
+            timeout: Duration.seconds(10),
+          });
+          // Within a sample of the spell: the wait looks every 100 ms.
+          assert.isAtLeast(yield* quiet(page), 450, moving);
+          assert.strictEqual(
+            yield* reason(page.ready({ quietMillis: 600, timeout: Duration.seconds(2) })),
+            "Timeout",
+          );
+        }),
+      );
+
+    it.effect("never ends while what a click set moving keeps moving", () =>
+      Effect.gen(function* () {
+        const page = yield* clicked("reels", 1000);
+
+        assert.strictEqual(
+          yield* reason(
+            page.ready({ still: "foreground", quietMillis: 600, timeout: Duration.seconds(3) }),
+          ),
+          "Timeout",
+        );
+      }),
+    );
+  },
+);
+
 // Over raw CDP a tab behind another is hidden, unless some session holds focus emulation on it;
 // here none can, so the page behind paints no frame and is never ready to be shown.
 it.live("is never ready on a tab behind another that paints nothing", () =>
@@ -306,24 +497,29 @@ it.live("never takes a stalled connection for a still screen", () =>
     const proxy = yield* behindProxy();
     const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
 
-    for (const [toward, slow] of [
-      ["client", true],
-      ["browser", false],
-    ] as const) {
-      const page = yield* browser.newPage(reels(slow));
+    for (const still of ["screen", "foreground"] as const)
+      for (const [toward, slow] of [
+        ["client", true],
+        ["browser", false],
+      ] as const) {
+        const page = yield* browser.newPage(reels(slow));
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* Effect.sleep(Duration.millis(300));
-      const clicked = yield* browser.now;
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Effect.sleep(Duration.millis(300));
+        const clicked = yield* browser.now;
 
-      yield* page.click({ x: 200, y: 100 });
-      yield* Effect.sleep(Duration.millis(150)).pipe(
-        Effect.andThen(Effect.sync(() => proxy.stall(toward, 600))),
-        Effect.forkScoped,
-      );
-      yield* page.ready({ quietMillis: 400, timeout: Duration.seconds(10) });
-      assert.isAtLeast((yield* browser.now) - clicked, 1200, `stalled toward the ${toward}`);
-    }
+        yield* page.click({ x: 200, y: 100 });
+        yield* Effect.sleep(Duration.millis(150)).pipe(
+          Effect.andThen(Effect.sync(() => proxy.stall(toward, 600))),
+          Effect.forkScoped,
+        );
+        yield* page.ready({ still, quietMillis: 400, timeout: Duration.seconds(10) });
+        assert.isAtLeast(
+          (yield* browser.now) - clicked,
+          1200,
+          `${still}, stalled toward the ${toward}`,
+        );
+      }
   }).pipe(Effect.scoped),
 );
 

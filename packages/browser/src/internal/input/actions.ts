@@ -6,12 +6,13 @@
  */
 import { Duration, Effect } from "effect";
 
-import { InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
+import { NotActionable, StaleRef } from "../../BrowserError.ts";
 import type { ClickOptions, PressOptions, ScrollOptions, Target, TypeOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { decodeWith, failWith, type PageContext } from "../page/context.ts";
+import { decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import * as Dispatch from "./dispatch.ts";
+import { buttonAt } from "./dispatch.ts";
 import * as Script from "./edit.inpage.ts";
 import * as Guard from "./guard.ts";
 import * as Keyboard from "./keyboard.ts";
@@ -21,8 +22,6 @@ import * as Pointer from "./pointer.ts";
 import * as Settle from "./settle.ts";
 import { plain, type Style } from "./style.ts";
 import * as Targets from "./targets.ts";
-
-const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
 
 const partsOf = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
   const dispatch = Dispatch.make(page);
@@ -52,25 +51,23 @@ const finite = (...values: ReadonlyArray<number | undefined>) =>
 
 const named = (target: Target) => (typeof target === "string" ? target : `${target.x},${target.y}`);
 
+/** The ref a target names, if it names one rather than a point. */
+const refOf = (target: Target | undefined) => (typeof target === "string" ? target : undefined);
+
 /** A click's options, once its counts are finite. */
 const clickable = (options: ClickOptions) =>
   finite(options.clickCount, options.holdMillis)
     ? Effect.void
-    : failWith("click", new InvalidRequest({ detail: "clickCount and holdMillis must be finite" }));
+    : refuse("click", "clickCount and holdMillis must be finite");
 
 /** The keys a press sends, once they and its options are valid. */
 const pressed = (keys: string, options: PressOptions) => {
   const parts = Keys.parts(keys);
 
   if (!finite(options.times, options.holdMillis))
-    return failWith("press", new InvalidRequest({ detail: "times and holdMillis must be finite" }));
+    return refuse("press", "times and holdMillis must be finite");
   if (parts === undefined)
-    return failWith(
-      "press",
-      new InvalidRequest({
-        detail: `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`,
-      }),
-    );
+    return refuse("press", `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`);
 
   return Effect.succeed(parts);
 };
@@ -92,11 +89,7 @@ const click = (input: Parts) => {
       },
       settings.actionTimeout,
       Effect.suspend(() => clickable(clickOptions)).pipe(
-        Effect.andThen(
-          preparePolicy("click", { target: typeof target === "string" ? target : undefined }, [
-            target,
-          ]),
-        ),
+        Effect.andThen(preparePolicy("click", { target: refOf(target) }, [target])),
       ),
       (marks, approval) =>
         Effect.gen(function* () {
@@ -134,26 +127,14 @@ const click = (input: Parts) => {
                     ),
                 ),
               );
-            yield* sendMouse("click", marks.input, {
-              type: "mousePressed",
-              ...point,
-              button,
-              buttons: buttonMask[button],
-              clickCount: index,
-            });
+            yield* sendMouse("click", marks.input, buttonAt("mousePressed", point, button, index));
 
             // A hold the caller asks for is the click's own; the style's is presentation.
             const hold = clickOptions.holdMillis ?? (yield* marks.style.hold);
 
             if (clickOptions.holdMillis === undefined) yield* marks.present(hold);
             if (hold > 0) yield* Effect.sleep(Duration.millis(hold));
-            yield* sendMouse("click", marks.input, {
-              type: "mouseReleased",
-              ...point,
-              button,
-              buttons: 0,
-              clickCount: index,
-            });
+            yield* sendMouse("click", marks.input, buttonAt("mouseReleased", point, button, index));
           }
           yield* flush("click", marks.input);
           yield* settle("click", before);
@@ -173,7 +154,7 @@ const hover = (input: Parts) => {
       "hover",
       { target: named(target) },
       settings.actionTimeout,
-      preparePolicy("hover", { target: typeof target === "string" ? target : undefined }, [target]),
+      preparePolicy("hover", { target: refOf(target) }, [target]),
       (marks, approval) =>
         Effect.gen(function* () {
           const resolved = yield* targetFor("hover", target, approval, marks);
@@ -244,21 +225,9 @@ const drag = (input: Parts) => {
             ],
           });
           yield* marks.sent;
-          yield* sendMouse("drag", marks.input, {
-            type: "mousePressed",
-            ...start.point,
-            button: "left",
-            buttons: 1,
-            clickCount: 1,
-          });
+          yield* sendMouse("drag", marks.input, buttonAt("mousePressed", start.point));
           yield* moveTo("drag", marks, end.point, end.cursor, "drag");
-          yield* sendMouse("drag", marks.input, {
-            type: "mouseReleased",
-            ...end.point,
-            button: "left",
-            buttons: 0,
-            clickCount: 1,
-          });
+          yield* sendMouse("drag", marks.input, buttonAt("mouseReleased", end.point));
           yield* flush("drag", marks.input);
         }),
       style,
@@ -292,10 +261,7 @@ const typeText = (input: Parts) => {
           const into = typeOptions.into;
 
           if (into !== undefined && !/^e\d+$/.test(into))
-            return yield* failWith(
-              "type",
-              new InvalidRequest({ detail: `"${into}" is not a ref; refs look like e12` }),
-            );
+            return yield* refuse("type", `"${into}" is not a ref; refs look like e12`);
 
           // A typed space or letter can press a focused button or change a control. Refuse
           // those before any input, on every path.
@@ -328,13 +294,7 @@ const typeText = (input: Parts) => {
               yield* Guard.check(approval, { presses: [{ index: 0, ...target.point }] });
               yield* marks.sent;
               for (const type of ["mousePressed", "mouseReleased"] as const)
-                yield* sendMouse("type", marks.input, {
-                  type,
-                  ...target.point,
-                  button: "left",
-                  buttons: type === "mousePressed" ? 1 : 0,
-                  clickCount: 1,
-                });
+                yield* sendMouse("type", marks.input, buttonAt(type, target.point));
               yield* flush("type", marks.input);
             }
 
@@ -480,7 +440,7 @@ const scroll = (input: Parts) => {
     const valid =
       Number.isFinite(scrollOptions.dx ?? 0) && Number.isFinite(scrollOptions.dy ?? 0)
         ? Effect.void
-        : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
+        : refuse("scroll", "scroll deltas must be finite");
 
     return perform(
       "scroll",
@@ -492,11 +452,7 @@ const scroll = (input: Parts) => {
       valid.pipe(
         Effect.andThen(
           // Scrolling the page has no target: whatever sits mid-viewport is not what is scrolled.
-          preparePolicy(
-            "scroll",
-            { target: typeof target === "string" ? target : undefined },
-            target === undefined ? [] : [target],
-          ),
+          preparePolicy("scroll", { target: refOf(target) }, target === undefined ? [] : [target]),
         ),
       ),
       (marks, approval) =>

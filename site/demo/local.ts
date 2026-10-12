@@ -30,7 +30,7 @@ const missing = Effect.gen(function* () {
   const live = yield* Config.option(Config.String("EFFECT_BROWSER_BENCH_LIVE"));
 
   return [
-    ...(Option.isNone(key) ? ["OPENROUTER_API_KEY: the agent, narrator and voice run on it"] : []),
+    ...(Option.isNone(key) ? ["OPENROUTER_API_KEY: the agent and its voice run on it"] : []),
     ...(Option.getOrUndefined(live) === "1"
       ? []
       : ["EFFECT_BROWSER_BENCH_LIVE=1: your opt-in to paid model calls"]),

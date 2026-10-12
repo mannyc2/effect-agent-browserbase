@@ -27,6 +27,9 @@ describe("pageName", () => {
       "What price will ethereum hit",
     );
     assert.strictEqual(pageName("https://www.polymarket.com/", names), "polymarket.com");
+    // bea3a16 decoded legal URL paths without guarding malformed percent escapes.
+    assert.strictEqual(pageName("https://example.com/offer-50%", names), "Offer 50%");
+    assert.strictEqual(pageName("https://example.com/%E0%A4", names), "%E0%A4");
   });
 });
 

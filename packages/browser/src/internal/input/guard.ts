@@ -8,7 +8,7 @@ import { Effect } from "effect";
 import { type BrowserError, InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
 import { InputRequest, redacted } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
+import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
 import * as Url from "../page/url.ts";
 import * as Script from "./guard.inpage.ts";
 
@@ -74,19 +74,13 @@ export const make = (page: PageContext, bridge: Bridge) => {
     Effect.gen(function* () {
       for (const target of targets) {
         if (typeof target === "string" && !/^e\d+$/.test(target))
-          return yield* failWith(
-            action,
-            new InvalidRequest({ detail: `"${target}" is not a ref; refs look like e12` }),
-          );
+          return yield* refuse(action, `"${target}" is not a ref; refs look like e12`);
         if (
           target !== null &&
           typeof target !== "string" &&
           (!Number.isFinite(target.x) || !Number.isFinite(target.y))
         )
-          return yield* failWith(
-            action,
-            new InvalidRequest({ detail: "point coordinates must be finite" }),
-          );
+          return yield* refuse(action, "point coordinates must be finite");
       }
 
       const input: Script.InputPlan = {

@@ -1,7 +1,6 @@
 // One take of the demo, run the way the bench runs a trial: model calls behind the bench's opt-in
-// and budget, a recorded local Chromium, and the outcome classified and checked. The take is then packed
-// with the narrator's voice, which has a cap of its own within the take's.
-import { OpenRouterLanguageModel } from "@effect/ai-openrouter";
+// and budget, a recorded local Chromium, and the outcome classified and checked. The take is then
+// packed with the agent's words spoken, by a voice with a cap of its own within the take's.
 import { BenchError, modelRunner, optedIn, refuse } from "bench/Budget.ts";
 import * as Recorder from "bench/Recorder.ts";
 import { errorText } from "bench/run.ts";
@@ -13,6 +12,7 @@ import * as Chromium from "effect-browser/Chromium";
 import { FetchHttpClient } from "effect/http";
 
 import * as Casino from "./casino.ts";
+import { freshSeed } from "./casino/site.ts";
 import type { DemoName } from "./defaults.ts";
 import { pack } from "./pack.ts";
 import * as Polymarket from "./polymarket.ts";
@@ -26,21 +26,20 @@ type Explored = ReturnType<typeof Casino.explore> | ReturnType<typeof Polymarket
 const explore = (
   demo: DemoName,
   options: ExploreOptions,
+  seed: number,
 ): Effect.Effect<Effect.Success<Explored>, Effect.Error<Explored>, Effect.Services<Explored>> =>
-  demo === "casino" ? Casino.explore(options) : Polymarket.explore(options);
+  demo === "casino" ? Casino.explore(options, seed) : Polymarket.explore(options);
 
 export interface TakeOptions {
   /** Which demo to record. */
   readonly demo: DemoName;
   /** The replay this take is packed as, under public/replays/. */
   readonly id: string;
-  /** An OpenRouter model id, for the agent and the narrator. */
+  /** An OpenRouter model id, for the agent. */
   readonly model: string;
   readonly reasoning: "none" | "low" | "medium" | "high";
-  /** USD for the agent, narrator and voice together. */
+  /** USD for the agent and the voice together. */
   readonly maxUsd: number;
-  /** How often the narrator speaks. */
-  readonly every: Duration.Duration;
   readonly maxSteps: number;
   /** Show Chromium's window. */
   readonly headed: boolean;
@@ -88,15 +87,11 @@ export const take = Effect.fn("demo.take")(function* (options: TakeOptions) {
   yield* Console.log(`Take ${options.id}: ${options.model}, recording into ${directory}`);
 
   const task = tasks[options.demo];
+  const seed = options.demo === "casino" ? freshSeed() : 0;
 
   const work = runner.withModel(
     Effect.provide(
-      explore(options.demo, {
-        every: options.every,
-        maxSteps: options.maxSteps,
-        trace: recorder.trace,
-        captionCall: OpenRouterLanguageModel.withConfigOverride({ reasoning: { effort: "none" } }),
-      }),
+      explore(options.demo, { maxSteps: options.maxSteps, trace: recorder.trace }, seed),
       FetchHttpClient.layer,
     ),
     options.reasoning,
@@ -124,7 +119,7 @@ export const take = Effect.fn("demo.take")(function* (options: TakeOptions) {
     task: { name: task.name, kind: task.kind, summary: task.summary, prompt: task.prompt },
     run: {
       trial: 1,
-      seed: 0,
+      seed,
       model: options.model,
       reasoning: options.reasoning,
       browser: "chromium",

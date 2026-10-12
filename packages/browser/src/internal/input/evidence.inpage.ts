@@ -7,8 +7,6 @@ import { Schema } from "effect";
 import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 
-export type FormField = typeof FormFieldSchema.Encoded;
-
 /** Page text about the first target. It never includes what a field holds. */
 export type Evidence = typeof EvidenceSchema.Encoded;
 
