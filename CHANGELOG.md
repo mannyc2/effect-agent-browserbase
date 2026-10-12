@@ -4,6 +4,19 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.15
+
+- `Supervisor.Admission.after` covers every earlier session that stopped serving, including failed
+  acquisition attempts and older generations still draining. It waits for all pending releases and
+  retains the first `Unconfirmed` outcome for later attempts. Healthy nonexclusive rotation still
+  keeps its serving predecessor until the replacement opens; admission remains interruptible.
+- The optional `Supervisor.Releasing` service lets provider adapters report failed-attempt cleanup
+  without replacing the acquisition failure. Browserbase reports failed connection, build and
+  lost-create cleanup through it. Completed generations drop their browser and scope references;
+  admission retains release outcomes and pending signals. The Browserbase package requires
+  `effect-browser` from this release for the new service. Local Chromium and fake-provider tests
+  establish sequencing, not hosted billing or actual provider release confirmation.
+
 ## 0.3.0-beta.14
 
 - Library pictures pause native screencast capture through actual screenshot restoration, preserving
