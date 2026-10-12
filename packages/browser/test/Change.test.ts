@@ -580,6 +580,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           }),
         );
         yield* page.changes();
+        // The moment starts before the first click, however long the clicks take on a busy host.
+        const from = yield* (yield* Browser).now;
+
         yield* page.click(yield* button(page, "Menu"));
         yield* page.click(
           (yield* page.find({ role: "menuitem", name: "Share" }))[0]?.ref ?? "no menu",
@@ -587,7 +590,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         yield* page.click(yield* button(page, "Place order"));
         yield* page.waitFor({ text: "Order placed" });
         yield* Effect.sleep(Duration.millis(100));
-        const moment = yield* Moment.capture(page, { since: Duration.seconds(3) });
+        const moment = yield* Moment.capture(page, { since: from });
         const changes = moment.changes?.changes ?? [];
         const changed = (after: string) => changes.find((change) => change.after === after);
         const [menu, sheet, placed] = ["Share", "Share this page", "Order placed"].map(changed);

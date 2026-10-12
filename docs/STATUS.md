@@ -2,6 +2,12 @@
 
 ## 0.3
 
+Unreleased browser fixes retain paused capture until an uncropped native snapshot confirms the
+restored surface, so a crop with the viewport's aspect ratio cannot become a screencast frame.
+Interrupted input stops pending loading after its actual replies arrive, retaining input authority
+through cleanup. Stage schedules silence checks from the last paint without adding another hold
+when a frame arrives during the wait.
+
 The `0.3.0-beta.16` release publishes failed-try cleanup on terminal supervisor states, so the
 last try and retirement report outcomes without requiring another admission. `Down.released`
 and an opening generation's `Closed.released` retain that generation's first `Unconfirmed`,
@@ -286,8 +292,8 @@ Agent, the renamed Effect Agent:
   a document's first read is two calls and a warm read one, `ready` included however long the page
   takes, and a wait for a still screen two calls while a capture runs; the library's own clipped
   pictures stay out of the screencast by pausing native capture through actual picture restoration,
-  retaining readers and settings. Forced pictures with capture running add stop, viewport refresh
-  and restart calls; cached frame reuse remains free, and readiness requires fresh frame evidence
+  retaining readers and settings. Forced pictures with capture running add stop, an uncropped
+  restoration snapshot, viewport refresh and restart calls; cached frame reuse remains free, and readiness requires fresh frame evidence
   after a pause. Focus emulation keeps tabs behind painting. A native
   suite holds these to their call budgets through a counting proxy.
 - Tracing: page operations with their phases and protocol cost, captures, page script round trips

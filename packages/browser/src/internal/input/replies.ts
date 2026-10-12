@@ -3,7 +3,7 @@
  * Canceling a caller cannot cancel a protocol command already sent. The next action waits for
  * those replies, while a stopped run releases only held keys or buttons whose release was never submitted.
  */
-import { Context, Data, Effect } from "effect";
+import { Context, Data, Effect, type Scope } from "effect";
 
 import { maximumSamples } from "../../Motion.ts";
 
@@ -18,6 +18,8 @@ export interface Run {
   readonly track: <A>(reply: Promise<A>) => Promise<A>;
   /** End ownership after the record and all this operation's native replies have settled. */
   readonly afterIdle: (ended: () => void) => void;
+  /** Retain authority through scoped cleanup after the replies already submitted. */
+  readonly recover: (cleanup: Effect.Effect<void>, scope: Scope.Scope) => Effect.Effect<void>;
   /** Reserve a complete stroke, including its releases, before sending its first event. */
   readonly reserve: (commands: number) => Effect.Effect<void, InputFailure>;
   /** Admit every sample before a motion starts its published clock; ordinary input stays bounded separately. */
@@ -105,17 +107,11 @@ export const make = () => {
     const submit = (command: () => Promise<unknown>) => {
       if (reserved < 1) throw new Error("input must reserve capacity before dispatch");
       reserved--;
-      let response: Promise<unknown>;
-
       try {
-        response = command();
+        void track(command(), true);
       } catch (cause) {
         failure ??= new InputFailure({ cause });
-
-        return;
       }
-
-      void track(response, true);
     };
 
     const reserve = (commands: number, maximum: number, limit: number) =>
@@ -138,6 +134,21 @@ export const make = () => {
         if (pending.size === 0) end();
         else endings.add(end);
       },
+      recover: (cleanup, scope) =>
+        Effect.gen(function* () {
+          const replies = [...pending];
+          const done = Promise.withResolvers<void>();
+
+          // This reservation prevents a new action or suspension from overtaking cleanup.
+          void track(done.promise);
+          yield* Effect.promise(() => Promise.all(replies)).pipe(
+            Effect.andThen(cleanup),
+            Effect.ensuring(Effect.sync(() => done.resolve())),
+            Effect.provideService(Current, run),
+            Effect.interruptible,
+            Effect.forkIn(scope),
+          );
+        }),
       reserve: (commands) => reserve(commands, capacity, capacity),
       // A dense stroke cannot wait for replies midway without changing its published timing.
       // Its finite reservation also leaves room for the ordinary pool's already-owned releases.

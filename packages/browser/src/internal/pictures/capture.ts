@@ -47,6 +47,8 @@ interface Options {
   readonly frameHistory: Duration.Duration;
   /** The viewport in CSS pixels; a capture is scaled to fit it, as screenshots are. */
   readonly viewport: Effect.Effect<Size, BrowserError>;
+  /** Copies the restored whole surface before native capture can restart. */
+  readonly restore: () => Promise<unknown>;
   readonly imageSize: (data: Uint8Array) => Size | undefined;
   readonly error: (cause: unknown) => BrowserError;
 }
@@ -589,6 +591,11 @@ export const make = (options: Options) =>
           };
 
           if (current === undefined || !resumable()) return;
+          // Screenshot replies restore emulation before the compositor has necessarily painted
+          // it. Copy the whole restored surface while stopped, retaining its actual native reply.
+          void pictures.track("picture restoration", options.restore(), failed(current));
+          yield* pictures.wait("picture restoration");
+          yield* healthy(current);
           const viewport = yield* readViewport(options);
 
           if (!resumable()) return;

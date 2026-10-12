@@ -619,11 +619,13 @@ under browser zoom, is never stalled. `foreignSize` therefore also counts some o
 frames: those of a new size still unconfirmed when another size replaced it, when the capture
 stopped, or beyond the 16 held. Before taking any new library picture, including an uncropped
 forced screenshot, the running native capture stops. It restarts with the same readers and settings
-only after the actual screenshot promise and viewport restoration settle, and after reading the
-current viewport. A frame received during that pause is acknowledged and discarded as
+only after the actual screenshot promise and viewport restoration settle. Before restarting, it
+takes an uncropped surface snapshot and discards its pixels, then reads the current viewport:
+Chromium can answer a crop before the compositor paints the restored page, even with the viewport's
+own proportions. A frame received during the pause is acknowledged and discarded as
 `duringPictures`; the pause can produce no callbacks, leaving the count at zero. Cached-frame reuse
-still costs no call. A forced picture with capture running adds stop, viewport refresh and restart
-calls to its usual cost. Caller cancellation retains the actual native replies: the next picture or
+still costs no call. A forced picture with capture running adds stop, a restoration snapshot,
+viewport refresh and restart calls to its usual cost. Caller cancellation retains the actual native replies: the next picture or
 capture waits for them, cleanup is bounded to two seconds, and unconfirmed restoration fails the
 capture rather than resuming it early. Readiness requires current post-resume frame evidence, so
 paused capture cannot certify that a still-painting page is quiet.

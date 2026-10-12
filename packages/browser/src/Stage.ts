@@ -240,16 +240,14 @@ const evidence = (
 
       const probe = Effect.gen(function* () {
         yield* until(Math.max(checkedAt, current()?.changedAt ?? checkedAt) + millis, now);
-        checkedAt = now();
         const before = current();
         const frame = before?.frame;
 
-        if (
-          before === undefined ||
-          frame === undefined ||
-          gone === before.feed ||
-          checkedAt - before.changedAt < millis
-        )
+        // Paint during the wait moves the deadline; an early wake is not a silence check.
+        if (before !== undefined && now() - before.changedAt < millis)
+          return Option.none<Evidence>();
+        checkedAt = now();
+        if (before === undefined || frame === undefined || gone === before.feed)
           return Option.none<Evidence>();
         const { feed } = before;
 
