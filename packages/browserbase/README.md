@@ -54,8 +54,8 @@ Each create `open` sends carries a nonce of its own in the session's user metada
 A create whose answer was lost, or that Browserbase answered 5xx or 408, may still have made a
 session that nobody can see, and that bills until its timeout: `open` looks for it by its nonce,
 again and again for up to 30 seconds, since Browserbase can list a new session late, ends it, and
-then fails with the create's error. A `supervise` that tries again after such failures leaves no
-session behind each try.
+then fails with the create's error. `supervise` reports that cleanup's outcome to the next
+attempt's admission, including when a session it found could not be confirmed ended.
 
 `open` and `attach` record the session's id and region on their spans, so a trace finds its
 session in Browserbase's dashboard (`https://browserbase.com/sessions/<id>`).
@@ -103,13 +103,16 @@ failures are tried again on the schedule. `definite(error)` can also stop retrie
 failures, including those from `build` or `admit`.
 
 `admit({ number, after })` runs before each attempt, including the first, before acquiring a
-context lease or making a provider request. `after`, when present, is the previous generation's
-release outcome. Await it to enforce an account policy such as refusing a reopen after an
-`Unconfirmed` release; ignoring it preserves immediate reopening. First opens and healthy
-nonexclusive rotations have no `after`, so the same policy keeps ephemeral rotations opening
-the replacement before releasing the outgoing session. Loss recovery and exclusive rotation
-expose the preceding release, including on retries after a failed acquisition. Admission shares
-the opening fiber's retry and cancellation rules.
+context lease or making a provider request. `after`, when present, covers every session the
+supervisor started that no longer serves: prior generations still releasing and failed attempts,
+including a failed connection or `build`. It waits for all their releases and is `Unconfirmed`
+if any was; the first unconfirmed outcome remains visible on later attempts and identifies its
+session when known.
+Await it to enforce an account policy such as refusing a reopen after an `Unconfirmed` release;
+ignoring it preserves immediate reopening. The serving predecessor of a healthy nonexclusive
+rotation is excluded, so the same policy keeps ephemeral rotations opening the replacement
+before releasing the outgoing session. Admission shares the opening fiber's retry and
+cancellation rules.
 
 ```ts
 const program = Effect.gen(function* () {

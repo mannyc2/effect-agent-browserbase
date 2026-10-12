@@ -883,15 +883,24 @@ It reopens on `reopen`, which also retries an open failure until the schedule en
 `definite` failure goes `Down` at once, with the cause also available through `Unavailable`.
 
 `admit({ number, after })` runs before every open attempt, including the first and each retry,
-inside the opening scope. It can await the last opened generation's release through `after`,
-even after an earlier reopen failed, to enforce a policy such as stopping after `Unconfirmed`.
-The first generation and a healthy nonexclusive rotation have no `after`: that rotation keeps
-the outgoing generation serving until its replacement opens. After a loss, or an exclusive
-rotation, `after` exposes the outgoing release. One policy can therefore await every available
-`after` without delaying healthy nonexclusive rotations. This is checked again before each
-retry, including when the serving generation was lost during a failed rotation. Admission
-failures follow `reopen` and `definite`, and retirement interrupts admission. Ignoring `after`
-adds no release wait.
+inside the opening scope. `after` covers every earlier session that stopped serving: all older
+generations still draining or releasing, and sessions whose acquisition or application build
+failed. It waits for all of their pending releases. If any end is `Unconfirmed`, that outcome
+remains visible on every later admission, even after newer releases settle. The supervisor keeps
+the first unconfirmed outcome as its witness, without retaining completed generations' resources.
+
+Before any release there is no `after`; completed confirmed releases resolve immediately. A
+nonexclusive rotation excludes its still-serving predecessor, so awaiting `after` preserves
+make-before-break rotation unless an older release remains pending or unconfirmed. The facts are
+checked again before every retry. Exclusive acquisition also waits for all pending releases.
+Admission failures follow `reopen` and `definite`, and retirement interrupts admission while
+releases run to their outcomes. Ignoring `after` adds no release wait for nonexclusive acquisition.
+
+Provider adapters can read the optional `Supervisor.Releasing` service during `open`. When an
+attempt fails, its cleanup reports the actual outcome with `released(outcome)` before finishing;
+the original acquisition failure stays a failure. Successful generations return `Opened.release`
+as usual. `Browserbase.supervise` supplies failed-connect and failed-build outcomes this way, so
+consumers do not need to wrap or repeat a provider release.
 
 `retire` revokes immediately, stops acquisition and waits for every generation to release.
 Closing the supervisor's scope does the same unless `keep` is set: then only the serving
