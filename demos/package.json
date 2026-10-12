@@ -11,13 +11,13 @@
     "test": "vp test --run"
   },
   "dependencies": {
-    "effect": "4.0.0",
+    "effect": "4.0.2",
     "effect-browser": "workspace:*",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0",
+    "@effect/vitest": "4.0.2",
     "@types/node": "26.1.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
