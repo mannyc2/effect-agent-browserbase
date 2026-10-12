@@ -266,6 +266,84 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
   },
 );
 
+// A corner that pulses from the start, as a slot's idle art does, and a region a click sets moving
+// for 1.5 s, or for good: a reel's large area, or a win counter's few digits.
+const stage = (moving: "reels" | "counter", seconds: number) =>
+  `<body style="margin:0"><canvas id=c width=640 height=360></canvas><script>
+  const g = c.getContext("2d");
+  let until = -1;
+  g.fillStyle = "#222"; g.fillRect(0, 0, 640, 360);
+  function draw(now) {
+    g.fillStyle = "hsl(" + Math.round(now / 4) % 360 + ", 80%, 50%)";
+    g.fillRect(600, 10, 30, 30);
+    if (now < until) {
+      g.fillStyle = "#222"; g.fillRect(20, 60, 400, 260);
+      g.fillStyle = ${moving === "reels"} ? "hsl(" + Math.round(now) % 360 + ", 70%, 40%)" : "#fff";
+      if (${moving === "reels"}) g.fillRect(20, 60, 400, 260);
+      else { g.font = "24px sans-serif"; g.fillText(String(Math.round(now)), 24, 84); }
+    } else if (until > 0 && window.stoppedAt === undefined) window.stoppedAt = performance.now();
+    requestAnimationFrame(draw);
+  }
+  c.onclick = () => { until = performance.now() + ${seconds * 1000}; };
+  requestAnimationFrame(draw);
+</script></body>`;
+
+// The screen's foreground: what an input set moving must stop, while what moved before it may not.
+layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
+  "Page.ready in the foreground",
+  (it) => {
+    const clicked = (moving: "reels" | "counter", seconds: number) =>
+      Effect.gen(function* () {
+        const page = yield* blank;
+
+        yield* show(page, stage(moving, seconds));
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Effect.sleep("800 millis");
+        yield* page.click({ x: 200, y: 150 });
+
+        return page;
+      });
+
+    const quiet = (page: Page) =>
+      evaluate(
+        page,
+        () => performance.now() - (window as unknown as { stoppedAt: number }).stoppedAt,
+      );
+
+    for (const moving of ["reels", "counter"] as const)
+      it.effect(`waits for the ${moving} a click set moving, not for the idle art`, () =>
+        Effect.gen(function* () {
+          const page = yield* clicked(moving, 1.5);
+
+          yield* page.ready({
+            still: "foreground",
+            quietMillis: 600,
+            timeout: Duration.seconds(10),
+          });
+          // Within a sample of the spell: the wait looks every 100 ms.
+          assert.isAtLeast(yield* quiet(page), 450, moving);
+          assert.strictEqual(
+            yield* reason(page.ready({ quietMillis: 600, timeout: Duration.seconds(2) })),
+            "Timeout",
+          );
+        }),
+      );
+
+    it.effect("never ends while what a click set moving keeps moving", () =>
+      Effect.gen(function* () {
+        const page = yield* clicked("reels", 1000);
+
+        assert.strictEqual(
+          yield* reason(
+            page.ready({ still: "foreground", quietMillis: 600, timeout: Duration.seconds(3) }),
+          ),
+          "Timeout",
+        );
+      }),
+    );
+  },
+);
+
 // Over raw CDP a tab behind another is hidden, unless some session holds focus emulation on it;
 // here none can, so the page behind paints no frame and is never ready to be shown.
 it.live("is never ready on a tab behind another that paints nothing", () =>
@@ -306,24 +384,29 @@ it.live("never takes a stalled connection for a still screen", () =>
     const proxy = yield* behindProxy();
     const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
 
-    for (const [toward, slow] of [
-      ["client", true],
-      ["browser", false],
-    ] as const) {
-      const page = yield* browser.newPage(reels(slow));
+    for (const still of ["screen", "foreground"] as const)
+      for (const [toward, slow] of [
+        ["client", true],
+        ["browser", false],
+      ] as const) {
+        const page = yield* browser.newPage(reels(slow));
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* Effect.sleep(Duration.millis(300));
-      const clicked = yield* browser.now;
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Effect.sleep(Duration.millis(300));
+        const clicked = yield* browser.now;
 
-      yield* page.click({ x: 200, y: 100 });
-      yield* Effect.sleep(Duration.millis(150)).pipe(
-        Effect.andThen(Effect.sync(() => proxy.stall(toward, 600))),
-        Effect.forkScoped,
-      );
-      yield* page.ready({ quietMillis: 400, timeout: Duration.seconds(10) });
-      assert.isAtLeast((yield* browser.now) - clicked, 1200, `stalled toward the ${toward}`);
-    }
+        yield* page.click({ x: 200, y: 100 });
+        yield* Effect.sleep(Duration.millis(150)).pipe(
+          Effect.andThen(Effect.sync(() => proxy.stall(toward, 600))),
+          Effect.forkScoped,
+        );
+        yield* page.ready({ still, quietMillis: 400, timeout: Duration.seconds(10) });
+        assert.isAtLeast(
+          (yield* browser.now) - clicked,
+          1200,
+          `${still}, stalled toward the ${toward}`,
+        );
+      }
   }).pipe(Effect.scoped),
 );
 
