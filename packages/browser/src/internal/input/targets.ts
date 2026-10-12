@@ -8,7 +8,7 @@ import { Effect } from "effect";
 import { InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
 import { ResolvedTarget, type Target } from "../../Page.ts";
 import { scriptCall } from "../page/bridge.ts";
-import { decodeWith, failWith } from "../page/context.ts";
+import { decodeWith, failWith, refuse } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import type { Dispatch } from "./dispatch.ts";
 import { type Approval, check, type Guard } from "./guard.ts";
@@ -67,15 +67,9 @@ export const make = (
 
   const resolve = (operation: string, target: Target, approval?: Approval, scroll = true) => {
     if (typeof target === "string" && !/^e\d+$/.test(target))
-      return failWith(
-        operation,
-        new InvalidRequest({ detail: target + " is not a ref; refs look like e12" }),
-      );
+      return refuse(operation, target + " is not a ref; refs look like e12");
     if (typeof target !== "string" && (!Number.isFinite(target.x) || !Number.isFinite(target.y)))
-      return failWith(
-        operation,
-        new InvalidRequest({ detail: "point coordinates must be finite" }),
-      );
+      return refuse(operation, "point coordinates must be finite");
 
     return readPoint(operation, target, approval, scroll).pipe(
       Effect.flatMap((result) =>

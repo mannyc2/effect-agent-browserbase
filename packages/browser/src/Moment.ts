@@ -27,11 +27,11 @@
 import { Duration, Effect, Option, Result, Schema } from "effect";
 import { Prompt } from "effect/ai";
 
-import { BrowserError, InvalidRequest } from "./BrowserError.ts";
+import { BrowserError } from "./BrowserError.ts";
 import { type Action, BrowserEvent } from "./BrowserEvent.ts";
 import { type Change, Changes } from "./Change.ts";
 import { Frame } from "./Frame.ts";
-import { undispatched } from "./internal/page/context.ts";
+import { refuse } from "./internal/page/context.ts";
 import { describe, named, quoted, where } from "./internal/timeline/words.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
@@ -116,10 +116,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
   const count = options.frames ?? 2;
 
   if (!Number.isSafeInteger(count) || count < 1)
-    return yield* undispatched(
-      "moment",
-      new InvalidRequest({ detail: "frames must be a positive safe integer" }),
-    );
+    return yield* refuse("moment", "frames must be a positive safe integer");
   const outline = options.snapshot ?? false;
 
   // The picture comes first, at no call with a running screencast, and the window ends at its

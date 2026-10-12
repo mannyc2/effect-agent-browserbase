@@ -9,7 +9,11 @@
  * the crops `zoom` took since its last, as context the run never keeps, so only the current picture
  * is ever in a request. Its pixel coordinates are viewport coordinates, which the pointer tools
  * take. The pictures are `RunContextPreparation`'s transient context, which a run's own
- * `transientContext` option replaces.
+ * `transientContext` option replaces. With `vision: "moments"`, the model's thread holds, after
+ * each turn's tool results, a moment of the current tab since the turn before: what happened, what
+ * changed. These stable accounts can be compacted. The latest three moments' pictures follow as
+ * reference messages labeled by turn, with their frame times. A run's own `context` option
+ * replaces the accounts' hook; its `transientContext` replaces the pictures.
  *
  * `make` gives the toolkit to put in an agent, and `layer`, which provides every tool's handler,
  * the ports and the pictures for one run, on a page or a browser's tabs.
@@ -29,9 +33,11 @@ import {
   SchemaTransformation,
 } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
+import type * as Moment from "effect-browser/Moment";
 import * as Page from "effect-browser/Page";
 import { Prompt, Tool, Toolkit } from "effect/ai";
 
+import * as Moments from "./internal/moments.ts";
 import * as PageControl from "./PageControl.ts";
 
 // A parameter a model may leave out. Its JSON Schema allows null, as an optional one's does, and
@@ -125,7 +131,7 @@ export const Pointer = Toolkit.make(
   ),
   pointerTool(
     "wait_still",
-    "Wait for the screen to stop moving, as reels coming to rest or a chart that loads.",
+    "Wait for the screen to stop moving, as reels coming to rest or a chart that loads; what was already moving before your last input, such as an idle animation, does not count.",
     { seconds: absent(Schema.Finite, { description: "At most this long; defaults to 15" }) },
   ),
   // Without parameters, not with an empty struct: an empty struct's JSON Schema has no object root,
@@ -158,48 +164,43 @@ const single = BrowserUse.make({ mode: "single" });
 const batched = BrowserUse.make({ mode: "batched" });
 
 export interface LayerOptions extends PageControl.Options {
-  /** Show the model a screenshot of the current tab before each turn. Defaults to true. */
-  readonly vision?: boolean | undefined;
+  /**
+   * What the model sees of the page: `true`, the default, a screenshot of the current tab before
+   * each turn; `"moments"`, in its thread, what the tab did since its previous turn, with frames
+   * from a running screencast, or one screenshot without one; `false`, no pictures.
+   */
+  readonly vision?: boolean | "moments" | undefined;
+  /** With moments, called with each moment as the model is first shown it, as for a recording. */
+  readonly onMoment?: ((moment: Moment.Moment) => Effect.Effect<void>) | undefined;
 }
-
-/** At most this many crops are shown before a turn: the latest. */
-const maxZooms = 8;
 
 const text = (value: string) => ({ type: "text" as const, text: value });
 
 /** What the model sees before a turn: the current tab's screenshot, and the crops since its last. */
 const pictures = (controller: PageControl.Controller, zooms: Ref.Ref<Array<Page.Zoom>>) =>
   Effect.gen(function* () {
-    const crops = yield* Ref.getAndSet(zooms, []);
-    const shown = crops.slice(-maxZooms);
-
-    const cropped = shown.flatMap(({ region, image }) => [
-      text(
-        `Zoom: viewport origin (${region.x}, ${region.y}), ${region.width}x${region.height} CSS pixels. Add this origin to a point in the crop for a viewport click.`,
-      ),
-      { type: "file" as const, mediaType: image.mediaType, data: image.data },
-    ]);
-
-    const left =
-      crops.length > shown.length
-        ? [text(`${crops.length - shown.length} earlier crops were left out.`)]
-        : [];
-
     // A look before a turn shows a tab an action opened, as `follow` says.
-    const screen = yield* Effect.flatMap(controller.look, (page) => page.screenshot()).pipe(
-      Effect.map((image) => [
-        text(
-          `The current tab's viewport, ${image.width}x${image.height}. Its pixel coordinates are viewport coordinates.`,
-        ),
-        { type: "file" as const, mediaType: image.mediaType, data: image.data },
-      ]),
+    const parts = yield* Effect.flatMap(controller.look, (page) =>
+      Effect.gen(function* () {
+        const crops = Moments.cropped(yield* Ref.getAndSet(zooms, []), page.id);
+        const screen = yield* page.screenshot();
+
+        return [
+          text(
+            `The current tab's viewport, ${screen.width}x${screen.height}. Its pixel coordinates are viewport coordinates.`,
+          ),
+          { type: "file" as const, mediaType: screen.mediaType, data: screen.data },
+          ...crops,
+        ];
+      }),
+    ).pipe(
       Effect.catch((error) =>
         Effect.succeed([text(`(no screenshot of the current tab: ${error.message})`)]),
       ),
       controller.withTask,
     );
 
-    return Prompt.make([{ role: "user", content: [...screen, ...cropped, ...left] }]);
+    return Prompt.make([{ role: "user", content: parts }]);
   });
 
 // A point is the more specific of the two, such as a spot on a canvas a ref names.
@@ -228,7 +229,7 @@ const missing = (what: string) =>
 const pointing = (
   controller: PageControl.Controller,
   zooms: Ref.Ref<Array<Page.Zoom>>,
-  vision: boolean,
+  vision: boolean | "moments",
 ) => {
   const act = <A>(
     run: (page: Page.Page) => Effect.Effect<A, BrowserError>,
@@ -276,12 +277,12 @@ const pointing = (
         () => `Pressed ${keys}${times === undefined || times === 1 ? "" : ` ${times} times`}.`,
       ),
     zoom: (region) =>
-      vision
+      vision !== false
         ? controller.current.pipe(
             Effect.flatMap((page) => page.zoom(new Page.Region(region))),
             Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
             Effect.map(() => ({
-              did: `Cropped (${region.x}, ${region.y}), ${region.width}x${region.height}: it is shown before your next turn.`,
+              did: `Cropped (${region.x}, ${region.y}), ${region.width}x${region.height}: it is shown before your next turn if this tab is still current.`,
               followed: [],
             })),
             Effect.mapError(PageControl.useError),
@@ -296,7 +297,10 @@ const pointing = (
     wait_still: ({ seconds }) =>
       act(
         (page) =>
+          // What was already moving before the input, such as a game's idle animation, is not
+          // what the model waits for.
           page.ready({
+            still: "foreground",
             quietMillis: 600,
             timeout: `${Math.min(Math.max(seconds ?? 15, 0), 30)} seconds`,
           }),
@@ -318,8 +322,8 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
   const toolkit = Toolkit.merge(browserUse.toolkit, Control, Pointer);
 
   /**
-   * Every tool's handler, `PageControl`'s ports, and with `vision` the pictures before each turn,
-   * for one run on `target`.
+   * Every tool's handler, `PageControl`'s ports, and with `vision` the pictures before each turn
+   * or the moments in the thread, for one run on `target`.
    */
   const layer = (target: PageControl.Target, options: LayerOptions = {}) =>
     Layer.unwrap(
@@ -349,11 +353,21 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
         ).pipe(Layer.provide(ports));
 
         // Without pictures, an application's own context preparation stays as it is.
-        const preparation = vision
-          ? Layer.succeed(RunContextPreparation, {
-              transientContext: { load: () => pictures(controller, zooms) },
-            })
-          : Layer.empty;
+        const preparation =
+          vision === "moments"
+            ? Layer.succeed(
+                RunContextPreparation,
+                yield* Moments.make(
+                  controller.look,
+                  Ref.getAndSet(zooms, []),
+                  options.onMoment ?? (() => Effect.void),
+                ),
+              )
+            : vision
+              ? Layer.succeed(RunContextPreparation, {
+                  transientContext: { load: () => pictures(controller, zooms) },
+                })
+              : Layer.empty;
 
         return Layer.mergeAll(handlers, ports, preparation);
       }),

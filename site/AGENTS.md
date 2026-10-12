@@ -31,7 +31,7 @@ If your person asked you to record a take of the demo on their machine:
 - `agent.ts`: the Vite plugin that serves and builds the agent surface: each page's markdown, `llms.txt`, `llms-full.txt`, `/api/v1/pages.json`, `robots.txt`, `404.md`, and one HTML entry per page.
 - `src/serve.ts` and `src/worker.ts`: the deployed Worker, which answers `Accept: text/markdown`, adds a `Link` header naming a page's markdown, and streams replays from R2.
 - `alchemy.run.ts`: the Cloudflare stack. `upload.ts` puts a replay in its bucket.
-- `demo/`: the demos' runner: the take, the narrator, the voice, the packer and the dev server's `/local` API. `show.ts` is what the demos share: the host's opening, commentary and close around the agent's run. `polymarket.ts` and `casino.ts` are the two demos.
+- `demo/`: the demos' runner: the take, the voice, the packer and the dev server's `/local` API. `show.ts` is what the demos share: the agent's run with moments of the page in its thread, and a persona that makes what it says beside its tool calls the video's voice. `polymarket.ts` and `casino.ts` are the two demos.
 - `demo/casino/`: the casino demo's own sites: the casino (`casino.html`), its slot (`slot.html`, drawn on a canvas), the slot's maths (`slot.ts`) and the server that serves both and records every spin (`site.ts`). Nothing in them may tell the agent they were made for the demo.
 
 ### Adding a docs page

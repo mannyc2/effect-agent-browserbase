@@ -1,7 +1,7 @@
-// The narrator's voice: each line spoken by an OpenRouter audio model, which streams 24 kHz 16-bit
-// mono PCM with a transcript of what it said. A line is spoken as written or not at all, so the
-// captions always match the speech. Spending has its own cap, since OpenRouter streams audio
-// only, outside the bench's budgeted, non-streaming client.
+// The agent's voice: each line spoken by an OpenRouter audio model, which streams 24 kHz 16-bit
+// mono PCM. The line is the caption; the voice is asked to read it as written and trusted to.
+// Spending has its own cap, since OpenRouter streams audio only, outside the bench's budgeted,
+// non-streaming client.
 import { Config, Effect, Redacted, Ref, Schema, Stream } from "effect";
 import * as Sse from "effect/encoding/Sse";
 import { HttpClient, HttpClientRequest } from "effect/http";
@@ -34,9 +34,9 @@ const maxTokens = 1200;
 const bound = 400 * rates.input + maxTokens * rates.output;
 
 const instructions = [
-  "You are the voice of a live stream's commentator. Read the user's message aloud exactly as",
-  "written, word for word, adding nothing and leaving nothing out. Warm, lively broadcast tone,",
-  "at a brisk conversational pace.",
+  "You are the voice of someone talking over their own screen recording as they use a computer.",
+  "Read the user's message aloud exactly as written, word for word, adding nothing and leaving",
+  "nothing out. Relaxed, natural and engaged, like thinking aloud, at a brisk conversational pace.",
 ].join(" ");
 
 const Chunk = Schema.Struct({
@@ -45,12 +45,7 @@ const Chunk = Schema.Struct({
       Schema.Struct({
         delta: Schema.optional(
           Schema.Struct({
-            audio: Schema.optional(
-              Schema.Struct({
-                data: Schema.optional(Schema.String),
-                transcript: Schema.optional(Schema.String),
-              }),
-            ),
+            audio: Schema.optional(Schema.Struct({ data: Schema.optional(Schema.String) })),
           }),
         ),
       }),
@@ -62,27 +57,9 @@ const Chunk = Schema.Struct({
 
 const decodeChunk = Schema.decodeUnknownEffect(Schema.fromJsonString(Chunk));
 
-const words = (text: string) =>
-  text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .split(" ")
-    .filter((word) => word !== "");
-
-/** Whether a transcript says the line: nearly all of its words, and few of its own. */
-export const says = (transcript: string, line: string) => {
-  const heard = words(transcript);
-  const meant = words(line);
-  const shared = meant.filter((word) => heard.includes(word)).length;
-
-  return meant.length > 0 && shared >= meant.length * 0.85 && heard.length <= meant.length * 1.2;
-};
-
 interface Heard {
   /** Base64 PCM, as streamed. */
   readonly audio: string;
-  readonly transcript: string;
   /** What OpenRouter charged, once its usage arrives. */
   readonly cost: number | undefined;
 }
@@ -115,7 +92,7 @@ export const make = Effect.fn("Voice.make")(function* (options: VoiceOptions) {
       }),
     );
 
-  /** One attempt: the audio, what the model says it said, and what OpenRouter charged. */
+  /** One attempt: the audio and what OpenRouter charged. */
   const attempt = (line: string) =>
     client.execute(request(line)).pipe(
       Effect.filterOrFail(
@@ -137,16 +114,11 @@ export const make = Effect.fn("Voice.make")(function* (options: VoiceOptions) {
             ),
           ),
           Stream.runFold(
-            (): Heard => ({ audio: "", transcript: "", cost: undefined }),
-            (state, chunk): Heard => {
-              const audio = chunk.choices?.[0]?.delta?.audio;
-
-              return {
-                audio: state.audio + (audio?.data ?? ""),
-                transcript: state.transcript + (audio?.transcript ?? ""),
-                cost: chunk.usage?.cost ?? state.cost,
-              };
-            },
+            (): Heard => ({ audio: "", cost: undefined }),
+            (state, chunk): Heard => ({
+              audio: state.audio + (chunk.choices?.[0]?.delta?.audio?.data ?? ""),
+              cost: chunk.usage?.cost ?? state.cost,
+            }),
           ),
         ),
       ),
@@ -157,12 +129,10 @@ export const make = Effect.fn("Voice.make")(function* (options: VoiceOptions) {
       ),
     );
 
-  /** Speak one line, retrying once when the voice strays from it. */
+  /** Speak one line, trying again once if the request fails. */
   const speak = Effect.fn("Voice.speak")(function* (line: string) {
-    for (let tries = 0; tries < 2; tries++) {
-      const before = yield* Ref.get(spent);
-
-      if (before + bound > options.maxUsd)
+    const once = Effect.gen(function* () {
+      if ((yield* Ref.get(spent)) + bound > options.maxUsd)
         return yield* new VoiceError({
           message: `another line could take the voice past its $${options.maxUsd} cap`,
         });
@@ -175,10 +145,12 @@ export const make = Effect.fn("Voice.make")(function* (options: VoiceOptions) {
       yield* Ref.update(spent, (usd) => usd + (heard.cost ?? bound));
       const pcm = Uint8Array.from(Buffer.from(heard.audio, "base64"));
 
-      if (pcm.length > 0 && says(heard.transcript, line)) return { pcm, millis: millisOf(pcm) };
-    }
+      if (pcm.length === 0) return yield* new VoiceError({ message: "the voice sent no audio" });
 
-    return yield* new VoiceError({ message: `the voice would not say "${line}" as written` });
+      return { pcm, millis: millisOf(pcm) };
+    });
+
+    return yield* once.pipe(Effect.retry({ times: 1 }));
   });
 
   return { speak, spent: Ref.get(spent), credit: `${options.model}, voice ${options.voice}` };

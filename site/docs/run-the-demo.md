@@ -1,6 +1,6 @@
 # Run the demo yourself
 
-The demo is a take you can record on your own machine: your Chromium, your OpenRouter key, your spending cap. An agent explores Polymarket on its own, a narrator watches the screen and writes a line every few seconds, a voice speaks each line as it arrives, and the markets the agent reports are checked against Polymarket's public API. The take is packed into a replay and opens in the player.
+The demo is a take you can record on your own machine: your Chromium, your OpenRouter key, your spending cap. An agent explores Polymarket on its own and talks as it goes: what it writes beside its tool calls, in the first person, is spoken by a voice, and the markets it reports are checked against Polymarket's public API. The take is packed into a replay and opens in the player.
 
 ## Set up
 
@@ -47,7 +47,7 @@ Chrome Headless Shell 153.0.8010.12 (playwright chromium-headless-shell v1243) d
 
 ## Record a take
 
-From `site/`, `bun run demo take` records a take; `--model`, `--max-usd`, `--every` and `--headed` change it. The take is packed into `public/replays/<id>/`, and `bun run dev` serves it at `/replay/<id>`. The dev server also serves the local runner the [Try page](/try) uses, which shows what a take still needs and records one with the model and cap you choose.
+From `site/`, `bun run demo take` records a take; `--demo`, `--model`, `--max-usd` and `--headed` change it. The take is packed into `public/replays/<id>/`, and `bun run dev` serves it at `/replay/<id>`. The dev server also serves the local runner the [Try page](/try) uses, which shows what a take still needs and records one with the model and cap you choose.
 
 :::Example
 ```sh
@@ -55,7 +55,7 @@ cd site
 bun run demo take --id polymarket-take5 --max-usd 0.5
 ```
 
-This is the featured take, recorded on 11 October 2026 and then moved to `public/replays/polymarket/`. It printed the lines below, with paths shortened and the agent's warnings about tool calls that failed and were handed back to it left out:
+This is the featured take, recorded on 11 October 2026 and then moved to `public/replays/polymarket/`, when a separate narrator model still spoke for the agent. It printed the lines below, with paths shortened and the agent's warnings about tool calls that failed and were handed back to it left out:
 
 ```text output
 $ node --conditions=@effect-browser/source demo/main.ts take --id "polymarket-take5" --max-usd "0.5"
@@ -88,7 +88,7 @@ Packed polymarket-take5: 21 lines spoken for $0.0102; the take cost $0.1152 in a
 ```
 :::
 
-The agent and the narrator run on one OpenRouter model; the voice is `openai/gpt-audio-mini`. The cap covers all three: every call reserves its worst case against it before it is sent, and settles to what it actually cost. The featured take ran just over three minutes on a cheap model: 44 model calls and 21 spoken lines for $0.12 in all, voice included.
+The agent runs on an OpenRouter model; the voice is `openai/gpt-audio-mini`. The cap covers both: every call reserves its worst case against it before it is sent, and settles to what it actually cost. The featured take ran just over three minutes on a cheap model: 44 model calls and 21 spoken lines for $0.12 in all, voice included.
 
 From the United States, Polymarket opens with a notice about trading from the US; the agent continues in view-only mode, which is all a reading take needs.
 
@@ -96,7 +96,8 @@ From the United States, Polymarket opens with a notice about trading from the US
 
 - The browser's own screencast, as video, with the pointer's planned glides, every press, wheel and key drawn over it from the recorded input.
 - Each of the agent's turns: what it said, the tools it called and what they returned.
-- Each narrator line: the moment it captioned, the frames it saw, when its words arrived and when the voice spoke them. The lines are also written out as WebVTT captions.
+- What the agent was doing when, from its trace: each model call it thought in, each screenshot it took, and each tool it ran to read, act on or wait for the page, or to report. The player marks these over the video and on its timeline. Only their kinds and times are kept.
+- Each spoken line: the turn it was written in, the moment the agent was shown before that turn and when the voice spoke it. The lines are also written out as WebVTT captions, in the short pieces the player shows.
 - The agent's answer and how it checked out against Polymarket's API at the time of the run.
 
 ## How the answer is checked
@@ -105,9 +106,11 @@ The agent reports three markets: each one's title as its page shows it, the outc
 
 ## The casino demo
 
-`bun run demo take --demo casino` records a second demo, an agent playing a slot machine. It starts in an online casino's lobby, finds the slot Opal Crown, opens it in demo mode, sets the bet, reads the paytable and plays six spins. The game is drawn on a canvas inside the game studio's iframe, as real casino games are. Its reels, balance, bet and wins are pictures with no text behind them, so the agent reads every result from screenshots and plays by clicking points on them.
+`bun run demo take --demo casino` records a second demo, an agent playing a slot machine. It starts in an online casino's lobby and is told only the goal: six spins of the slot Opal Crown at a $2 bet in demo mode, and a report of how it went. Finding the game, getting past its sound prompt and intro, setting the bet and reading the paytable are up to the agent. The game is drawn on a canvas inside the game studio's iframe, as real casino games are. Its reels, balance, bet and wins are pictures with no text behind them, so the agent reads every result from the moments in its thread and plays by clicking points on them. The game keeps moving while it waits, with sparkles and a glowing spin button, and its wins count up; the agent's `wait_still` waits only for what its spin set moving.
 
-The casino, the studio and the game were made for this demo. The take serves them at their own HTTPS addresses by request interception, and nothing on them tells the agent so. The game server decides each spin from a fixed seed, which deals four wins in the first six spins at a $2 bet, the last of them a big one. It keeps its own record of every spin. The agent reports six things: what five Crowns pay, the bet it played at, each spin's win in order, the final balance and its biggest win's symbol and count. The check compares each one with that record, to the cent.
+The casino, the studio and the game were made for this demo. The take serves them at their own HTTPS addresses by request interception, and nothing on them tells the agent so. The game server deals each take's spins from a fresh seed, and keeps its own record of every spin. The agent reports seven things: what five Crowns pay, the bet it played at, how many spins it played, each spin's win in order, the lowest balance after any spin, the final balance and its biggest win's symbol and count. The check compares each one with that record, to the cent.
+
+The featured take, recorded on 12 October 2026, passed all seven in 118 seconds: 22 model calls and 21 spoken lines for $0.054 in all, voice included. Its third spin paid $5.00 for four Jacks on line 7, which the agent said as it saw it: "Spin three paid $5.00 on Line 7 (Jacks with a Wild), raising the balance to $999.00."
 
 ::Replay{id="casino"}
 

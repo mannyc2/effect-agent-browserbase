@@ -1,16 +1,9 @@
-// When narrator lines are heard and how they become a track and captions: a line waits for the
-// one before, a stale line is left unsaid, and the speech lands at its time in the track.
+// When spoken lines are heard and how they become a track and captions: a line waits for the
+// one before and is always said, and the speech lands at its time in the track.
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import {
-  breath,
-  captions,
-  type Caption,
-  mixdown,
-  schedule,
-  staleAfter,
-} from "../demo/narration.ts";
+import { breath, captions, type Caption, mixdown, schedule } from "../demo/narration.ts";
 import { sampleRate } from "../demo/voice.ts";
 
 const caption = (until: number, text = `line at ${until}`): Caption => ({
@@ -37,35 +30,16 @@ describe("schedule", () => {
     }),
   );
 
-  it.effect("leaves a stale line unsaid, without asking the voice for it", () =>
+  it.effect("says a late line after the one before, however long that one runs", () =>
     Effect.gen(function* () {
-      const asked: Array<number> = [];
-
-      const lines = yield* schedule([caption(1000), caption(2000), caption(9000)], (line) =>
-        Effect.sync(() => {
-          asked.push(line.until);
-
-          return { millis: staleAfter + 2000 };
-        }),
-      );
-
-      assert.deepStrictEqual(asked, [1000, 9000]);
-      assert.deepStrictEqual(
-        lines.map((line) => line.until),
-        [1000, 9000],
-      );
-    }),
-  );
-
-  it.effect("skips a line the voice leaves unsaid", () =>
-    Effect.gen(function* () {
-      const lines = yield* schedule([caption(1000), caption(3000)], (line) =>
-        Effect.succeed(line.until === 1000 ? undefined : { millis: 1000 }),
+      const lines = yield* schedule(
+        [caption(1000), caption(2000), caption(3000)],
+        speaking(10_000),
       );
 
       assert.deepStrictEqual(
         lines.map((line) => line.at),
-        [3000],
+        [1000, 11_000 + breath, 21_000 + 2 * breath],
       );
     }),
   );

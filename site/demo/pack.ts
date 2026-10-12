@@ -1,6 +1,7 @@
 // Packs one recording (`bun run demo`, or the bench's `--record`) for the player: its shown frames
-// become one H.264 video at their recorded times, the narrator's lines are spoken into its audio
-// track and written as WebVTT captions, and replay.json keeps everything else.
+// become one H.264 video at their recorded times, what the agent said beside its tool calls is
+// spoken into its audio track from the moment it acted and written as WebVTT captions, and
+// replay.json keeps everything else.
 //
 // Output goes to public/replays/<replay id>/, which is ignored by git and published with the site.
 import { spawnSync } from "node:child_process";
@@ -11,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { Recording } from "bench/Recording.ts";
 import { Console, Effect, Schema } from "effect";
 
-import { NarrationLine, Replay, shownFrames } from "../src/replay.ts";
+import { activityOf, NarrationLine, Replay, shownFrames } from "../src/replay.ts";
 import { captions, mixdown, schedule } from "./narration.ts";
 import { sampleRate, type Voice } from "./voice.ts";
 
@@ -50,8 +51,8 @@ const ffmpeg = (args: ReadonlyArray<string>) =>
   });
 
 /**
- * Packs the recording in `source` as replay `id`. With a voice, the narrator's captions are
- * spoken; without one, or with no captions, the video is silent and has no narration.
+ * Packs the recording in `source` as replay `id`. With a voice, the agent's words are spoken;
+ * without one, or with no words, the video is silent and has no narration.
  */
 export const pack = Effect.fn("pack")(function* (source: string, id: string, voice?: Voice) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(id))
@@ -74,30 +75,28 @@ export const pack = Effect.fn("pack")(function* (source: string, id: string, voi
     mkdirSync(join(output, "moments"), { recursive: true });
   });
 
+  // A turn's words, heard as its actions start.
+  const said = recording.steps.filter((step) => step.text.trim() !== "");
+
   const spoken =
     voice === undefined
       ? []
       : yield* schedule(
-          recording.moments.flatMap((moment) =>
-            moment.caption === undefined
-              ? []
-              : [
-                  {
-                    text: moment.caption,
-                    from: moment.from,
-                    // A window that closed before the first frame is heard from the first frame.
-                    until: Math.max(moment.at, first.hostTime),
-                    readyAt: moment.readyAt,
-                  },
-                ],
-          ),
+          said.map((step) => ({
+            text: step.text.trim(),
+            from: step.at,
+            // A turn before the first frame is heard from the first frame.
+            until: Math.max(step.at, first.hostTime),
+            readyAt: step.at,
+          })),
           (caption) =>
             voice.speak(caption.text).pipe(
               Effect.tap(() => Console.log(`  said: ${caption.text}`)),
-              Effect.catchTag("VoiceError", (error) =>
-                Console.error(`  unsaid (${error.message}): ${caption.text}`).pipe(
-                  Effect.as(undefined),
-                ),
+              Effect.mapError(
+                (error) =>
+                  new PackError({
+                    message: `${error.message}; pack the recording again with \`bun run demo pack ${source} ${id} --voice\``,
+                  }),
               ),
             ),
         );
@@ -238,6 +237,7 @@ export const pack = Effect.fn("pack")(function* (source: string, id: string, voi
       height,
       frames: frames.length,
     },
+    activity: recording.spans === undefined ? undefined : activityOf(recording.spans),
     narration:
       voice === undefined || spoken.length === 0
         ? undefined
@@ -259,7 +259,7 @@ export const pack = Effect.fn("pack")(function* (source: string, id: string, voi
     writeFileSync(join(output, "replay.json"), `${JSON.stringify(json)}\n`),
   );
   yield* Console.log(
-    `${id}: ${frames.length} of ${recording.frames.length} frames, ${(durationMillis / 1000).toFixed(1)}s, ${spoken.length} of ${recording.moments.filter((moment) => moment.caption !== undefined).length} lines spoken, in ${output}`,
+    `${id}: ${frames.length} of ${recording.frames.length} frames, ${(durationMillis / 1000).toFixed(1)}s, ${spoken.length} of ${said.length} lines spoken, in ${output}`,
   );
 
   return { output, lines: spoken.length };

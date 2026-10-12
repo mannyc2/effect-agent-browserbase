@@ -1,6 +1,6 @@
 # Moments and narration
 
-A screenshot says what a page shows; a **moment** says what it showed and what changed on it over a window of time. That is what a narrator needs, and what a model needs to understand a live chart, a game or a feed.
+A screenshot says what a page shows; a **moment** says what it showed and what changed on it over a window of time. That is what a model needs to follow a live chart, a game or a feed, and what an agent needs to see what its actions did.
 
 ## A moment
 
@@ -37,15 +37,21 @@ On Lichess, GM CondemnedToMove opened the rated 1+0 bullet game by moving the wh
 
 Frames carry the browser's paint time mapped onto one host clock, with its uncertainty, so a moment never passes old paint off as the page an action left.
 
-## A narrator
+## Moments in an agent's thread
 
-Each moment can start where the last one ended, so a narrator neither repeats nor misses an event or a change. In the demo, the narrator is a host who runs beside the agent. Before the agent starts, it opens the video from the first screen and the task. Then every few seconds it captures the moment since its last line and asks a model for a line sized to the interval, so spoken lines don't pile up. With each moment it gets what the agent said it was about to do and its own last few lines, so each line carries on from the one before. When the agent is done, it closes the video with what the agent found and how the check came out. It never steers, slows or grades the agent, and a failed call is skipped rather than ending the run.
+Give `BrowserTools.layer` the option `vision: "moments"` and it puts an account of the tab in the agent's thread after each turn's tool results: what happened since the turn before and what changed. The latest three moments' pictures follow as reference messages labeled by turn, with each frame's time. The agent reads its session in order and can connect each action and account to its pictures.
 
-A voice model speaks each line where the window it describes ends, at the last frame the narrator saw, or as soon as the line before has finished. On a live stream a line is heard when its words arrive, several seconds later and with the screen moved on; a replay places it where it belongs. The replay keeps all of it on the recording's clock: the window each line describes, when its words arrived, and when it was spoken.
+Each moment starts where the one before ended, so nothing that happened while the model was thinking is missed. Accounts stay unchanged until Yielded compacts them with the surrounding conversation. Retiring older pictures never changes an account or invalidates a compacted prefix. The frames are the ones a running screencast painted, up to three per moment; without one, a moment holds a single screenshot.
 
-::Replay{id="polymarket"}
+For long runs, configure Yielded's native compaction and a model-aware image-token estimate. Its default JSON estimate counts image bytes as text and can overestimate screenshots. The [adapter guide](https://github.com/mannyc2/effect-agent-browserbase/tree/main/packages/agent-browser#moments-and-long-runs) shows how to compose the consumer's resolved model with the moments preparation. The bounded demo runs do not configure automatic compaction.
 
-Open "What the narrator saw" under any line in the transcript to see the frames its moment held.
+## The agent's own voice
+
+In the demo, nobody narrates for the agent. What it writes beside its tool calls is spoken over the video in the first person, as its instructions tell it people are watching and listening. Every line is the agent's own reading of the moments in its thread, so you can judge from it whether the page was understood. A voice model speaks each line as that turn's actions start, or as soon as the line before has finished.
+
+::Replay{id="casino"}
+
+Open the frames under any line in the transcript to see the moment the agent was shown before that turn.
 
 ## A long stream
 

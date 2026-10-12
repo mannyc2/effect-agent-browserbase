@@ -105,7 +105,8 @@ the layer serves every tool either way. `make({ mode: "single" })` lets `act` ta
 - Before each turn the model sees a screenshot of the current tab, and the crops `zoom` took since
   its last turn, as context the run never keeps, so only the current picture is ever in a request.
   Its pixel coordinates are viewport coordinates, which the pointer tools take. `vision: false`
-  leaves the pictures out, and `zoom` then refuses.
+  leaves the pictures out, and `zoom` then refuses. A queued crop is discarded if another tab
+  becomes current before the next turn, so its coordinates never describe that other tab.
 - An observation after an action begins with what followed it: a dialog and how the browser
   answered it, where the page went, a tab it opened and up to three changes its input caused,
   such as `"Full" became "Kept"`. A pointer tool's result says the same in `followed`.
@@ -117,6 +118,54 @@ the layer serves every tool either way. `make({ mode: "single" })` lets `act` ta
   the port refuses it. Yielded's `screenshot` tool is left out too; the port answers with a PNG for
   a host that asks.
 - Frames from the same origin are read inline, and none is listed, so the ports refuse a `frame`.
+
+## Moments and long runs
+
+`layer(target, { vision: "moments" })` puts a stable account of the page after each turn's tool
+results: what happened and what changed since the preceding moment. The latest three moments'
+pictures follow the thread as reference messages, labeled by turn, with each frame's time and
+each crop's viewport origin. Retiring those pictures releases their bytes without rewriting
+earlier accounts. Without a screencast, each moment has one screenshot; with one, up to three
+frames. `onMoment` receives each captured moment once, for a consumer that records it.
+If the current page is lost or its moment has no usable picture, preparation fails with
+`AgentInputError` before another model call. A partial change record remains explicit in the moment.
+
+Yielded's native pruning and summarization can compact the accounts with the surrounding tool
+exchanges. The recent pictures remain available across compaction and never enter the summarizer.
+The accounts belong to the prepared model context for this run; they are not durable history.
+Keep a recording with `onMoment` if they must outlive the run.
+
+For a bounded model context, the consumer supplies the selected model's `ResolvedModelCall`,
+including `estimateMessageTokens`. Yielded's default structural JSON estimate counts image bytes
+as text, so it can greatly overestimate a screenshot. Use the selected provider's image-token
+reservation plus the text estimate from `@yielded/agent/compaction`; image costs differ by model,
+resolution and detail. Neither the tools nor the bench infer a universal image-token budget.
+
+Compose the model selection with the installed preparation instead of replacing its accounts.
+Inside the effect provided by `tools.layer`, with `resolvedModel` supplied by the consumer:
+
+```ts
+import { RunContextPreparation } from "@yielded/agent/run-options";
+import { Effect, Option } from "effect";
+
+const run = Effect.gen(function* () {
+  const preparation = Option.getOrUndefined(yield* Effect.serviceOption(RunContextPreparation));
+
+  return yield* AgentRuntime.run(buyer, task, {
+    context: {
+      prepare: (request) =>
+        Effect.map(
+          preparation?.hook?.prepare(request) ?? Effect.succeed({ prompt: request.source }),
+          (prepared) => ({ ...prepared, modelCall: resolvedModel }),
+        ),
+    },
+  });
+});
+```
+
+The run's own `context` replaces the account hook; its `transientContext` replaces the pictures.
+Leave `transientContext` unset to keep the tools' recent images. Set the agent's compaction policy
+and the resolved model's context capacity and output reserve to match the selected provider.
 
 ## A page or a browser's tabs
 

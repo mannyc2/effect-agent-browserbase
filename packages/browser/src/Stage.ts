@@ -24,7 +24,7 @@ import {
 
 import { type BrowserError, Closed, consequence, InvalidRequest, Timeout } from "./BrowserError.ts";
 import type { CaptureStats, Frame, ScreencastOptions } from "./Frame.ts";
-import { failWith, undispatched } from "./internal/page/context.ts";
+import { failWith, refuse, undispatched } from "./internal/page/context.ts";
 import { internalsOf } from "./internal/page/page.ts";
 import { monotonicMillis } from "./internal/pictures/clock.ts";
 import type { Page } from "./Page.ts";
@@ -397,10 +397,7 @@ export const make = Effect.fn("Stage.make")(function* (
     !Duration.isFinite(waited.value) ||
     !Duration.isPositive(waited.value)
   )
-    return yield* failWith(
-      "stage",
-      new InvalidRequest({ detail: "firstFrame must be a finite positive duration" }),
-    );
+    return yield* refuse("stage", "firstFrame must be a finite positive duration");
   const firstFrame = waited.value;
   const settings = { quality: options.quality, size: options.size };
   const output = yield* PubSub.sliding<Paint>(16);
@@ -432,10 +429,7 @@ export const make = Effect.fn("Stage.make")(function* (
       return switching(
         Effect.gen(function* () {
           if (!Number.isFinite(asked))
-            return yield* failWith(
-              "cue",
-              new InvalidRequest({ detail: "at must be finite host milliseconds" }),
-            );
+            return yield* refuse("cue", "at must be finite host milliseconds");
           yield* firstOf(feed, firstFrame);
           const old = showing;
 

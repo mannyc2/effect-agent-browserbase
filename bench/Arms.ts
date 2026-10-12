@@ -2,14 +2,17 @@
 // what it sees. Arm 5 is the library's default: `act` in batches, Yielded's control tools, the
 // pointer tools and a screenshot before each turn. Arm 1 is Yielded's own tools alone: one action
 // per `act`, an outline after each, and no pictures. Arm 2 sees a screenshot before each turn and
-// acts by pixels. Understand tasks differ only in arm 1, whose moments add the outline.
+// acts by pixels. Arm 6 is arm 5 with moments in its thread instead of the screenshot: after each
+// turn's results, what the page did since the turn before. Understand tasks differ only in arm 1,
+// whose moments add the outline.
 import { Agent, AgentRuntime, BrowserUse, InMemory, type RunEvent } from "@yielded/agent";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/BrowserTools";
+import type * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
-export const arms = [1, 2, 5] as const;
+export const arms = [1, 2, 5, 6] as const;
 
 export type Arm = (typeof arms)[number];
 
@@ -17,6 +20,7 @@ export const armNames: { readonly [A in Arm]: string } = {
   1: "Yielded's tools alone",
   2: "vision first",
   5: "default",
+  6: "moments",
 };
 
 /** Token counts, as the run or the model's response reported them. */
@@ -60,6 +64,10 @@ export interface OperateOptions<A, I> {
   readonly answer: Schema.Codec<A, I>;
   readonly maxSteps: number;
   readonly onStep: (step: Step) => Effect.Effect<void>;
+  /** In arm 6, called with each moment as the model is first shown it. */
+  readonly onMoment?: ((moment: Moment.Moment) => Effect.Effect<void>) | undefined;
+  /** Who the agent is to whoever watches it, added to its instructions. */
+  readonly persona?: string | undefined;
 }
 
 /** Whether an arm's moments carry the page's outline: only arm 1's, as the library's default leaves it out. */
@@ -89,6 +97,14 @@ const instructions: { readonly [A in Arm]: string } = {
   5: [
     "You operate a web browser through tools to complete the user's task.",
     "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+    "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+    "- Prefer refs where the outline has them.",
+    ...closing,
+  ].join("\n"),
+  6: [
+    "You operate a web browser through tools to complete the user's task.",
+    "- After each turn you are shown what the page did since the turn before: what happened and changed, with screenshots and their times, the last one the page now. Older screenshots are dropped; what happened stays.",
+    "- Screenshot pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
     "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
     "- Prefer refs where the outline has them.",
     ...closing,
@@ -135,6 +151,7 @@ const tooling = {
   },
   2: { toolkit: VisionToolkit, tools: batched, vision: true },
   5: { toolkit: batched.toolkit, tools: batched, vision: true },
+  6: { toolkit: batched.toolkit, tools: batched, vision: "moments" },
 } as const;
 
 /** What the run hands back: the answer, or why there is none. */
@@ -177,7 +194,10 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
     const agent = Agent.make(`bench-arm-${arm}`, {
       input: Schema.String,
       output,
-      instructions: instructions[arm],
+      instructions:
+        options.persona === undefined
+          ? instructions[arm]
+          : `${instructions[arm]}\n${options.persona}`,
       toolkit: Toolkit.merge(finish, toolkit),
       policy: {
         maxTurns: options.maxSteps,
@@ -217,7 +237,7 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
       }),
       Effect.provide(
         Layer.mergeAll(
-          tools.layer({ page }, { task, vision }),
+          tools.layer({ page }, { task, vision, onMoment: options.onMoment }),
           finish.toLayer({ done: () => Effect.void, give_up: () => Effect.void }),
           InMemory.layer,
         ),

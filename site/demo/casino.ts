@@ -1,11 +1,13 @@
-// The casino demo: an agent finds a slot machine in an online casino's lobby, reads its paytable
-// and plays six spins, while a host talks viewers through it. The game is drawn on a canvas, so
-// the reels, the balance and every win are pictures with no text behind them. What the agent
-// reports is checked against the game server's own record of each spin.
+// The casino demo: an agent is given a goal, six spins of a slot machine in an online casino, and
+// finds its own way there, talking viewers through it as it plays. The game is drawn on a canvas,
+// so the reels, the balance and every win are pictures with no text behind them, and it behaves as
+// a real slot does: it asks about sound, animates while idle, counts wins up and celebrates a big
+// one until skipped. Each take draws fresh spins, and what the agent reports is checked against
+// the game server's own record of them.
 //
 // The casino, its studio and the game are this demo's own, served at their own HTTPS origins by
 // request interception (see casino/site.ts); nothing in them says so to the agent.
-import { Effect, Schema } from "effect";
+import { Console, Effect, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 
 import * as Site from "./casino/site.ts";
@@ -25,20 +27,9 @@ export const task = {
   summary: "Open a canvas slot machine, read its paytable and report six spins' wins",
   start: Site.casino,
   prompt: [
-    "You are on Marlowe Casino, an online casino. Find the slot game Opal Crown and open it in",
-    "demo mode, which plays with free demo credits and needs no account.",
-    `When the game has loaded, set its total bet to ${dollars(bet)}. Then open the game's`,
-    "paytable, read what five Crowns on a line pay at that bet, and close it.",
-    `Then play exactly ${spins} spins, one at a time: after each spin, wait until the reels have`,
-    "stopped and any win has been shown, and note what the spin won, 0 if nothing.",
-    "Do not use autoplay or change the bet again.",
-    "Then report, with every amount in dollars: what five Crowns pay; the total bet you played",
-    "at; each spin's win, in order; the balance the game shows after the last spin; and for the",
-    "spin that won the most, the symbol its winning line paid for and how many in a row it paid",
-    "for, counting wilds.",
-    "People are watching you play, so before each action say in one short sentence what you are",
-    "about to do and why, for them to read.",
-    "Do not log in, sign up or play for real money.",
+    `You're on Marlowe Casino, an online casino. Play ${spins} spins of Opal Crown at a`,
+    `${dollars(bet)} total bet in demo mode, and report how it went.`,
+    "Don't log in, sign up or play for real money.",
   ].join(" "),
 } as const satisfies Show.Task;
 
@@ -53,6 +44,9 @@ export const Answer = Schema.Struct({
   balance: Schema.Finite.annotate({
     description: "The balance the game shows after the last spin, in dollars",
   }),
+  lowest: Schema.Finite.annotate({
+    description: "The lowest balance the game showed after any of your spins, in dollars",
+  }),
   biggest: Schema.Struct({
     symbol: Schema.String,
     count: Schema.Finite,
@@ -63,15 +57,6 @@ export const Answer = Schema.Struct({
 });
 
 export type Answer = typeof Answer.Type;
-
-const opening = [
-  "This is the very start of the video, before the agent has done anything; the picture is the",
-  "online casino's lobby it starts on. Open the way a presenter opens a demo: greet the viewers,",
-  "and say that the agent is going to play a slot machine drawn entirely on a canvas, with no",
-  "text behind it, so it has to read the reels, the balance and every win from the picture.",
-  "Then say what it will do, in order, and hand over to it, as in let's watch. Three or four",
-  "short sentences, at most 55 words.",
-].join(" ");
 
 const cents = (amount: number) => Math.round(amount * 100);
 
@@ -103,19 +88,20 @@ export const grade = (answer: Answer, record: ReadonlyArray<Site.Spin>): Show.Ch
   const last = record.at(-1);
   const played = last === undefined ? [] : record.filter((spin) => spin.session === last.session);
 
-  const biggest = played.reduce<Site.Spin | undefined>(
-    (best, spin) => (best === undefined || spin.win > best.win ? spin : best),
-    undefined,
-  );
+  const biggest = Math.max(0, ...played.map((spin) => spin.win));
 
-  const line = biggest?.wins.reduce<Slot.LineWin | undefined>(
-    (best, win) => (best === undefined || win.pay > best.pay ? win : best),
-    undefined,
-  );
+  const lines = played
+    .filter((spin) => spin.win === biggest)
+    .flatMap((spin) => {
+      const highest = Math.max(0, ...spin.wins.map((win) => win.pay));
+
+      return spin.wins.filter((win) => win.pay === highest);
+    });
 
   const crowns = Math.round((bet * Slot.pays.CROWN[2]) / 10);
   const reported = answer.wins.map(cents);
   const won = played.map((spin) => spin.win);
+  const lowest = played.length === 0 ? undefined : Math.min(...played.map((spin) => spin.balance));
 
   const facts = [
     {
@@ -136,15 +122,23 @@ export const grade = (answer: Answer, record: ReadonlyArray<Site.Spin>): Show.Ch
       line: `wins: reported ${reported.map(dollars).join(", ") || "none"}, the server paid ${won.map(dollars).join(", ") || "none"}`,
     },
     {
+      ok: lowest !== undefined && cents(answer.lowest) === lowest,
+      line: `lowest balance: reported ${dollars(cents(answer.lowest))}, the server's ${lowest === undefined ? "none" : dollars(lowest)}`,
+    },
+    {
       ok: last !== undefined && cents(answer.balance) === last.balance,
       line: `balance: reported ${dollars(cents(answer.balance))}, the server's ${last === undefined ? "none" : dollars(last.balance)}`,
     },
     {
       ok:
-        line === undefined
+        lines.length === 0
           ? answer.biggest.count === 0
-          : symbolOf(answer.biggest.symbol) === line.symbol && answer.biggest.count === line.count,
-      line: `biggest win: reported ${answer.biggest.count} ${answer.biggest.symbol}, the server paid ${line === undefined ? "nothing" : `${line.count} ${Slot.names[line.symbol]} on line ${line.line}, ${dollars(line.pay)}`}`,
+          : lines.some(
+              (line) =>
+                symbolOf(answer.biggest.symbol) === line.symbol &&
+                answer.biggest.count === line.count,
+            ),
+      line: `biggest win: reported ${answer.biggest.count} ${answer.biggest.symbol}, the server paid ${lines.map((line) => `${line.count} ${Slot.names[line.symbol]} on line ${line.line}, ${dollars(line.pay)}`).join(" or ") || "nothing"}`,
     },
   ];
 
@@ -157,37 +151,26 @@ export const grade = (answer: Answer, record: ReadonlyArray<Site.Spin>): Show.Ch
   };
 };
 
-const closing = (answer: Answer, checked: Show.Checked) =>
-  [
-    "The agent has finished. It reported that five Crowns pay",
-    `${dollars(cents(answer.fiveCrowns))} at its bet of ${dollars(cents(answer.bet))}; that its`,
-    `spins won ${answer.wins.map((win) => dollars(cents(win))).join(", ")}; that the balance after`,
-    `the last spin was ${dollars(cents(answer.balance))}; and that its biggest win was`,
-    `${answer.biggest.count} ${answer.biggest.symbol}.`,
-    `Its report was then compared with the game server's own record of every spin: ${checked.detail}`,
-    "Close the video the way a presenter wraps up a demo: say the run is over, sum up the session",
-    "briefly with its biggest win and the final balance, say how the check came out, and thank",
-    "the viewers for watching. Four or five short sentences, at most 70 words.",
-  ].join(" ");
-
-/** One take: the agent plays, the narrator speaks over it, and the report is checked. */
-export const explore = (options: Show.ExploreOptions) =>
+/** One take: the agent plays and talks, and its report is checked. The take logs its seed. */
+export const explore = (options: Show.ExploreOptions, seed = Site.freshSeed()) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const served = yield* Site.serve(browser);
+    const served = yield* Site.serve(browser, seed);
     const page = yield* browser.firstPage;
+
+    yield* Console.log(`Opal Crown seed: ${served.seed}`);
 
     yield* page.goto(task.start);
 
-    return yield* Show.perform(
+    const result = yield* Show.perform(
       page,
       {
         task,
         answer: Answer,
-        opening,
         check: (answer) => served.spins.pipe(Effect.map((record) => grade(answer, record))),
-        closing,
       },
       options,
     );
+
+    return { ...result, seed: served.seed };
   }).pipe(Effect.scoped);

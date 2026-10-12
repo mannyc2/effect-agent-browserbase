@@ -98,7 +98,7 @@
 
       // ---------------------------------------------------------------- state
       const game = {
-        phase: "loading", // loading, intro, idle, spinning, presenting, error
+        phase: "loading", // loading, sound, intro, idle, spinning, presenting, error
         loadStarted: performance.now(),
         loaded: false,
         config: null,
@@ -876,20 +876,28 @@
         return rows.slice(0, win.count).map((row, reel) => reel * 3 + row);
       };
 
+      // A win counts up over one to two seconds, longer the bigger it is, and the balance with it.
+      const rollMillis = (win) => Math.round(1000 + 1000 * Math.min(1, win / (game.bet * 10)));
+
+      function showPaid(shown) {
+        game.shownWin = shown;
+        game.shownBalance = game.balance - game.result.win + shown;
+      }
+
       function present(now, result) {
         const wins = result.wins;
         const cells = new Set(wins.flatMap(winCells));
-        const big = result.win >= game.bet * 10;
+        const big = result.win >= game.bet * 15;
         game.presentation = {
           wins,
           cells,
           phase: big ? "big" : "all",
           phaseAt: now,
           index: 0,
-          rollFrom: 0,
+          roll: big ? 0 : rollMillis(result.win),
         };
         if (big) startBigWin(now, result.win);
-        game.message = big ? "" : "WIN " + money(result.win);
+        game.message = big ? "" : "WIN " + money(0);
       }
 
       function updatePresentation(now) {
@@ -900,16 +908,16 @@
           if (!game.bigWin) {
             p.phase = "all";
             p.phaseAt = now;
-            game.shownWin = game.result.win;
+            p.roll = 0;
+            showPaid(game.result.win);
           }
           return true;
         }
         if (p.phase === "all") {
-          game.shownWin = Math.round(game.result.win * Math.min(1, since / 900));
+          showPaid(Math.round(game.result.win * (p.roll === 0 ? 1 : Math.min(1, since / p.roll))));
           game.message = "WIN " + money(game.shownWin);
-          if (since >= 1500) {
-            game.shownWin = game.result.win;
-            game.shownBalance = game.balance;
+          if (since >= p.roll + 600) {
+            showPaid(game.result.win);
             if (p.wins.length > 1) {
               p.phase = "each";
               p.index = 0;
@@ -966,15 +974,15 @@
 
       function badge(g, x, y, text, colour) {
         g.save();
-        g.font = "800 22px Inter, system-ui, sans-serif";
+        g.font = "800 17px Inter, system-ui, sans-serif";
         g.textAlign = "center";
         g.textBaseline = "middle";
-        const w = g.measureText(text).width + 28;
+        const w = g.measureText(text).width + 24;
         g.fillStyle = "rgba(10,4,24,.92)";
         g.strokeStyle = colour;
         g.lineWidth = 3;
         g.beginPath();
-        g.roundRect(x - w / 2, y - 18, w, 36, 18);
+        g.roundRect(x - w / 2, y - 15, w, 30, 15);
         g.fill();
         g.stroke();
         g.fillStyle = "#fff";
@@ -983,6 +991,10 @@
       }
 
       // ---------------------------------------------------------------- big win
+      // A big win plays for seven seconds, counting up for the first five; a tap skips to its end.
+      const BIG_MILLIS = 7000,
+        BIG_COUNT_MILLIS = 5200;
+
       function startBigWin(now, amount) {
         const coins = Array.from({ length: 46 }, (_, i) => ({
           x: W / 2 + (Math.random() - 0.5) * 120,
@@ -990,7 +1002,7 @@
           vx: (Math.random() - 0.5) * 900,
           vy: -500 - Math.random() * 700,
           spin: Math.random() * 10,
-          delay: (i % 12) * 60,
+          delay: (i % 23) * 100,
         }));
         game.bigWin = {
           at: now,
@@ -1003,18 +1015,26 @@
       function updateBigWin(now) {
         const b = game.bigWin;
         if (!b) return false;
-        if (now - b.at > 3400) {
+        if (now - b.at > BIG_MILLIS) {
           game.bigWin = null;
           return true;
         }
+        showPaid(Math.round(b.amount * Math.min(1, (now - b.at) / BIG_COUNT_MILLIS)));
         return true;
+      }
+
+      function skipBigWin(now) {
+        const b = game.bigWin;
+        if (now - b.at > 600) b.at = Math.min(b.at, now - BIG_COUNT_MILLIS - 400);
       }
 
       function drawBigWin(g, now) {
         const b = game.bigWin;
         if (!b) return;
-        const t = (now - b.at) / 1000;
-        const fade = t > 3.05 ? Math.max(0, 1 - (t - 3.05) / 0.35) : Math.min(1, t / 0.25);
+        const t = (now - b.at) / 1000,
+          end = BIG_MILLIS / 1000;
+        const fade =
+          t > end - 0.35 ? Math.max(0, 1 - (t - end + 0.35) / 0.35) : Math.min(1, t / 0.25);
         g.save();
         g.globalAlpha = fade;
         g.fillStyle = "rgba(6,2,16,.72)";
@@ -1033,9 +1053,10 @@
           g.fill();
         }
         g.restore();
+        // A fountain of coins: each falls off the screen before it is thrown again.
         for (const coin of b.coins) {
-          const ct = t - coin.delay / 1000;
-          if (ct < 0) continue;
+          if (t < coin.delay / 1000) continue;
+          const ct = (t - coin.delay / 1000) % 2.4;
           const x = coin.x + coin.vx * ct,
             y = coin.y + coin.vy * ct + 900 * ct * ct;
           if (y > H + 40) continue;
@@ -1071,9 +1092,8 @@
         g.shadowBlur = 30;
         g.fillText(b.label, 0, 0);
         g.restore();
-        const shown = Math.round(b.amount * Math.min(1, t / 1.6));
-        game.shownWin = shown;
-        g.font = "800 72px Inter, system-ui, sans-serif";
+        const shown = game.shownWin;
+        g.font = "800 64px Inter, system-ui, sans-serif";
         g.textAlign = "center";
         g.textBaseline = "middle";
         g.lineWidth = 12;
@@ -1174,15 +1194,15 @@
       function readout(g, x, label, value, colour = "#ffffff") {
         g.textAlign = "center";
         g.textBaseline = "middle";
-        g.font = "700 13px Inter, system-ui, sans-serif";
-        g.fillStyle = "rgba(226,200,150,.75)";
+        g.font = "700 11px Inter, system-ui, sans-serif";
+        g.fillStyle = "rgba(226,200,150,.7)";
         g.save();
         g.letterSpacing = "2px";
-        g.fillText(label, x, 640);
+        g.fillText(label, x, 644);
         g.restore();
-        g.font = "800 27px Inter, system-ui, sans-serif";
+        g.font = "800 21px Inter, system-ui, sans-serif";
         g.fillStyle = colour;
-        g.fillText(value, x, 672);
+        g.fillText(value, x, 670);
       }
 
       function drawControls(g, now) {
@@ -1212,9 +1232,10 @@
         // Spin.
         const b = BUTTONS.spin,
           ready = game.phase === "idle" && !game.overlay;
+        const pulse = 0.5 + 0.5 * Math.sin(now / 420);
         g.save();
-        g.shadowColor = ready ? "rgba(255,200,80,.55)" : "rgba(0,0,0,0)";
-        g.shadowBlur = 22;
+        g.shadowColor = ready ? `rgba(255,200,80,${0.35 + 0.4 * pulse})` : "rgba(0,0,0,0)";
+        g.shadowBlur = 14 + 18 * pulse;
         const ring = g.createLinearGradient(0, b.y - b.r, 0, b.y + b.r);
         ring.addColorStop(0, "#fff0b0");
         ring.addColorStop(0.5, "#d9a531");
@@ -1255,7 +1276,7 @@
         g.fill();
         g.restore();
         // Small print.
-        g.font = "600 11px Inter, system-ui, sans-serif";
+        g.font = "600 10px Inter, system-ui, sans-serif";
         g.textAlign = "left";
         g.textBaseline = "middle";
         g.fillStyle = "rgba(226,200,150,.5)";
@@ -1273,7 +1294,7 @@
         g.save();
         g.textAlign = "center";
         g.textBaseline = "middle";
-        g.font = "800 21px Inter, system-ui, sans-serif";
+        g.font = "800 17px Inter, system-ui, sans-serif";
         g.letterSpacing = "3px";
         g.fillStyle =
           game.message.startsWith("LINE") || game.message.includes("WIN") ? "#ffd65c" : "#f5e6c2";
@@ -1311,7 +1332,7 @@
             g.arc(x, y, 13, 0, Math.PI * 2);
             g.fill();
             g.stroke();
-            g.font = "800 13px Inter, system-ui, sans-serif";
+            g.font = "800 11px Inter, system-ui, sans-serif";
             g.textAlign = "center";
             g.textBaseline = "middle";
             g.fillStyle = on ? "#120624" : LINE_COLOURS[line - 1];
@@ -1319,6 +1340,28 @@
             g.fillText(String(line), x, y + 1);
             g.restore();
           });
+        }
+      }
+
+      // ---------------------------------------------------------------- ambience
+      // Sparkles that twinkle about the title and the reel frame while the game runs.
+      const TWINKLES = [
+        [W / 2 + 205, 44, 0],
+        [W / 2 - 230, 84, 1.7],
+        [W / 2 + 120, 92, 3.1],
+        [FRAME.x + 14, FRAME.y + 14, 0.8],
+        [FRAME.x + FRAME.w - 14, FRAME.y + 14, 2.4],
+        [FRAME.x + 14, FRAME.y + FRAME.h - 14, 4.0],
+        [FRAME.x + FRAME.w - 14, FRAME.y + FRAME.h - 14, 5.2],
+        [90, 210, 2.0],
+        [W - 90, 330, 3.6],
+        [90, 470, 4.6],
+      ];
+
+      function drawAmbience(g, now) {
+        for (const [x, y, offset] of TWINKLES) {
+          const r = 11 * Math.pow(Math.max(0, Math.sin(now / 900 + offset)), 4);
+          if (r > 0.6) sparkle(g, x, y, r);
         }
       }
 
@@ -1380,10 +1423,10 @@
             g.textBaseline = "middle";
             [5, 4, 3].forEach((count, k) => {
               const pay = Math.round((game.bet * game.config.pays[symbol][count - 3]) / 10);
-              g.font = "800 19px Inter, system-ui, sans-serif";
+              g.font = "800 15px Inter, system-ui, sans-serif";
               g.fillStyle = "#ffd65c";
               g.fillText(String(count), x + 128, y + 30 + k * 28);
-              g.font = "700 19px Inter, system-ui, sans-serif";
+              g.font = "700 15px Inter, system-ui, sans-serif";
               g.fillStyle = "#ffffff";
               g.fillText(money(pay), x + 150, y + 30 + k * 28);
             });
@@ -1391,14 +1434,14 @@
           g.drawImage(sprites.WILD, 900, 150, 150, 140);
           g.textAlign = "center";
           g.fillStyle = "#ffd65c";
-          g.font = "900 24px Cinzel, Georgia, serif";
+          g.font = "900 20px Cinzel, Georgia, serif";
           g.fillText("OPAL WILD", 975, 312);
-          g.font = "600 17px Inter, system-ui, sans-serif";
+          g.font = "600 14px Inter, system-ui, sans-serif";
           g.fillStyle = "#e9e1f5";
           ["Substitutes for all", "symbols. Appears on", "reels 2, 3 and 4 only."].forEach(
-            (text, i) => g.fillText(text, 975, 348 + i * 26),
+            (text, i) => g.fillText(text, 975, 344 + i * 22),
           );
-          g.font = "600 15px Inter, system-ui, sans-serif";
+          g.font = "600 12px Inter, system-ui, sans-serif";
           g.fillStyle = "rgba(233,225,245,.7)";
           g.fillText(
             "Pays shown for the current total bet of " + money(game.bet) + ".",
@@ -1411,7 +1454,7 @@
               row = Math.floor(i / 5),
               x = 170 + col * 192,
               y = 150 + row * 130;
-            g.font = "800 15px Inter, system-ui, sans-serif";
+            g.font = "800 12px Inter, system-ui, sans-serif";
             g.textAlign = "left";
             g.fillStyle = LINE_COLOURS[i];
             g.fillText("LINE " + (i + 1), x, y - 12);
@@ -1421,14 +1464,14 @@
                 g.fillRect(x + reel * 27, y + r * 27, 23, 23);
               }
           });
-          g.font = "600 16px Inter, system-ui, sans-serif";
+          g.font = "600 13px Inter, system-ui, sans-serif";
           g.textAlign = "center";
           g.fillStyle = "#e9e1f5";
           [
             "All wins pay left to right on adjacent reels, starting from the leftmost reel. Only the highest win on each line",
             "is paid, and wins on different lines are added. Line pays are multiples of the line bet: the total bet divided by 10.",
             "Malfunction voids all pays and plays.",
-          ].forEach((text, i) => g.fillText(text, W / 2, 440 + i * 28));
+          ].forEach((text, i) => g.fillText(text, W / 2, 440 + i * 22));
         }
         circleButton(g, PREV, page > 0, game.hover === "prev", (c, x, y) => {
           c.beginPath();
@@ -1444,7 +1487,7 @@
           c.lineTo(x - 4, y + 9);
           c.stroke();
         });
-        g.font = "700 16px Inter, system-ui, sans-serif";
+        g.font = "700 13px Inter, system-ui, sans-serif";
         g.fillStyle = "#e9e1f5";
         g.textAlign = "center";
         g.fillText(`${page + 1} / 2`, W / 2, 561);
@@ -1469,7 +1512,7 @@
           const y = 470 + i * 56;
           g.fillStyle = game.hover === "menu-" + key ? "rgba(226,184,87,.18)" : "rgba(0,0,0,0)";
           g.fillRect(40, y - 24, 260, 48);
-          g.font = "700 17px Inter, system-ui, sans-serif";
+          g.font = "700 14px Inter, system-ui, sans-serif";
           g.textAlign = "left";
           g.textBaseline = "middle";
           g.fillStyle = key === "history" ? "rgba(245,230,194,.4)" : "#f5e6c2";
@@ -1539,6 +1582,56 @@
         return progress >= 1;
       }
 
+      const SOUND_YES = { x: W / 2 - 160, y: 392, w: 140, h: 50 },
+        SOUND_NO = { x: W / 2 + 20, y: 392, w: 140, h: 50 };
+
+      function drawSoundPrompt(g) {
+        g.drawImage(backdrop, 0, 0, W, H);
+        g.fillStyle = "rgba(6,2,16,.88)";
+        g.fillRect(0, 0, W, H);
+        const fill = g.createLinearGradient(0, 250, 0, 480);
+        fill.addColorStop(0, "#26124a");
+        fill.addColorStop(1, "#12072a");
+        g.fillStyle = fill;
+        g.beginPath();
+        g.roundRect(W / 2 - 230, 250, 460, 230, 20);
+        g.fill();
+        g.lineWidth = 3;
+        g.strokeStyle = "#d9a531";
+        g.stroke();
+        g.save();
+        g.fillStyle = g.strokeStyle = "#f5e6c2";
+        g.lineCap = "round";
+        iconSound(g, W / 2 - 6, 296);
+        g.restore();
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.font = "800 20px Inter, system-ui, sans-serif";
+        g.fillStyle = "#f5e6c2";
+        g.fillText("PLAY WITH SOUND?", W / 2, 340);
+        g.font = "600 12px Inter, system-ui, sans-serif";
+        g.fillStyle = "rgba(233,225,245,.7)";
+        g.fillText("You can change this at any time in the menu.", W / 2, 366);
+        [
+          [SOUND_YES, "YES", "sound-yes"],
+          [SOUND_NO, "NO", "sound-no"],
+        ].forEach(([b, label, key]) => {
+          const face = g.createLinearGradient(0, b.y, 0, b.y + b.h);
+          face.addColorStop(0, game.hover === key ? "#4a2f86" : "#36205f");
+          face.addColorStop(1, "#1a0d33");
+          g.fillStyle = face;
+          g.beginPath();
+          g.roundRect(b.x, b.y, b.w, b.h, 25);
+          g.fill();
+          g.lineWidth = 2;
+          g.strokeStyle = "rgba(226,184,87,.85)";
+          g.stroke();
+          g.font = "800 16px Inter, system-ui, sans-serif";
+          g.fillStyle = "#f5e6c2";
+          g.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + 1);
+        });
+      }
+
       const CONTINUE = { x: W / 2 - 130, y: 560, w: 260, h: 60 };
 
       function drawIntro(g) {
@@ -1570,10 +1663,10 @@
           g.font = "900 26px Cinzel, Georgia, serif";
           g.fillStyle = "#ffd65c";
           g.fillText(head, x, 418);
-          g.font = "600 17px Inter, system-ui, sans-serif";
+          g.font = "600 14px Inter, system-ui, sans-serif";
           g.fillStyle = "#e9e1f5";
-          g.fillText(a, x, 452);
-          g.fillText(b, x, 476);
+          g.fillText(a, x, 450);
+          g.fillText(b, x, 470);
         });
         const c = CONTINUE;
         const fill = g.createLinearGradient(0, c.y, 0, c.y + c.h);
@@ -1586,7 +1679,7 @@
         g.lineWidth = 3;
         g.strokeStyle = "#e2b857";
         g.stroke();
-        g.font = "800 22px Inter, system-ui, sans-serif";
+        g.font = "800 19px Inter, system-ui, sans-serif";
         g.fillStyle = "#ffffff";
         g.save();
         g.letterSpacing = "3px";
@@ -1595,6 +1688,7 @@
       }
 
       // ---------------------------------------------------------------- frame loop
+      // One animation frame after another: the game draws on every frame, idle or not.
       let frame = 0;
       function invalidate() {
         if (!frame) frame = requestAnimationFrame(render);
@@ -1606,13 +1700,10 @@
         ctx.fillStyle = "#07040f";
         ctx.fillRect(0, 0, innerWidth, innerHeight);
         ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
-        let again = false;
         if (game.phase === "loading") {
-          const done = drawLoading(ctx, now);
-          if (done && game.loaded) {
-            game.phase = "intro";
-            again = true;
-          } else again = true;
+          if (drawLoading(ctx, now) && game.loaded) game.phase = "sound";
+        } else if (game.phase === "sound") {
+          drawSoundPrompt(ctx);
         } else if (game.phase === "intro") {
           drawIntro(ctx);
         } else if (game.phase === "error") {
@@ -1624,30 +1715,26 @@
           ctx.font = "700 26px Inter, system-ui, sans-serif";
           ctx.fillText(game.message, W / 2, H / 2);
         } else {
-          if (game.phase === "spinning") {
-            const moving = updateReels(now);
-            if (!moving && game.result) {
-              game.phase = "presenting";
-              game.grid = game.result.grid;
-              game.reels = [];
-              afterSpin(now);
-            }
-            again = true;
+          if (game.phase === "spinning" && !updateReels(now) && game.result) {
+            game.phase = "presenting";
+            game.grid = game.result.grid;
+            game.reels = [];
+            afterSpin(now);
           }
-          if (game.phase === "presenting") again = updatePresentation(now) || again;
-          if (game.bigWin) again = updateBigWin(now) || again;
+          if (game.phase === "presenting") updatePresentation(now);
+          if (game.bigWin) updateBigWin(now);
           ctx.drawImage(backdrop, 0, 0, W, H);
           drawReels(ctx, now);
           drawPresentation(ctx, now);
           drawMarkers(ctx);
           drawMessage(ctx);
           drawControls(ctx, now);
+          drawAmbience(ctx, now);
           drawBigWin(ctx, now);
           if (game.overlay?.kind === "paytable") drawPaytable(ctx);
           if (game.overlay?.kind === "menu") drawMenu(ctx);
-          if (game.phase === "presenting" || game.bigWin) again = true;
         }
-        if (again) invalidate();
+        invalidate();
       }
 
       function afterSpin(now) {
@@ -1729,6 +1816,8 @@
 
       function target(x, y) {
         if (game.phase === "loading" || game.phase === "error") return null;
+        if (game.phase === "sound")
+          return inRect(SOUND_YES, x, y) ? "sound-yes" : inRect(SOUND_NO, x, y) ? "sound-no" : null;
         if (game.phase === "intro") return inRect(CONTINUE, x, y) ? "continue" : "intro";
         if (game.bigWin) return "skip";
         if (game.overlay?.kind === "paytable")
@@ -1764,6 +1853,12 @@
         const [x, y] = toLogical(event),
           hit = target(x, y);
         switch (hit) {
+          case "sound-yes":
+          case "sound-no":
+            game.sound = hit === "sound-yes";
+            game.phase = "intro";
+            game.hover = null;
+            break;
           case "continue":
           case "intro":
             if (hit === "continue") {
@@ -1772,9 +1867,7 @@
             }
             break;
           case "skip":
-            if (performance.now() - game.bigWin.at > 900) {
-              game.bigWin.at = performance.now() - 3050;
-            }
+            skipBigWin(performance.now());
             break;
           case "spin":
             if (game.phase === "presenting") {
@@ -1829,6 +1922,7 @@
       addEventListener("keydown", (event) => {
         if (event.code === "Space" || event.code === "Enter") {
           event.preventDefault();
+          if (game.phase === "loading" || game.phase === "sound") return;
           if (game.phase === "intro") game.phase = "idle";
           else if (game.overlay) return;
           else {
