@@ -1,13 +1,11 @@
 /**
  * A run's thread as a recording of its page: before each turn, a `Moment` of the current tab
  * since the one before, placed after that turn's tool results, so the model reads its session in
- * order, each action followed by what the page did. The run's history never holds a moment:
- * context preparation places all of them again before every call, the same each time, since a
- * tool result cannot carry a picture to the model. A moment's account of what happened stays for
- * the whole run; its pictures only for the latest few, as pictures cost the most and the newest
- * show the page as it is.
+ * order, each action followed by what the page did. Stable accounts belong to the prepared
+ * thread, so Yielded can compact them. The latest few moments' pictures are labeled references
+ * outside compaction coverage: retiring pictures never changes an already compacted prefix.
  */
-import type { RunContextHook } from "@yielded/agent/run-options";
+import type { RunContextRequest } from "@yielded/agent/run-options";
 import { Duration, Effect, Ref, Result } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Image } from "effect-browser/Frame";
@@ -24,15 +22,12 @@ const pictured = 3;
 /** At most this many crops are shown at once: the latest. */
 const maxZooms = 8;
 
-/** One moment where it sits in the thread, as the model is shown it with and without pictures. */
+/** One immutable account where it sits in the thread. No image data survives here. */
 interface Placed {
   readonly turn: string;
   /** How many of the run's messages come before it. */
   readonly after: number;
-  readonly page: string | undefined;
-  readonly moment: Moment.Moment | undefined;
-  readonly whole: ReadonlyArray<Prompt.UserMessagePart>;
-  readonly told: ReadonlyArray<Prompt.UserMessagePart>;
+  readonly message: Prompt.UserMessage;
 }
 
 const text = (value: string) => Prompt.makePart("text", { text: value });
@@ -57,25 +52,32 @@ export const cropped = (crops: ReadonlyArray<Page.Zoom>): ReadonlyArray<Prompt.U
   ];
 };
 
-/** A moment as the model is shown it: whole, then, once older, its account alone. */
+/** A moment's stable account and its separately retained, time-labeled pictures. */
 const shown = (
   taken: Result.Result<{ readonly page: string; readonly moment: Moment.Moment }, BrowserError>,
   crops: ReadonlyArray<Page.Zoom>,
+  turn: number,
 ) => {
-  if (Result.isFailure(taken)) {
-    const told = [text(`(No moment of the current tab: ${taken.failure.message})`)];
+  const label = text(
+    `Moment before turn ${turn}. Pictures mentioned below are separate references, shown only for the latest three moments.`,
+  );
 
-    return { page: undefined, moment: undefined, whole: told, told };
+  if (Result.isFailure(taken)) {
+    const account = Prompt.userMessage({
+      content: [label, text(`(No moment of the current tab: ${taken.failure.message})`)],
+    });
+
+    return { previous: undefined, account, pictures: Prompt.userMessage({ content: [] }) };
   }
-  const { page, moment } = taken.success;
+  const { moment } = taken.success;
   // The moment's one message: its account of what happened, then each frame with its time.
   const [message] = Moment.toPrompt(moment).content;
   const [account, ...frames] = message?.role === "user" ? message.content : [];
   const last = moment.frames.at(-1);
   const shownCrops = cropped(crops);
 
-  const whole = [
-    ...(account === undefined ? [] : [account]),
+  const pictures = [
+    label,
     ...frames,
     ...(last === undefined
       ? []
@@ -87,34 +89,38 @@ const shown = (
     ...shownCrops,
   ];
 
-  const pictures = moment.frames.length + shownCrops.filter((part) => part.type === "file").length;
-
   return {
-    page,
-    moment,
-    whole,
-    told: [
-      ...(account === undefined ? [] : [account]),
-      text(`(Its ${pictures} pictures are no longer shown.)`),
-    ],
+    // Window keeps the page-clock change cursor as well as the host timestamp. No image bytes
+    // or input events are needed to start the next window exactly where this one ended.
+    previous: new Moment.Window({
+      page: moment.page,
+      since: moment.since,
+      until: moment.until,
+      changes: moment.changes,
+      frames: [],
+      events: [],
+      missing: [],
+    }),
+    pictures: Prompt.userMessage({ content: pictures }),
+    account: Prompt.userMessage({ content: [label, ...(account === undefined ? [] : [account])] }),
   };
 };
 
-/** The run's messages with each moment after the ones it followed, the latest with pictures. */
+/** The run's messages with each account after the ones it followed. */
 const woven = (source: Prompt.Prompt, placed: ReadonlyArray<Placed>) => {
   const messages: Array<Prompt.Message> = [];
-  const firstPictured = placed.length - pictured;
   const end = source.content.length;
+  let next = 0;
 
-  const place = (at: number) =>
-    placed.forEach((moment, index) => {
-      if (Math.min(moment.after, end) === at)
-        messages.push(
-          Prompt.makeMessage("user", {
-            content: index >= firstPictured ? moment.whole : moment.told,
-          }),
-        );
-    });
+  const place = (at: number) => {
+    let moment = placed[next];
+
+    while (moment !== undefined && Math.min(moment.after, end) === at) {
+      messages.push(moment.message);
+      next++;
+      moment = placed[next];
+    }
+  };
 
   source.content.forEach((message, index) => {
     place(index);
@@ -135,40 +141,59 @@ export const make = Effect.fnUntraced(function* (
   crops: Effect.Effect<ReadonlyArray<Page.Zoom>>,
   onMoment: (moment: Moment.Moment) => Effect.Effect<void>,
 ) {
-  const placed = yield* Ref.make<ReadonlyArray<Placed>>([]);
+  const state = yield* Ref.make<{
+    readonly placed: ReadonlyArray<Placed>;
+    readonly recent: ReadonlyArray<Prompt.UserMessage>;
+    readonly previous: Moment.Window | undefined;
+  }>({ placed: [], recent: [], previous: undefined });
 
-  const capture = (previous: Placed | undefined) =>
+  const capture = (previous: Moment.Window | undefined) =>
     Effect.flatMap(look, (page) =>
       Moment.capture(page, {
         // Consecutive moments of one tab neither repeat nor miss what happened between them.
-        since:
-          previous?.page === page.id && previous.moment !== undefined
-            ? previous.moment
-            : Duration.seconds(5),
+        since: previous?.page === page.id ? previous : Duration.seconds(5),
         frames: framesPerMoment,
       }).pipe(Effect.map((moment) => ({ page: page.id, moment }))),
     );
 
-  const prepare: RunContextHook["prepare"] = (request) =>
+  const take = (request: RunContextRequest) =>
     Effect.gen(function* () {
-      const known = yield* Ref.get(placed);
+      const known = yield* Ref.get(state);
 
-      if (known.some((moment) => moment.turn === request.turnId))
-        return { prompt: woven(request.source, known) };
+      if (known.placed.some((moment) => moment.turn === request.turnId)) return known;
 
-      const taken = yield* Effect.result(capture(known.at(-1)));
-      const moment = shown(taken, yield* crops);
+      const taken = yield* Effect.result(capture(known.previous));
+      const moment = shown(taken, yield* crops, request.turn);
 
-      const all = [
-        ...known,
-        { turn: request.turnId, after: request.source.content.length, ...moment },
-      ];
+      const all = {
+        placed: [
+          ...known.placed,
+          {
+            turn: request.turnId,
+            after: request.source.content.length,
+            message: moment.account,
+          },
+        ],
+        recent: [...known.recent, moment.pictures].slice(-pictured),
+        previous: moment.previous,
+      };
 
-      yield* Ref.set(placed, all);
-      if (moment.moment !== undefined) yield* onMoment(moment.moment);
+      yield* Ref.set(state, all);
+      if (Result.isSuccess(taken)) yield* onMoment(taken.success.moment);
 
-      return { prompt: woven(request.source, all) };
+      return all;
     });
 
-  return { prepare } satisfies RunContextHook;
+  return {
+    hook: {
+      prepare: (request: RunContextRequest) =>
+        Effect.map(take(request), ({ placed }) => ({ prompt: woven(request.source, placed) })),
+    },
+    transientContext: {
+      load: (request: RunContextRequest) =>
+        Effect.map(take(request), ({ recent }) =>
+          Prompt.fromMessages(recent.filter((message) => message.content.length > 0)),
+        ),
+    },
+  };
 });

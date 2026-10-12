@@ -11,8 +11,9 @@
  * take. The pictures are `RunContextPreparation`'s transient context, which a run's own
  * `transientContext` option replaces. With `vision: "moments"`, the model's thread holds, after
  * each turn's tool results, a moment of the current tab since the turn before: what happened, what
- * changed and frames with their times, the frames of the latest few only. They are
- * `RunContextPreparation`'s hook, which a run's own `context` option replaces.
+ * changed. These stable accounts can be compacted. The latest three moments' pictures follow as
+ * reference messages labeled by turn, with their frame times. A run's own `context` option
+ * replaces the accounts' hook; its `transientContext` replaces the pictures.
  *
  * `make` gives the toolkit to put in an agent, and `layer`, which provides every tool's handler,
  * the ports and the pictures for one run, on a page or a browser's tabs.
@@ -349,13 +350,14 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
         // Without pictures, an application's own context preparation stays as it is.
         const preparation =
           vision === "moments"
-            ? Layer.succeed(RunContextPreparation, {
-                hook: yield* Moments.make(
+            ? Layer.succeed(
+                RunContextPreparation,
+                yield* Moments.make(
                   controller.look,
                   Ref.getAndSet(zooms, []),
                   options.onMoment ?? (() => Effect.void),
                 ),
-              })
+              )
             : vision
               ? Layer.succeed(RunContextPreparation, {
                   transientContext: { load: () => pictures(controller, zooms) },

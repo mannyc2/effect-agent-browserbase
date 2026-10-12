@@ -39,9 +39,11 @@ Frames carry the browser's paint time mapped onto one host clock, with its uncer
 
 ## Moments in an agent's thread
 
-Give `BrowserTools.layer` the option `vision: "moments"` and it puts a moment of the tab in the agent's thread after each turn's tool results: what happened since the turn before, what changed, and three frames with their times, the last one the page as it is. The agent reads its session in order, each action followed by what the page did, as you would watch a recording of it.
+Give `BrowserTools.layer` the option `vision: "moments"` and it puts an account of the tab in the agent's thread after each turn's tool results: what happened since the turn before and what changed. The latest three moments' pictures follow as reference messages labeled by turn, with each frame's time. The agent reads its session in order and can connect each action and account to its pictures.
 
-Each moment starts where the one before ended, so nothing that happened while the model was thinking is missed. Every moment's account stays in the thread for the whole run; the frames only for the latest three, since pictures cost the most and the newest show the page as it is. The frames are the ones a running screencast painted; without one, a moment holds a single screenshot.
+Each moment starts where the one before ended, so nothing that happened while the model was thinking is missed. Accounts stay unchanged until Yielded compacts them with the surrounding conversation. Retiring older pictures never changes an account or invalidates a compacted prefix. The frames are the ones a running screencast painted, up to three per moment; without one, a moment holds a single screenshot.
+
+For long runs, configure Yielded's native compaction and a model-aware image-token estimate. Its default JSON estimate counts image bytes as text and can overestimate screenshots. The [adapter guide](https://github.com/mannyc2/effect-agent-browserbase/tree/main/packages/agent-browser#moments-and-long-runs) shows how to compose the consumer's resolved model with the moments preparation. The bounded demo runs do not configure automatic compaction.
 
 ## The agent's own voice
 

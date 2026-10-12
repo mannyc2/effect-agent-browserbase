@@ -2,11 +2,16 @@
 // model is called.
 import { assert, it, layer } from "@effect/vitest";
 import { Agent, AgentRuntime, InMemory, Output } from "@yielded/agent";
-import { Duration, Effect, Layer, Schema } from "effect";
+import { CompactionPolicy } from "@yielded/agent/agent-policy";
+import { estimateMessageTokens } from "@yielded/agent/compaction";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
+import { ModelCallContext } from "@yielded/agent/context-window";
+import { RunContextPreparation } from "@yielded/agent/run-options";
+import { Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import type * as Moment from "effect-browser/Moment";
-import { AnthropicStructuredOutput, OpenAiStructuredOutput, Prompt } from "effect/ai";
+import { AnthropicStructuredOutput, OpenAiStructuredOutput, Prompt, Toolkit } from "effect/ai";
 
 import * as BrowserTools from "../src/BrowserTools.ts";
 import {
@@ -46,9 +51,17 @@ const pictures = (prompt: Prompt.Prompt) =>
     message.role === "user" ? message.content.filter((part) => part.type === "file") : [],
   );
 
-// The run's input is its one user message; with moments, every other one is a moment.
+const files = (message: Prompt.Message | undefined) =>
+  message?.role === "user" ? message.content.filter((part) => part.type === "file") : [];
+
+// The run's first user message is its input; accounts precede the recent image references.
 const moments = (prompt: Prompt.Prompt) =>
-  prompt.content.filter((message) => message.role === "user").slice(1);
+  prompt.content
+    .filter((message) => message.role === "user" && files(message).length === 0)
+    .slice(1);
+
+const references = (prompt: Prompt.Prompt) =>
+  prompt.content.filter((message) => files(message).length > 0);
 
 const run = (task: string, turns: ReadonlyArray<Turn>, options: BrowserTools.LayerOptions = {}) =>
   Effect.gen(function* () {
@@ -150,7 +163,9 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           // The first moment follows the task; each later one, the results of the turn it shows.
           const placed = prompt.content
             .flatMap((message, index) =>
-              message.role === "user" ? [prompt.content[index - 1]?.role] : [],
+              message.role === "user" && files(message).length === 0
+                ? [prompt.content[index - 1]?.role]
+                : [],
             )
             .slice(1);
 
@@ -158,21 +173,20 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           assert.strictEqual(prompt.content.at(-1)?.role, "user");
         }
 
-        // A moment is shown the same way every time, its pictures only while it is among the latest.
+        // Accounts never change. Only the latest moments' labeled image references survive.
         const last = prompts[4]!;
-
-        const files = (message: Prompt.Message | undefined) =>
-          message?.role === "user" ? message.content.filter((part) => part.type === "file") : [];
 
         assert.deepStrictEqual(moments(prompts[2]!)[0], moments(prompts[0]!)[0]);
         assert.deepStrictEqual(
-          moments(last).map((moment) => files(moment).length > 0),
-          [false, false, true, true, true],
+          references(last).map((message) => message.content[0]),
+          moments(last)
+            .slice(-3)
+            .map((message) => message.content[0]),
         );
-        assert.deepStrictEqual(moments(last)[0]?.content[0], moments(prompts[0]!)[0]?.content[0]);
+        assert.deepStrictEqual(moments(last)[0], moments(prompts[0]!)[0]);
         assert.include(textOf(Prompt.fromMessages([moments(prompts[1]!)[1]!])), "(300, 320)");
         // The crop is shown with the moment of the turn that took it.
-        assert.strictEqual(files(moments(prompts[2]!)[2]).length, seen[2]!.frames.length + 1);
+        assert.strictEqual(files(references(prompts[2]!)[2]).length, seen[2]!.frames.length + 1);
       }),
   );
 
@@ -190,6 +204,115 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.deepStrictEqual(prompts.map(pictures), [[], []]);
       assert.include(textOf(prompts[1]!), "a crop cannot be shown");
     }),
+  );
+
+  // #292: ageing pictures changed a prefix already summarized by Yielded, ending long runs.
+  // Exercise the real interpreter: short demos never reach either compaction or image expiry.
+  it.effect(
+    "continues moments through repeated native compaction with bounded recent pictures",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* open("/form");
+        const seen: Array<Moment.Moment> = [];
+
+        const summary = scripted(
+          Array.from({ length: 30 }, () => () => answer("Order not placed.")),
+        );
+
+        const model = scripted([
+          ...Array.from({ length: 24 }, () => () => calling(call("inspect", { selector: "body" }))),
+          () => answer("Finished observing."),
+        ]);
+
+        const observer = Agent.make("compacting-browser", {
+          input: Schema.String,
+          output: Output.text(Schema.String),
+          instructions: "Observe the order form without placing an order.",
+          toolkit: Toolkit.make(BrowserTools.Control.tools.inspect),
+          policy: {
+            maxTurns: 30,
+            maxToolCalls: 30,
+            maxDuration: "1 minute",
+            toolConcurrency: 1,
+            compaction: CompactionPolicy.make({
+              mode: "prune-then-summarize",
+              keepRecentTokens: 400,
+            }),
+          },
+        });
+
+        const result = yield* Effect.gen(function* () {
+          const preparation = Option.getOrThrow(yield* Effect.serviceOption(RunContextPreparation));
+
+          return yield* AgentRuntime.stream(observer, "Observe the form, then finish.", {
+            context: {
+              prepare: (request) =>
+                Effect.map(preparation.hook!.prepare(request), (prepared) => ({
+                  ...prepared,
+                  modelCall: {
+                    model: model.layer,
+                    context: ModelCallContext.make({
+                      contextCapacity: 3000,
+                      outputReserveTokens: 128,
+                      uncountedOverheadTokens: 0,
+                    }),
+                    // The scripted model reserves 64 tokens per image, independent of encoding.
+                    estimateMessageTokens: (message) => {
+                      if (message.role !== "user") return undefined;
+                      const images = message.content.filter((part) => part.type === "file");
+
+                      if (images.length === 0) return undefined;
+
+                      return (
+                        images.length * 64 +
+                        estimateMessageTokens(
+                          Prompt.userMessage({
+                            content: message.content.filter((part) => part.type !== "file"),
+                          }),
+                        )
+                      );
+                    },
+                  },
+                })),
+            },
+          }).pipe(Stream.runCollect);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              tools.layer(
+                { page },
+                { vision: "moments", onMoment: (moment) => Effect.sync(() => seen.push(moment)) },
+              ),
+              InMemory.layer,
+              ContextCompactor.layerWithModel(summary.layer),
+              model.layer,
+            ),
+          ),
+        );
+
+        assert.strictEqual(
+          result.find((event) => event._tag === "RunCompleted")?.output,
+          "Finished observing.",
+        );
+        assert.isAtLeast(
+          result.filter(
+            (event) => event._tag === "CompactionPerformed" && event.kind === "clear-tool-results",
+          ).length,
+          1,
+        );
+        assert.isAtLeast(summary.prompts.length, 2);
+        assert.strictEqual(seen.length, model.prompts.length);
+        assert.isAtMost(pictures(model.prompts.at(-1)!).length, 9);
+        assert.isAbove(pictures(model.prompts.at(-1)!).length, 0);
+        assert.deepStrictEqual(
+          references(model.prompts.at(-1)!).map((message) => message.content[0]),
+          model.prompts.slice(-3).map((prompt) => moments(prompt).at(-1)?.content[0]),
+        );
+        for (const prompt of summary.prompts) {
+          assert.strictEqual(pictures(prompt).length, 0);
+          assert.include(textOf(prompt), "Moment");
+        }
+      }),
   );
 });
 

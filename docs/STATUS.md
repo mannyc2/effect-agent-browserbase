@@ -166,7 +166,10 @@ Agent, the renamed Effect Agent:
   its input reached the browser, and nothing is retried. Before each turn the model sees a
   screenshot of the current tab, as context the run never keeps; with `vision: "moments"` its
   thread holds instead, after each turn's tool results, a moment of the tab since the turn before,
-  the account kept for the whole run and the frames for the latest three. `wait_still` waits for
+  immutable accounts that Yielded can prune and summarize with the conversation. The latest three
+  moments' frames remain as turn-labeled references outside compaction coverage, and older image
+  bytes are released. Bounded model contexts need a model-aware image-token estimator, composed
+  with the tools' preparation as the package README shows. `wait_still` waits for
   foreground stillness. Yielded runs the agent: its loop,
   policy and budgets, approval, context and run events. Its browser interface is on Yielded's
   `main` but not yet on npm: the package pins `@yielded/agent` `0.1.0-beta.168`, which upstream's
