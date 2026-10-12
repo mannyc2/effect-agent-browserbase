@@ -279,10 +279,15 @@ const stage = (moving: "reels" | "counter", seconds: number) =>
     g.fillRect(600, 10, 30, 30);
     if (now < until) {
       g.fillStyle = "#222"; g.fillRect(20, 60, 400, 260);
-      g.fillStyle = ${moving === "reels"} ? "hsl(" + Math.round(now) % 360 + ", 70%, 40%)" : "#fff";
+      // The reels change color with equal green, so a single color channel cannot prove stillness.
+      g.fillStyle = ${moving === "reels"} ? (Math.floor(now / 80) % 2 === 0 ? "#f00" : "#00f") : "#fff";
       if (${moving === "reels"}) g.fillRect(20, 60, 400, 260);
       else { g.font = "24px sans-serif"; g.fillText(String(Math.round(now)), 24, 84); }
-    } else if (until > 0 && window.stoppedAt === undefined) window.stoppedAt = performance.now();
+    } else if (until > 0 && window.stoppedAt === undefined) {
+      // A delayed rAF must timestamp a visible final paint, not a later notification of silence.
+      g.fillStyle = "#fff"; g.fillRect(20, 60, ${moving === "reels" ? 400 : 24}, ${moving === "reels" ? 260 : 24});
+      window.stoppedAt = performance.now();
+    }
     requestAnimationFrame(draw);
   }
   c.onclick = () => { until = performance.now() + ${seconds * 1000}; };
