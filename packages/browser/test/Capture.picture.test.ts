@@ -20,6 +20,7 @@ const fixture = Effect.fnUntraced(function* () {
   let listening: Parameters<Transport["listen"]>[0] | undefined;
   let start = () => Promise.resolve();
   let stop = () => Promise.resolve();
+  let restore = () => Promise.resolve();
   let viewport = Effect.succeed({ width: 10, height: 10 });
   let timestamp = 0;
 
@@ -79,6 +80,7 @@ const fixture = Effect.fnUntraced(function* () {
     watch: Effect.void,
     frameHistory: Duration.seconds(5),
     viewport: Effect.suspend(() => viewport),
+    restore: () => restore(),
     imageSize: () => ({ width: 10, height: 10 }),
     error,
   });
@@ -104,6 +106,9 @@ const fixture = Effect.fnUntraced(function* () {
     },
     onStop: (next: () => Promise<void>) => {
       stop = next;
+    },
+    onRestore: (next: () => Promise<void>) => {
+      restore = next;
     },
     onViewport: (next: typeof viewport) => {
       viewport = next;
@@ -170,34 +175,43 @@ it.live(
     }),
 );
 
-it.live(
-  "an unconfirmed picture ends capture boundedly and blocks later shots until actual settlement",
-  () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const reader = yield* f.reader;
+// An unconfirmed restored surface must retain its reply just as the requested picture does.
+for (const phase of ["picture", "restored surface"] as const)
+  it.live(
+    `an unconfirmed ${phase} ends capture boundedly and blocks later shots until actual settlement`,
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const reader = yield* f.reader;
 
-      yield* eventually(() => f.starts.length === 1);
-      const reply = Promise.withResolvers<void>();
+        yield* eventually(() => f.starts.length === 1);
+        const reply = Promise.withResolvers<void>();
 
-      yield* Effect.addFinalizer(() => Effect.sync(() => reply.resolve()));
-      const shot = yield* f.controller.excluding(f.picture(reply.promise)).pipe(Effect.forkChild);
+        yield* Effect.addFinalizer(() => Effect.sync(() => reply.resolve()));
+        if (phase === "restored surface") f.onRestore(() => reply.promise);
 
-      yield* eventually(() => f.shots() === 1);
-      yield* Fiber.interrupt(shot).pipe(Effect.timeout("3 seconds"));
-      assert.isFalse(yield* f.controller.active);
-      const failure = yield* f.controller.excluding(f.picture(Promise.resolve())).pipe(Effect.flip);
+        const shot = yield* f.controller
+          .excluding(f.picture(phase === "picture" ? reply.promise : Promise.resolve()))
+          .pipe(Effect.forkChild);
 
-      assert.match(failure.message, /restoration.*deadline/);
-      assert.strictEqual(f.shots(), 1);
-      assert.strictEqual(f.starts.length, 1);
-      reply.resolve();
-      yield* Fiber.join(reader).pipe(Effect.timeout("3 seconds"));
-      yield* f.controller.excluding(f.picture(Promise.resolve()));
-      assert.strictEqual(f.shots(), 2);
-      assert.strictEqual(f.starts.length, 1);
-    }),
-);
+        yield* eventually(() => f.shots() === 1);
+        yield* Fiber.interrupt(shot).pipe(Effect.timeout("3 seconds"));
+        assert.isFalse(yield* f.controller.active);
+
+        const failure = yield* f.controller
+          .excluding(f.picture(Promise.resolve()))
+          .pipe(Effect.flip);
+
+        assert.match(failure.message, /restoration.*deadline/);
+        assert.strictEqual(f.shots(), 1);
+        assert.strictEqual(f.starts.length, 1);
+        reply.resolve();
+        yield* Fiber.join(reader).pipe(Effect.timeout("3 seconds"));
+        yield* f.controller.excluding(f.picture(Promise.resolve()));
+        assert.strictEqual(f.shots(), 2);
+        assert.strictEqual(f.starts.length, 1);
+      }),
+  );
 
 it.live(
   "a failed pause never takes a picture, and a failed restart never reports picture success",

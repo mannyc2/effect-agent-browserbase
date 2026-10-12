@@ -55,9 +55,12 @@ const opened = (args: ReadonlyArray<string> = []) =>
   });
 
 // The commands from a capture's start to its first frame. The frame's acknowledgement answers it.
+// A target Playwright attaches on its own meanwhile, as a busy machine can leave one late, costs
+// the capture nothing: only the sessions the page already had, or the library attached, count.
 const toFirstFrame = (proxy: Proxy, page: Page) =>
   Effect.gen(function* () {
     const before = proxy.commands.length;
+    const known = new Set(proxy.commands.map((command) => command.sessionId));
     let first = before;
 
     yield* page.screencast().pipe(
@@ -72,7 +75,11 @@ const toFirstFrame = (proxy: Proxy, page: Page) =>
 
     return proxy.commands
       .slice(before, first)
-      .filter((command) => command.method !== "Page.screencastFrameAck");
+      .filter(
+        (command) =>
+          command.method !== "Page.screencastFrameAck" &&
+          (known.has(command.sessionId) || proxy.attached.has(command.sessionId ?? "")),
+      );
   });
 
 const framesArrive = (page: Page) =>

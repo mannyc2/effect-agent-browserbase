@@ -65,6 +65,7 @@ const transport = Effect.fnUntraced(function* () {
     watch: Effect.void,
     frameHistory: Duration.seconds(5),
     viewport: Effect.succeed({ width: 1, height: 1 }),
+    restore: () => Promise.resolve(),
     imageSize: () => ({ width: 1, height: 1 }),
     error: () => failed,
   });

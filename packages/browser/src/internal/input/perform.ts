@@ -137,19 +137,14 @@ const useRun = <A>(
   name: string,
   run: Replies.Run,
   action: Effect.Effect<A, BrowserError>,
+  canStop: Effect.Effect<boolean>,
 ) =>
   action.pipe(
-    Effect.matchEffect({
-      onFailure: (error) =>
-        run.close.pipe(
-          Effect.andThen(sender.flush(name, run).pipe(Effect.ignore)),
-          Effect.andThen(Effect.fail(error)),
-        ),
-      onSuccess: (value) =>
-        run.close.pipe(Effect.andThen(sender.flush(name, run)), Effect.as(value)),
-    }),
+    Effect.tapError(() => run.close.pipe(Effect.andThen(sender.flush(name, run)), Effect.ignore)),
+    Effect.tap(() => run.close.pipe(Effect.andThen(sender.flush(name, run)))),
     // Cleanup submits missing releases; the page retains replies after caller interruption.
     Effect.ensuring(run.close.pipe(Effect.andThen(page.openings.clear))),
+    Effect.onError(() => run.recover(page.stopLoading, page.scope).pipe(Effect.when(canStop))),
     Effect.provideService(Replies.Current, run),
   );
 
@@ -224,7 +219,16 @@ export const make = (page: PageContext, sender: Dispatch) => {
               if (estimate !== undefined) inputClocks.set(current, estimate);
             }),
           ),
-          Effect.flatMap((run) => useRun(page, sender, name, run, action(run))),
+          Effect.flatMap((run) =>
+            useRun(
+              page,
+              sender,
+              name,
+              run,
+              action(run),
+              info.input === false ? Effect.succeed(false) : Ref.get(sent),
+            ),
+          ),
         );
 
       // How long its turn and the page's replies kept the action waiting, once it had both.

@@ -39,12 +39,13 @@ export const make = (page: PageContext, bridge: Bridge) => {
         // evaluate after the settling deadline, without retaining browser input authority.
         Effect.provideService(Current, undefined),
         Effect.catchIf(contextGone, () => Effect.void),
-        Effect.onError(() => page.stopLoading),
       );
       while (document() > before.document && parsed < document()) yield* Deferred.await(changed);
     }).pipe(
       Effect.timeoutOrElse({ duration: settling, orElse: () => Effect.fail("unsettled") }),
-      Effect.catch(() => Effect.annotateCurrentSpan("settled", false)),
+      Effect.catch(() =>
+        page.stopLoading.pipe(Effect.andThen(Effect.annotateCurrentSpan("settled", false))),
+      ),
       Effect.andThen(page.openings.settle(before.openings)),
       page.span("Page.settle", {}, "Debug"),
     );
