@@ -26,17 +26,7 @@ import {
 import type { BrowserContext, Dialog, Page as PlaywrightPage } from "playwright-core";
 
 import { type BrowserError, Failed, InvalidRequest, Limit } from "./BrowserError.ts";
-import {
-  type BrowserEvent,
-  DialogShown,
-  Disconnected,
-  type DisconnectCause,
-  PageClosed,
-  PageOpened,
-  PageUntracked,
-  type RecordedEvent,
-  SessionEnding,
-} from "./BrowserEvent.ts";
+import * as Events from "./BrowserEvent.ts";
 import * as Gate from "./internal/input/gate.ts";
 import { call, failWith, type Settings, undispatched } from "./internal/page/context.ts";
 import * as Identity from "./internal/page/identity.ts";
@@ -167,11 +157,11 @@ export interface Service {
    * Completes once the browser is lost to its owner, with why: its connection dropped, its
    * provider ended its session, or its owner's scope released it.
    */
-  readonly disconnected: Effect.Effect<DisconnectCause>;
+  readonly disconnected: Effect.Effect<Events.DisconnectCause>;
   /** Live events, or replay after a cursor. A reader that falls behind fails with EventHistoryExpired. */
-  readonly events: (options?: EventOptions) => Stream.Stream<RecordedEvent, BrowserError>;
+  readonly events: (options?: EventOptions) => Stream.Stream<Events.RecordedEvent, BrowserError>;
   /** The latest `eventHistory` events, oldest first. */
-  readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
+  readonly recentEvents: Effect.Effect<ReadonlyArray<Events.BrowserEvent>>;
 }
 
 export class Browser extends Context.Service<Browser, Service>()("effect-browser/Browser") {}
@@ -230,14 +220,14 @@ const watchLoss = Effect.fnUntraced(function* (
   context: BrowserContext,
   expiresAt: DateTime.Utc | undefined,
   clock: Clock.Clock,
-  disconnected: (cause: DisconnectCause) => void,
+  disconnected: (cause: Events.DisconnectCause) => void,
 ) {
-  let lostBy: DisconnectCause | undefined;
-  const lost = yield* Deferred.make<DisconnectCause>();
+  let lostBy: Events.DisconnectCause | undefined;
+  const lost = yield* Deferred.make<Events.DisconnectCause>();
   const inFlight = new Set<(cause: Error) => void>();
   const gone = () => new Error("Target page, context or browser has been closed");
 
-  const lose = (cause: DisconnectCause) => {
+  const lose = (cause: Events.DisconnectCause) => {
     if (lostBy !== undefined) return;
     lostBy = cause;
     for (const reject of inFlight) reject(gone());
@@ -283,7 +273,7 @@ const watchLoss = Effect.fnUntraced(function* (
 const listen = (
   playwright: PlaywrightPage,
   page: string,
-  publish: (event: BrowserEvent) => number,
+  publish: (event: Events.BrowserEvent) => number,
   now: () => number,
   on: { readonly close: () => void; readonly crash: () => void },
 ) => {
@@ -292,7 +282,7 @@ const listen = (
     const answer = kind === "alert" || kind === "beforeunload" ? "accepted" : "dismissed";
     const message = shown.message().slice(0, 500);
 
-    publish(new DialogShown({ at: now(), page, kind, message, answer }));
+    publish(new Events.DialogShown({ at: now(), page, kind, message, answer }));
     (answer === "accepted" ? shown.accept() : shown.dismiss()).catch(() => undefined);
   };
 
@@ -318,7 +308,7 @@ const listen = (
 const followOpened = Effect.fnUntraced(function* (
   context: BrowserContext,
   register: (playwright: PlaywrightPage) => Effect.Effect<Page.Page, BrowserError>,
-  publish: (event: BrowserEvent) => number,
+  publish: (event: Events.BrowserEvent) => number,
   now: () => number,
   registrations: Openings.Registrations,
 ) {
@@ -334,7 +324,7 @@ const followOpened = Effect.fnUntraced(function* (
       const url = Url.redact(playwright.url());
 
       if (!playwright.isClosed())
-        publish(new PageUntracked({ at: now(), url, detail: error.message }));
+        publish(new Events.PageUntracked({ at: now(), url, detail: error.message }));
     });
 
   context.on("page", onPage);
@@ -368,7 +358,7 @@ const releaseNative = (clock: Clock.Clock) => (run: () => Promise<unknown>) =>
   );
 
 /** A page's own events among the browser's retained ones, and the openings of tabs it opened. */
-const eventsOf = (recent: Effect.Effect<ReadonlyArray<RecordedEvent>>, page: string) =>
+const eventsOf = (recent: Effect.Effect<ReadonlyArray<Events.RecordedEvent>>, page: string) =>
   Effect.map(recent, (records) =>
     records.flatMap(({ event }) =>
       ("page" in event && event.page === page) ||
@@ -448,21 +438,21 @@ const sentNow = <A>(sent: Promise<A>) => {
 
 /** Close tab resources after publishing their close; a browser loss speaks for all its tabs. */
 const closures = (
-  lostBy: () => DisconnectCause | undefined,
-  publish: (event: BrowserEvent) => number,
+  lostBy: () => Events.DisconnectCause | undefined,
+  publish: (event: Events.BrowserEvent) => number,
   now: () => number,
 ) =>
   Effect.gen(function* () {
     const closing = yield* Queue.unbounded<{
       readonly scope: Scope.Closeable;
       readonly page: string;
-      readonly cause: PageClosed["cause"];
+      readonly cause: Events.PageClosed["cause"];
     }>();
 
     yield* Queue.take(closing).pipe(
       Effect.tap(({ page, cause }) =>
         Effect.sync(() => {
-          if (lostBy() === undefined) publish(new PageClosed({ at: now(), page, cause }));
+          if (lostBy() === undefined) publish(new Events.PageClosed({ at: now(), page, cause }));
         }),
       ),
       Effect.flatMap(({ scope }) => Scope.close(scope, Exit.void)),
@@ -503,13 +493,13 @@ export const make = Effect.fn("Browser.make")(function* (
   const publish = timeline.publish;
 
   if (info.expiresAt !== undefined)
-    publish(new SessionEnding({ at: now(), expiresAt: info.expiresAt }));
+    publish(new Events.SessionEnding({ at: now(), expiresAt: info.expiresAt }));
 
   const { lostBy, lost, lose, untilLost, native } = yield* watchLoss(
     context,
     info.expiresAt,
     clock,
-    (cause) => publish(new Disconnected({ at: now(), cause })),
+    (cause) => publish(new Events.Disconnected({ at: now(), cause })),
   );
 
   const inputGate = Gate.make({
@@ -598,7 +588,7 @@ export const make = Effect.fn("Browser.make")(function* (
 
           registry.set(playwright, page);
           publish(
-            new PageOpened({
+            new Events.PageOpened({
               at: now(),
               page: id,
               url: Url.redact(targetInfo.url),

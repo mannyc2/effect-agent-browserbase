@@ -56,6 +56,8 @@ import * as CaptureConnection from "./internal/captureConnection.ts";
 
 export interface Options extends Browser.Options {
   readonly session?: SessionOptions | undefined;
+  /** Runtime-supplied Playwright CDP connection, shared by open, attach and supervision. */
+  readonly connect?: Cdp.Connector | undefined;
   /** Bound on connecting to the session. Defaults to 30 seconds. */
   readonly connectTimeoutMillis?: number | undefined;
   /**

@@ -5,9 +5,9 @@
  * What moved among the frames before an input is the page's background, such as an idle
  * animation; foreground stillness ignores it.
  *
- * Frames are decoded with the JPEG decoder playwright-core bundles and exports as
- * `playwright-core/lib/utilsBundle`: effect-browser depends on nothing else, and the runtime has
- * no image decoder. That entry point has no types, so `utilsBundle.d.ts` declares what is used.
+ * Frames use Playwright's bundled JPEG decoder. The package build ships that exact decoder
+ * alone, keeping its Node utility bundle out of Workers. Source runs use its native export,
+ * whose untyped entry point is declared by `utilsBundle.d.ts`.
  */
 // oxlint-disable-next-line typescript/triple-slash-reference -- a declaration of an untyped module cannot be imported, and every program that compiles this source needs it
 /// <reference path="./utilsBundle.d.ts" />

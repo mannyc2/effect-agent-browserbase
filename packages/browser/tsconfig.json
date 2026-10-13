@@ -11,5 +11,5 @@
     "allowUnreachableCode": false,
     "allowUnusedLabels": false
   },
-  "include": ["src", "test", "vite.config.ts"]
+  "include": ["src", "test", "*.ts"]
 }

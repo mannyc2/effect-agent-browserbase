@@ -16,6 +16,11 @@
   "sideEffects": [],
   "exports": {
     ".": {
+      "workerd": {
+        "@effect-browser/source": "./src/workerd/index.ts",
+        "types": "./dist/workerd/index.d.mts",
+        "default": "./dist/workerd/index.mjs"
+      },
       "@effect-browser/source": "./src/index.ts",
       "types": "./dist/index.d.mts",
       "default": "./dist/index.mjs"
@@ -41,6 +46,11 @@
       "default": "./dist/Change.mjs"
     },
     "./Cdp": {
+      "workerd": {
+        "@effect-browser/source": "./src/workerd/Cdp.ts",
+        "types": "./dist/workerd/Cdp.d.mts",
+        "default": "./dist/workerd/Cdp.mjs"
+      },
       "@effect-browser/source": "./src/Cdp.ts",
       "types": "./dist/Cdp.d.mts",
       "default": "./dist/Cdp.mjs"
@@ -118,6 +128,7 @@
     "@effect/vitest": "4.0.0",
     "@types/node": "26.1.2",
     "effect": "4.0.0",
+    "esbuild": "0.28.2",
     "playwright-core": "1.63.0",
     "typescript": "7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",

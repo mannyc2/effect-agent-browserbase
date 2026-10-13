@@ -41,6 +41,92 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Plan`         | A walk recorded from a page's events, replayed on a fresh page by subject         |
 | `Supervisor`   | A browser kept open across losses and session ends, as generations                |
 
+## Runtime CDP connectors
+
+`Cdp.open` and `Cdp.layer` accept `connect: Cdp.Connector`, a callback receiving the endpoint and
+`{ timeout, headers, signal }` and returning a real Playwright CDP `Browser`. Node uses
+`playwright-core`'s `chromium.connectOverCDP` by default. A consumer can supply a connector using
+its runtime's WebSocket implementation to avoid Playwright's Node WebSocket transport.
+
+```ts
+import { Redacted } from "effect";
+import * as Cdp from "effect-browser/Cdp";
+
+declare const connect: Cdp.Connector; // The consumer's runtime-compatible Playwright connector.
+
+const Remote = Cdp.layer({ endpoint: Redacted.make("wss://browser.example/cdp"), connect });
+```
+
+For Bun, this connector uses the global `WebSocket` and Playwright 1.63's public transport
+argument. It accepts `ws:` and `wss:` endpoints. Standard `WebSocket` cannot add custom headers,
+so this example refuses them; a consumer needing headers supplies a runtime-specific connector.
+The same example is exercised against local Chromium under Node and Bun, without a hosted session.
+
+```ts
+import * as Cdp from "effect-browser/Cdp";
+import { chromium, type ConnectOverCDPTransport } from "playwright-core";
+
+const nativeConnect: Cdp.Connector = async (endpoint, { timeout, headers, signal }) => {
+  if (headers !== undefined)
+    throw new Error("This native connector does not support custom headers");
+  if (signal.aborted) throw new Error("CDP opening canceled");
+  const socket = new WebSocket(endpoint);
+
+  const transport: ConnectOverCDPTransport = {
+    send: (message) => socket.send(JSON.stringify(message)),
+    close: () => socket.close(),
+  };
+
+  const abort = () => socket.close();
+
+  signal.addEventListener("abort", abort, { once: true });
+  socket.addEventListener("message", (event) => {
+    transport.onmessage?.(JSON.parse(String(event.data)) as object);
+  });
+  socket.addEventListener("close", () => {
+    signal.removeEventListener("abort", abort);
+    transport.onclose?.();
+  });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve(), { once: true });
+      socket.addEventListener("error", () => reject(new Error("Native CDP WebSocket failed")), {
+        once: true,
+      });
+      socket.addEventListener("close", () => reject(new Error("Native CDP WebSocket closed")), {
+        once: true,
+      });
+    });
+
+    return await chromium.connectOverCDP(transport, { timeout });
+  } catch (cause) {
+    signal.removeEventListener("abort", abort);
+    socket.close();
+
+    throw cause;
+  }
+};
+```
+
+Pass `nativeConnect` as `connect` to `Cdp.open` or `Cdp.layer`, or to the Browserbase options.
+
+The `workerd` export condition selects a CDP entry without the Node transport. It requires
+`connect`; omitting it fails with `BrowserError` reason `InvalidRequest`. The Workers root entry
+excludes local `Chromium`; import `effect-browser/Cdp` for remote connections. Bundlers must select
+the `workerd` condition, and Workers must enable `nodejs_compat`. The consumer still supplies and qualifies the runtime's Playwright
+implementation against this package's Playwright peer; the seam does not certify a different
+Playwright version or provide a Cloudflare connector.
+
+The callback receives a finite positive `connectTimeoutMillis`, 30 seconds by default, and an
+`AbortSignal`. Opening enforces that deadline independently, fails with reason `Timeout` and aborts
+the signal when it expires or the caller is interrupted. A connector should stop its own pending
+work when aborted. A browser it returns late is disconnected, as is one whose opening fails or
+whose scope closes. Its `close()` must disconnect the CDP connection without ending the remote
+browser; do not return a locally launched browser. Endpoints and headers can contain credentials:
+keep them out of logs and model inputs. Connect failures retain typed reasons and redact the
+endpoint's userinfo, path and query.
+
 A snapshot outlines the viewport, or the whole page, with a ref such as `e12` on each control, and
 lists those controls as values, `Snapshot.Control`: each one's ref, kind, name and what it holds,
 a select's options, and whether it is disabled, checked or takes typed text. `within` reads only
@@ -930,6 +1016,11 @@ generations and, with `keep`, can adopt one it previously kept.
 
 Every module is also an entry point, such as `effect-browser/Page`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.
+
+The published build embeds the complete page script as a closed JavaScript source string. Consumer
+bundlers can preserve function names or minify the library without changing that script's dependencies.
+The `@effect-browser/source` export condition is for this workspace's development tools; consumer
+bundles should use the default built exports, which also supply the Workers-specific packaging.
 
 ## Tracing
 

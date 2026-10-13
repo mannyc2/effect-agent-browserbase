@@ -40,6 +40,13 @@ const literalSource = (node: Node): string | undefined => {
   return undefined;
 };
 
+/** The Node public root shares the deliberately listed portable namespaces, then adds its own. */
+const portablePublicBase = (filename: string, node: Node) =>
+  filename.replaceAll("\\", "/").endsWith("/packages/browser/src/index.ts") &&
+  node.type === "ExportAllDeclaration" &&
+  node.exported === null &&
+  node.source.value === "./workerd/index.ts";
+
 const noInternalBarrel = {
   meta: {
     type: "problem",
@@ -111,12 +118,15 @@ const publicEntrypoint = {
       Program(program) {
         for (const node of program.body) {
           if (node.type === "EmptyStatement") continue;
+          if (portablePublicBase(context.filename, node)) continue;
           if (
             node.type === "ExportAllDeclaration" &&
             node.exported?.type === "Identifier" &&
             /^[A-Z][A-Za-z0-9]*$/.test(node.exported.name) &&
             typeof node.source.value === "string" &&
-            node.source.value.startsWith("./") &&
+            (node.source.value.startsWith("./") ||
+              (context.filename.replaceAll("\\", "/").endsWith("/src/workerd/index.ts") &&
+                node.source.value === `../${node.exported.name}.ts`)) &&
             !node.source.value.split("/").includes("internal") &&
             node.source.value.endsWith(`/${node.exported.name}.ts`)
           )
@@ -178,7 +188,7 @@ const noSelfBarrelImport = {
         check(node, literalSource(node.source));
       },
       ExportAllDeclaration(node) {
-        check(node, node.source.value);
+        if (!portablePublicBase(context.filename, node)) check(node, node.source.value);
       },
       ExportNamedDeclaration(node) {
         if (node.source !== null) check(node, node.source.value);

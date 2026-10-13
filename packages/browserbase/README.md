@@ -36,6 +36,19 @@ const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
 );
 ```
 
+`open`, `layer`, `attach`, `supervise` and `verifyContext` accept `connect`, the same
+[`Cdp.Connector`](../browser/README.md#runtime-cdp-connectors) used by the browser core. It receives
+the session's endpoint, the connection deadline and its cancellation signal, and returns a real
+Playwright CDP browser. This lets a Bun consumer use a native WebSocket connector, or a Workers
+consumer use a compatible Playwright implementation, while Browserbase keeps owning session
+creation, capture and release. A failed or interrupted custom connection still releases a session
+that `open` created. The separate capture connection already uses the global `WebSocket`.
+
+Select the `workerd` package export condition when bundling for Workers with `nodejs_compat` and
+supply `connect`:
+the worker entry imports no Playwright Node transport and has no default connector. This seam
+does not validate a Playwright fork's version compatibility or change the default Node transport.
+
 Each page keeps its CDP target id as its `id` across connections, so `attach` to the same session,
 after a dropped connection or from another process, finds a page stored before with
 `browser.page(id)`. `attach` refuses a session that has ended, `Closed` by the session, before it
