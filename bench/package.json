@@ -19,7 +19,7 @@
     "effect-agent-browser": "workspace:*",
     "effect-browser": "workspace:*",
     "effect-browserbase": "workspace:*",
-    "playwright-core": "1.63.0",
+    "playwright-core": "1.64.0",
     "typescript": "7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
     "vite-plus": "1.1.0",
