@@ -27,11 +27,7 @@ export const make = Effect.gen(function* () {
   const supplied = yield* Effect.serviceOption(Crypto.Crypto);
   const crypto = Option.getOrElse(supplied, native);
 
-  return yield* crypto
-    .randomUUIDv4()
-    .pipe(
-      Effect.mapError(() =>
-        undispatched("make", new Failed({ detail: "Could not name connection" })),
-      ),
-    );
+  return yield* Effect.mapError(crypto.randomUUIDv4(), () =>
+    undispatched("make", new Failed({ detail: "Could not name connection" })),
+  );
 });
