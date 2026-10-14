@@ -21,14 +21,17 @@
       {
         "name": "@effect/language-service",
         // Effect 4 marks its AI, HTTP and observability modules unstable, and these packages are
-        // built on them. Property tests use Arbitrary, as CONTRIBUTING.md asks. The packages' `~4.0.0`
+        // built on them. Property tests use Arbitrary, as CONTRIBUTING.md asks. The packages' `~4.0.3`
         // peer range holds them still; docs/RELEASING.md says why. Any other unstable or experimental
-        // API still warns.
+        // API still warns. Effect 4.0.3 also marks Crypto and PlatformError unstable; the browser's
+        // connection identity adapter deliberately uses those platform contracts.
         "allowedUnstableApis": [
           "effect/ai",
           "effect/Arbitrary",
+          "effect/Crypto",
           "effect/http",
           "effect/observability",
+          "effect/PlatformError",
           "@effect/ai-openrouter",
           "@effect/ai-typesafe"
         ],
@@ -51,6 +54,23 @@
         },
         "overrides": [
           {
+            // Package tests use Effect's test runner, now marked unstable in 4.0.3.
+            "include": ["**/packages/*/test/**/*.ts"],
+            "options": {
+              "allowedUnstableApis": [
+                "effect/ai",
+                "effect/Arbitrary",
+                "effect/Crypto",
+                "effect/http",
+                "effect/observability",
+                "effect/PlatformError",
+                "@effect/ai-openrouter",
+                "@effect/ai-typesafe",
+                "@effect/vitest"
+              ]
+            }
+          },
+          {
             "include": ["**/src/**/*.ts"],
             "options": {
               "diagnosticSeverity": {
@@ -61,37 +81,54 @@
           },
           {
             // The bench is also a command-line program, on Effect's command-line and process
-            // modules, which Effect 4 marks unstable too. An override replaces the list above.
+            // and platform modules, which Effect 4 marks unstable too. Its tests use Effect's
+            // test runner. An override replaces the list above.
             "include": ["**/bench/**/*.ts"],
             "options": {
               "allowedUnstableApis": [
                 "effect/ai",
                 "effect/Arbitrary",
                 "effect/cli",
+                "effect/Crypto",
+                "effect/FileSystem",
                 "effect/http",
                 "effect/observability",
+                "effect/Path",
+                "effect/PlatformError",
                 "effect/process",
                 "@effect/ai-openrouter",
-                "@effect/ai-typesafe"
+                "@effect/ai-typesafe",
+                "@effect/platform-node/NodeServices",
+                "@effect/platform-node/NodeRuntime",
+                "@effect/vitest"
               ]
             }
           },
           {
             // The site is an application: its client calls the local runner through Effect's HTTP
-            // API module, and its demo runner is a command-line program that streams the voice.
+            // API module, and its demo runner uses Node platform services to stream the voice.
+            // Its tests use Effect's test runner.
             "include": ["**/site/**/*.ts"],
             "options": {
               "allowedUnstableApis": [
                 "effect/ai",
                 "effect/Arbitrary",
                 "effect/cli",
+                "effect/Crypto",
                 "effect/encoding",
+                "effect/FileSystem",
                 "effect/http",
                 "effect/http-api",
                 "effect/observability",
+                "effect/Path",
+                "effect/PlatformError",
                 "effect/process",
                 "@effect/ai-openrouter",
-                "@effect/ai-typesafe"
+                "@effect/ai-typesafe",
+                "@effect/platform-node/NodeHttpPlatform",
+                "@effect/platform-node/NodeServices",
+                "@effect/platform-node/NodeRuntime",
+                "@effect/vitest"
               ]
             }
           }

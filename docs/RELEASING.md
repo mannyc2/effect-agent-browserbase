@@ -8,22 +8,26 @@ package. Ordinary CI never publishes,
 and preparing or testing a release does not authorize publishing, tagging or changing account
 settings.
 
-## The Yielded archive
+## The Yielded dependency
 
-`effect-agent-browser` peers on one exact `@yielded/agent`. While that version is not on npm, the
-repository overrides it with an archive pinned to a commit of the `vendor/yielded-agent` branch,
-and a release can go out with it. npm consumers do not inherit workspace overrides, so the
-package's README has them install the archive as a dependency and as an override, and gives its
-address and integrity. `tools/check-packed.sh` holds every PR and release to that: the override
-must be pinned to a commit, the README must give its address and the integrity `bun.lock` records,
-and an npm project and a Bun workspace with the isolated linker must install it as the README
-says, with no `--force` or `--legacy-peer-deps`, lock that integrity, and hold one copy each of
-`effect`, `effect-browser`, `@yielded/agent` and `playwright-core`.
+`effect-agent-browser` peers on the published npm artifact of `@yielded/agent`
+`0.1.0-beta.168` exactly. The workspace and consumer instructions use that registry dependency
+without an archive override. `tools/check-packed.sh` installs it in an npm project and a Bun
+workspace with the isolated linker, with no `--force` or `--legacy-peer-deps`. Both lockfiles must
+record the registry artifact's integrity and hold one copy each of `effect`, `effect-browser`,
+`@yielded/agent` and `playwright-core`.
 
-- Keep `vendor/yielded-agent` while a published release's README sends consumers to it.
-- Change the archive only in a PR that changes the override, `bun.lock` and the README together.
-- Once the version is on npm, the release checked against it drops the override, refreshes
-  `bun.lock` and removes the README's archive step.
+The earlier release-candidate archive and npm artifact share a version but differ in content and
+integrity. Checks against the archive do not establish compatibility with the npm artifact; run
+the full gate and packed-consumer checks when changing the dependency.
+
+Keep `vendor/yielded-agent`: earlier published READMEs still send their consumers to its
+commit-pinned archive. That archive was upstream's release candidate,
+[yielded-dev/agent#779](https://github.com/yielded-dev/agent/pull/779) at `36775000`, built by
+upstream's CI. Its preserved address is
+`https://raw.githubusercontent.com/mannyc2/effect-agent-browserbase/1c40d56a631ea0a041577d9736a7484e3d0f4b62/yielded-agent-0.1.0-beta.168.tgz`,
+with integrity
+`sha512-wEvXIgLTR6nDpFglj/TDI3F2NWgNEhiyXaGaMsbM6vx2H9xFBx/Q90qCcnVRg12kcL4eptuMSZp4wE7YfLxTLw==`.
 
 ## One-time setup
 
@@ -64,12 +68,12 @@ The owner does this once, in npm and GitHub settings.
 
 ## Peer ranges
 
-- **`effect` is `~4.0.0` in every package:** 4.0's patch releases, and never 4.1. The packages are
+- **`effect` is `~4.0.3` in every package:** 4.0's patch releases from 4.0.3, and never 4.1. The packages are
   built on modules that Effect 4 marks `@stability unstable`: `effect/ai`, `effect/http` and
   `effect/observability`. Semver does not hold those, and a minor release may change them. A caret
   range would let a consumer install an Effect the packages were never checked against.
   - Widen the range to the next minor in the release that is checked against it.
-  - Widen it to `^4.0.0` once those modules are stable.
+  - Widen it to `^4.0.3` once those modules are stable.
 - **`effect-browser`** is a caret range in the other three packages, from the version each needs.
   Move it in the release that needs a newer one.
 - **`@yielded/agent`** is one exact version in `effect-agent-browser`, because each Yielded beta may

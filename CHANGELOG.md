@@ -4,6 +4,20 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.20
+
+- `effect-agent-browser` installs the published npm artifact of `@yielded/agent`
+  `0.1.0-beta.168`, replacing the commit-pinned release-candidate archive and its workspace
+  override. Consumer installs no longer need an archive dependency or override. The npm artifact
+  differs from the earlier archive despite sharing its version; the exact Yielded peer stays at
+  `0.1.0-beta.168`.
+- Effect and the coordinated `@effect` dependencies move to `4.0.3`; every public package's
+  Effect peer starts at `~4.0.3`. The npm and isolated-Bun packed-consumer checks use the registry
+  dependency and its lockfile integrity.
+- Connection and bench UUIDs use Effect's new function API. Existing platform and test APIs
+  newly marked unstable by Effect are explicitly allowed in their owning TypeScript projects;
+  other unstable API diagnostics remain enabled.
+
 ## 0.3.0-beta.19
 
 - Presented typing follows a focused text field of the same name when a page replaces the field
@@ -184,7 +198,7 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 The first 0.3 release on npm. `0.3.0-beta.0` to `0.3.0-beta.4` were prepared but never published,
 so this release also carries the changes their sections list. `v0.3.0-beta.4` was tagged, and
 release tags cannot move, so the fix below goes out as this version. `effect-agent-browser` peers
-on `@yielded/agent` `0.1.0-beta.168`, which is not on npm yet: its README gives the archive, and its
+on `@yielded/agent` `0.1.0-beta.168`, which was not on npm at release time: its README gives the archive, and its
 integrity, that consumers install in its place, as the release checks do.
 
 ### Changed

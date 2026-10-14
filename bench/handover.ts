@@ -54,7 +54,7 @@ export const command = Command.make(
       if (verification.length === 0)
         return yield* refuse("H2 requires the retained private dashboard verification evidence");
       const verificationHash = yield* crypto.digest("SHA-256", verification);
-      const runId = yield* crypto.randomUUIDv4;
+      const runId = yield* crypto.randomUUIDv4();
       const directory = path.join(import.meta.dirname, "..", ".work", "h2", runId);
       const versions: Record<string, string> = {};
 

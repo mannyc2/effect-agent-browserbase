@@ -9,13 +9,13 @@
     "test": "vp test --run"
   },
   "devDependencies": {
-    "@effect/ai-openrouter": "4.0.0",
-    "@effect/ai-typesafe": "4.0.0",
-    "@effect/platform-node": "4.0.0",
-    "@effect/vitest": "4.0.0",
+    "@effect/ai-openrouter": "4.0.3",
+    "@effect/ai-typesafe": "4.0.3",
+    "@effect/platform-node": "4.0.3",
+    "@effect/vitest": "4.0.3",
     "@types/node": "26.1.2",
     "@yielded/agent": "0.1.0-beta.168",
-    "effect": "4.0.0",
+    "effect": "4.0.3",
     "effect-agent-browser": "workspace:*",
     "effect-browser": "workspace:*",
     "effect-browserbase": "workspace:*",
