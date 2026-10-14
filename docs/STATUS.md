@@ -2,6 +2,14 @@
 
 ## 0.3
 
+The `0.3.0-beta.20` release moves `@yielded/agent` `0.1.0-beta.168` from the commit-pinned
+release-candidate archive to its published npm artifact, with Effect and the coordinated
+`@effect` dependencies at `4.0.3`. The exact Yielded peer stays at `0.1.0-beta.168`, and public
+Effect peers start at `~4.0.3`. Consumer instructions use npm directly; earlier consumers can
+still reach the retained archive. The registry artifact differs from the archive with the same
+version, so previous archive checks are historical evidence. Release validation checks the npm
+artifact through `ready` and the npm/isolated-Bun packed consumers.
+
 The `0.3.0-beta.19` release adds browser moments in the agent's thread, with native conversation
 compaction and the latest three moments' images retained separately. Foreground stillness compares
 all three color channels in newly accepted frames while ignoring animation already present before input; gaps in newly accepted
@@ -116,8 +124,8 @@ and insertion typing replacing existing text. Local Chromium regressions reprodu
 before the fixes. The Browserbase fake also serves Live View and retains session create settings;
 these tests establish the fake/client contract, not hosted behavior.
 
-0.3 is a rewrite of the 0.2 set on stable Effect 4.0.0 and `effect/ai`, with agents on Yielded
-Agent, the renamed Effect Agent:
+0.3 is a rewrite of the 0.2 set on stable Effect 4 and `effect/ai`, currently pinned to `4.0.3`,
+with agents on Yielded Agent, the renamed Effect Agent:
 
 - `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
   `Frame`, `BrowserEvent` and `BrowserError`; `Moment`. It has no agent code.
@@ -185,13 +193,12 @@ Agent, the renamed Effect Agent:
   need a model-aware image-token estimator, composed
   with the tools' preparation as the package README shows. `wait_still` waits for
   foreground stillness. Yielded runs the agent: its loop,
-  policy and budgets, approval, context and run events. Its browser interface is on Yielded's
-  `main` but not yet on npm: the package pins `@yielded/agent` `0.1.0-beta.168`, which upstream's
-  pending release publishes. Until then the repository's `overrides` install a commit-pinned pack
-  of upstream's release candidate from this repository's `vendor/yielded-agent` branch, and
-  consumers install the same pack as a dependency and an override, by the address and integrity
-  the package's README gives. The packed check installs it that way with npm and with Bun's
-  isolated linker, and holds each to that integrity and to one copy of each runtime package.
+  policy and budgets, approval, context and run events. The package pins the published npm
+  artifact of `@yielded/agent` `0.1.0-beta.168`, whose browser ports it implements. The packed
+  check installs it from the registry with npm and with Bun's isolated linker, holding each to
+  the registry integrity and to one copy of each runtime package. Earlier releases used a
+  commit-pinned release-candidate archive from `vendor/yielded-agent`; it remains available for
+  their consumers, as [RELEASING.md](RELEASING.md) records.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
 - Structured reads in one call to the page. `Page.find` returns the elements that a query of role,
@@ -437,7 +444,7 @@ and each becoming the next beta.
   narrator, asked for numbers, does; with the outline, the alternative, the states got worse, 13
   of 32 wrong in 16 moments. The run's 160 calls cost $0.084. The release hygiene left from
   earlier is done too:
-  - `effect` is now a `~4.0.0` peer, while the packages rely on modules that Effect marks unstable;
+  - `effect` became a `~4.0.0` peer, while the packages rely on modules that Effect marks unstable;
     [RELEASING.md](RELEASING.md) has the policy.
   - The docs now say that `attach` resumes only a session created with `keepAlive`, and that closing
     `open`'s scope waits for its release.
@@ -515,8 +522,9 @@ The larger pieces left for later:
 `0.3.0-beta.5` of `effect-browser`, `effect-browserbase` and `effect-agent-browser` was published
 on 10 October 2026 from tag `v0.3.0-beta.5` (`3af967f`) on the `beta` dist-tag, by
 `.github/workflows/publish.yml` through npm trusted publishing, with provenance. Each archive npm
-serves has the integrity of the one the workflow checked. `effect-agent-browser` takes
-`@yielded/agent` from the archive above until `0.1.0-beta.168` is on npm. Installed from npm as its
+serves has the integrity of the one the workflow checked. That release of `effect-agent-browser`
+took `@yielded/agent` from the release-candidate archive, before `0.1.0-beta.168` reached npm.
+Installed from npm as its
 README says, in an npm project and in a Bun workspace with the isolated linker, the three held one
 copy of each runtime package, locked the archive's integrity, and loaded all 27 of their entry
 points.

@@ -9,7 +9,7 @@ Open a focused PR against `main` that explains the change and how it was checked
 | -------------------- | ----------------------------- |
 | Node                 | 24.14.1 (`.node-version`)     |
 | Bun                  | 1.4.2                         |
-| Effect               | 4.0.0                         |
+| Effect               | 4.0.3                         |
 | Playwright           | playwright-core 1.63.0        |
 | Yielded Agent        | @yielded/agent 0.1.0-beta.168 |
 | TypeScript / Vite+   | 7.0.2 / 1.1.0                 |
@@ -48,7 +48,7 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   `effect-browser`'s source stays at or under 12,000 code lines (`bun run size`, in `ready`),
   counted by lint's same rule with blank and comment-only lines excluded. A change that would
   cross it deletes as much code as it adds.
-- **Exceptions say why.** A comment that switches a check off gives its reason after ` -- `, as
+- **Exceptions say why.** A comment that switches a check off gives its reason after `--`, as
   in `// oxlint-disable-next-line <rule> -- <why this site is an exception>`. Lint enforces it.
 - **A PR says what it deletes,** the source and test lines it adds and removes, the public names
   it adds and removes, and any check it adds or exception it lowers. A PR that only adds says

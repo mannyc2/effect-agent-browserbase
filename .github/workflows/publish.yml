@@ -69,9 +69,8 @@ jobs:
             (cd "$dir" && bun pm pack --destination "$RUNNER_TEMP/packages" --quiet)
           done
       # The archives as a consumer gets them: installed outside the workspace, their declarations
-      # typechecked with skipLibCheck false and every entry point imported. Workspace overrides do
-      # not reach consumers, so while @yielded/agent is overridden with an archive, the consumers
-      # install it as effect-agent-browser's README says, held to the integrity bun.lock records.
+      # typechecked with skipLibCheck false and every entry point imported. Both consumers install
+      # their peers from npm, then reinstall from their lockfiles and check for one runtime copy.
       - name: Check the archives in a clean consumer
         env:
           TMPDIR: ${{ runner.temp }}

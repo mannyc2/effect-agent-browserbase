@@ -35,30 +35,11 @@ fi
 names=(effect-browser effect-browserbase effect-browser-human-strokes effect-agent-browser)
 runtimes=(effect effect-browser @yielded/agent playwright-core)
 
-# Until the pinned @yielded/agent is on npm, the repository overrides it with an archive pinned to
-# a commit, and effect-agent-browser's README has consumers install that archive as a dependency
-# and as an override, by its address and integrity. Both consumers here install it so, and their
-# lockfiles must hold the integrity bun.lock holds, which the workspace's frozen install checked.
-yielded="$(node -p "require('$root/package.json').overrides?.['@yielded/agent'] ?? ''")"
-if [ -n "$yielded" ]; then
-  [[ $yielded =~ ^https://raw\.githubusercontent\.com/[^/]+/[^/]+/[0-9a-f]{40}/[^/]+\.tgz$ ]] ||
-    { echo "The @yielded/agent override, $yielded, is not an archive pinned to a commit." >&2; exit 1; }
-  integrity="$(grep -F "[\"@yielded/agent@$yielded\"," "$root/bun.lock" | grep -oE 'sha512-[A-Za-z0-9+/]+=*')"
-  for documented in "$yielded" "$integrity"; do
-    grep -qF "$documented" "$root/packages/agent-browser/README.md" ||
-      { echo "effect-agent-browser's README does not give the archive's $documented." >&2; exit 1; }
-  done
-fi
+yielded="$(node -p "require('$root/packages/agent-browser/package.json').peerDependencies['@yielded/agent']")"
 quiet() { # runs an install, failing on any word of a peer it could not satisfy
   local log
   log="$("$@" 2>&1)" || { printf '%s\n' "$log" >&2; return 1; }
   if grep -qi 'peer' <<< "$log"; then printf '%s\n' "$log" >&2; echo "$* warned of a peer." >&2; return 1; fi
-}
-locked() { # $1, the integrity a lockfile holds for the archive
-  if [ -n "$yielded" ] && [ "$1" != "$integrity" ]; then
-    echo "The consumer locked $yielded at ${1:-no integrity}, not $integrity." >&2
-    exit 1
-  fi
 }
 once() { # $@, how many copies of each runtime package a consumer holds, in the order of runtimes
   local index=0
@@ -70,17 +51,12 @@ once() { # $@, how many copies of each runtime package a consumer holds, in the 
 
 consumer="$work/consumer"
 mkdir "$consumer"
-node -e '
-  const yielded = process.argv[1];
-  const archive = yielded ? { dependencies: { "@yielded/agent": yielded }, overrides: { "@yielded/agent": yielded } } : {};
-  console.log(JSON.stringify({ private: true, type: "module", ...archive }, null, 2));
-' "$yielded" > "$consumer/package.json"
+printf '{"private":true,"type":"module"}\n' > "$consumer/package.json"
 archived=()
 for name in "${names[@]}"; do archived+=("$archives/$name-$version.tgz"); done
 quiet npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund \
   "${archived[@]}" "typescript@$(pin typescript)" "@types/node@$(pin @types/node)"
 quiet npm ci --prefix "$consumer" --ignore-scripts --no-audit --no-fund
-locked "$(node -p "require('$consumer/package-lock.json').packages['node_modules/@yielded/agent']?.integrity ?? ''")"
 mapfile -t counts < <(node -e '
   const keys = Object.keys(require(process.argv[1]).packages);
   for (const name of process.argv.slice(2)) console.log(keys.filter((key) => key.endsWith(`node_modules/${name}`)).length);
@@ -143,17 +119,15 @@ node -e '
   const { writeFileSync } = require("node:fs");
   const [workspace, yielded, archives, version, effect, playwright, typescript, types, ...names] = process.argv.slice(1);
   const archive = (name) => `${archives}/${name}-${version}.tgz`;
-  const dependencies = { effect, "playwright-core": playwright, typescript, "@types/node": types };
+  const dependencies = { effect, "@yielded/agent": yielded, "playwright-core": playwright, typescript, "@types/node": types };
   for (const name of names) dependencies[name] = archive(name);
   // Bun reads overrides from the workspace root only.
   const overrides = { "effect-browser": archive("effect-browser") };
-  if (yielded) dependencies["@yielded/agent"] = overrides["@yielded/agent"] = yielded;
   const json = (value) => JSON.stringify(value, null, 2);
   writeFileSync(`${workspace}/package.json`, json({ private: true, workspaces: ["apps/*"], overrides }));
   writeFileSync(`${workspace}/apps/consumer/package.json`, json({ name: "consumer", private: true, type: "module", dependencies }));
 ' "$workspace" "$yielded" "$archives" "$version" "$(pin effect)" "$(pin playwright-core)" "$(pin typescript)" "$(pin @types/node)" "${names[@]}"
 (cd "$workspace" && quiet bun install --ignore-scripts && rm -rf node_modules apps/consumer/node_modules && quiet bun install --frozen-lockfile --ignore-scripts)
-if [ -n "$yielded" ]; then locked "$(grep -F "[\"@yielded/agent@$yielded\"," "$workspace/bun.lock" | grep -oE 'sha512-[A-Za-z0-9+/]+=*')"; fi
 mapfile -t counts < <(for name in "${runtimes[@]}"; do ls "$workspace/node_modules/.bun" | grep -c "^${name/\//+}@" || true; done)
 once "${counts[@]}"
 cp "$consumer/index.ts" "$consumer/tsconfig.json" "$application/"
