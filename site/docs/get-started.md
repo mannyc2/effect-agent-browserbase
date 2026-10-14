@@ -13,6 +13,16 @@ npm install @yielded/agent@0.1.0-beta.168 effect-browser@beta effect-agent-brows
 npx playwright-core install chromium
 ```
 
+Captured in a fresh npm project on Linux with Node `24.14.1` and npm `11.11.0`. At capture time,
+both `@beta` packages resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
+`0.1.0-beta.168`, with Effect and the OpenRouter provider at `4.0.3`. Chromium was already
+installed on this host, so its install command printed nothing:
+
+```text output
+added 6 packages, and audited 7 packages in 2s
+
+found 0 vulnerabilities
+```
 :::
 
 ## An agent in a local Chromium
