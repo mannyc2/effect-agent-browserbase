@@ -2,6 +2,16 @@
 
 ## 0.3
 
+The `0.3.0-beta.21` release fixes page operations in consumer bundles with preserved function
+names or minification and adds runtime-supplied Playwright CDP connectors. Browserbase propagates
+the connector while retaining session ownership; opening enforces deadlines, cancellation and
+late disconnect cleanup. Workers exports omit the Node transport and require a compatible
+connector, with the JPEG decoder shipped separately from Node utilities. Connection errors
+withhold diagnostics that echo supplied header values, including serialized errors, while
+preserving typed timeout and connection-loss reasons. Local Chromium, bundled-consumer and
+fake-provider regressions cover these boundaries; they do not qualify a Cloudflare Playwright
+implementation or establish hosted behavior.
+
 The `0.3.0-beta.20` release moves `@yielded/agent` `0.1.0-beta.168` from the commit-pinned
 release-candidate archive to its published npm artifact, with Effect and the coordinated
 `@effect` dependencies at `4.0.3`. The exact Yielded peer stays at `0.1.0-beta.168`, and public
