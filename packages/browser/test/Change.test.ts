@@ -581,12 +581,27 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         );
         yield* page.changes();
         // The moment starts before the first click, however long the clicks take on a busy host.
-        const from = yield* (yield* Browser).now;
+        const browser = yield* Browser;
+        const from = yield* browser.now;
+
+        // A slow clock probe can put mapped mutations ahead of the host's present. Keep the
+        // next input's stamp after the preceding read, so it cannot claim that earlier change.
+        const separate = Effect.gen(function* () {
+          const { until } = yield* page.changes();
+          let now = yield* browser.now;
+
+          while (now <= until) {
+            yield* Effect.sleep(Duration.millis(Math.max(1, until - now)));
+            now = yield* browser.now;
+          }
+        });
 
         yield* page.click(yield* button(page, "Menu"));
+        yield* separate;
         yield* page.click(
           (yield* page.find({ role: "menuitem", name: "Share" }))[0]?.ref ?? "no menu",
         );
+        yield* separate;
         yield* page.click(yield* button(page, "Place order"));
         yield* page.waitFor({ text: "Order placed" });
         yield* Effect.sleep(Duration.millis(100));

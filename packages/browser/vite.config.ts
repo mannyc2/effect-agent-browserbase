@@ -1,9 +1,13 @@
 import { defineConfig } from "vite-plus";
 
+import { pageScript } from "./page-script.ts";
+import { playwrightJpeg } from "./playwright-jpeg.ts";
+
 export default defineConfig({
   resolve: { conditions: ["@effect-browser/source"] },
   pack: {
-    entry: ["src/*.ts"],
+    plugins: [pageScript(), playwrightJpeg()],
+    entry: ["src/*.ts", "src/workerd/*.ts"],
     dts: true,
     sourcemap: true,
   },

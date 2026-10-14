@@ -17,14 +17,7 @@ import {
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
 import type { CaptureSource } from "../../Browser.ts";
-import {
-  BrowserError,
-  Closed,
-  Failed,
-  InvalidRequest,
-  type Reason,
-  Timeout,
-} from "../../BrowserError.ts";
+import * as Errors from "../../BrowserError.ts";
 import type { BrowserEvent } from "../../BrowserEvent.ts";
 import type { InputGuard, Point } from "../../Page.ts";
 import type { Gate } from "../input/gate.ts";
@@ -35,7 +28,7 @@ import type { Openings } from "./openings.ts";
 import * as Url from "./url.ts";
 
 /** Why a page is gone. */
-export type ClosedCause = Closed["cause"];
+export type ClosedCause = Errors.Closed["cause"];
 
 /** What every page of a browser shares, from its options. */
 export interface Settings {
@@ -72,9 +65,9 @@ export interface MakeOptions {
   /** Registration of the actual popups this page's current input opened. */
   readonly openings: Openings;
   /** Succeeds once the page's own session holds focus emulation, which keeps it painting behind. */
-  readonly focused: Effect.Effect<void, BrowserError>;
+  readonly focused: Effect.Effect<void, Errors.BrowserError>;
   /** Succeeds once the page's own session has the Page domain on, so it sees every later commit. */
-  readonly paging: (operation: string) => Effect.Effect<void, BrowserError>;
+  readonly paging: (operation: string) => Effect.Effect<void, Errors.BrowserError>;
   /** Why the page is gone, once it is: its browser's loss, else its own close or crash. */
   readonly closedBy: () => ClosedCause;
   /** Where the page's screencast runs, if not on its own session. */
@@ -96,15 +89,16 @@ export const reasonOf = (
   cause: unknown,
   timeoutMillis?: number,
   closed: ClosedCause = "connection",
-): Reason => {
+  redact: (message: string) => string = Url.redactWithin,
+): Errors.Reason => {
   const message = messageOf(cause);
 
-  if (closedPattern.test(message)) return new Closed({ cause: closed });
+  if (closedPattern.test(message)) return new Errors.Closed({ cause: closed });
   if (cause instanceof Error && cause.name === "TimeoutError" && timeoutMillis !== undefined)
-    return new Timeout({ millis: timeoutMillis });
-  const line = message.split("\n")[0] ?? message;
+    return new Errors.Timeout({ millis: timeoutMillis });
+  const line = redact(message).split("\n")[0] ?? message;
 
-  return new Failed({ detail: Url.redactWithin(line.replace(/^[\w.]+: /, "")) });
+  return new Errors.Failed({ detail: line.replace(/^[\w.]+: /, "") });
 };
 
 /**
@@ -123,7 +117,7 @@ export const call = <A>(
     catch: (cause) => undispatched(operation, reasonOf(cause, timeoutMillis, closedBy())),
   });
 
-export const contextGone = (error: BrowserError) =>
+export const contextGone = (error: Errors.BrowserError) =>
   error.reason._tag === "Failed" &&
   /Cannot find context|Execution context was destroyed|__effectBrowser|Inspected target navigated/i.test(
     error.reason.detail,
@@ -160,21 +154,23 @@ const sizeOf = (value: unknown) =>
   value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
 
 /** A failure of `operation` before any of its input reached the browser. */
-export const undispatched = (operation: string, reason: Reason) =>
-  new BrowserError({ operation, reason, dispatched: false });
+export const undispatched = (operation: string, reason: Errors.Reason) =>
+  new Errors.BrowserError({ operation, reason, dispatched: false });
 
-export const failWith = (operation: string, reason: Reason) =>
+export const failWith = (operation: string, reason: Errors.Reason) =>
   Effect.fail(undispatched(operation, reason));
 
 /** Refuse a request to `operation` that could never succeed, before sending anything. */
 export const refuse = (operation: string, detail: string) =>
-  failWith(operation, new InvalidRequest({ detail }));
+  failWith(operation, new Errors.InvalidRequest({ detail }));
 
 export const decodeWith =
   <A>(operation: string, schema: Schema.Codec<A, unknown>) =>
   (value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(
-      Effect.mapError((error) => undispatched(operation, new Failed({ detail: error.message }))),
+      Effect.mapError((error) =>
+        undispatched(operation, new Errors.Failed({ detail: error.message })),
+      ),
     );
 
 export const make = (options: MakeOptions, scope: Scope.Scope) => {
@@ -275,7 +271,8 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.timeoutOrElse(effect, {
         duration,
-        orElse: () => failWith(operation, new Timeout({ millis: Duration.toMillis(duration) })),
+        orElse: () =>
+          failWith(operation, new Errors.Timeout({ millis: Duration.toMillis(duration) })),
       });
 
   // Stop a navigation whose bounded wait failed. The stop and original mutation keep their
@@ -301,7 +298,7 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     now,
     actionTimeout: options.settings.actionTimeout,
     documentAt: () => activity.documentAt,
-    gone: (operation) => undispatched(operation, new Closed({ cause: options.closedBy() })),
+    gone: (operation) => undispatched(operation, new Errors.Closed({ cause: options.closedBy() })),
     scope,
     inputGate: options.inputGate,
   });

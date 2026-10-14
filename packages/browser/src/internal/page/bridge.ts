@@ -65,7 +65,7 @@ declare global {
 }
 
 // Like the parts it receives, this is evaluated from its source text.
-const install = (
+export const install = (
   makeNames: typeof names,
   makeWalk: typeof walk,
   makeMatch: typeof match,
@@ -135,7 +135,7 @@ const install = (
   return api;
 };
 
-/** The expression that installs the script and evaluates to its API. */
+/** The expression that installs the script and evaluates to its API; packaging freezes it. */
 export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, expectations, text, controls, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit, Url.addresses].join(", ")})`;
 
 const worldName = "effect-browser";

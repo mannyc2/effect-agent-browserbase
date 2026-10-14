@@ -1,101 +1,16 @@
 /**
- * A browser reached over the Chrome DevTools Protocol: a Chrome started with
- * `--remote-debugging-port`, or any provider that hands out a CDP WebSocket URL.
- *
- * Closing the scope disconnects. It does not close the remote browser; its owner does that.
+ * A browser reached over Chrome DevTools Protocol. Node defaults to Playwright's transport;
+ * `connect` supplies another runtime's real Playwright browser. Closing the scope disconnects.
  *
  * @since 0.3.0
  */
-import { type DateTime, Effect, Layer, Redacted } from "effect";
 import { chromium } from "playwright-core";
 
-import * as Browser from "./Browser.ts";
-import { type BrowserError, Failed, type Reason } from "./BrowserError.ts";
-import { reasonOf, undispatched } from "./internal/page/context.ts";
-import * as Url from "./internal/page/url.ts";
+import { make } from "./internal/cdp.ts";
 
-export interface Options extends Browser.Options {
-  /**
-   * `ws://`, `wss://` or `http://` DevTools endpoint. Often a credential, so it may be redacted;
-   * connect failures never include its userinfo, path or query.
-   */
-  readonly endpoint: string | Redacted.Redacted<string>;
-  readonly headers?: Readonly<Record<string, string>> | undefined;
-  /** Identifies the session in `Browser.id`. Defaults to `"cdp"`. */
-  readonly id?: string | undefined;
-  readonly provider?: string | undefined;
-  /** Bound on connecting. Defaults to 30 seconds. */
-  readonly connectTimeoutMillis?: number | undefined;
-  /** When the provider ends the session on its own, as a hosted session's timeout does. */
-  readonly expiresAt?: DateTime.Utc | undefined;
-  /**
-   * A connection apart from this one for the pages' screencasts, as a hosted provider supplies.
-   * Without one, each page's capture runs on its own session.
-   */
-  readonly capture?: Browser.CaptureSource | undefined;
-}
-
-/**
- * Playwright can echo the endpoint, or a URL derived from it with its query, userinfo or path, in
- * a connect failure. Those parts are often the credential, so a URL keeps its scheme, host and
- * port, and any other echo of the endpoint is replaced.
- */
-const withoutEndpoint = (endpoint: string, reason: Reason): Reason => {
-  if (reason._tag !== "Failed") return reason;
-
-  const origins = reason.detail.replace(Url.quoted, (url) => {
-    const parsed = URL.parse(url);
-
-    return parsed === null || parsed.host === "" ? "<url>" : `${parsed.protocol}//${parsed.host}`;
-  });
-
-  return new Failed({
-    detail: endpoint === "" ? origins : origins.replaceAll(endpoint, "<endpoint>"),
-  });
-};
+export type { Connector, ConnectOptions, Options } from "./internal/cdp.ts";
 
 /** Connect and open a `Browser` over the endpoint's first context. */
-export const open = Effect.fn("Cdp.open")(function* (options: Options) {
-  const endpoint = Redacted.isRedacted(options.endpoint)
-    ? Redacted.value(options.endpoint)
-    : options.endpoint;
-
-  const timeout = options.connectTimeoutMillis ?? 30_000;
-
-  const failed = (cause: unknown, timeoutMillis?: number) =>
-    undispatched("connect", withoutEndpoint(endpoint, reasonOf(cause, timeoutMillis)));
-
-  // The endpoint is often a credential, so the connect span names no part of it.
-  const connected = yield* Effect.acquireRelease(
-    Effect.tryPromise({
-      try: () =>
-        chromium.connectOverCDP(endpoint, {
-          timeout,
-          ...(options.headers === undefined ? {} : { headers: { ...options.headers } }),
-        }),
-      catch: (cause) => failed(cause, timeout),
-    }).pipe(Effect.withSpan("Cdp.connect", {}, { captureStackTrace: false })),
-    (browser) => Effect.tryPromise(() => browser.close()).pipe(Effect.ignore),
-  );
-
-  const context =
-    connected.contexts()[0] ??
-    (yield* Effect.tryPromise({
-      try: () => connected.newContext(),
-      catch: (cause) => failed(cause),
-    }));
-
-  return yield* Browser.make(
-    context,
-    {
-      id: options.id ?? "cdp",
-      provider: options.provider ?? "cdp",
-      expiresAt: options.expiresAt,
-      capture: options.capture,
-    },
-    options,
-  );
-});
-
-export const layer = (options: Options): Layer.Layer<Browser.Browser, BrowserError> =>
-  Layer.effect(Browser.Browser, open(options));
+export const { open, layer } = make((endpoint, options) =>
+  chromium.connectOverCDP(endpoint, options),
+);

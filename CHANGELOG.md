@@ -4,6 +4,21 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.21
+
+- Published page scripts survive consumer bundling with preserved function names and minification,
+  restoring snapshot, find, text, waits and expectations (#302). Consumer bundles use the default
+  built exports; the source condition remains for workspace development.
+- `Cdp.open` and `Cdp.layer` accept a runtime-supplied Playwright connector with a bounded deadline
+  and cancellation signal (#303). Browserbase propagates it through its session APIs while
+  retaining session cleanup ownership, and requires `effect-browser` from this release. Late
+  successful connections are disconnected after cancellation. Workers exports omit the Node
+  transport and require a compatible connector; the browser core ships its JPEG decoder separately
+  from Node utilities. Local Chromium, bundled-consumer and fake-provider tests do not qualify a
+  Cloudflare Playwright implementation or establish hosted behavior.
+- Connection failures withhold diagnostics that echo supplied header values, including serialized
+  errors, while preserving typed timeout and connection-loss reasons.
+
 ## 0.3.0-beta.20
 
 - `effect-agent-browser` installs the published npm artifact of `@yielded/agent`
