@@ -89,15 +89,16 @@ export const reasonOf = (
   cause: unknown,
   timeoutMillis?: number,
   closed: ClosedCause = "connection",
+  redact: (message: string) => string = Url.redactWithin,
 ): Errors.Reason => {
   const message = messageOf(cause);
 
   if (closedPattern.test(message)) return new Errors.Closed({ cause: closed });
   if (cause instanceof Error && cause.name === "TimeoutError" && timeoutMillis !== undefined)
     return new Errors.Timeout({ millis: timeoutMillis });
-  const line = message.split("\n")[0] ?? message;
+  const line = redact(message).split("\n")[0] ?? message;
 
-  return new Errors.Failed({ detail: Url.redactWithin(line.replace(/^[\w.]+: /, "")) });
+  return new Errors.Failed({ detail: line.replace(/^[\w.]+: /, "") });
 };
 
 /**

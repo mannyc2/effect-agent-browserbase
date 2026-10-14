@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import { Arbitrary, Deferred, Effect, Exit, Fiber, Redacted, Schema } from "effect";
 import { type Browser, chromium } from "playwright-core";
 
+import { BrowserError } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as WorkerCdp from "../src/workerd/Cdp.ts";
 import { nativeConnect } from "./nativeConnector.ts";
@@ -216,5 +217,169 @@ it.live("keeps a custom connector's failures typed and its credential private", 
     );
     assert.notInclude(JSON.stringify(error), secret);
     assert.include(error.message, "wss://runtime.invalid");
+  }),
+);
+
+const connectorFailure = Effect.fnUntraced(function* (
+  headers: Readonly<Record<string, string>> | undefined,
+  cause: Error | string,
+) {
+  const error = yield* Cdp.open({
+    endpoint: "wss://runtime.invalid/cdp",
+    headers,
+    // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- External connectors may reject strings; exercise that redaction boundary alongside Error values.
+    connect: () => Promise.reject(cause),
+  }).pipe(Effect.scoped, Effect.flip);
+
+  const json = Schema.fromJsonString(Schema.toCodecJson(BrowserError));
+  const serialized = yield* Schema.encodeEffect(json)(error);
+
+  return {
+    error,
+    shown: [error.message, String(error), error.stack ?? "", JSON.stringify(error), serialized],
+  };
+});
+
+it.effect("conceals whole failures that echo header credentials before URL transformations", () =>
+  Effect.gen(function* () {
+    const authorization = "Bearer authorization-private-0123456789";
+    const custom = "runtime-header-private-0123456789";
+    const upper = "UPPER-HEADER-PRIVATE-0123456789";
+    const url = "wss://header-secret.example/private-route?access_token=opaque-secret";
+
+    const cases: ReadonlyArray<{
+      readonly headers: Readonly<Record<string, string>>;
+      readonly detail: string;
+      readonly secrets: ReadonlyArray<string>;
+    }> = [
+      {
+        headers: { Authorization: authorization, "x-runtime-key": custom, "x-empty": "" },
+        detail: `Native handshake refused: Authorization=${authorization}; x-runtime-key=${custom}`,
+        secrets: [authorization, custom],
+      },
+      {
+        headers: { "x-runtime-key": custom },
+        detail: `Native handshake refused at wss://${custom}.runtime.invalid/cdp`,
+        secrets: [custom],
+      },
+      {
+        headers: { "x-runtime-key": upper },
+        detail: `Native handshake refused at wss://${upper}.runtime.invalid/cdp`,
+        secrets: [upper, upper.toLowerCase()],
+      },
+      {
+        headers: { "x-first": "abc", "x-second": "bcd" },
+        detail: "Native handshake refused overlapping credentials abcd",
+        secrets: ["abc", "bcd"],
+      },
+      {
+        headers: { "x-first": "nested-secret", "x-second": "nested-secret-suffix" },
+        detail: "Native handshake refused nested credential nested-secret-suffix",
+        secrets: ["nested-secret", "nested-secret-suffix"],
+      },
+      {
+        headers: { "x-runtime-key": url },
+        detail: `Native handshake refused URL-shaped header ${url}`,
+        secrets: [url, "header-secret.example", "private-route", "opaque-secret"],
+      },
+    ];
+
+    let concealed: string | undefined;
+
+    for (const { headers, detail, secrets } of cases) {
+      const { error, shown } = yield* connectorFailure(headers, new Error(detail));
+
+      assert.deepStrictEqual(
+        [error._tag, error.operation, error.reason._tag, error.dispatched],
+        ["BrowserError", "connect", "Failed", false],
+      );
+      if (error.reason._tag !== "Failed") return yield* Effect.die(error);
+      // Each credential-bearing diagnostic is discarded as a whole, without pinning its wording.
+      concealed ??= error.reason.detail;
+      assert.strictEqual(error.reason.detail, concealed);
+      for (const value of shown) for (const secret of secrets) assert.notInclude(value, secret);
+    }
+  }),
+);
+
+it.effect.prop(
+  "conceals arbitrary echoed header values in errors and serialized failures",
+  {
+    value: Arbitrary.schema(Schema.NonEmptyString),
+    kind: Arbitrary.schema(Schema.Literals(["error", "string"])),
+  },
+  ({ value, kind }) =>
+    Effect.gen(function* () {
+      const authorization = `authorization-header-private-${value}`;
+      const custom = `custom-header-private-${value}`;
+      const detail = `Native refused ${authorization} and ${custom}`;
+
+      const { error, shown } = yield* connectorFailure(
+        { Authorization: authorization, "x-runtime-key": custom, "x-empty": "" },
+        kind === "error" ? new Error(detail) : detail,
+      );
+
+      assert.deepStrictEqual([error._tag, error.dispatched], ["BrowserError", false]);
+      for (const text of shown) {
+        assert.notInclude(text, "authorization-header-private-");
+        assert.notInclude(text, "custom-header-private-");
+      }
+    }),
+);
+
+it.effect("preserves safe diagnostics and typed reasons when headers need no Failed detail", () =>
+  Effect.gen(function* () {
+    const diagnostic = "Native handshake refused without disclosing credentials";
+
+    const safeHeaders: ReadonlyArray<Readonly<Record<string, string>> | undefined> = [
+      undefined,
+      { "x-empty": "" },
+      { Authorization: "unreported-private" },
+    ];
+
+    for (const headers of safeHeaders) {
+      const { error, shown } = yield* connectorFailure(headers, new Error(diagnostic));
+
+      assert.strictEqual(error.reason._tag, "Failed");
+      assert.include(error.message, diagnostic);
+      assert.include(shown[4] ?? "", diagnostic);
+    }
+    const credential = "typed-reason-private-0123456789";
+    const timedOut = new Error(`Native exceeded its deadline with ${credential}`);
+
+    timedOut.name = "TimeoutError";
+    for (const [cause, expected] of [
+      [timedOut, "Timeout"],
+      [new Error(`Browser has disconnected with ${credential}`), "Closed"],
+    ] as const) {
+      const { error, shown } = yield* connectorFailure({ Authorization: credential }, cause);
+
+      assert.deepStrictEqual([error.reason._tag, error.dispatched], [expected, false]);
+      for (const value of shown) assert.notInclude(value, credential);
+    }
+  }),
+);
+
+it.effect("redacts originally supplied headers when their caller mutates the record", () =>
+  Effect.gen(function* () {
+    const credential = "original-header-private-0123456789";
+    const headers = { Authorization: credential };
+
+    const error = yield* Cdp.open({
+      endpoint: "wss://runtime.invalid/cdp",
+      headers,
+      connect: async () => {
+        headers.Authorization = "changed-after-handoff";
+        throw new Error(`Native refused originally supplied ${credential}`);
+      },
+    }).pipe(Effect.scoped, Effect.flip);
+
+    const serialized = yield* Schema.encodeEffect(
+      Schema.fromJsonString(Schema.toCodecJson(BrowserError)),
+    )(error);
+
+    assert.strictEqual(error.reason._tag, "Failed");
+    assert.notInclude(error.message, credential);
+    assert.notInclude(serialized, credential);
   }),
 );

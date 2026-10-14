@@ -28,13 +28,12 @@ export interface ConnectOptions {
  */
 export type Connector = (endpoint: string, options: ConnectOptions) => Promise<PlaywrightBrowser>;
 
-export interface Options extends Browser.Options {
+export interface Options extends Browser.Options, Pick<ConnectOptions, "headers"> {
   /**
    * `ws://`, `wss://` or `http://` DevTools endpoint. Often a credential, so it may be redacted;
    * connect failures never include its userinfo, path or query.
    */
   readonly endpoint: string | Redacted.Redacted<string>;
-  readonly headers?: Readonly<Record<string, string>> | undefined;
   /** Runtime-supplied Playwright connection. Required by the `workerd` entry. */
   readonly connect?: Connector | undefined;
   /** Identifies the session in `Browser.id`. Defaults to `"cdp"`. */
@@ -51,25 +50,6 @@ export interface Options extends Browser.Options {
   readonly capture?: Browser.CaptureSource | undefined;
 }
 
-/**
- * Playwright can echo the endpoint, or a URL derived from it with its query, userinfo or path, in
- * a connect failure. Those parts are often the credential, so a URL keeps its scheme, host and
- * port, and any other echo of the endpoint is replaced.
- */
-const withoutEndpoint = (endpoint: string, reason: Errors.Reason): Errors.Reason => {
-  if (reason._tag !== "Failed") return reason;
-
-  const origins = reason.detail.replace(Url.quoted, (url) => {
-    const parsed = URL.parse(url);
-
-    return parsed === null || parsed.host === "" ? "<url>" : `${parsed.protocol}//${parsed.host}`;
-  });
-
-  return new Errors.Failed({
-    detail: endpoint === "" ? origins : origins.replaceAll(endpoint, "<endpoint>"),
-  });
-};
-
 /** Runtime facades supply the default transport; the shared lifetime imports no Node transport. */
 export const make = (defaultConnect?: Connector) => {
   const open = Effect.fn("Cdp.open")(function* (options: Options) {
@@ -79,6 +59,7 @@ export const make = (defaultConnect?: Connector) => {
 
     const timeout = options.connectTimeoutMillis ?? 30_000;
     const connector = options.connect ?? defaultConnect;
+    const headers = options.headers === undefined ? undefined : { ...options.headers };
 
     const invalid = (detail: string) =>
       undispatched("connect", new Errors.InvalidRequest({ detail }));
@@ -88,8 +69,23 @@ export const make = (defaultConnect?: Connector) => {
     if (connector === undefined)
       return yield* invalid("This runtime requires a CDP connect callback");
 
+    // Inspect before URL normalization or truncation. Withhold an echoed diagnostic entirely so
+    // overlapping header values cannot leave fragments; other URLs keep only their scheme and host.
+    const redact = (message: string) => {
+      if (Object.values(headers ?? {}).some((value) => value !== "" && message.includes(value)))
+        return "CDP diagnostic withheld";
+
+      const origins = message.replace(Url.quoted, (url) => {
+        const parsed = URL.parse(url);
+
+        return parsed?.host ? `${parsed.protocol}//${parsed.host}` : "<url>";
+      });
+
+      return endpoint === "" ? origins : origins.replaceAll(endpoint, "<endpoint>");
+    };
+
     const failed = (cause: unknown, timeoutMillis?: number) =>
-      undispatched("connect", withoutEndpoint(endpoint, reasonOf(cause, timeoutMillis)));
+      undispatched("connect", reasonOf(cause, timeoutMillis, "connection", redact));
 
     // The endpoint is often a credential, so the connect span names no part of it.
     const connected = yield* Effect.acquireRelease(
@@ -98,7 +94,7 @@ export const make = (defaultConnect?: Connector) => {
           connector(endpoint, {
             timeout,
             signal,
-            ...(options.headers === undefined ? {} : { headers: { ...options.headers } }),
+            ...(headers === undefined ? {} : { headers: { ...headers } }),
           }).then(async (browser) => {
             // Cancellation can precede a connector that ignores its signal. Its late browser still
             // belongs to this acquisition, so disconnect it before dropping the promise result.

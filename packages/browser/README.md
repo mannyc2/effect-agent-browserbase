@@ -125,7 +125,8 @@ work when aborted. A browser it returns late is disconnected, as is one whose op
 whose scope closes. Its `close()` must disconnect the CDP connection without ending the remote
 browser; do not return a locally launched browser. Endpoints and headers can contain credentials:
 keep them out of logs and model inputs. Connect failures retain typed reasons and redact the
-endpoint's userinfo, path and query.
+endpoint's userinfo, path and query. A failure diagnostic that echoes a nonempty supplied header
+value is withheld entirely, including in serialized errors.
 
 A snapshot outlines the viewport, or the whole page, with a ref such as `e12` on each control, and
 lists those controls as values, `Snapshot.Control`: each one's ref, kind, name and what it holds,
