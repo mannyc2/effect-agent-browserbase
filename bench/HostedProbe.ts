@@ -59,7 +59,7 @@ export const prepare = Effect.fnUntraced(function* (kind: "h1" | "h3", allowance
   if (verification.length === 0)
     return yield* refuse("Retain nonempty private dashboard verification evidence before running");
   const hash = yield* crypto.digest("SHA-256", verification);
-  const runId = yield* crypto.randomUUIDv4;
+  const runId = yield* crypto.randomUUIDv4();
   const directory = path.join(import.meta.dirname, "..", ".work", kind, runId);
   const versions: Record<string, string> = {};
 

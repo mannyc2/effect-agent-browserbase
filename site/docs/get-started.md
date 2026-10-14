@@ -4,30 +4,24 @@ effect-browser runs on Effect 4 and Playwright's Chromium. An agent drives pages
 
 ## Install
 
-`effect-agent-browser` peers on `@yielded/agent` `0.1.0-beta.168` exactly, which is not on npm yet, so the install takes the archive its release is checked with, as a dependency and as an override; its [README](https://github.com/mannyc2/effect-agent-browserbase/tree/main/packages/agent-browser#readme) says where the archive comes from. Effect is pinned to 4.0.0, the version the packages are tested with.
+`effect-agent-browser` peers on the published npm release of `@yielded/agent` `0.1.0-beta.168` exactly. Effect and the OpenRouter provider are pinned to `4.0.3`. If you installed an earlier release with an archive override for Yielded, remove that override and refresh your lockfile before installing.
 
 :::Example
 ```sh
 mkdir top-story && cd top-story && npm init -y > /dev/null && npm pkg set type=module
-# Yielded Agent 0.1.0-beta.168 is not on npm yet: install the archive this release is checked with.
-YIELDED=https://raw.githubusercontent.com/mannyc2/effect-agent-browserbase/1c40d56a631ea0a041577d9736a7484e3d0f4b62/yielded-agent-0.1.0-beta.168.tgz
-npm pkg set "overrides[@yielded/agent]=$YIELDED"
-npm install "$YIELDED" effect-browser@beta effect-agent-browser@beta effect@4.0.0 @effect/ai-openrouter@4.0.0 playwright-core
+npm install @yielded/agent@0.1.0-beta.168 effect-browser@beta effect-agent-browser@beta effect@4.0.3 @effect/ai-openrouter@4.0.3 playwright-core@1.63.0
 npx playwright-core install chromium
 ```
 
-Run on Linux with Node 24 and npm 11 on 11 October 2026:
+Captured in a fresh npm project on Linux with Node `24.14.1` and npm `11.11.0`. At capture time,
+both `@beta` packages resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
+`0.1.0-beta.168`, with Effect and the OpenRouter provider at `4.0.3`. Chromium was already
+installed on this host, so its install command printed nothing:
 
 ```text output
-added 6 packages, and audited 7 packages in 3s
+added 6 packages, and audited 7 packages in 2s
 
 found 0 vulnerabilities
-Downloading Chrome for Testing 156.0.8078.4 (playwright chromium v1248) from https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-linux64.zip
-Chrome for Testing 156.0.8078.4 (playwright chromium v1248) downloaded to ~/.cache/ms-playwright/chromium-1248
-Downloading FFmpeg (playwright ffmpeg v1013) from https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1013/ffmpeg-linux.zip
-FFmpeg (playwright ffmpeg v1013) downloaded to ~/.cache/ms-playwright/ffmpeg-1013
-Downloading Chrome Headless Shell 156.0.8078.4 (playwright chromium-headless-shell v1248) from https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-headless-shell-linux64.zip
-Chrome Headless Shell 156.0.8078.4 (playwright chromium-headless-shell v1248) downloaded to ~/.cache/ms-playwright/chromium_headless_shell-1248
 ```
 :::
 
@@ -71,8 +65,7 @@ const program = Effect.gen(function* () {
 });
 
 const OpenRouter = Layer.mergeAll(
-  // Without strictJsonSchema, @effect/ai-openrouter 4.0.0 sends `strict: null`, OpenRouter drops
-  // the response format, and a structured answer comes back as prose.
+  // Ask OpenRouter for a structured answer that follows the output schema.
   OpenRouterLanguageModel.layer({
     model: "openai/gpt-6-luna",
     config: { strictJsonSchema: true },
@@ -87,7 +80,7 @@ const OpenRouter = Layer.mergeAll(
 program.pipe(Effect.provide([Chromium.layer(), OpenRouter]), Effect.runPromise);
 ```
 
-Run with `OPENROUTER_API_KEY=… node agent.ts` on 11 October 2026. The model read the top story off the first screenshot, so the run took one model call:
+Run with `OPENROUTER_API_KEY=… node agent.ts`. The following result is from 11 October 2026, using the earlier release-candidate archive and Effect `4.0.0`; it is historical run evidence. The model read the top story off the first screenshot, so the run took one model call:
 
 ```text output
 [20:23:58.322] INFO (#1): {

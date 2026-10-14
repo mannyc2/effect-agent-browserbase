@@ -16,7 +16,7 @@ export OPENROUTER_API_KEY=…
 export EFFECT_BROWSER_BENCH_LIVE=1
 ```
 
-Run on Linux on 11 October 2026, it printed this, leaving out the two lines of the install's own setup script:
+The earlier checkout printed this on Linux on 11 October 2026, leaving out the two lines of the install's own setup script. This transcript uses Effect `4.0.0` and predates the npm migration; current dependencies are pinned in the repository:
 
 ```text output
 Cloning into 'effect-agent-browserbase'...

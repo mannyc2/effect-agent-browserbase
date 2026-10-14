@@ -19,8 +19,8 @@ evidence; applications own their decisions and durable business records.
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
 | [`site`](site) (private)                                 | The docs site, its narrated demo and a player for recorded runs    |
 
-`effect-agent-browser` needs `@yielded/agent` `0.1.0-beta.168`, which is not on npm yet: its
-[README](packages/agent-browser/README.md) gives the archive to install in its place.
+`effect-agent-browser` needs the npm release of `@yielded/agent` `0.1.0-beta.168` and Effect
+`4.0.3`. Its [README](packages/agent-browser/README.md) gives the install command.
 
 The browser core also owns [leased generations](packages/browser/README.md#supervising-browser-generations):
 scoped work and application resources, bounded handover and explicit revocation, with hosted
@@ -41,9 +41,9 @@ Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter:
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
-import { Model } from "effect/ai";
-import { Browser, Chromium } from "effect-browser";
 import { BrowserTools } from "effect-agent-browser";
+import { Browser, Chromium } from "effect-browser";
+import { Model } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 
 const tools = BrowserTools.make();

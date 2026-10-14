@@ -434,9 +434,8 @@ text and the facts as trusted, and the page's text only as evidence. It never se
 words. A judgement only adds to structure: a `secret` fact counts whatever the judge reads. A judge
 that fails or exceeds `timeout` (30 seconds) leaves the input unjudged. `make` then denies the input
 if it has any fact, with the judge's failure as the `PolicyDenied` cause, and lets an input without
-facts, such as a same-origin link, go ahead. Through `@effect/ai-openrouter` 4.0.0, structured output needs
-`strictJsonSchema: true` in the model's config, or OpenRouter drops the response format and every
-review fails to decode.
+facts, such as a same-origin link, go ahead. With `@effect/ai-openrouter`, set
+`strictJsonSchema: true` in the model's config for structured judge outputs.
 
 Holds use `policyTimeout`, a finite positive duration defaulting to five minutes, separately from
 the action timeout. They do not keep the page locked. After approval, the library verifies the same
