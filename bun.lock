@@ -8,11 +8,11 @@
         "@effect/tsgo": "0.51.0",
         "@stylistic/eslint-plugin": "5.10.0",
         "@types/node": "26.1.2",
-        "effect": "4.0.3",
+        "effect": "4.0.4",
         "oxfmt": "0.72.0",
         "oxlint": "1.82.0",
         "oxlint-tsgolint": "7.0.2001",
-        "playwright-core": "1.63.0",
+        "playwright-core": "1.64.1",
         "typescript": "7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
         "vite-plus": "1.1.0",
@@ -22,17 +22,17 @@
     "bench": {
       "name": "bench",
       "devDependencies": {
-        "@effect/ai-openrouter": "4.0.3",
-        "@effect/ai-typesafe": "4.0.3",
-        "@effect/platform-node": "4.0.3",
-        "@effect/vitest": "4.0.3",
+        "@effect/ai-openrouter": "4.0.4",
+        "@effect/ai-typesafe": "4.0.4",
+        "@effect/platform-node": "4.0.4",
+        "@effect/vitest": "4.0.4",
         "@types/node": "26.1.2",
         "@yielded/agent": "0.1.0-beta.168",
-        "effect": "4.0.3",
+        "effect": "4.0.4",
         "effect-agent-browser": "workspace:*",
         "effect-browser": "workspace:*",
         "effect-browserbase": "workspace:*",
-        "playwright-core": "1.63.0",
+        "playwright-core": "1.64.1",
         "typescript": "7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
         "vite-plus": "1.1.0",
@@ -44,12 +44,12 @@
       "name": "effect-agent-browser",
       "version": "0.3.0-beta.21",
       "devDependencies": {
-        "@effect/vitest": "4.0.3",
+        "@effect/vitest": "4.0.4",
         "@types/node": "26.1.2",
         "@yielded/agent": "0.1.0-beta.168",
-        "effect": "4.0.3",
+        "effect": "4.0.4",
         "effect-browser": "workspace:*",
-        "playwright-core": "1.63.0",
+        "playwright-core": "1.64.1",
         "typescript": "7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
         "vite-plus": "1.1.0",
@@ -65,11 +65,11 @@
       "name": "effect-browser",
       "version": "0.3.0-beta.21",
       "devDependencies": {
-        "@effect/vitest": "4.0.3",
+        "@effect/vitest": "4.0.4",
         "@types/node": "26.1.2",
-        "effect": "4.0.3",
+        "effect": "4.0.4",
         "esbuild": "0.28.2",
-        "playwright-core": "1.63.0",
+        "playwright-core": "1.64.1",
         "typescript": "7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
         "vite-plus": "1.1.0",
@@ -84,11 +84,11 @@
       "name": "effect-browserbase",
       "version": "0.3.0-beta.21",
       "devDependencies": {
-        "@effect/vitest": "4.0.3",
+        "@effect/vitest": "4.0.4",
         "@types/node": "26.1.2",
-        "effect": "4.0.3",
+        "effect": "4.0.4",
         "effect-browser": "workspace:*",
-        "playwright-core": "1.63.0",
+        "playwright-core": "1.64.1",
         "typescript": "7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
         "vite-plus": "1.1.0",
@@ -104,11 +104,11 @@
       "name": "effect-browser-human-strokes",
       "version": "0.3.0-beta.21",
       "devDependencies": {
-        "@effect/vitest": "4.0.3",
+        "@effect/vitest": "4.0.4",
         "@types/node": "26.1.2",
-        "effect": "4.0.3",
+        "effect": "4.0.4",
         "effect-browser": "workspace:*",
-        "playwright-core": "1.63.0",
+        "playwright-core": "1.64.1",
         "typescript": "7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
         "vite-plus": "1.1.0",
@@ -122,16 +122,16 @@
     "site": {
       "name": "site",
       "dependencies": {
-        "@effect/platform-browser": "4.0.3",
+        "@effect/platform-browser": "4.0.4",
         "@foldkit/markdown": "0.14.2",
-        "effect": "4.0.3",
+        "effect": "4.0.4",
         "foldkit": "0.167.0",
       },
       "devDependencies": {
         "@alchemy.run/frontend-frameworks": "2.0.0-beta.81",
-        "@effect/ai-openrouter": "4.0.3",
-        "@effect/platform-node": "4.0.3",
-        "@effect/vitest": "4.0.3",
+        "@effect/ai-openrouter": "4.0.4",
+        "@effect/platform-node": "4.0.4",
+        "@effect/vitest": "4.0.4",
         "@foldkit/devtools": "0.167.0",
         "@foldkit/vite-plugin": "0.27.0",
         "@tailwindcss/vite": "4.3.3",
@@ -232,19 +232,19 @@
 
     "@distilled.cloud/zerossl": ["@distilled.cloud/zerossl@1.0.0-rc.13", "", { "dependencies": { "@distilled.cloud/core": "1.0.0-rc.13" }, "peerDependencies": { "effect": "^4.0.0" } }, "sha512-dnxhg39lZjpTdZbHCVYPoUC9E2r8eSHbqiYDhSq2EurVPJcc9YRXlxZR1bP1nniSp078XV8GA+aUECt/Z56aQg=="],
 
-    "@effect/ai-openrouter": ["@effect/ai-openrouter@4.0.3", "", { "peerDependencies": { "effect": "^4.0.3" } }, "sha512-P7yP8iAAVrVSnpIxjOWlfKwA2b9PX+Vy7pbGYJz0tDQiW0MZXJKLIvDMyOKcG9kGt0wDpH6ACNVQL43oAQgKRQ=="],
+    "@effect/ai-openrouter": ["@effect/ai-openrouter@4.0.4", "", { "peerDependencies": { "effect": "^4.0.4" } }, "sha512-8xt2Y0VMZ8KMuflHR+S9jTVEq1TijIIF1wmexoh+6bNc6ggbAv3KnGbft0R/s0M72nMrD5xc183+7qS5nl7teA=="],
 
-    "@effect/ai-typesafe": ["@effect/ai-typesafe@4.0.3", "", { "peerDependencies": { "effect": "^4.0.3" } }, "sha512-GLwC8pv/czX67klmoIjPJVARDkBR3OeXV9I3/b4l/BZlKfMh76WD0KVvx0t4suQ7sZtGf5w2LQ5UPN1xZ34GJQ=="],
+    "@effect/ai-typesafe": ["@effect/ai-typesafe@4.0.4", "", { "peerDependencies": { "effect": "^4.0.4" } }, "sha512-GfDYAAifNjvGwG0kOKbqTB+g0UmafKUa+PPjgMwNdoPfkUe9/3yFBTlSlJrXpQ10AqnFDF+Xm9UgiuRHyN8i7Q=="],
 
-    "@effect/platform-browser": ["@effect/platform-browser@4.0.3", "", { "peerDependencies": { "effect": "^4.0.3" } }, "sha512-1heMTrwHkghTN2DWRb+Os+YdeowMFaxTbBqPzmqJDGU8DlBCKPGr+f4BIjWmnANxlnsIlKUqzr3gKqfR1ueicw=="],
+    "@effect/platform-browser": ["@effect/platform-browser@4.0.4", "", { "peerDependencies": { "effect": "^4.0.4" } }, "sha512-2D+0/Vd+6gMpgR608OPYON4+QMvtbXyl2+HKIlayuXLmlVokI2KoIt37gm01CN+fyRFotBr3hSz4gzLd7xb3Hw=="],
 
-    "@effect/platform-node": ["@effect/platform-node@4.0.3", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.3", "undici": "^8.11.2" }, "peerDependencies": { "effect": "^4.0.3", "redis": ">=5.0.0 <7.0.0" } }, "sha512-ctvREpC1EzRVsOm0JyIzYHajAQScFaec6Gl+M7TEIpEqdmmx6Ju11Um92EA/CE2KBfY5Fp1QWlqTkK6lOL7tqg=="],
+    "@effect/platform-node": ["@effect/platform-node@4.0.4", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.4", "undici": "^8.11.2" }, "peerDependencies": { "effect": "^4.0.4", "redis": ">=5.0.0 <7.0.0" } }, "sha512-SdoyQMrO5zmqBebb2fxDk0sHYyJjBiw4QmLdV2ZcWf3ATpQPge3B5sTLijZg49PadekOwNeO83o5TfdtiiFEig=="],
 
     "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.3", "", { "dependencies": { "@types/ws": "^8.18.2", "ws": "^8.22.0" }, "peerDependencies": { "effect": "^4.0.3" } }, "sha512-5srkJfmWklWSgwZwlkMeTXobfNtxuwuTCvY9JWdPXRv/PBXAe5kKSptzRxT778oFFsaE9IMI8X61pvkifT9Eug=="],
 
-    "@effect/sql-d1": ["@effect/sql-d1@4.0.3", "", { "dependencies": { "@cloudflare/workers-types": "^5.20261003.1" }, "peerDependencies": { "effect": "^4.0.3" } }, "sha512-PPItxp9aAmJTRIfZtyJMuQCB7d1ExFvIRkGWnfQuWZlPxjtYfQT+V2kS9AUqf0OC1/nZnAFwLlFKCDgumLmy6A=="],
+    "@effect/sql-d1": ["@effect/sql-d1@4.0.5", "", { "dependencies": { "@cloudflare/workers-types": "^5.20261010.1" }, "peerDependencies": { "effect": "^4.0.5" } }, "sha512-ERArvCS/qOHx52yKFePc8v5qs0y18Ld+Ha6Xkkm/I1R+zTf+flfWpsuxlxkPKlwQCqB9K+yfU6Kw1gshKGRCPQ=="],
 
-    "@effect/sql-sqlite-do": ["@effect/sql-sqlite-do@4.0.3", "", { "peerDependencies": { "effect": "^4.0.3" } }, "sha512-q3DeEnsmAbD2jQX9g3+U0iij7VFVgzPtSLoOwbB9oegeBkzzBXVDrblAvw2NgEfs0OctkaIkJhiYJROqSafQKA=="],
+    "@effect/sql-sqlite-do": ["@effect/sql-sqlite-do@4.0.5", "", { "peerDependencies": { "effect": "^4.0.5" } }, "sha512-TGlU65ZJJMa81I7EoicQXxhRsJDxDPz6A/PNOPzMYRgmCdLs6EsTTXIkKZ+8apb7pl2o0OKVcrT6i6mGlluyLg=="],
 
     "@effect/tsgo": ["@effect/tsgo@0.51.0", "", { "optionalDependencies": { "@effect/tsgo-darwin-arm64": "0.51.0", "@effect/tsgo-darwin-x64": "0.51.0", "@effect/tsgo-linux-arm": "0.51.0", "@effect/tsgo-linux-arm64": "0.51.0", "@effect/tsgo-linux-x64": "0.51.0", "@effect/tsgo-win32-arm64": "0.51.0", "@effect/tsgo-win32-x64": "0.51.0" }, "bin": { "effect-tsgo": "dist/effect-tsgo.cjs" } }, "sha512-USDPT8AJCq1xc8+C8gyroohI0aJ9SZmmnSQRUEKzEMiBMJFpVuadXKqkHQ1DGOwZDeu2NDz/tLXxDD/vtel1bA=="],
 
@@ -262,7 +262,7 @@
 
     "@effect/tsgo-win32-x64": ["@effect/tsgo-win32-x64@0.51.0", "", { "os": "win32", "cpu": "x64" }, "sha512-sO2Ngbdxn6DrDdSCItXu/J5ha7PgFGyY7U1qJ4VzMyovazguiVJfkExskZ174Qa+ltPWZIGHFY/QdVZwHepOTw=="],
 
-    "@effect/vitest": ["@effect/vitest@4.0.3", "", { "peerDependencies": { "effect": "^4.0.3", "vitest": ">=5.0.0 <6.0.0" } }, "sha512-jsIkpssf0CFuOeycW2sQZkWx0qzlsRv+JIkzd9qQpoFDcHC9JZFSdIjEBAhsdp20pDy4Y/b2vT/ew7wXZxvEig=="],
+    "@effect/vitest": ["@effect/vitest@4.0.4", "", { "peerDependencies": { "effect": "^4.0.4", "vitest": ">=5.0.0 <6.0.0" } }, "sha512-l5KN46RbDVpqZxWzwXZtX6FVQiyzd+/hTYqL543uSDRo7hC0m19IeICh6O9U/nqCtfersqsNZnBjgHFfkuHsBw=="],
 
     "@electric-sql/pglite": ["@electric-sql/pglite@0.3.15", "", {}, "sha512-Cj++n1Mekf9ETfdc16TlDi+cDDQF0W7EcbyRHYOAeZdsAe8M/FJg18itDTSwyHfar2WIezawM9o0EKaRGVKygQ=="],
 
@@ -908,7 +908,7 @@
 
     "dom-accessibility-api": ["dom-accessibility-api@0.5.16", "", {}, "sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg=="],
 
-    "effect": ["effect@4.0.3", "", {}, "sha512-LoWn/Uwwx0JjHSDmBAAahx8sB+klzM6vsZovnbYowBNw6B4QScJLRLBByO61plvNiycx7HPN8FnsWUCu0eXW5w=="],
+    "effect": ["effect@4.0.4", "", {}, "sha512-Sr50OeVSC3M5UkoUYUhFf3EULryhGaZZUf6OzDHTvaznOw7HRlxOKdF3/4nvQXHL22StOyMG3Cvo8Bt7xUp+Ng=="],
 
     "effect-agent-browser": ["effect-agent-browser@workspace:packages/agent-browser"],
 
@@ -1220,7 +1220,7 @@
 
     "picomatch": ["picomatch@4.0.7", "", {}, "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA=="],
 
-    "playwright-core": ["playwright-core@1.63.0", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg=="],
+    "playwright-core": ["playwright-core@1.64.1", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ=="],
 
     "pngjs": ["pngjs@7.0.0", "", {}, "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow=="],
 
@@ -1384,9 +1384,9 @@
 
     "@alchemy.run/cloudflare-runtime/magic-string": ["magic-string@0.30.21", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.5" } }, "sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ=="],
 
-    "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
+    "@alchemy.run/frontend-frameworks/@effect/platform-node": ["@effect/platform-node@4.0.5", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.5", "undici": "^8.11.2" }, "peerDependencies": { "effect": "^4.0.5", "redis": ">=5.0.0 <7.0.0" } }, "sha512-v4KD5fWvEUa4QmWFpZFbBsRhmfnTP6ETCME2r9ifyXVDPjhfpxpTZl41prjgQFMqZBHdWWCl7YC5ImbXv5ui5g=="],
 
-    "@foldkit/devtools/@effect/platform-browser": ["@effect/platform-browser@4.0.0", "", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-OHo7EPpF3RVPiI+mjoU9yd05LdCdKPjzDXqs5wRgF9CsdVvwN76B0zgt54DxPUcvMYri1tVJOtLCVnK0tRkNQQ=="],
+    "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 
     "@foldkit/vite-plugin/@effect/platform-node": ["@effect/platform-node@4.0.0", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0", "undici": "^8.11.2" }, "peerDependencies": { "effect": "^4.0.0", "redis": ">=5.0.0 <7.0.0" } }, "sha512-/L+4MUbl8FejPKLHLROYSOebvHnfixkP8KiblSD/DE5uH5xENZBHaux4nH6XMnRP+lr8ajpEJFS8sUrmmxFJeQ=="],
 
@@ -1417,8 +1417,6 @@
     "eslint/eslint-visitor-keys": ["eslint-visitor-keys@5.0.1", "", {}, "sha512-tD40eHxA35h0PEIZNeIjkHoDR4YjjJp34biM0mDvplBe//mB+IHCqHDGV7pxF+7MklTvighcCPPZC7ynWyjdTA=="],
 
     "eslint/espree": ["espree@11.2.0", "", { "dependencies": { "acorn": "^8.16.0", "acorn-jsx": "^5.3.2", "eslint-visitor-keys": "^5.0.1" } }, "sha512-7p3DrVEIopW1B1avAGLuCSh1jubc01H2JHc8B4qqGblmg5gI9yumBgACjWo4JlIc04ufug4xJ3SQI8HkS/Rgzw=="],
-
-    "foldkit/@effect/platform-browser": ["@effect/platform-browser@4.0.0", "", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-OHo7EPpF3RVPiI+mjoU9yd05LdCdKPjzDXqs5wRgF9CsdVvwN76B0zgt54DxPUcvMYri1tVJOtLCVnK0tRkNQQ=="],
 
     "libsql/detect-libc": ["detect-libc@2.0.2", "", {}, "sha512-UX6sGumvvqSaXgdKGUsgZWqcUyIXZ/vZTrlRT/iobiKhGL0zL4d3osHj3uqllWJK+i+sixDS/3COVEOFbupFyw=="],
 
