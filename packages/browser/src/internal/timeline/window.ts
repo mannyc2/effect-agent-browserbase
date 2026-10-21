@@ -9,11 +9,13 @@ import type { BrowserError } from "../../BrowserError.ts";
 import { type BrowserEvent, TrackEvent } from "../../BrowserEvent.ts";
 import type { Changes } from "../../Change.ts";
 import { Frame } from "../../Frame.ts";
-import { Window } from "../../Moment.ts";
 import type { ChangesOptions, WindowOptions } from "../../Page.ts";
+import { Cursor, Window } from "../../Window.ts";
 import { type PageContext, refuse } from "../page/context.ts";
 
-const isWindow = Schema.is(Window);
+const isWindow = (value: unknown): value is Window | Cursor =>
+  Schema.is(Window)(value) || Schema.is(Cursor)(value);
+
 const isFrame = Schema.is(Frame);
 const isTrackEvent = Schema.is(TrackEvent);
 

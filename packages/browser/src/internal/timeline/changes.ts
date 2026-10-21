@@ -1,22 +1,22 @@
 /**
- * Reading a page's record of what changed, in one call to the page. The first read also registers
- * the recorder with the page's own session, in the same round trip, so that every later document
- * records from its start. The page's times map to the owner's clock through the browser's one
+ * Reading a page's record of what changed. The first read also registers the recorder with the
+ * page's own session so that every later document records from its start, until the idle lifetime
+ * expires. The page's times map to the owner's clock through the browser's one
  * clock mapping, as frames' do, which a browser's first read measures, once, where no capture has;
  * and a window can begin on the page's own clock where the previous one ended, so consecutive
  * reads neither miss nor repeat a change. A read takes its turn on the page as other reads do, and
  * identical ones in flight share it; none is kept for a later caller, since its window ends when
  * it was read.
  */
-import { Effect, Schema } from "effect";
+import { Clock, Duration, Effect, type Fiber, Schema, Semaphore } from "effect";
 
 import type { BrowserError } from "../../BrowserError.ts";
 import { Change, Changes } from "../../Change.ts";
+import * as BrowserClock from "../../Clock.ts";
 import type { Frame } from "../../Frame.ts";
 import type { ChangesOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, type PageContext } from "../page/context.ts";
-import * as BrowserClock from "../pictures/clock.ts";
 import { type ChangesRequest, ChangesResultSchema } from "./changes.inpage.ts";
 
 const isChanges = Schema.is(Changes);
@@ -35,6 +35,54 @@ export const make = (
   estimate: Effect.Effect<BrowserClock.Estimate, BrowserError>,
 ) => {
   const reads = page.lane.shared<Changes>("changes", false);
+  const recording = Semaphore.makeUnsafe(1);
+  const idleMillis = 120_000;
+  let readAt = Number.NEGATIVE_INFINITY;
+  let lifetime: Fiber.Fiber<void, BrowserError> | undefined;
+  let expired: BrowserError | undefined;
+
+  const expiry: Effect.Effect<void, BrowserError> = Effect.suspend(() => {
+    const left = readAt + idleMillis - page.now();
+
+    if (left > 0) return Effect.sleep(Duration.millis(left)).pipe(Effect.andThen(expiry));
+
+    return recording
+      .withPermits(1)(
+        Effect.suspend(() => {
+          if (page.now() < readAt + idleMillis) return Effect.void;
+
+          return bridge.unregisterRecorder("changes").pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                lifetime = undefined;
+              }),
+            ),
+          );
+        }),
+      )
+      .pipe(
+        page.lane.read("changes"),
+        page.within("changes"),
+        Effect.andThen(Effect.suspend(() => (lifetime === undefined ? Effect.void : expiry))),
+      );
+  });
+
+  const register = recording.withPermits(1)(
+    Effect.gen(function* () {
+      if (expired !== undefined) return yield* expired;
+      readAt = page.now();
+      yield* bridge.registerRecorder("changes");
+      lifetime ??= yield* expiry.pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            expired = error;
+          }),
+        ),
+        Effect.provideService(Clock.Clock, page.clock),
+        Effect.forkIn(page.scope),
+      );
+    }),
+  );
 
   return (options: ChangesOptions = {}) =>
     reads(
@@ -62,7 +110,7 @@ export const make = (
 
         const [, result] = yield* Effect.all(
           [
-            bridge.registerRecorder("changes"),
+            register,
             bridge
               .evaluate("changes", scriptCall("changes", request))
               .pipe(Effect.flatMap(decodeWith("changes", ChangesResultSchema))),

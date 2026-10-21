@@ -1,7 +1,7 @@
 // The README's native WebSocket example, using Playwright's public transport overload.
 import { chromium, type ConnectOverCDPTransport } from "playwright-core";
 
-import type { Connector } from "../src/Cdp.ts";
+import type { Connector } from "../src/providers/Cdp.ts";
 
 export const nativeConnect: Connector = async (endpoint, { timeout, headers, signal }) => {
   if (headers !== undefined)

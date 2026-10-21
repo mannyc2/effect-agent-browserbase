@@ -3,15 +3,15 @@
  * share (the clock mapping and event publication), so construction stays internal. A page is
  * assembled here from its domains: the script bridge, pictures, reading, its timeline, input and
  * navigation.
- * What a presenter and a stage need of a page, and no caller should, it keeps out of sight.
+ * Features use the same documented Page contract as consumers.
  */
-import { type Effect as Eff, Effect, Option } from "effect";
+import { Effect, Option } from "effect";
 
-import type { BrowserError } from "../../BrowserError.ts";
+import * as ActionPort from "../../ActionPort.ts";
 import type { Frame } from "../../Frame.ts";
 import { type Page, State } from "../../Page.ts";
+import * as Url from "../../Url.ts";
 import * as Actions from "../input/actions.ts";
-import type { Controller } from "../pictures/capture.ts";
 import * as Pictures from "../pictures/pictures.ts";
 import * as Reading from "../reading/reading.ts";
 import * as Ready from "../reading/ready.ts";
@@ -20,48 +20,8 @@ import * as Window from "../timeline/window.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
-import * as Url from "./url.ts";
+import * as Scripts from "./scripts.ts";
 import * as Viewport from "./viewport.ts";
-
-export interface Internals {
-  /** The page's input, in any style. */
-  readonly input: Actions.Input;
-  /** Drain earlier input and retain a read turn through the effect; the whole wait is bounded. */
-  readonly afterInput: <A, E, R>(effect: Eff.Effect<A, E, R>) => Eff.Effect<A, E | BrowserError, R>;
-  /** Start capture now, independently of its first frame. The calling scope keeps it running. */
-  readonly capture: Controller["open"];
-  /** Current capture/document evidence, without waiting for acknowledgement or transport. */
-  readonly current: (frame: Frame) => boolean;
-  /** A current frame, with a fresh bounded answer from the page and capture sessions. */
-  readonly confirm: (frame: Frame) => Eff.Effect<boolean, BrowserError>;
-  /** The page's documents so far, counted as `Navigated` counts them. */
-  readonly document: () => number;
-  /** Wait, in one call, until what a query finds is there, is not, or shows something else. */
-  readonly until: Reading.Reading["until"];
-}
-
-/** A page this library built: it keeps its internals where only this module reaches them. */
-class Built {
-  readonly #internals: Internals;
-
-  constructor(internals: Internals) {
-    this.#internals = internals;
-  }
-
-  static internalsOf(page: Page): Internals | undefined {
-    return page instanceof Built ? page.#internals : undefined;
-  }
-}
-
-/** What a page this library built keeps out of sight; nothing for any other `Page`. */
-export const internalsOf = (page: Page) => Built.internalsOf(page);
-
-/** `view`, made from `page` with some of its operations replaced, keeping what `page` keeps out of sight. */
-export const viewOf = <A extends Page>(page: Page, view: A): A => {
-  const internals = internalsOf(page);
-
-  return internals === undefined ? view : Object.assign(new Built(internals), view);
-};
 
 export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const page = Context.make(options, yield* Effect.scope);
@@ -85,6 +45,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
 
     return new State({
       page: id,
+      connection: page.connection,
       at: page.now(),
       url,
       document,
@@ -100,14 +61,46 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     bridge.frameTag().document === frame.document &&
     frame.hostTime - frame.timing.uncertaintyMillis > page.activity.documentAt;
 
+  const afterInput: Page["afterInput"] = (effect) =>
+    lane
+      .read(
+        "inputEnded",
+        page.settings.navigationTimeout,
+      )(Effect.andThen(input.perform.idle, effect))
+      .pipe(within("inputEnded", page.settings.navigationTimeout), owned);
+
+  const confirm = (frame: Frame) =>
+    native("shown", () => page.protocol.send("Page.getFrameTree")).pipe(
+      Effect.flatMap(() => capture.confirm(frame)),
+      Effect.map((confirmed) => confirmed && current(frame)),
+      within("shown", "2 seconds"),
+      owned,
+    );
+
+  const perform = ActionPort.checked((action) =>
+    ActionPort.execute({ ...input, ...navigation }, action),
+  );
+
   const assembled: Page = {
+    ...Scripts.make(page, bridge, input),
+    ...ActionPort.methods(perform),
+    perform,
+    clock: page.clock,
+    afterInput,
+    until: reading.until,
+    capture: (options) =>
+      capture.open(options).pipe(
+        Effect.map((lease) => ({
+          ...lease,
+          isCurrent: current,
+          confirm,
+          sync: capture.sync,
+          stats: pictures.captureStats,
+        })),
+      ),
     id,
-    playwright,
     url: Effect.sync(() => Url.redact(playwright.url())),
     title: titles("", navigation.title.pipe(within("title"))).pipe(span("Page.title"), owned),
-    goto: navigation.goto,
-    back: navigation.back,
-    reload: navigation.reload,
     bringToFront: native("bringToFront", () => playwright.bringToFront()),
     // Playwright answers once the page has closed, and at once for one already closed.
     close: native("close", () => playwright.close()),
@@ -124,42 +117,12 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     changes,
     window: Window.make(page, changes, capture.recent),
     state,
-    click: (target, options) => input.click(target, options),
-    hover: (target) => input.hover(target),
-    drag: (from, to) => input.drag(from, to),
-    type: (text, options) => input.type(text, options),
-    press: (keys, options) => input.press(keys, options),
-    scroll: (options) => input.scroll(options),
-    select: input.select,
-    waitFor: reading.waitFor,
-    ready: Ready.make(page, bridge, capture),
+    ready: Ready.make(page, bridge),
     screencast: capture.stream,
     captureStats: pictures.captureStats,
     recentFrames: capture.recent,
     recentEvents: options.recentEvents,
   };
 
-  const internals: Internals = {
-    input,
-    afterInput: (effect) =>
-      lane
-        .read(
-          "inputEnded",
-          page.settings.navigationTimeout,
-        )(Effect.andThen(input.perform.idle, effect))
-        .pipe(within("inputEnded", page.settings.navigationTimeout), owned),
-    capture: capture.open,
-    current,
-    confirm: (frame) =>
-      native("shown", () => page.protocol.send("Page.getFrameTree")).pipe(
-        Effect.flatMap(() => capture.confirm(frame)),
-        Effect.map((confirmed) => confirmed && current(frame)),
-        within("shown", "2 seconds"),
-        owned,
-      ),
-    document: () => bridge.frameTag().document,
-    until: reading.until,
-  };
-
-  return Object.assign(new Built(internals), assembled);
+  return assembled;
 });

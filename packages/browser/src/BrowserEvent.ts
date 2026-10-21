@@ -12,7 +12,8 @@
  */
 import { Schema } from "effect";
 
-import * as Motion from "./Motion.ts";
+import { Action as ActionValue, Name } from "./Action.ts";
+import * as Motion from "./Geometry.ts";
 
 /** A page opened, and the page that opened it, as a link or `window.open` does, if one did. */
 export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
@@ -127,27 +128,8 @@ export const Box = Schema.Struct({
 export type Box = typeof Box.Type;
 
 /**
- * What else an action was asked, where it changes what the action does: a click's button, count
- * and hold, how `type` enters its text, how often and how long `press` holds its keys, how far
- * `scroll` moves, and the options `select` chose. Only a completed action records them.
- */
-export const ActionOptions = Schema.Struct({
-  button: Schema.optional(Button),
-  clickCount: Schema.optional(Schema.Finite),
-  holdMillis: Schema.optional(Schema.Finite),
-  replace: Schema.optional(Schema.Boolean),
-  submit: Schema.optional(Schema.Boolean),
-  times: Schema.optional(Schema.Finite),
-  dx: Schema.optional(Schema.Finite),
-  dy: Schema.optional(Schema.Finite),
-  values: Schema.optional(Schema.Array(Schema.String)),
-});
-
-export type ActionOptions = typeof ActionOptions.Type;
-
-/**
  * One page operation ended, including one its caller interrupted (`error: "interrupted"`).
- * `target` is what the caller asked for: a ref, a point, a URL or keys, and `options` the rest.
+ * `value` is the decoded call. `target` is its short rendering for observers.
  * `subject` is what an element or point action found there, and `to` where a drag ended; an
  * action that failed before finding its target has neither. Point actions carry the viewport
  * point they used. `correlation` is the id its caller gave it with `Page.correlate`, such as a
@@ -157,12 +139,13 @@ export class Action extends Schema.TaggedClass<Action>()("Action", {
   at: Schema.Finite,
   startedAt: Schema.Finite,
   page: Schema.String,
-  name: Schema.String,
+  name: Name,
+  /** The decoded call, with secrets removed before publication. */
+  value: ActionValue,
   /** The address when the action ended; absent in events recorded by older releases. */
   url: Schema.optional(Schema.String),
   correlation: Schema.optional(Schema.String),
   target: Schema.optional(Schema.String),
-  options: Schema.optional(ActionOptions),
   subject: Schema.optional(Subject),
   to: Schema.optional(Subject),
   /** For an action at a point, the box of what it found there. */
@@ -258,7 +241,7 @@ export const TrackEvent = Schema.Union([
 export type TrackEvent = typeof TrackEvent.Type;
 
 /**
- * A JavaScript dialog appeared and was answered: an alert or a leave-page prompt accepted, a
+ * A JavaScript dialog appeared; its completed answer, or a failed response: an alert or a leave-page prompt accepted, a
  * confirm or a prompt dismissed, as if its Cancel were pressed.
  */
 export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown", {
@@ -266,10 +249,21 @@ export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown"
   page: Schema.String,
   kind: Schema.String,
   message: Schema.String,
-  answer: Schema.Literals(["accepted", "dismissed"]),
+  answer: Schema.Literals(["accepted", "dismissed", "failed"]),
+}) {}
+
+/** A context policy refused traffic; page is present only when its containing page was established.
+ * Worker and out-of-process iframe requests may omit it while retaining proven context ownership. */
+export class RequestRefused extends Schema.TaggedClass<RequestRefused>()("RequestRefused", {
+  at: Schema.Finite,
+  page: Schema.optional(Schema.String),
+  method: Schema.String,
+  url: Schema.String,
+  reason: Schema.String,
 }) {}
 
 export const BrowserEvent = Schema.Union([
+  RequestRefused,
   PageOpened,
   PageClosed,
   PageUntracked,

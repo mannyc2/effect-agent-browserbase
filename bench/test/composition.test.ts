@@ -8,10 +8,11 @@ import { join } from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect";
+import * as Browser from "effect-browser/Browser";
 import { Subject } from "effect-browser/BrowserEvent";
-import * as Chromium from "effect-browser/Chromium";
 import * as Plan from "effect-browser/Plan";
 import * as Supervisor from "effect-browser/Supervisor";
+import { chromium, type Page as NativePage } from "playwright-core";
 
 import * as Watched from "../Watched.ts";
 import * as Workflow from "../Workflow.ts";
@@ -71,24 +72,44 @@ const fixture = Effect.fnUntraced(function* (needsOperator = false) {
       ),
   );
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  const walk = Plan.Plan.new([new Plan.Step({ action: "navigate", url, target: url })]);
+  const walk = Plan.Plan.new([new Plan.Step({ action: { _tag: "Goto", url }, url })]);
+  const nativePages = new Map<string, Array<NativePage>>();
+  let latestBrowser = "";
   const closed: Array<number> = [];
   let opened = 0;
 
   const sessions = yield* Supervisor.make({
-    handover: "2 seconds",
-    open: Effect.gen(function* () {
-      const browser = yield* Chromium.open();
-      const number = ++opened;
+    open: () =>
+      Effect.gen(function* () {
+        const native = yield* Effect.acquireRelease(
+          Effect.promise(() => chromium.launch()),
+          (browser) => Effect.promise(() => browser.close()),
+        );
 
-      yield* Effect.addFinalizer(() => Effect.sync(() => void closed.push(number)));
+        const context = yield* Effect.promise(() => native.newContext());
+        const browser = yield* Browser.make(context, { provider: "composition-fixture" });
+        const pages: Array<NativePage> = [];
 
-      return { browser, value: { number } };
-    }),
+        context.on("page", (page) => pages.push(page));
+        nativePages.set(browser.id, pages);
+        latestBrowser = browser.id;
+        const number = ++opened;
+
+        yield* Effect.addFinalizer(() => Effect.sync(() => void closed.push(number)));
+
+        return { value: { browser, value: { number } }, lost: browser.disconnected };
+      }),
   });
 
   return {
     sessions,
+    native: (id = latestBrowser) => {
+      const page = nativePages.get(id)?.[0];
+
+      if (page === undefined) throw new Error("fixture page has not opened");
+
+      return page;
+    },
     url,
     walk,
     closed,
@@ -101,9 +122,9 @@ const fixture = Effect.fnUntraced(function* (needsOperator = false) {
 
 const claim = (url: string, durable: boolean) =>
   Plan.Plan.new([
-    new Plan.Step({ action: "navigate", url, target: url }),
+    new Plan.Step({ action: { _tag: "Goto", url }, url }),
     new Plan.Step({
-      action: "click",
+      action: { _tag: "Click", target: "e1" },
       url,
       subject: button("Submit claim"),
       expect: {
@@ -150,39 +171,41 @@ const journalFile = Effect.gen(function* () {
 });
 
 describe("consumer compositions", () => {
-  it.live(
-    "keeps output through rotation, commits on an actual line and closes retired resources",
-    () =>
-      Effect.gen(function* () {
-        const world = yield* fixture();
-        const watched = yield* Watched.make(world.sessions);
-        const first = yield* watched.prepare("first", world.walk);
+  it.live("revokes old views on rotation and commits the new view on an actual line", () =>
+    Effect.gen(function* () {
+      const world = yield* fixture();
+      const watched = yield* Watched.make(world.sessions);
+      const first = yield* watched.prepare("first", world.walk);
 
-        yield* watched.reveal(first, first.browser.now.pipe(Effect.asSome));
-        yield* world.sessions.rotate;
-        assert.isFalse(first.page.playwright.isClosed());
-        assert.deepStrictEqual(world.closed, []);
-        const next = yield* watched.prepare("next", world.walk);
-        const sent = yield* Deferred.make<Option.Option<number>>();
-        const waiting = yield* Effect.forkChild(watched.reveal(next, Deferred.await(sent)));
+      yield* watched.reveal(first, first.browser.now.pipe(Effect.asSome));
+      yield* world.sessions.rotate();
+      yield* world.sessions.states.pipe(
+        Stream.filter((event) => event.number === 1 && event.state._tag === "Closed"),
+        Stream.runHead,
+      );
+      assert.isTrue(world.native(first.browser.id).isClosed());
+      assert.deepStrictEqual(world.closed, [1]);
+      const next = yield* watched.prepare("next", world.walk);
+      const sent = yield* Deferred.make<Option.Option<number>>();
+      const waiting = yield* Effect.forkChild(watched.reveal(next, Deferred.await(sent)));
 
-        yield* Effect.sleep("50 millis");
-        assert.strictEqual(Option.getOrThrow(yield* watched.current).id, first.page.id);
-        const sentAt = yield* next.browser.now;
+      yield* Effect.sleep("50 millis");
+      assert.strictEqual(Option.getOrThrow(yield* watched.current).id, first.page.id);
+      const sentAt = yield* next.browser.now;
 
-        yield* Deferred.succeed(sent, Option.some(sentAt));
-        const result = Option.getOrThrow(yield* Fiber.join(waiting));
+      yield* Deferred.succeed(sent, Option.some(sentAt));
+      const result = Option.getOrThrow(yield* Fiber.join(waiting));
 
-        assert.isAtLeast(result.at, sentAt);
-        assert.strictEqual(Option.getOrThrow(yield* watched.current).id, next.page.id);
-        assert.isTrue(first.page.playwright.isClosed());
-        yield* world.sessions.states.pipe(
-          Stream.filter((event) => event.number === 1 && event.state._tag === "Closed"),
-          Stream.runHead,
-        );
-        assert.deepStrictEqual(world.closed, [1]);
-        assert.strictEqual(next.value.number, 2);
-      }).pipe(Effect.scoped),
+      assert.isAtLeast(result.at, sentAt);
+      assert.strictEqual(Option.getOrThrow(yield* watched.current).id, next.page.id);
+      assert.isTrue(world.native(first.browser.id).isClosed());
+      yield* world.sessions.states.pipe(
+        Stream.filter((event) => event.number === 1 && event.state._tag === "Closed"),
+        Stream.runHead,
+      );
+      assert.deepStrictEqual(world.closed, [1]);
+      assert.strictEqual(next.value.number, 2);
+    }).pipe(Effect.scoped),
   );
 
   it.live("drops a cue without switching and stops the walk at a completed step boundary", () =>
@@ -203,17 +226,25 @@ describe("consumer compositions", () => {
       const stop = yield* Deferred.make<void>();
 
       const plan = Plan.Plan.new([
-        new Plan.Step({ action: "click", url: world.url, subject: button("First") }),
-        new Plan.Step({ action: "click", url: world.url, subject: button("Second") }),
+        new Plan.Step({
+          action: { _tag: "Click", target: "e1" },
+          url: world.url,
+          subject: button("First"),
+        }),
+        new Plan.Step({
+          action: { _tag: "Click", target: "e1" },
+          url: world.url,
+          subject: button("Second"),
+        }),
       ]);
 
       yield* Effect.promise(() =>
-        first.page.playwright.exposeFunction("stopAtBoundary", () =>
-          Deferred.doneUnsafe(stop, Effect.void),
-        ),
+        world
+          .native(first.browser.id)
+          .exposeFunction("stopAtBoundary", () => Deferred.doneUnsafe(stop, Effect.void)),
       );
       yield* Effect.promise(() =>
-        first.page.playwright.evaluate(() => {
+        world.native(first.browser.id).evaluate(() => {
           document.getElementById("first")?.addEventListener("click", () => {
             const callback = Reflect.get(window, "stopAtBoundary");
 
@@ -232,11 +263,11 @@ describe("consumer compositions", () => {
         new Plan.Stopped({ step: 1, input: "unsent" }),
       );
       assert.strictEqual(
-        yield* Effect.promise(() => first.page.playwright.locator("output").textContent()),
+        yield* Effect.promise(() => world.native(first.browser.id).locator("output").textContent()),
         "first ",
       );
       yield* world.sessions.retire;
-      assert.isTrue(first.page.playwright.isClosed());
+      assert.isTrue(world.native(first.browser.id).isClosed());
       assert.isTrue(
         Exit.isFailure(
           yield* watched
@@ -269,7 +300,7 @@ describe("consumer compositions", () => {
 
         assert.strictEqual(failed._tag, "StoreFailed");
         assert.strictEqual(world.submissions(), 1);
-        yield* world.sessions.rotate;
+        yield* world.sessions.rotate();
         if (evidence === "absent") world.hideReceipt();
 
         const resumed = yield* Workflow.run(world.sessions, journal(path), "RUN-1", plan).pipe(
@@ -310,10 +341,10 @@ describe("consumer compositions", () => {
               assert.isAbove((yield* page.screenshot()).data.length, 0);
               // A human/provider viewer is outside the library's automated-input gate.
               yield* Effect.promise(() =>
-                page.playwright.getByRole("button", { name: "Verify operator" }).click(),
+                world.native().getByRole("button", { name: "Verify operator" }).click(),
               );
               yield* Effect.promise(() =>
-                page.playwright.getByRole("button", { name: "Submit claim" }).waitFor(),
+                world.native().getByRole("button", { name: "Submit claim" }).waitFor(),
               );
             }),
         },

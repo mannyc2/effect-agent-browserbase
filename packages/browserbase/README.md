@@ -10,8 +10,8 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
 - `Browserbase`: `open` and `layer` create a session and request its release when their scope
   closes. Closing waits for the outcome; an `Unconfirmed` session may still run and bill.
   `attach` connects to a running session without taking ownership of it, as from another process:
-  that is resume, of a session created with `keepAlive`. `supervise` keeps
-  sessions open across losses and session ends, and with `keep`, past its own scope. `reconcile`
+  that is resume, of a session created with `keepAlive`. `generations` supplies hosted acquisitions
+  to the generic `Supervisor.make` core. `reconcile`
   ends a stored context's sessions, and `verifyContext` reads a stored context back.
 - `ContextLease`: who may write a stored context. `ContextLease.layer` lets one writer at a time
   hold each context in this process; an application provides its own to exclude writers across
@@ -26,7 +26,7 @@ npm install effect-browserbase@beta effect-browser@beta effect playwright-core
   A create whose answer named its session but did not decode is `Decode` with `released`, whether
   the client released that session.
 
-`open`, `layer`, `supervise`, `reconcile` and `verifyContext` need a `ContextLease`, and the client:
+`open`, `layer`, `generations`, `reconcile` and `verifyContext` need a `ContextLease`, and the client:
 
 ```ts
 const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
@@ -36,7 +36,7 @@ const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
 );
 ```
 
-`open`, `layer`, `attach`, `supervise` and `verifyContext` accept `connect`, the same
+`open`, `layer`, `attach`, `generations` and `verifyContext` accept `connect`, the same
 [`Cdp.Connector`](../browser/README.md#runtime-cdp-connectors) used by the browser core. It receives
 the session's endpoint, the connection deadline and its cancellation signal, and returns a real
 Playwright CDP browser. This lets a Bun consumer use a native WebSocket connector, or a Workers
@@ -44,8 +44,7 @@ consumer use a compatible Playwright implementation, while Browserbase keeps own
 creation, capture and release. A failed or interrupted custom connection still releases a session
 that `open` created. The separate capture connection already uses the global `WebSocket`.
 
-Select the `workerd` package export condition when bundling for Workers with `nodejs_compat` and
-supply `connect`:
+Select the `workerd` package export condition when bundling for Workers and supply `connect`:
 the worker entry imports no Playwright Node transport and has no default connector. This seam
 does not validate a Playwright fork's version compatibility or change the default Node transport.
 
@@ -67,8 +66,8 @@ Each create `open` sends carries a nonce of its own in the session's user metada
 A create whose answer was lost, or that Browserbase answered 5xx or 408, may still have made a
 session that nobody can see, and that bills until its timeout: `open` looks for it by its nonce,
 again and again for up to 30 seconds, since Browserbase can list a new session late, ends it, and
-then fails with the create's error. `supervise` reports that cleanup's outcome to the next
-attempt's admission, including when a session it found could not be confirmed ended.
+then fails with the create's error. `generations` attaches that attempt's cleanup outcome to
+`OpenFailed.cleanup`, including when a found session could not be confirmed ended.
 
 `open` and `attach` record the session's id and region on their spans, so a trace finds its
 session in Browserbase's dashboard (`https://browserbase.com/sessions/<id>`).
@@ -87,91 +86,51 @@ end, and for a session that saves to a stored context `contextSettle` longer, 10
 default. `release` does it sooner and gives the outcome as a value, and the scope then asks
 Browserbase nothing more. Closing `attach`'s scope only disconnects; its `release` ends the
 session. Browserbase ends a session whose last connection closes unless it was created with
-`keepAlive`, which `supervise({ keep })` sets and `session.keepAlive` asks for, so only such a
+`keepAlive`, requested with `session.keepAlive`, so only such a
 session outlives the process that opened it, for another to attach to.
 
 ## Supervised sessions
 
-`supervise` keeps a browser on Browserbase as `Supervisor` generations, each a new session made
-from `session`. Use `sessions.use` to hold a generation while working: its lease gives the
-`browser` and `value`, which is the `Session` unless `build` supplies an application value.
-`build(hosted)` runs in the generation's scope on every acquisition, including adoption; failed
-or cancelled construction closes that scope and releases the acquired session before retry.
-The [generic supervisor contract](../browser/README.md#supervising-browser-generations) describes
-`use`, transferable `retain` scopes, cancellation and stale-work refusal.
-
-Outgoing holds drain for `handover`, 30 seconds by default. A lost session revokes immediately and
-is replaced on `reopen`; a consumer can declare the same loss with `lease.lose(detail)`.
-`rotateBefore` and `rotate` keep their normal schedule while older
-nonexclusive generations drain. This can overlap more than two hosted sessions. The consumer
-owns its overlap and billing policy. `states` reports each generation's release outcome;
-`Unconfirmed` means the old session might still run even after local ownership ends.
-
-Sessions that persist to a stored context are exclusive: rotation first drains the current
-generation, releases its session and lets its save settle. If release is unconfirmed, the next
-writer reconciles the context and fails `ContextHeld` while the old writer cannot be confirmed
-ended. It does not silently create another writer. An open Browserbase refused, as for a bad key
-or an invalid request, and a permanent `ContextRefused`, are `Down` at once. Temporary `ContextHeld`
-failures are tried again on the schedule. `definite(error)` can also stop retries for application
-failures, including those from `build` or `admit`.
-
-`admit({ number, after })` runs before each attempt, including the first, before acquiring a
-context lease or making a provider request. `after`, when present, covers every session the
-supervisor started that no longer serves: prior generations still releasing and failed attempts,
-including a failed connection or `build`. It waits for all their releases and is `Unconfirmed`
-if any was; the first unconfirmed outcome remains visible on later attempts and identifies its
-session when known.
-Await it to enforce an account policy such as refusing a reopen after an `Unconfirmed` release;
-ignoring it preserves immediate reopening. The serving predecessor of a healthy nonexclusive
-rotation is excluded, so the same policy keeps ephemeral rotations opening the replacement
-before releasing the outgoing session. Admission shares the opening fiber's retry and
-cancellation rules.
+`generations` returns the `open`, `exclusive` and `definite` options for
+`effect-browser/Supervisor.make`. Each generation creates a new session and runs `build(hosted)`
+in its scope. The value returned by `build` is exactly the lease's `value`. A failed builder closes
+its scope and releases the session before returning `OpenFailed`, whose `error` preserves the
+original typed failure and whose optional `cleanup` describes that attempt alone.
 
 ```ts
-const program = Effect.gen(function* () {
-  const sessions = yield* Browserbase.supervise({
-    session: { timeout: 6 * 60 * 60 },
+import * as Supervisor from "effect-browser/Supervisor";
+
+const sessions =
+  yield *
+  Supervisor.make({
+    ...Browserbase.generations({
+      session: { timeout: 60 * 60 },
+      build: ({ browser, session }) =>
+        browser.firstPage.pipe(Effect.map((page) => ({ page, session }))),
+    }),
     reopen: Schedule.exponential("1 second").pipe(Schedule.upTo({ duration: "5 minutes" })),
-    rotateBefore: "20 minutes",
-    build: ({ browser, session }) =>
-      browser.firstPage.pipe(Effect.map((page) => ({ page, session }))),
   });
-  // `retire` releases every session; so does the scope's close.
-  return yield* sessions.use(({ value }) => value.page.text());
-});
+
+const text = yield * sessions.use(({ value }) => value.page.text());
 ```
 
-Keep pages that must close before provider release in a `use` or retained scope. Resources
-acquired by `build` live in the generation's scope, which closes after provider release.
-Generation `hostTime` uses the owning Effect clock; provider `createdAt` and `endedAt` are separate
-wall-clock evidence. Fake-provider ordering tests do not prove hosted context-save timing or
-billing. The included-hours-only [H2 recipe](../../docs/HOSTED_CHECKS.md) remains a hosted check to
-run after its allowance is verified.
+Sessions persisting to a stored context are exclusive. Rotation revokes admitted work, awaits its
+cleanup, releases the session and lets its save settle before opening its replacement. Unconfirmed
+release leaves the context unsettled; the next writer reconciles it and fails `ContextHeld` while
+an old writer cannot be confirmed ended. Permanent provider refusal and `ContextRefused` stop
+retrying, while temporary `ContextHeld` can retry. To add a permanent application refusal, compose
+the returned `definite` predicate with the application's typed errors.
 
-### Keeping a session past the scope
+The [generic supervisor contract](../browser/README.md#supervising-resource-generations) describes
+leases, retry timing, revocation and retirement. Provider billing policy and scheduled rotation
+belong to the caller: wrap acquisitions or releases and consume `states`. The core has no process
+restart adoption or keep-past-scope mode. Explicit `attach` and `session.keepAlive` remain provider
+operations for a consumer that owns that policy.
 
-With `keep`, a name, closing the supervisor's scope leaves its current session running instead of
-releasing it, published as `Kept`, and the first generation of the next `supervise` under the same
-name adopts that session, its pages and their ids with it, rather than creating one. So a deploy or
-a restart of the process that owns the browser keeps its prepared pages and its signed-in state.
-It is off by default, and opt-in, because a kept session bills until something adopts and releases
-it, or until its own `timeout` ends it: set one that bounds what a forgotten session costs.
-Keeping revokes active work and closes retained and generation application scopes. The next
-supervisor rebuilds its value when it adopts the session; only the provider's browser state stays.
-
-- Each session is created with `keepAlive`, so it outlives its connection, and labelled
-  `keptAs: <name>` in its user metadata, since Browserbase sets user metadata only at the create.
-  A name is 1 to 64 letters, digits, `_`, `.`, `:` or `-`; another is refused, `Down` at once.
-- Adopting takes the newest session kept under the name that saves to the same stored context, or
-  to none; any other session kept under the name is ended, as nothing else adopts it.
-- `retire` always releases, `keep` or not. Only the first generation adopts: a later one, after a
-  loss or a rotation, is a new session.
-- One supervisor at a time per name: two at once would adopt one session together.
-
-```ts
-const sessions = yield * Browserbase.supervise({ keep: "on-air", session: { timeout: 60 * 60 } });
-const browser = yield * sessions.browser; // the session the last process kept, if one runs
-```
+Keep pages that must close before provider release in `use` callback scopes. Resources acquired by
+`build` close after provider release. Fake-provider ordering tests establish local ordering; they
+do not establish hosted context-save timing or billing. The included-hours-only
+[H2 recipe](../../docs/HOSTED_CHECKS.md) is a separate hosted check.
 
 ## Session settings
 
@@ -251,9 +210,8 @@ const Lease = Layer.succeed(ContextLease.ContextLease, {
 });
 ```
 
-Three things leave a session that may still be saving to the context: a release left `Unconfirmed`;
-a create whose answer was lost, which may have made a session nobody can see; and a session kept
-past its supervisor's scope. Each leaves the context unsettled, through the lease, and the next
+An `Unconfirmed` release or a create whose answer was lost can leave a session still saving to
+the context. Each leaves the context unsettled, through the lease, and the next
 writer clears it before it writes: it ends the context's sessions, which `open` labels with
 `persistsContext: <context id>` in Browserbase's user metadata, confirms they ended, waits
 `contextSettle` and goes on. While they cannot be confirmed ended it fails with `ContextHeld`, which
@@ -287,13 +245,9 @@ const signedIn =
   );
 ```
 
-A supervised persisting session reopens through the same path, so a held context is tried again on
-the `reopen` schedule. An open that Browserbase refused outright, as for a bad key, is `Down` at
-once instead, with its cause: a schedule would only hide a configuration error. A supervisor that
-keeps a persisting session leaves its context unsettled, so any other writer ends that session
-first; the next supervisor under its name adopts it without ending it. Under `ContextLease.layer`,
-a later process's other writers can't know it runs: keep one where the next writer is the
-supervisor that adopts it, or under a lease that outlives the process.
+A persisting generation reopens through the same lease and reconciliation path. Its permanent
+provider refusal is `Down` immediately; a held context can retry on the caller's `reopen` schedule.
+A lease spanning processes must treat a writer that ended without reporting its outcome as unsettled.
 
 ## Extensions
 

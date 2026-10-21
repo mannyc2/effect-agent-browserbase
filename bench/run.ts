@@ -30,6 +30,7 @@ import { type Arm, armNames, arms } from "./Arms.ts";
 import { BenchError, efforts, modelRunner, noCalls, noTiming, optedIn, refuse } from "./Budget.ts";
 import { tasks } from "./Catalog.ts";
 import * as Diagnostics from "./Diagnostics.ts";
+import * as Fixtures from "./FixtureRoutes.ts";
 import * as Latency from "./Latency.ts";
 import * as Recorder from "./Recorder.ts";
 import * as Relay from "./Relay.ts";
@@ -64,14 +65,17 @@ export const hostedSessionSeconds = 30 * 60;
  * have a lease of its own.
  */
 export const hostedBrowser = (userMetadata?: Readonly<Record<string, string>>) =>
-  Browserbase.layer({
-    frameHistory,
-    session: {
-      timeout: hostedSessionSeconds,
-      browserSettings: { viewport: { width: 1280, height: 720 } },
-      userMetadata,
-    },
-  }).pipe(Layer.provide(ContextLease.layer));
+  Fixtures.layer((requests) =>
+    Browserbase.layer({
+      requests,
+      frameHistory,
+      session: {
+        timeout: hostedSessionSeconds,
+        browserSettings: { viewport: { width: 1280, height: 720 } },
+        userMetadata,
+      },
+    }).pipe(Layer.provide(ContextLease.layer)),
+  );
 
 /** A failure as the bench may print or record it: provider errors can embed URLs or ids. */
 export const errorText = (cause: Cause.Cause<unknown>) => {
@@ -220,8 +224,10 @@ export const command = Command.make(
             Layer.provide(Relay.client(trial.record).pipe(Layer.provide(browserbaseClient))),
           )
         : latency !== undefined
-          ? Latency.layer(latency, { frameHistory }, trial.record)
-          : Chromium.layer({ frameHistory });
+          ? Fixtures.layer((requests) =>
+              Latency.layer(latency, { frameHistory, requests }, trial.record),
+            )
+          : Fixtures.layer((requests) => Chromium.layer({ frameHistory, requests }));
     };
 
     // After a create whose outcome is unknown, no further hosted session is requested.
@@ -405,6 +411,7 @@ export const command = Command.make(
                   }),
                   effectiveReasoning,
                   account,
+                  recorder,
                 )
               : task.scripted({ seed, trace, humanize: options.humanize });
 

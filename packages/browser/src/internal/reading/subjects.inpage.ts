@@ -4,13 +4,52 @@
  * beside it. See `names.inpage.ts` for what a page-side part may use.
  */
 import type { SubjectContext } from "../../BrowserEvent.ts";
+import type { FindRequest, Match } from "../../Matching.ts";
 import type { ContextReader } from "./context.inpage.ts";
-import type { FindRequest, Match } from "./match.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Walk } from "./walk.inpage.ts";
 
-export const subjects = (names: Names, walked: Walk, matching: Match, placing: ContextReader) => {
-  const { isDisabled, isInput, nameOf, refFor, refs, roleOf, textOf } = names;
+export const states = (names: Names) => (element: Element, role: string | null) => {
+  const { isDisabled, isInput } = names;
+
+  // A state the page gives either way, or none.
+  const given = (attribute: string) => {
+    const value = element.getAttribute(attribute);
+
+    return value === "true" || (value === "false" ? false : undefined);
+  };
+
+  const checkable =
+    element.hasAttribute("aria-checked") ||
+    ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role ?? "");
+
+  // In the order the outline shows them.
+  return {
+    disabled: isDisabled(element),
+    checked: checkable
+      ? (isInput(element) && element.checked) || element.getAttribute("aria-checked") === "true"
+      : undefined,
+    expanded: given("aria-expanded"),
+    selected: given("aria-selected"),
+    pressed: given("aria-pressed"),
+    focused: element.ownerDocument.activeElement === element,
+    level:
+      role === "heading"
+        ? Number(element.getAttribute("aria-level")) ||
+          Number(/^H([1-6])$/.exec(element.tagName)?.[1]) ||
+          2
+        : undefined,
+  };
+};
+
+export const subjects = (
+  names: Names,
+  walked: Walk,
+  matching: Match,
+  placing: ContextReader,
+  stateOf: ReturnType<typeof states>,
+) => {
+  const { isDisabled, nameOf, refFor, roleOf, textOf } = names;
   const { acts, boxOf, controlOf, hitAt, inView } = walked;
   const { contextOf, known } = placing;
 
@@ -25,37 +64,6 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     acts(element, role) ||
     (style.cursor === "pointer" && !insidePointer && rect.width > 0 && rect.height > 0);
 
-  const stateOf = (element: Element, role: string | null) => {
-    // A state the page gives either way, or none.
-    const given = (attribute: string) => {
-      const value = element.getAttribute(attribute);
-
-      return value === "true" || (value === "false" ? false : undefined);
-    };
-
-    const checkable =
-      element.hasAttribute("aria-checked") ||
-      ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role ?? "");
-
-    // In the order the outline shows them.
-    return {
-      disabled: isDisabled(element),
-      checked: checkable
-        ? (isInput(element) && element.checked) || element.getAttribute("aria-checked") === "true"
-        : undefined,
-      expanded: given("aria-expanded"),
-      selected: given("aria-selected"),
-      pressed: given("aria-pressed"),
-      focused: element.ownerDocument.activeElement === element,
-      level:
-        role === "heading"
-          ? Number(element.getAttribute("aria-level")) ||
-            Number(/^H([1-6])$/.exec(element.tagName)?.[1]) ||
-            2
-          : undefined,
-    };
-  };
-
   /**
    * The elements in scope that match a query, in tree order. Without text, an element matches
    * when it has a role or is a control. With text, any element can, but text inside a control or
@@ -68,6 +76,18 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
     const byText = request.text !== null;
     const viewport = request.scope === "viewport";
     const read = known();
+
+    if (request.selector !== null) {
+      try {
+        document.querySelector(request.selector);
+      } catch {
+        return { invalid: `${JSON.stringify(request.selector)} is not a CSS selector` };
+      }
+    }
+
+    const eligible = (element: Element) =>
+      (request.selector === null || element.matches(request.selector)) &&
+      (request.state !== "enabled" || !isDisabled(element));
 
     interface Entry {
       readonly element: Element;
@@ -103,9 +123,15 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
       const element = controlOf(hit);
       const { x, y, width, height } = boxOf(element);
       const rect = new DOMRect(x, y, width, height);
-      const entry: Entry = { element, rect, role: roleOf(element), matched: false };
 
-      entry.matched = judge(entry, () => textOf(element));
+      const entry: Entry = {
+        element,
+        rect,
+        role: roleOf(element, request.role !== null),
+        matched: false,
+      };
+
+      entry.matched = eligible(element) && judge(entry, () => textOf(element));
       entries.push(entry);
     }
     if (at === null)
@@ -115,10 +141,15 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
         { pointer: false, owned: false },
         {
           enter: (element, style, rect, state) => {
-            const role = roleOf(element);
+            const role = roleOf(element, request.role !== null);
             const control = isControl(element, role, style, rect, state.pointer);
             const unit = control || role === "heading";
-            const candidate = byText ? unit || !state.owned : role !== null || control;
+
+            const candidate =
+              eligible(element) &&
+              (byText
+                ? unit || !state.owned
+                : request.selector !== null || role !== null || control);
 
             const entry =
               candidate && (!viewport || inView(rect))
@@ -154,8 +185,10 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
   };
 
   const find = (request: FindRequest) => {
-    if (refs.next < request.firstRef) refs.next = request.firstRef;
-    const { entries, named, placed } = matched(request);
+    const result = matched(request);
+
+    if (result.invalid !== undefined) return { invalid: result.invalid };
+    const { entries, named, placed } = result;
 
     const found = entries.map((entry) => ({
       ref: refFor(entry.element),
@@ -175,12 +208,19 @@ export const subjects = (names: Names, walked: Walk, matching: Match, placing: C
       state: stateOf(entry.element, entry.role),
     }));
 
-    return { found, nextRef: refs.next };
+    return { found };
   };
 
   /** The elements `find` would find, in tree order, with no refs given. */
-  const elementsOf = (request: FindRequest) =>
-    matched(request).entries.map((entry) => entry.element);
+  const elementsOf = (
+    request: FindRequest,
+  ): ReadonlyArray<Element> | { readonly invalid: string } => {
+    const result = matched(request);
+
+    return result.invalid !== undefined
+      ? { invalid: result.invalid }
+      : result.entries.map((entry) => entry.element);
+  };
 
   return { find, elementsOf, isControl, stateOf };
 };

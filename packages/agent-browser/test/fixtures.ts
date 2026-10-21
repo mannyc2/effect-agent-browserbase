@@ -4,8 +4,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { Context, Effect, Layer, Stream } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { LanguageModel, Model, type Prompt, type Response } from "effect/ai";
+
+import { TestModel } from "../src/testing.ts";
 
 const form = `<!doctype html><title>Order</title>
 <body style="margin:0;font-family:sans-serif">
@@ -88,60 +90,33 @@ export const SiteLayer = Layer.effect(
   }),
 );
 
-/** One model response, from the prompt it was given. */
-export type Turn = (prompt: Prompt.Prompt) => ReadonlyArray<Response.StreamPartEncoded>;
+/** One prompt-aware response; model ownership and exhaustion come from the public kit. */
+export type Turn = (prompt: Prompt.Prompt) => ReadonlyArray<Response.PartEncoded>;
+export const call = TestModel.call;
+export const answer = TestModel.text;
+export const finish = TestModel.finish;
+export const calling = TestModel.calling;
 
-let calls = 0;
-
-/** A tool call in a scripted response. */
-export const call = (name: string, params: unknown): Response.StreamPartEncoded => {
-  calls += 1;
-
-  return { type: "tool-call", id: `call-${calls}`, name, params };
-};
-
-/** A final answer: the text, and the response's end. */
-export const answer = (text: string): ReadonlyArray<Response.StreamPartEncoded> => [
-  { type: "text-start", id: "answer" },
-  { type: "text-delta", id: "answer", delta: text },
-  { type: "text-end", id: "answer" },
-  finish("stop"),
-];
-
-export const finish = (reason: "stop" | "tool-calls"): Response.StreamPartEncoded => ({
-  type: "finish",
-  reason,
-  usage: { inputTokens: { total: 900 }, outputTokens: { total: 40 } },
-});
-
-/** Tool calls, then the response's end. */
-export const calling = (
-  ...calls: ReadonlyArray<Response.StreamPartEncoded>
-): ReadonlyArray<Response.StreamPartEncoded> => [...calls, finish("tool-calls")];
-
-/**
- * A model that answers each request with the next turn of its script, and keeps the prompts it was
- * given. Its provider and model names are the runtime's model services.
- */
 export const scripted = (turns: ReadonlyArray<Turn>) => {
   const prompts: Array<Prompt.Prompt> = [];
 
-  const model = LanguageModel.make({
-    generateText: () => Effect.die("the runtime streams"),
-    streamText: (options) =>
-      Stream.suspend(() => {
-        const turn = turns[prompts.length];
-
-        prompts.push(options.prompt);
-
-        return turn === undefined
-          ? Stream.die(`no turn ${prompts.length} in the script`)
-          : Stream.fromIterable(turn(options.prompt));
-      }),
-  });
+  const layer = TestModel.layer(
+    turns.map(
+      (turn) =>
+        ({ prompt }) =>
+          Effect.sync(() => TestModel.reply(turn(prompt))),
+    ),
+    { onRequest: ({ prompt }) => Effect.sync(() => void prompts.push(prompt)) },
+  );
 
   return {
-    layer: Model.make("scripted", "test-model", Layer.effect(LanguageModel.LanguageModel, model)),
+    layer: Model.make(
+      "scripted",
+      "test-model",
+      Layer.effect(LanguageModel.LanguageModel, LanguageModel.LanguageModel).pipe(
+        Layer.provide(layer),
+      ),
+    ),
     prompts,
   };
 };

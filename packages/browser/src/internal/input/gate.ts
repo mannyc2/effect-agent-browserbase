@@ -4,7 +4,14 @@
  */
 import { Clock, Deferred, Duration, Effect, Exit, Option, type Scope } from "effect";
 
-import { BrowserError, Busy, Closed, InvalidRequest, Suspended } from "../../BrowserError.ts";
+import {
+  undispatched,
+  type BrowserError,
+  Busy,
+  Closed,
+  InvalidRequest,
+  Suspended,
+} from "../../BrowserError.ts";
 import type { DisconnectCause } from "../../BrowserEvent.ts";
 
 interface Stopped {
@@ -86,14 +93,12 @@ export const make = (options: {
   let ready = Deferred.makeUnsafe<Stopped, BrowserError>();
 
   const error = (operation: string) =>
-    new BrowserError({
+    undispatched(
       operation,
-      reason:
-        options.closedBy() === undefined
-          ? new Suspended()
-          : new Closed({ cause: options.closedBy() ?? "connection" }),
-      dispatched: false,
-    });
+      options.closedBy() === undefined
+        ? new Suspended()
+        : new Closed({ cause: options.closedBy() ?? "connection" }),
+    );
 
   const stopped = (): Stopped => ({ since: options.sequence(), at: options.now() });
 
@@ -108,14 +113,13 @@ export const make = (options: {
       Deferred.doneUnsafe(
         ready,
         Exit.fail(
-          new BrowserError({
-            operation: "suspend",
-            reason: new Busy({
+          undispatched(
+            "suspend",
+            new Busy({
               waitedMillis: Math.round(options.now() - before.startedAt),
               ahead: before.inputs.size,
             }),
-            dispatched: false,
-          }),
+          ),
         ),
       );
     if (before._tag === "Open" && state._tag !== "Open") Deferred.doneUnsafe(refused, Exit.void);
@@ -148,11 +152,10 @@ export const make = (options: {
         Duration.toMillis(duration.value) < 0
       )
         return Effect.fail(
-          new BrowserError({
-            operation: "suspend",
-            reason: new InvalidRequest({ detail: "drain must be a finite nonnegative duration" }),
-            dispatched: false,
-          }),
+          undispatched(
+            "suspend",
+            new InvalidRequest({ detail: "drain must be a finite nonnegative duration" }),
+          ),
         );
       const id = ++next;
       const leave = Effect.sync(() => apply({ _tag: "Leave", id }));

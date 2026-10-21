@@ -6,12 +6,13 @@ import { type Prompt } from "effect/ai";
 import { Browser } from "../src/Browser.ts";
 import { Action, Subject } from "../src/BrowserEvent.ts";
 import { Change, Changes } from "../src/Change.ts";
-import * as Chromium from "../src/Chromium.ts";
 import { fold, type Folded } from "../src/internal/timeline/fold.inpage.ts";
 import { type Bounds, history } from "../src/internal/timeline/history.inpage.ts";
-import * as Moment from "../src/Moment.ts";
+import * as Moment from "../src/moment/Moment.ts";
 import type { Page } from "../src/Page.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 // ---------------------------------------------------------------------------------------------
 // The record's rules, on its history alone. A record with small bounds is compared with one that
@@ -210,6 +211,7 @@ describe("a moment's account", () => {
       startedAt,
       page: "p1",
       name: "click",
+      value: { _tag: "Click", target: "e1" },
       subject: new Subject({ role: "button", name, tag: "button", context: {} }),
       ok: true,
       dispatched: true,
@@ -350,7 +352,7 @@ const start = (path: string) =>
   });
 
 const run = (page: Page, script: () => void) =>
-  Effect.promise(() => page.playwright.evaluate(script));
+  Effect.promise(() => TestCdp.nativePage(page).evaluate(script));
 
 /** The ref of the one button `name` names. */
 const button = (page: Page, name: string) =>
@@ -365,340 +367,364 @@ const button = (page: Page, name: string) =>
 const told = (changes: Changes) =>
   changes.changes.map((change) => [change.kind, change.before, change.after]);
 
-layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
+layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
 })("the change record on a page", (it) => {
   it.effect("tells a toast shown and removed as appeared, then disappeared", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
-      const first = yield* page.changes();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/desk");
+        const first = yield* page.changes();
 
-      yield* run(page, () => {
-        const toast = document.createElement("div");
+        yield* run(page, () => {
+          const toast = document.createElement("div");
 
-        toast.textContent = "Order placed";
-        document.querySelector("#alerts")?.append(toast);
-      });
-      yield* Effect.sleep(Duration.millis(300));
-      const shown = yield* page.changes({ since: first });
+          toast.textContent = "Order placed";
+          document.querySelector("#alerts")?.append(toast);
+        });
+        yield* Effect.sleep(Duration.millis(300));
+        const shown = yield* page.changes({ since: first });
 
-      yield* run(page, () => document.querySelector("#alerts div")?.remove());
-      yield* Effect.sleep(Duration.millis(300));
-      const gone = yield* page.changes({ since: shown });
+        yield* run(page, () => document.querySelector("#alerts div")?.remove());
+        yield* Effect.sleep(Duration.millis(300));
+        const gone = yield* page.changes({ since: shown });
 
-      assert.deepStrictEqual(told(shown), [["appeared", undefined, "Order placed"]]);
-      assert.deepStrictEqual(told(gone), [["disappeared", "Order placed", undefined]]);
-      // Over both windows it came and went.
-      assert.deepStrictEqual(told(yield* page.changes({ since: first })), [
-        ["brief", undefined, "Order placed"],
-      ]);
-    }),
+        assert.deepStrictEqual(told(shown), [["appeared", undefined, "Order placed"]]);
+        assert.deepStrictEqual(told(gone), [["disappeared", "Order placed", undefined]]);
+        // Over both windows it came and went.
+        assert.deepStrictEqual(told(yield* page.changes({ since: first })), [
+          ["brief", undefined, "Order placed"],
+        ]);
+      }),
+    ),
   );
 
   it.effect("sees a class and a style show and hide, and nothing out of view or unseen", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
-      const first = yield* page.changes();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/desk");
+        const first = yield* page.changes();
 
-      // The alert a class hid since the page loaded, a line an inline style hid, text below the
-      // fold, and text no one can see.
-      yield* run(page, () => {
-        document.querySelector("#notice")?.classList.remove("closed");
-        document.body.insertAdjacentHTML(
-          "afterbegin",
-          '<p id="tip" style="display:none">Tip: limit orders</p><p>Fee <span id="ghost" style="opacity:0">$1</span></p>',
-        );
-      });
-      yield* Effect.sleep(Duration.millis(300));
-      yield* run(page, () => {
-        const tip = document.querySelector<HTMLElement>("#tip");
-        const ghost = document.querySelector("#ghost");
-        const below = document.querySelector("#below");
+        // The alert a class hid since the page loaded, a line an inline style hid, text below the
+        // fold, and text no one can see.
+        yield* run(page, () => {
+          document.querySelector("#notice")?.classList.remove("closed");
+          document.body.insertAdjacentHTML(
+            "afterbegin",
+            '<p id="tip" style="display:none">Tip: limit orders</p><p>Fee <span id="ghost" style="opacity:0">$1</span></p>',
+          );
+        });
+        yield* Effect.sleep(Duration.millis(300));
+        yield* run(page, () => {
+          const tip = document.querySelector<HTMLElement>("#tip");
+          const ghost = document.querySelector("#ghost");
+          const below = document.querySelector("#below");
 
-        if (tip !== null) tip.style.display = "block";
-        if (ghost !== null) ghost.textContent = "$2";
-        if (below !== null) below.textContent = "Changed below";
-      });
-      yield* Effect.sleep(Duration.millis(300));
-      const shown = yield* page.changes({ since: first });
+          if (tip !== null) tip.style.display = "block";
+          if (ghost !== null) ghost.textContent = "$2";
+          if (below !== null) below.textContent = "Changed below";
+        });
+        yield* Effect.sleep(Duration.millis(300));
+        const shown = yield* page.changes({ since: first });
 
-      yield* run(page, () => document.querySelector("#notice")?.classList.add("closed"));
-      yield* Effect.sleep(Duration.millis(300));
-      const hidden = yield* page.changes({ since: shown });
+        yield* run(page, () => document.querySelector("#notice")?.classList.add("closed"));
+        yield* Effect.sleep(Duration.millis(300));
+        const hidden = yield* page.changes({ since: shown });
 
-      assert.sameDeepMembers(told(shown), [
-        ["appeared", undefined, "Market closes early today"],
-        ["appeared", undefined, "Tip: limit orders"],
-        ["appeared", undefined, "Fee"],
-      ]);
-      assert.deepStrictEqual(told(hidden), [
-        ["disappeared", "Market closes early today", undefined],
-      ]);
-    }),
+        assert.sameDeepMembers(told(shown), [
+          ["appeared", undefined, "Market closes early today"],
+          ["appeared", undefined, "Tip: limit orders"],
+          ["appeared", undefined, "Fee"],
+        ]);
+        assert.deepStrictEqual(told(hidden), [
+          ["disappeared", "Market closes early today", undefined],
+        ]);
+      }),
+    ),
   );
 
   it.effect(
     'tells a one-off "Order placed" as news beside a ticker, with the ticker\'s range',
     () =>
-      Effect.gen(function* () {
-        const page = yield* start("/desk");
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const page = yield* start("/desk");
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-        yield* page.changes();
-        yield* run(page, () => {
-          const prices = [61_240, 61_310, 61_190, 61_450, 61_380];
-          let tick = 0;
+          yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+          yield* page.changes();
+          yield* run(page, () => {
+            const prices = [61_240, 61_310, 61_190, 61_450, 61_380];
+            let tick = 0;
 
-          setInterval(() => {
-            const btc = document.querySelector("#btc");
+            setInterval(() => {
+              const btc = document.querySelector("#btc");
 
-            if (btc !== null)
-              btc.textContent = `$${(prices[++tick % prices.length] ?? 0).toLocaleString("en-US")}`;
-          }, 100);
-        });
-        yield* Effect.sleep(Duration.millis(700));
-        yield* page.click(yield* button(page, "Place order"));
-        yield* page.waitFor({ text: "Order placed" });
-        yield* Effect.sleep(Duration.millis(200));
-        const moment = yield* Moment.capture(page, { since: Duration.seconds(2) });
-        const changes = moment.changes?.changes ?? [];
-        const placed = changes.find((change) => change.after === "Order placed");
-        const ticker = changes.find((change) => change.subject.context.row === "BTC");
+              if (btc !== null)
+                btc.textContent = `$${(prices[++tick % prices.length] ?? 0).toLocaleString("en-US")}`;
+            }, 100);
+          });
+          yield* Effect.sleep(Duration.millis(700));
+          yield* page.click(yield* button(page, "Place order"));
+          yield* page.until({ text: "Order placed" }, "some", 5000);
+          yield* Effect.sleep(Duration.millis(200));
+          const moment = yield* Moment.capture(page, { since: Duration.seconds(2) });
+          const changes = moment.changes?.changes ?? [];
+          const placed = changes.find((change) => change.after === "Order placed");
+          const ticker = changes.find((change) => change.subject.context.row === "BTC");
 
-        assert.deepStrictEqual(
-          [placed?.kind, placed?.count, placed?.earlier],
-          ["appeared", 1, undefined],
-        );
-        assert.isAbove(ticker?.count ?? 0, 3);
-        assert.deepStrictEqual([ticker?.lowest, ticker?.highest], ["$61,190", "$61,450"]);
-        assert.deepStrictEqual(ticker?.subject.context, {
-          row: "BTC",
-          column: "Price",
-          heading: "Desk",
-        });
-      }),
+          assert.deepStrictEqual(
+            [placed?.kind, placed?.count, placed?.earlier],
+            ["appeared", 1, undefined],
+          );
+          assert.isAbove(ticker?.count ?? 0, 3);
+          assert.deepStrictEqual([ticker?.lowest, ticker?.highest], ["$61,190", "$61,450"]);
+          assert.deepStrictEqual(ticker?.subject.context, {
+            row: "BTC",
+            column: "Price",
+            heading: "Desk",
+          });
+        }),
+      ),
   );
 
   it.effect("counts what a capped burst let go, and moves `from` past it", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
-      const first = yield* page.changes();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/desk");
+        const first = yield* page.changes();
 
-      // News first, then more elements at once than the record keeps.
-      yield* run(page, () => {
-        document.querySelector("#answer")!.textContent = "Order placed";
-      });
-      yield* Effect.sleep(Duration.millis(300));
-      yield* run(page, () =>
-        document.body.insertAdjacentHTML(
-          "afterbegin",
-          Array.from({ length: 300 }, (_, index) => `<b>Lot ${index}</b>`).join(" "),
-        ),
-      );
-      yield* Effect.sleep(Duration.millis(300));
-      const burst = yield* page.changes({ since: first });
+        // News first, then more elements at once than the record keeps.
+        yield* run(page, () => {
+          document.querySelector("#answer")!.textContent = "Order placed";
+        });
+        yield* Effect.sleep(Duration.millis(300));
+        yield* run(page, () =>
+          document.body.insertAdjacentHTML(
+            "afterbegin",
+            Array.from({ length: 300 }, (_, index) => `<b>Lot ${index}</b>`).join(" "),
+          ),
+        );
+        yield* Effect.sleep(Duration.millis(300));
+        const burst = yield* page.changes({ since: first });
 
-      assert.isAtLeast(burst.dropped, 300 - 255);
-      assert.isAbove(burst.from, first.until);
-      // What came before the burst is still told.
-      assert.isTrue(burst.changes.some((change) => change.after === "Order placed"));
-      assert.isAtMost(burst.changes.length, 256);
-    }),
+        assert.isAtLeast(burst.dropped, 300 - 255);
+        assert.isAbove(burst.from, first.until);
+        // What came before the burst is still told.
+        assert.isTrue(burst.changes.some((change) => change.after === "Order placed"));
+        assert.isAtMost(burst.changes.length, 256);
+      }),
+    ),
   );
 
   it.effect("names no cause for what changes on its own after an inert click", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
-      const menu = yield* button(page, "Menu");
-
-      const tick = run(page, () => {
-        const btc = document.querySelector("#btc");
-
-        if (btc !== null) btc.textContent = `$61,${Number(btc.textContent?.slice(-3)) + 10}`;
-      });
-
-      // The page's own feed adds a line elsewhere 250 ms on, as a chat does.
-      const line = run(page, () => {
-        setTimeout(
-          () => document.querySelector("#alerts")?.insertAdjacentHTML("beforeend", "<p>gg wp</p>"),
-          250,
-        );
-      });
-
-      yield* page.changes();
-      // A line follows a click on a page that ticked a second before.
-      yield* tick;
-      yield* Effect.sleep(Duration.millis(1000));
-      const ticked = yield* page.changes();
-
-      yield* line;
-      yield* page.click(menu);
-      yield* Effect.sleep(Duration.millis(2500));
-      const busy = yield* page.changes({ since: ticked });
-
-      // On a page still for two seconds, a slow ticker ticks just after a click, and the feed
-      // adds a line again.
-      yield* line;
-      yield* page.click(menu);
-      yield* tick;
-      yield* Effect.sleep(Duration.millis(400));
-      const still = yield* page.changes({ since: busy });
-
-      assert.deepStrictEqual(told(busy), [["appeared", undefined, "gg wp"]]);
-      assert.sameDeepMembers(told(still), [
-        ["text", "$61,250", "$61,260"],
-        ["appeared", undefined, "gg wp"],
-      ]);
-      // None names the click: the line on a busy page, the slow tick, nor the feed's next line.
-      assert.deepStrictEqual(
-        [busy, still].flatMap(({ changes }) =>
-          changes.flatMap((change) => (change.cause === undefined ? [] : [change.after])),
-        ),
-        [],
-      );
-    }),
-  );
-
-  it.effect(
-    "names the click its effects followed, out of its reach on a still page or later in its form",
-    () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* start("/desk");
+        const menu = yield* button(page, "Menu");
 
-        // Menu opens a menu where a portal puts it, at the end of the body, and its item a dialog.
-        yield* run(page, () =>
-          document.addEventListener("click", ({ target }) => {
-            const opens =
-              target instanceof Element && target.id === "menu"
-                ? '<div role="menu" style="position:fixed;top:40px;left:200px"><button type="button" role="menuitem">Share</button></div>'
-                : target instanceof Element && target.getAttribute("role") === "menuitem"
-                  ? '<div role="dialog" style="position:fixed;top:80px;left:200px">Share this page</div>'
-                  : "";
+        const tick = run(page, () => {
+          const btc = document.querySelector("#btc");
 
-            document.body.insertAdjacentHTML("beforeend", opens);
-          }),
-        );
-        yield* page.changes();
-        // The moment starts before the first click, however long the clicks take on a busy host.
-        const browser = yield* Browser;
-        const from = yield* browser.now;
-
-        // A slow clock probe can put mapped mutations ahead of the host's present. Keep the
-        // next input's stamp after the preceding read, so it cannot claim that earlier change.
-        const separate = Effect.gen(function* () {
-          const { until } = yield* page.changes();
-          let now = yield* browser.now;
-
-          while (now <= until) {
-            yield* Effect.sleep(Duration.millis(Math.max(1, until - now)));
-            now = yield* browser.now;
-          }
+          if (btc !== null) btc.textContent = `$61,${Number(btc.textContent?.slice(-3)) + 10}`;
         });
 
-        yield* page.click(yield* button(page, "Menu"));
-        yield* separate;
-        yield* page.click(
-          (yield* page.find({ role: "menuitem", name: "Share" }))[0]?.ref ?? "no menu",
-        );
-        yield* separate;
-        yield* page.click(yield* button(page, "Place order"));
-        yield* page.waitFor({ text: "Order placed" });
-        yield* Effect.sleep(Duration.millis(100));
-        const moment = yield* Moment.capture(page, { since: from });
-        const changes = moment.changes?.changes ?? [];
-        const changed = (after: string) => changes.find((change) => change.after === after);
-        const [menu, sheet, placed] = ["Share", "Share this page", "Order placed"].map(changed);
+        // The page's own feed adds a line elsewhere 250 ms on, as a chat does.
+        const line = run(page, () => {
+          setTimeout(
+            () =>
+              document.querySelector("#alerts")?.insertAdjacentHTML("beforeend", "<p>gg wp</p>"),
+            250,
+          );
+        });
 
-        // At once, out of reach: the menu, and the dialog, though the menu holding the item that
-        // opened it came just before.
-        assert.isDefined(menu?.cause);
-        assert.isAbove(sheet?.cause ?? 0, menu?.cause ?? Infinity);
-        // 600 ms on, too late to be direct, but inside the form whose button was clicked.
-        assert.isAbove(placed?.cause ?? 0, sheet?.cause ?? Infinity);
-        assert.isAbove(placed?.startedAt ?? 0, (placed?.cause ?? Infinity) + 500);
+        yield* page.changes();
+        // A line follows a click on a page that ticked a second before.
+        yield* tick;
+        yield* Effect.sleep(Duration.millis(1000));
+        const ticked = yield* page.changes();
+
+        yield* line;
+        yield* page.click(menu);
+        yield* Effect.sleep(Duration.millis(2500));
+        const busy = yield* page.changes({ since: ticked });
+
+        // On a page still for two seconds, a slow ticker ticks just after a click, and the feed
+        // adds a line again.
+        yield* line;
+        yield* page.click(menu);
+        yield* tick;
+        yield* Effect.sleep(Duration.millis(400));
+        const still = yield* page.changes({ since: busy });
+
+        assert.deepStrictEqual(told(busy), [["appeared", undefined, "gg wp"]]);
+        assert.sameDeepMembers(told(still), [
+          ["text", "$61,250", "$61,260"],
+          ["appeared", undefined, "gg wp"],
+        ]);
+        // None names the click: the line on a busy page, the slow tick, nor the feed's next line.
+        assert.deepStrictEqual(
+          [busy, still].flatMap(({ changes }) =>
+            changes.flatMap((change) => (change.cause === undefined ? [] : [change.after])),
+          ),
+          [],
+        );
       }),
+    ),
   );
 
-  it.effect("masks what a field holds unless asked, and ends a window at a frame's paint", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/desk");
-      const field = (name: string) => page.find({ role: "textbox", name });
-      const amount = (yield* field("Amount"))[0]?.ref ?? "";
-      const memo = (yield* field("Memo"))[0]?.ref ?? "";
-      const pin = (yield* field("PIN"))[0]?.ref ?? "";
+  for (const delayedProbe of [false, true])
+    it.effect(
+      `names the click its effects followed${delayedProbe ? " with asymmetric clock probes" : ", out of its reach on a still page or later in its form"}`,
+      () =>
+        TestCdp.withCdp(
+          Effect.gen(function* () {
+            const faults = yield* TestCdp.make();
+            const browser = yield* faults.provide(Chromium.open());
+            const page = yield* browser.newPage((yield* Site).url("/desk"));
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      const first = yield* page.changes();
+            yield* page.bringToFront;
+            // Menu opens a menu where a portal puts it, at the end of the body, and its item a dialog.
+            yield* run(page, () =>
+              document.addEventListener("click", ({ target }) => {
+                const opens =
+                  target instanceof Element && target.id === "menu"
+                    ? '<div role="menu" style="position:fixed;top:40px;left:200px"><button type="button" role="menuitem">Share</button></div>'
+                    : target instanceof Element && target.getAttribute("role") === "menuitem"
+                      ? '<div role="dialog" style="position:fixed;top:80px;left:200px">Share this page</div>'
+                      : "";
 
-      yield* page.type("25", { into: amount });
-      yield* page.type("sell at 70k", { into: memo });
-      yield* page.type("4321", { into: pin });
-      yield* Effect.sleep(Duration.millis(300));
-      const frame = yield* page.frame({ maxAge: 0 });
+                document.body.insertAdjacentHTML("beforeend", opens);
+              }),
+            );
+            if (delayedProbe)
+              faults.rule(
+                { method: "Runtime.evaluate", operation: "calibrate" },
+                { _tag: "Delay", duration: "400 millis" },
+              );
+            // Keep the source cursor: a host bound includes the calibration estimate's uncertainty.
+            const from = yield* page.window({ since: Duration.zero });
 
-      yield* run(page, () => {
-        document.querySelector("#btc")!.textContent = "$70,000";
-      });
-      yield* Effect.sleep(Duration.millis(300));
+            // A slow clock probe can put mapped mutations ahead of the host's present. Keep the
+            // next input's stamp after the preceding read, so it cannot claim that earlier change.
+            const separate = Effect.gen(function* () {
+              const { until } = yield* page.changes();
+              let now = yield* browser.now;
 
-      const typed = (changes: Changes) =>
-        changes.changes.flatMap((change) => (change.kind === "value" ? [change.after] : []));
+              while (now <= until) {
+                yield* Effect.sleep(Duration.millis(Math.max(1, until - now)));
+                now = yield* browser.now;
+              }
+            });
 
-      const masked = yield* page.changes({ since: first });
+            yield* page.click(yield* button(page, "Menu"));
+            yield* separate;
+            yield* page.click(
+              (yield* page.find({ role: "menuitem", name: "Share" }))[0]?.ref ?? "no menu",
+            );
+            yield* separate;
+            yield* page.click(yield* button(page, "Place order"));
+            yield* page.until({ text: "Order placed" }, "some", 5000);
+            yield* Effect.sleep(Duration.millis(100));
+            const moment = yield* Moment.capture(page, { since: from });
+            const changes = moment.changes?.changes ?? [];
+            const changed = (after: string) => changes.find((change) => change.after === after);
+            const [menu, sheet, placed] = ["Share", "Share this page", "Order placed"].map(changed);
 
-      // What was typed shows only as a field's value, masked, in an editable region too, and a
-      // secret field's stays masked when unmasked.
-      assert.deepStrictEqual(typed(masked), ["••••", "••••", "••••"]);
-      assert.notInclude(JSON.stringify(masked), "sell");
-      assert.deepStrictEqual(typed(yield* page.changes({ since: first, unmask: true })), [
-        "25",
-        "sell at 70k",
-        "••••",
-      ]);
-      // A window that ends at the frame holds nothing painted after it.
-      assert.isFalse(
-        (yield* page.changes({ since: first, until: frame })).changes.some(
-          (change) => change.after === "$70,000",
+            // At once, out of reach: the menu, and the dialog, though the menu holding the item that
+            // opened it came just before.
+            assert.isDefined(menu?.cause);
+            assert.isAbove(sheet?.cause ?? 0, menu?.cause ?? Infinity);
+            // 600 ms on, too late to be direct, but inside the form whose button was clicked.
+            assert.isAbove(placed?.cause ?? 0, sheet?.cause ?? Infinity);
+            assert.isAbove(placed?.startedAt ?? 0, (placed?.cause ?? Infinity) + 500);
+          }),
         ),
-      );
-    }),
+    );
+
+  it.effect("masks what a field holds unless asked, and ends a window at a frame's paint", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/desk");
+        const field = (name: string) => page.find({ role: "textbox", name });
+        const amount = (yield* field("Amount"))[0]?.ref ?? "";
+        const memo = (yield* field("Memo"))[0]?.ref ?? "";
+        const pin = (yield* field("PIN"))[0]?.ref ?? "";
+
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        const first = yield* page.changes();
+
+        yield* page.type("25", { into: amount });
+        yield* page.type("sell at 70k", { into: memo });
+        yield* page.type("4321", { into: pin });
+        yield* Effect.sleep(Duration.millis(300));
+        const frame = yield* page.frame({ maxAge: 0 });
+
+        yield* run(page, () => {
+          document.querySelector("#btc")!.textContent = "$70,000";
+        });
+        yield* Effect.sleep(Duration.millis(300));
+
+        const typed = (changes: Changes) =>
+          changes.changes.flatMap((change) => (change.kind === "value" ? [change.after] : []));
+
+        const masked = yield* page.changes({ since: first });
+
+        // What was typed shows only as a field's value, masked, in an editable region too, and a
+        // secret field's stays masked when unmasked.
+        assert.deepStrictEqual(typed(masked), ["••••", "••••", "••••"]);
+        assert.notInclude(JSON.stringify(masked), "sell");
+        assert.deepStrictEqual(typed(yield* page.changes({ since: first, unmask: true })), [
+          "25",
+          "sell at 70k",
+          "••••",
+        ]);
+        // A window that ends at the frame holds nothing painted after it.
+        assert.isFalse(
+          (yield* page.changes({ since: first, until: frame })).changes.some(
+            (change) => change.after === "$70,000",
+          ),
+        );
+      }),
+    ),
   );
 
   it.effect(
     "continues each read where the last ended, and records a new document from its start",
     () =>
-      Effect.gen(function* () {
-        const page = yield* start("/desk");
-        const reads = [yield* page.changes()];
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const page = yield* start("/desk");
+          const reads = [yield* page.changes()];
 
-        for (const price of ["$1", "$2", "$3", "$4"]) {
-          yield* Effect.promise(() =>
-            page.playwright.evaluate((text) => {
-              document.querySelector("#btc")!.textContent = text;
-            }, price),
-          );
-          yield* Effect.sleep(Duration.millis(50));
-          reads.push(yield* page.changes({ since: reads.at(-1) }));
-        }
-        // Four windows, each holding its one change, each starting where the last ended.
-        assert.deepStrictEqual(reads.slice(1).map(told), [
-          [["text", "$61,240", "$1"]],
-          [["text", "$1", "$2"]],
-          [["text", "$2", "$3"]],
-          [["text", "$3", "$4"]],
-        ]);
+          for (const price of ["$1", "$2", "$3", "$4"]) {
+            yield* Effect.promise(() =>
+              TestCdp.nativePage(page).evaluate((text) => {
+                document.querySelector("#btc")!.textContent = text;
+              }, price),
+            );
+            yield* Effect.sleep(Duration.millis(50));
+            reads.push(yield* page.changes({ since: reads.at(-1) }));
+          }
+          // Four windows, each holding its one change, each starting where the last ended.
+          assert.deepStrictEqual(reads.slice(1).map(told), [
+            [["text", "$61,240", "$1"]],
+            [["text", "$1", "$2"]],
+            [["text", "$2", "$3"]],
+            [["text", "$3", "$4"]],
+          ]);
 
-        // The page's next document records from its start, with no read of its own.
-        yield* page.goto((yield* Site).url("/desk"));
-        yield* run(page, () => {
-          document.querySelector("#answer")!.textContent = "Order placed";
-        });
-        yield* Effect.sleep(Duration.millis(300));
-        const next = yield* page.changes();
+          // The page's next document records from its start, with no read of its own.
+          yield* page.goto((yield* Site).url("/desk"));
+          yield* run(page, () => {
+            document.querySelector("#answer")!.textContent = "Order placed";
+          });
+          yield* Effect.sleep(Duration.millis(300));
+          const next = yield* page.changes();
 
-        assert.strictEqual(next.document, reads[0]!.document + 1);
-        assert.deepStrictEqual(told(next), [["appeared", undefined, "Order placed"]]);
-      }),
+          assert.strictEqual(next.document, reads[0]!.document + 1);
+          assert.deepStrictEqual(told(next), [["appeared", undefined, "Order placed"]]);
+        }),
+      ),
   );
 });

@@ -20,16 +20,14 @@ power-loss durability or Browserbase's persistence, capture or billing.
 ## Watched browsing
 
 Create `Watched.make(sessions)` in the output's scope. `sessions` is a
-`Supervisor.Supervisor<A>`: its provider's scoped `open` returns `{ browser, value }`. Put
-generation-specific resources such as an authenticated page index in `value`, acquiring them
-inside that generation's scope. `Browserbase.supervise({ build })` supplies the same shape for
-hosted sessions. Closing a generation also closes its application resources.
+`Supervisor.Supervisor<{ browser, value: A }, E>`: its provider's scoped `open(number)` returns
+`{ value: { browser, value }, lost: browser.disconnected }`. Acquire application resources inside
+that generation's scope. For hosted sessions, pass `Browserbase.generations({ build })` into
+`Supervisor.make`, with `build` returning the browser and application value. Closing a generation
+also closes its application resources.
 
-`prepare(id, walk)` borrows the serving generation, retains a separate scope, opens a page
-in that scope and restores the walk. Restore refuses to blindly repeat a committing step;
-use navigation and other repeatable setup, or operation-specific durable read-back. Preparation
-stops on the lease's first ending notice. Already prepared pages remain held across rotation,
-until released or revoked at the handover deadline. The example uses no automatic retry loop:
+`prepare(id, walk)` keeps a scoped `use` running, opens a page in that scope and restores the walk. Restore refuses to blindly repeat a committing step;
+use navigation and other repeatable setup, or operation-specific durable read-back. Rotation, loss or retirement interrupts that work and closes its prepared page. The example uses no automatic retry loop:
 the consumer chooses which preparation still matters on the next generation.
 
 Keep each prepared page's caller scope alive while it is on output. `reveal(next, sent)` starts
@@ -42,8 +40,7 @@ its scope or explicitly closes its `hold`.
 
 Sent reveals wait in order; a later reveal cannot overtake one already waiting. Waiting remains
 cancelable. Once its turn starts, commit waits for outgoing input to drain. The example completes
-commit and transfers its retained-page ownership together, then releases the old page's hold. This
-lets an outgoing generation finish handover. The returned `Presented.at` is the actual switch
+commit and transfers its prepared-page ownership together, then closes the old page's hold. The returned `Presented.at` is the actual switch
 time; `latency` records how late it was relative to the event. Journal this alongside the
 consumer's line identifier if the application needs a durable editorial history.
 
@@ -56,10 +53,9 @@ unsent one.
 
 Subscribe to `output`, the stage's `shown` stream. `Painted` carries new paint, `Still` carries
 a confirmed current image, `Stalled` says the last image cannot currently be confirmed, and
-`Gone` reports known loss. A consumer can put up its own outage slate. A retained page does not
-survive revocation: stale work fails and its scope closes. For an exclusive persisted context,
-release the old page at a clean boundary before awaiting rotation; holding it while waiting
-for the next generation necessarily waits for handover/revocation instead.
+`Gone` reports known loss. A consumer can put up its own outage slate. A prepared page does not
+survive revocation: stale work fails and its scope closes. Exclusive persisted contexts wait for
+that cleanup and provider release before opening the next generation.
 
 ## Operator-assisted workflows
 
@@ -87,8 +83,8 @@ consumer to reconcile; the runner never retries it as a fresh numeric step.
 assertion about an actual lasting, operation-specific read-back. Absence and relative navigation
 cannot recover unknown input. A toast, generic success heading, arbitrary exact URL or another
 run's saved record is not sufficient. The library cannot
-prove that a site's text represents the intended business operation. Expected effects require
-plan version 2; ordinary recorded plans remain version 1.
+prove that a site's text represents the intended business operation. All plans use version 3
+with canonical typed Actions; prior string-action encodings do not decode.
 
 When a step is known unsent (or repeatable) and the consumer's `operator.needed(page)` confirms
 an authentication challenge, the runner suspends automated browser input. Draining is bounded

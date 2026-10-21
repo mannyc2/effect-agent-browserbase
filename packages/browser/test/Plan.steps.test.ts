@@ -7,169 +7,157 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { Arbitrary, Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
+import { nameOf } from "../src/Action.ts";
 import { Browser } from "../src/Browser.ts";
 import { BrowserError, Timeout } from "../src/BrowserError.ts";
 import { Subject } from "../src/BrowserEvent.ts";
-import * as Chromium from "../src/Chromium.ts";
-import { Found, type Page, ResolvedTarget, State } from "../src/Page.ts";
-import * as Plan from "../src/Plan.ts";
+import { Found, type Page as PublicPage, State } from "../src/Page.ts";
+import * as Plan from "../src/plan/index.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
+import * as TestPage from "../src/testing/TestPage.ts";
+import * as TestCdp from "./support/TestCdp.ts";
+
+type Page = PublicPage;
 
 const subject = new Subject({ role: "button", name: "Target", tag: "button", context: {} });
 
-/** Only the public Page methods Plan consumes; no browser internals or Expect substitute. */
-const scripted = (
+/** A mid-story seed with explicit action outcomes; no partial Page or browser-shaped cast. */
+const scripted = Effect.fnUntraced(function* (
   check: "present" | "absent" | "failed" | "blank" | "error" | "unrendered" = "absent",
-) => {
-  const dispatches: Array<string> = [];
-  const dispatch = (action: string) => Effect.sync(() => void dispatches.push(action));
-
+) {
   const url =
     check === "blank"
       ? "about:blank"
       : `https://workflow.test/${check === "error" ? "error" : "run"}`;
 
-  const found = new Found({
-    ref: "e1",
+  const element = {
+    key: "target",
     subject,
+    text: "Target",
+    editable: true,
+    state: { checked: check === "present" },
     box: { x: 0, y: 0, width: 20, height: 20 },
-    inViewport: true,
-    state: { disabled: false, focused: false, checked: check === "present" },
+  };
+
+  const test = yield* TestPage.make({
+    url,
+    ready: true,
+    elements: [
+      element,
+      ...(check === "present"
+        ? [
+            {
+              ...element,
+              key: "done",
+              subject: new Subject({ ...subject, name: "Done" }),
+              text: "Done",
+            },
+          ]
+        : []),
+    ],
   });
 
-  const methods = {
-    url: Effect.succeed(url),
-    state: Effect.succeed(new State({ page: "scripted", at: 0, url, document: 1 })),
-    ready: () => Effect.void,
-    find: (query = {}) =>
-      query.text === "Done"
-        ? check === "failed"
-          ? Effect.fail(
-              new BrowserError({
-                operation: "find",
-                reason: new Timeout({ millis: 1 }),
-                dispatched: false,
-              }),
-            )
-          : Effect.succeed(check === "present" ? [found] : [])
-        : Effect.succeed([found]),
-    goto: () => dispatch("navigate"),
-    back: dispatch("back"),
-    reload: dispatch("reload"),
-    click: () =>
-      dispatch("click").pipe(
-        Effect.as(
-          new ResolvedTarget({
-            point: { x: 10, y: 10 },
-            element: "button",
-            tag: "button",
-            role: "button",
-            name: "Target",
-            context: {},
-            cursor: "pointer",
-          }),
-        ),
-      ),
-    hover: () => dispatch("hover"),
-    drag: () => dispatch("drag"),
-    type: () => dispatch("type"),
-    press: () => dispatch("press"),
-    scroll: () => dispatch("scroll"),
-    select: () => dispatch("select").pipe(Effect.as("chosen")),
-  } satisfies Pick<
-    Page,
-    | "url"
-    | "state"
-    | "ready"
-    | "find"
-    | "goto"
-    | "back"
-    | "reload"
-    | "click"
-    | "hover"
-    | "drag"
-    | "type"
-    | "press"
-    | "scroll"
-    | "select"
-  >;
+  for (let index = 0; index < 8; index++) yield* test.succeedNext("chosen");
 
-  // This boundary double deliberately implements only Plan's public operations.
-  return { page: methods as unknown as Page, dispatches };
-};
+  const page: Page = {
+    ...test.page,
+    until: (query, want, millis) =>
+      check === "failed"
+        ? Effect.fail(
+            new BrowserError({
+              operation: "until",
+              reason: new Timeout({ millis: 1 }),
+              dispatched: false,
+            }),
+          )
+        : test.page.until(query, want, millis),
+  };
+
+  return {
+    page,
+    dispatches: Effect.map(test.actions, (actions) => actions.map(nameOf)),
+  };
+});
 
 describe("Plan step safety", () => {
   it.effect("refuses to repeat a click whose dispatch is unknown", () =>
-    Effect.gen(function* () {
-      const { page, dispatches } = scripted();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { page, dispatches } = yield* scripted();
 
-      const plan = new Plan.Plan({
-        version: 1,
-        steps: [new Plan.Step({ action: "click", subject, url: "" })],
-      });
+        const plan = new Plan.Plan({
+          version: 3,
+          steps: [new Plan.Step({ action: { _tag: "Click", target: "e0" }, subject, url: "" })],
+        });
 
-      const result = yield* Plan.replay(page, plan, {
-        settle: false,
-        from: { step: 0, input: "unknown" },
-      }).pipe(Effect.exit);
+        const result = yield* Plan.replay(page, plan, {
+          settle: false,
+          from: { step: 0, input: "unknown" },
+        }).pipe(Effect.exit);
 
-      assert.deepStrictEqual(dispatches, []);
-      assert.isTrue(Exit.isFailure(result));
-    }),
+        assert.deepStrictEqual(yield* dispatches, []);
+        assert.isTrue(Exit.isFailure(result));
+      }),
+    ),
   );
 
   it.effect("does not move an unresolved stopping point past a later missing input", () =>
-    Effect.gen(function* () {
-      const { page, dispatches } = scripted();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { page, dispatches } = yield* scripted();
 
-      const plan = Plan.Plan.new([
-        new Plan.Step({ action: "click", subject, url: "" }),
-        new Plan.Step({ action: "type", subject, input: "text", url: "" }),
-      ]);
+        const plan = Plan.Plan.new([
+          new Plan.Step({ action: { _tag: "Click", target: "e0" }, subject, url: "" }),
+          new Plan.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
+        ]);
 
-      const error = yield* Plan.replay(page, plan, {
-        from: new Plan.Stopped({ step: 0, input: "unknown" }),
-        settle: false,
-      }).pipe(Effect.flip);
+        const error = yield* Plan.replay(page, plan, {
+          from: new Plan.Stopped({ step: 0, input: "unknown" }),
+          settle: false,
+        }).pipe(Effect.flip);
 
-      assert.deepStrictEqual([error.stopped.step, error.stopped.input], [0, "unknown"]);
+        assert.deepStrictEqual([error.stopped.step, error.stopped.input], [0, "unknown"]);
 
-      const retried = yield* Plan.replay(page, plan, {
-        from: error.stopped,
-        inputs: { text: "memo" },
-        settle: false,
-      }).pipe(Effect.flip);
+        const retried = yield* Plan.replay(page, plan, {
+          from: error.stopped,
+          inputs: { text: "memo" },
+          settle: false,
+        }).pipe(Effect.flip);
 
-      assert.strictEqual(retried.reason._tag, "Uncertain");
-      assert.deepStrictEqual(dispatches, []);
-    }),
+        assert.strictEqual(retried.reason._tag, "Uncertain");
+        assert.deepStrictEqual(yield* dispatches, []);
+      }),
+    ),
   );
 
   it.effect("resumes from the run start after a missing input preflight", () =>
-    Effect.gen(function* () {
-      const { page, dispatches } = scripted();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { page, dispatches } = yield* scripted();
 
-      const plan = Plan.Plan.new([
-        new Plan.Step({ action: "navigate", target: "https://workflow.test/run", url: "" }),
-        new Plan.Step({ action: "type", subject, input: "text", url: "" }),
-      ]);
+        const plan = Plan.Plan.new([
+          new Plan.Step({ action: { _tag: "Goto", url: "https://workflow.test/run" }, url: "" }),
+          new Plan.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
+        ]);
 
-      const error = yield* Plan.replay(page, plan, { settle: false }).pipe(Effect.flip);
+        const error = yield* Plan.replay(page, plan, { settle: false }).pipe(Effect.flip);
 
-      assert.deepStrictEqual(dispatches, []);
-      assert.deepStrictEqual(error.receipts, []);
+        assert.deepStrictEqual(yield* dispatches, []);
+        assert.deepStrictEqual(error.receipts, []);
 
-      const receipts = yield* Plan.replay(page, plan, {
-        from: error.stopped,
-        inputs: { text: "memo" },
-        settle: false,
-      });
+        const receipts = yield* Plan.replay(page, plan, {
+          from: error.stopped,
+          inputs: { text: "memo" },
+          settle: false,
+        });
 
-      assert.deepStrictEqual(dispatches, ["navigate", "type"]);
-      assert.deepStrictEqual(
-        receipts.map(({ step }) => step),
-        [0, 1],
-      );
-    }),
+        assert.deepStrictEqual(yield* dispatches, ["navigate", "type"]);
+        assert.deepStrictEqual(
+          receipts.map(({ step }) => step),
+          [0, 1],
+        );
+      }),
+    ),
   );
 
   it.effect.prop(
@@ -189,7 +177,7 @@ describe("Plan step safety", () => {
     },
     ({ action, check, expectation, input, entry }) =>
       Effect.gen(function* () {
-        const { page, dispatches } = scripted(check);
+        const { page, dispatches } = yield* scripted(check);
         let document = 1;
 
         const changing: Page = {
@@ -227,17 +215,24 @@ describe("Plan step safety", () => {
         // Deliberately bypass constructors: persisted or constructed malformed objects must not
         // turn negative or relative evidence into a receipt (beta.11 review, user-requested R1).
         const step = {
-          action,
+          action:
+            action === "click"
+              ? { _tag: "Click", target: "e0" }
+              : action === "drag"
+                ? { _tag: "Drag", from: "e0", to: "e0" }
+                : action === "press"
+                  ? { _tag: "Press", keys: "Enter" }
+                  : action === "type"
+                    ? { _tag: "Type", text: "", options: { replace: false } }
+                    : { _tag: action === "back" ? "Back" : "Reload" },
           subject,
           to: subject,
-          target: "Enter",
           url: "",
           input: action === "type" ? "text" : undefined,
-          options: action === "type" ? { replace: false } : undefined,
           expect,
         };
 
-        const payload = { version: expect === undefined ? 1 : 2, steps: [step] };
+        const payload = { version: 3, steps: [step] };
         const plan = payload as unknown as Plan.Plan;
         const from = new Plan.Stopped({ step: 0, input: unknown ? "unknown" : "unsent" });
         const options = { arrival: 0, inputs: { text: "memo" } };
@@ -251,7 +246,7 @@ describe("Plan step safety", () => {
         ).pipe(Effect.exit);
 
         if (unknown) {
-          assert.deepStrictEqual(dispatches, []);
+          assert.deepStrictEqual(yield* dispatches, []);
           assert.strictEqual(
             Exit.isSuccess(result),
             (expectation === "durable" || expectation === "exact") && check === "present",
@@ -264,7 +259,7 @@ describe("Plan step safety", () => {
           }
         } else {
           assert.strictEqual(
-            dispatches.length,
+            (yield* dispatches).length,
             expectation === "none" ||
               (expectation === "exact"
                 ? check !== "present"
@@ -291,162 +286,188 @@ describe("Plan step safety", () => {
   );
 
   it.effect("refuses malformed durable absence and relative navigation before any input", () =>
-    Effect.gen(function* () {
-      for (const expect of [
-        { _tag: "Gone", query: { text: "Done" }, durable: true },
-        { _tag: "Navigated", durable: true },
-      ]) {
-        const payload = { version: 2, steps: [{ action: "click", subject, url: "", expect }] };
-        const plan = payload as unknown as Plan.Plan;
-        const { page, dispatches } = scripted("blank");
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        for (const expect of [
+          { _tag: "Gone", query: { text: "Done" }, durable: true },
+          { _tag: "Navigated", durable: true },
+        ]) {
+          const payload = {
+            version: 3,
+            steps: [{ action: { _tag: "Click", target: "e0" }, subject, url: "", expect }],
+          };
 
-        for (const at of [new Plan.Stopped({ step: 0, input: "unknown" }), 0]) {
-          const result = yield* Plan.take(page, plan, at, { settle: false, arrival: 0 }).pipe(
-            Effect.exit,
-          );
+          const plan = payload as unknown as Plan.Plan;
+          const { page, dispatches } = yield* scripted("blank");
 
-          assert.deepStrictEqual(dispatches, []);
-          assert.isTrue(Exit.isFailure(result));
-          if (Exit.isFailure(result)) {
-            const error = Exit.findErrorOption(result);
+          for (const at of [new Plan.Stopped({ step: 0, input: "unknown" }), 0]) {
+            const result = yield* Plan.take(page, plan, at, { settle: false, arrival: 0 }).pipe(
+              Effect.exit,
+            );
 
-            assert.isTrue(error._tag === "Some" && error.value.reason._tag === "Uncertain");
-            if (error._tag === "Some") assert.deepStrictEqual(error.value.receipts, []);
+            assert.deepStrictEqual(yield* dispatches, []);
+            assert.isTrue(Exit.isFailure(result));
+            if (Exit.isFailure(result)) {
+              const error = Exit.findErrorOption(result);
+
+              assert.isTrue(error._tag === "Some" && error.value.reason._tag === "Uncertain");
+              if (error._tag === "Some") assert.deepStrictEqual(error.value.receipts, []);
+            }
           }
+          for (const onExcessProperty of ["ignore", "error"] as const)
+            assert.isTrue(
+              Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan, { onExcessProperty })(payload)),
+            );
         }
-        for (const onExcessProperty of ["ignore", "error"] as const)
-          assert.isTrue(
-            Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan, { onExcessProperty })(payload)),
-          );
-      }
-    }),
+      }),
+    ),
   );
 
   it.effect("resumes only the repeatable actions whose input was unknown", () =>
-    Effect.gen(function* () {
-      const cases = [
-        new Plan.Step({ action: "navigate", target: "https://workflow.test/run", url: "" }),
-        new Plan.Step({ action: "hover", subject, url: "" }),
-        new Plan.Step({ action: "scroll", url: "" }),
-        new Plan.Step({ action: "select", subject, options: { values: ["chosen"] }, url: "" }),
-        new Plan.Step({ action: "type", subject, input: "text", url: "" }),
-      ];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const cases = [
+          new Plan.Step({ action: { _tag: "Goto", url: "https://workflow.test/run" }, url: "" }),
+          new Plan.Step({ action: { _tag: "Hover", target: "e0" }, subject, url: "" }),
+          new Plan.Step({ action: { _tag: "Scroll" }, url: "" }),
+          new Plan.Step({
+            action: { _tag: "Select", ref: "e0", values: ["chosen"] },
+            subject,
+            url: "",
+          }),
+          new Plan.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
+        ];
 
-      for (const step of cases) {
-        const { page, dispatches } = scripted();
-        const plan = new Plan.Plan({ version: 1, steps: [step] });
+        for (const step of cases) {
+          const { page, dispatches } = yield* scripted();
+          const plan = new Plan.Plan({ version: 3, steps: [step] });
 
-        const receipts = yield* Plan.replay(page, plan, {
-          from: { step: 0, input: "unknown" },
-          settle: false,
-          inputs: { text: "memo" },
-        });
+          const receipts = yield* Plan.replay(page, plan, {
+            from: { step: 0, input: "unknown" },
+            settle: false,
+            inputs: { text: "memo" },
+          });
 
-        assert.isTrue(Plan.repeatable(step));
-        assert.deepStrictEqual(dispatches, [step.action]);
-        assert.strictEqual(receipts[0]?.outcome, "taken");
-      }
-      assert.isFalse(Plan.repeatable(new Plan.Step({ action: "type", input: "text", url: "" })));
-      assert.isFalse(
-        Plan.repeatable(
-          new Plan.Step({ action: "type", subject, options: { submit: true }, url: "" }),
-        ),
-      );
-    }),
+          assert.isTrue(Plan.repeatable(step));
+          assert.deepStrictEqual(yield* dispatches, [
+            step.action._tag === "Goto" ? "navigate" : step.action._tag.toLowerCase(),
+          ]);
+          assert.strictEqual(receipts[0]?.outcome, "taken");
+        }
+        assert.isFalse(
+          Plan.repeatable(
+            new Plan.Step({ action: { _tag: "Type", text: "" }, input: "text", url: "" }),
+          ),
+        );
+        assert.isFalse(
+          Plan.repeatable(
+            new Plan.Step({
+              action: { _tag: "Type", text: "", options: { submit: true } },
+              subject,
+              url: "",
+            }),
+          ),
+        );
+      }),
+    ),
   );
 
   it.effect(
     "refuses a Checked expectation on a target with no checked state before any input",
     () =>
-      Effect.gen(function* () {
-        const { page, dispatches } = scripted();
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const { page, dispatches } = yield* scripted();
 
-        const button: Page = {
-          ...page,
-          find: (query) =>
-            page
-              .find(query)
-              .pipe(
-                Effect.map((found) =>
-                  found.map(
-                    (target) =>
-                      new Found({ ...target, state: { disabled: false, focused: false } }),
+          const button: Page = {
+            ...page,
+            find: (query) =>
+              page
+                .find(query)
+                .pipe(
+                  Effect.map((found) =>
+                    found.map(
+                      (target) =>
+                        new Found({ ...target, state: { disabled: false, focused: false } }),
+                    ),
                   ),
                 ),
-              ),
-        };
+          };
 
-        const plan = Plan.Plan.new([
-          new Plan.Step({
-            action: "click",
-            subject,
-            url: "",
-            expect: { _tag: "Checked", checked: false },
-          }),
-        ]);
+          const plan = Plan.Plan.new([
+            new Plan.Step({
+              action: { _tag: "Click", target: "e0" },
+              subject,
+              url: "",
+              expect: { _tag: "Checked", checked: false },
+            }),
+          ]);
 
-        for (const at of [0, new Plan.Stopped({ step: 0, input: "unknown" })]) {
-          const error = yield* Plan.take(button, plan, at, { settle: false, arrival: 0 }).pipe(
-            Effect.flip,
-          );
+          for (const at of [0, new Plan.Stopped({ step: 0, input: "unknown" })]) {
+            const error = yield* Plan.take(button, plan, at, { settle: false, arrival: 0 }).pipe(
+              Effect.flip,
+            );
 
-          assert.deepStrictEqual(dispatches, []);
-          assert.strictEqual(error.reason._tag, "BrowserError");
-          if (error.reason._tag === "BrowserError")
-            assert.strictEqual(error.reason.reason._tag, "InvalidRequest");
-          assert.strictEqual(error.input, typeof at === "number" ? "unsent" : "unknown");
-        }
-      }),
+            assert.deepStrictEqual(yield* dispatches, []);
+            assert.strictEqual(error.reason._tag, "BrowserError");
+            if (error.reason._tag === "BrowserError")
+              assert.strictEqual(error.reason.reason._tag, "InvalidRequest");
+            assert.strictEqual(error.input, typeof at === "number" ? "unsent" : "unknown");
+          }
+        }),
+      ),
   );
 
   it.effect("bounds effect reads before dispatch, after dispatch, and during recovery", () =>
-    Effect.gen(function* () {
-      for (const phase of ["after", "before", "recovery"] as const) {
-        const { page, dispatches } = scripted();
-        let checks = 0;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        for (const phase of ["after", "before", "recovery"] as const) {
+          const { page, dispatches } = yield* scripted();
+          let checks = 0;
 
-        const slow: Page = {
-          ...page,
-          find: (query) =>
-            Effect.suspend(() =>
-              query?.text === "Done" && ++checks > (phase === "after" ? 1 : 0)
-                ? Effect.sleep("1 hour").pipe(Effect.andThen(page.find(query)))
-                : page.find(query),
-            ),
-        };
+          const slow: Page = {
+            ...page,
+            until: (query, want, millis) =>
+              Effect.suspend(() =>
+                ++checks > (phase === "after" ? 1 : 0)
+                  ? Effect.sleep("1 hour").pipe(Effect.andThen(page.until(query, want, millis)))
+                  : page.until(query, want, millis),
+              ),
+          };
 
-        const plan = Plan.Plan.new([
-          new Plan.Step({
-            action: "click",
-            subject,
-            url: "",
-            expect: { _tag: "Appeared", query: { text: "Done" }, durable: true },
-          }),
-        ]);
+          const plan = Plan.Plan.new([
+            new Plan.Step({
+              action: { _tag: "Click", target: "e0" },
+              subject,
+              url: "",
+              expect: { _tag: "Appeared", query: { text: "Done" }, durable: true },
+            }),
+          ]);
 
-        const taking = yield* Effect.forkChild(
-          Plan.take(
-            slow,
-            plan,
-            phase === "recovery" ? new Plan.Stopped({ step: 0, input: "unknown" }) : 0,
-            { settle: false, arrival: "50 millis" },
-          ).pipe(Effect.flip),
-        );
+          const taking = yield* Effect.forkChild(
+            Plan.take(
+              slow,
+              plan,
+              phase === "recovery" ? new Plan.Stopped({ step: 0, input: "unknown" }) : 0,
+              { settle: false, arrival: "50 millis" },
+            ).pipe(Effect.flip),
+          );
 
-        yield* TestClock.adjust("100 millis");
-        assert.isDefined(taking.pollUnsafe(), `${phase}: a check must not outlive its deadline`);
-        const error = yield* Fiber.join(taking);
+          yield* TestClock.adjust("100 millis");
+          assert.isDefined(taking.pollUnsafe(), `${phase}: a check must not outlive its deadline`);
+          const error = yield* Fiber.join(taking);
 
-        assert.deepStrictEqual(
-          [error.reason._tag, error.input, dispatches],
-          [
-            phase === "recovery" ? "Uncertain" : "Drifted",
-            phase === "before" ? "unsent" : "unknown",
-            phase === "after" ? ["click"] : [],
-          ],
-        );
-      }
-    }),
+          assert.deepStrictEqual(
+            [error.reason._tag, error.input, yield* dispatches],
+            [
+              phase === "recovery" ? "Uncertain" : "Drifted",
+              phase === "before" ? "unsent" : "unknown",
+              phase === "after" ? ["click"] : [],
+            ],
+          );
+        }
+      }),
+    ),
   );
 });
 
@@ -511,8 +532,8 @@ const named = (name: string, role = "button") =>
 /** The native click runs; its public operation then loses the acknowledgement. */
 const losesReply = (page: Page): Page => ({
   ...page,
-  click: (target, options) =>
-    page.click(target, options).pipe(
+  perform: (action) =>
+    page.perform(action).pipe(
       Effect.andThen(
         Effect.fail(
           new BrowserError({
@@ -527,10 +548,10 @@ const losesReply = (page: Page): Page => ({
 
 const orderPlan = (durable: boolean) =>
   new Plan.Plan({
-    version: 2,
+    version: 3,
     steps: [
       new Plan.Step({
-        action: "click",
+        action: { _tag: "Click", target: "e0" },
         subject: named("Place order"),
         url: "",
         expect: {
@@ -542,10 +563,12 @@ const orderPlan = (durable: boolean) =>
     ],
   });
 
-layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
-  "Plan steps in Chromium",
-  (it) => {
-    it.effect("recovers an exact operation URL without more input", () =>
+layer(TestCdp.provideLayer(Chromium.layer()), {
+  excludeTestServices: true,
+  timeout: Duration.seconds(60),
+})("Plan steps in Chromium", (it) => {
+  it.effect("recovers an exact operation URL without more input", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* workflow();
         const page = yield* open(site.url);
@@ -557,7 +580,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         const exact = Plan.Plan.new([
           new Plan.Step({
-            action: "click",
+            action: { _tag: "Click", target: "e0" },
             subject: named("Place order"),
             url: "",
             expect: { _tag: "Navigated", url: receiptUrl, durable: true },
@@ -590,11 +613,13 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
         assert.strictEqual(yield* site.orders, 1);
       }),
-    );
+    ),
+  );
 
-    it.effect(
-      "skips a checked target instead of toggling it, and stamps the receipt on the browser clock",
-      () =>
+  it.effect(
+    "skips a checked target instead of toggling it, and stamps the receipt on the browser clock",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const site = yield* workflow();
           const page = yield* open(site.url);
@@ -602,10 +627,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           const before = yield* browser.now;
 
           const plan = new Plan.Plan({
-            version: 2,
+            version: 3,
             steps: [
               new Plan.Step({
-                action: "click",
+                action: { _tag: "Click", target: "e0" },
                 subject: named("Enabled", "checkbox"),
                 url: site.url,
                 expect: { _tag: "Checked", checked: true },
@@ -620,19 +645,19 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.isAtLeast(receipt.at, receipt.startedAt);
           assert.isAtMost(receipt.at, yield* browser.now);
           assert.isTrue(
-            yield* Effect.promise(() => page.playwright.getByLabel("Enabled").isChecked()),
+            yield* Effect.promise(() => TestCdp.nativePage(page).getByLabel("Enabled").isChecked()),
           );
           assert.isUndefined(
             yield* Effect.promise(() =>
-              page.playwright.evaluate(() => document.body.dataset["toggles"]),
+              TestCdp.nativePage(page).evaluate(() => document.body.dataset["toggles"]),
             ),
           );
 
           const unchecked = new Plan.Plan({
-            version: 2,
+            version: 3,
             steps: [
               new Plan.Step({
-                action: "click",
+                action: { _tag: "Click", target: "e0" },
                 subject: named("Enabled", "checkbox"),
                 url: site.url,
                 expect: { _tag: "Checked", checked: false },
@@ -646,16 +671,18 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual((yield* Plan.take(page, unchecked, from)).outcome, "skipped");
           assert.strictEqual(
             yield* Effect.promise(() =>
-              page.playwright.evaluate(() => document.body.dataset["toggles"]),
+              TestCdp.nativePage(page).evaluate(() => document.body.dataset["toggles"]),
             ),
             "1",
           );
         }),
-    );
+      ),
+  );
 
-    it.effect(
-      "verifies a lost reply against durable read-back and restores on a fresh page without ordering twice",
-      () =>
+  it.effect(
+    "verifies a lost reply against durable read-back and restores on a fresh page without ordering twice",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const site = yield* workflow();
           const page = yield* open(site.url);
@@ -683,11 +710,13 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           );
           assert.strictEqual(yield* site.orders, 1);
         }),
-    );
+      ),
+  );
 
-    it.effect(
-      "does not treat a transient success notice as permission to continue after a lost reply",
-      () =>
+  it.effect(
+    "does not treat a transient success notice as permission to continue after a lost reply",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const site = yield* workflow();
           const page = yield* open(site.url);
@@ -701,7 +730,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           yield* site.ordered;
           assert.strictEqual(yield* site.orders, 1);
           yield* Effect.promise(() =>
-            page.playwright.getByRole("alert").waitFor({ state: "visible" }),
+            TestCdp.nativePage(page).getByRole("alert").waitFor({ state: "visible" }),
           );
           const visible = yield* Effect.flip(Plan.replay(page, plan, { from: error.stopped }));
 
@@ -719,20 +748,30 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(restore.reason._tag, "Uncertain");
           assert.strictEqual(yield* site.orders, 1);
         }),
-    );
+      ),
+  );
 
-    it.effect(
-      "records completed receipts and an unsent stopping point when the next input is refused",
-      () =>
+  it.effect(
+    "records completed receipts and an unsent stopping point when the next input is refused",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const site = yield* workflow();
           const page = yield* open(site.url);
 
           const plan = new Plan.Plan({
-            version: 1,
+            version: 3,
             steps: [
-              new Plan.Step({ action: "hover", subject: named("Place order"), url: site.url }),
-              new Plan.Step({ action: "click", subject: named("Unavailable"), url: site.url }),
+              new Plan.Step({
+                action: { _tag: "Hover", target: "e0" },
+                subject: named("Place order"),
+                url: site.url,
+              }),
+              new Plan.Step({
+                action: { _tag: "Click", target: "e0" },
+                subject: named("Unavailable"),
+                url: site.url,
+              }),
             ],
           });
 
@@ -748,22 +787,23 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           );
           assert.strictEqual(yield* site.orders, 0);
         }),
-    );
+      ),
+  );
 
-    it.effect(
-      "preserves dispatched Action evidence on cancellation and refuses its journaled unknown restart",
-      () =>
+  it.effect(
+    "preserves dispatched Action evidence on cancellation and refuses its journaled unknown restart",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const site = yield* workflow();
           const page = yield* open(site.url);
 
           const plan = new Plan.Plan({
-            version: 1,
+            version: 3,
             steps: [
               new Plan.Step({
-                action: "click",
+                action: { _tag: "Click", target: "e0", options: { holdMillis: 60_000 } },
                 subject: named("Commit on press"),
-                options: { holdMillis: 60_000 },
                 url: site.url,
               }),
             ],
@@ -793,11 +833,13 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(error.reason._tag, "Uncertain");
           assert.strictEqual(yield* site.orders, 1);
         }),
-    );
+      ),
+  );
 
-    it.effect(
-      "does not bypass recorded arrival when an effect already holds or reconciles a lost reply",
-      () =>
+  it.effect(
+    "does not bypass recorded arrival when an effect already holds or reconciles a lost reply",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const site = yield* workflow();
           const page = yield* open(site.url);
@@ -805,7 +847,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
           const checked = Plan.Plan.new([
             new Plan.Step({
-              action: "click",
+              action: { _tag: "Click", target: "e0" },
               subject: named("Enabled", "checkbox"),
               url: elsewhere,
               expect: { _tag: "Checked", checked: true },
@@ -834,16 +876,24 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           );
           assert.strictEqual(yield* site.orders, 1);
         }),
-    );
+      ),
+  );
 
-    it.effect("waits for a delayed cross-site arrival and refuses one outside its bound", () =>
+  it.effect("waits for a delayed cross-site arrival and refuses one outside its bound", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* workflow();
         const expected = site.url.replace("127.0.0.1", "localhost") + "/done";
 
         const plan = new Plan.Plan({
-          version: 1,
-          steps: [new Plan.Step({ action: "click", subject: named("Continue"), url: expected })],
+          version: 3,
+          steps: [
+            new Plan.Step({
+              action: { _tag: "Click", target: "e0" },
+              subject: named("Continue"),
+              url: expected,
+            }),
+          ],
         });
 
         const timely = yield* open(site.url + "?delay=200");
@@ -863,9 +913,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.deepStrictEqual([error.reason._tag, error.input], ["Drifted", "unknown"]);
         assert.notStrictEqual(yield* late.url, expected);
       }),
-    );
+    ),
+  );
 
-    it.effect("retains a delayed recorded navigation before resuming the following step", () =>
+  it.effect("retains a delayed recorded navigation before resuming the following step", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* workflow();
         const expected = site.url.replace("127.0.0.1", "localhost") + "/done";
@@ -874,10 +926,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         if (continued === undefined) return yield* Effect.die("missing Continue fixture");
         yield* recording.click(continued.ref);
-        yield* Effect.promise(() => recording.playwright.waitForURL(expected));
+        yield* Effect.promise(() => TestCdp.nativePage(recording).waitForURL(expected));
         yield* recording.press("Shift");
         const plan = Plan.fromEvents(yield* recording.recentEvents);
-        const following = plan.steps.findIndex((step) => step.action === "press");
+        const following = plan.steps.findIndex((step) => step.action._tag === "Press");
         const replacement = yield* open(expected);
 
         const receipt = yield* Plan.take(replacement, plan, following, {
@@ -888,6 +940,6 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(receipt.outcome, "taken");
         assert.strictEqual(plan.steps[following - 1]?.url, expected);
       }),
-    );
-  },
-);
+    ),
+  );
+});

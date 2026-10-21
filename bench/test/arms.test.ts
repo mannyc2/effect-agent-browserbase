@@ -3,13 +3,13 @@
 // pair. No model is called.
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
-import * as Chromium from "effect-browser/Chromium";
 import { type Prompt, Tool } from "effect/ai";
 
 import type { Arm } from "../Arms.ts";
 import { noCalls } from "../Budget.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
 import { classify, isolatedTrial } from "../Trial.ts";
+import * as Chromium from "./browser.ts";
 import { answer, call, finish, pictures, scripted, textOf, type Turn } from "./scripted.ts";
 
 const parameters = (tools: ReadonlyArray<Tool.Any>, name: string): ReadonlyArray<string> => {

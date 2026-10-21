@@ -5,12 +5,13 @@
  */
 import { Deferred, Duration, Effect, Schedule } from "effect";
 
+import type { Name } from "../../Action.ts";
 import { BrowserError, NavigationFailed, NotActionable, NotFound } from "../../BrowserError.ts";
+import * as Url from "../../Url.ts";
 import type { Guard } from "../input/guard.ts";
 import type { InputMarks, Perform } from "../input/perform.ts";
-import { Current } from "../input/replies.ts";
 import { failWith, type PageContext, refuse } from "./context.ts";
-import * as Url from "./url.ts";
+import { Current } from "./replies.ts";
 
 export const make = (
   page: PageContext,
@@ -21,7 +22,7 @@ export const make = (
   const { send } = page.protocol;
 
   // `address` is where `run` goes, as the action, the guard and a failure report it.
-  const navigation = (name: string, run: () => Promise<unknown>, address: string) => {
+  const navigation = (name: Name, run: () => Promise<unknown>, address: string) => {
     const url = Url.redact(address);
 
     return perform(
@@ -153,9 +154,14 @@ export const make = (
     )
       return refuse("navigate", `"${Url.redact(url)}" is not a URL`);
 
+    const run = () => playwright.goto(parsed.href, { waitUntil: "domcontentloaded", timeout: 0 });
+
     return navigation(
       "navigate",
-      () => playwright.goto(parsed.href, { waitUntil: "domcontentloaded", timeout: 0 }),
+      () =>
+        page.nativePort === undefined
+          ? run()
+          : page.nativePort(page.id, "goto", { url: parsed.href }, run),
       parsed.href,
     );
   };

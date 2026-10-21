@@ -3,9 +3,10 @@
 // the lobby and the game page from the casino, and the game in an iframe from its studio. The
 // studio's server decides every spin, and its record of them is the take's ground truth: the
 // canvas is the only place the agent can read them.
-import { Effect, FileSystem, Path } from "effect";
-import type * as Browser from "effect-browser/Browser";
+import { Effect, FileSystem, Path, Schema } from "effect";
+import type { RequestDecision } from "effect-browser/Browser";
 
+import * as Routes from "../../../bench/FixtureRoutes.ts";
 import * as Slot from "./slot.ts";
 
 export const casino = "https://www.marlowecasino.com";
@@ -76,10 +77,7 @@ const configuration = (session: Session) => ({
  * server drawing its spins from `seed`, a fresh one unless given. Returns the seed, so a session
  * can be dealt again, and the spins the game server has decided, oldest first.
  */
-export const serve = Effect.fn("Casino.serve")(function* (
-  browser: Browser.Service,
-  seed: number = freshSeed(),
-) {
+export const serve = Effect.fn("Casino.serve")(function* (seed: number = freshSeed()) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const read = (file: string) => fs.readFileString(path.join(import.meta.dirname, file));
@@ -132,69 +130,63 @@ export const serve = Effect.fn("Casino.serve")(function* (
   const casinoPage = (pathname: string) =>
     pathname === "/" || /^\/games\/[a-z0-9-]+\/?$/.test(pathname) ? html(site) : notFound;
 
-  yield* Effect.acquireRelease(
-    Effect.promise(() =>
-      Promise.all([
-        browser.context.route(`${casino}/**`, (route) => {
-          const url = new URL(route.request().url());
+  const fulfilled = (
+    response: Omit<Extract<RequestDecision, { readonly _tag: "Fulfilled" }>, "_tag">,
+  ) => ({ _tag: "Fulfilled" as const, ...response });
 
-          if (url.pathname === "/favicon.ico") return route.fulfill({ status: 204 });
-
-          return route.fulfill(casinoPage(url.pathname));
-        }),
-        browser.context.route(`${studio}/**`, (route) => {
-          const request = route.request();
-          const url = new URL(request.url());
-
-          if (request.method() === "OPTIONS")
-            return route.fulfill({
-              status: 204,
-              headers: {
-                "access-control-allow-origin": casino,
-                "access-control-allow-methods": "POST, GET",
-                "access-control-allow-headers": "content-type",
-              },
-            });
-          if (url.pathname === "/opal-crown/" || url.pathname === "/opal-crown/index.html")
-            return route.fulfill(html(slot));
-          if (url.pathname === "/api/v2/session" && request.method() === "POST")
-            return route.fulfill(json(configuration(open())));
-          if (url.pathname === "/api/v2/spin" && request.method() === "POST") {
-            const body = (request.postDataJSON() ?? {}) as {
-              readonly sessionId?: unknown;
-              readonly bet?: unknown;
-            };
-
-            const session =
-              typeof body.sessionId === "string" ? sessions.get(body.sessionId) : undefined;
-
-            const bet = Number(body.bet);
-
-            if (session === undefined)
-              return route.fulfill(json({ error: "SESSION_EXPIRED" }, 401));
-            if (!(Slot.betLevels as ReadonlyArray<number>).includes(bet))
-              return route.fulfill(json({ error: "INVALID_BET" }, 400));
-            if (session.balance < bet)
-              return route.fulfill(json({ error: "INSUFFICIENT_FUNDS" }, 402));
-            const played = spin(session, bet);
-
-            spins.push(played);
-
-            return route.fulfill(json(played));
-          }
-
-          return route.fulfill(notFound);
-        }),
-      ]),
+  yield* Routes.serve(`${casino}/`, (url) =>
+    fulfilled(
+      url.pathname === "/favicon.ico"
+        ? { status: 204, contentType: "text/plain", body: "" }
+        : casinoPage(url.pathname),
     ),
-    () =>
-      Effect.promise(() =>
-        Promise.all([
-          browser.context.unroute(`${casino}/**`),
-          browser.context.unroute(`${studio}/**`),
-        ]),
-      ).pipe(Effect.ignore),
   );
+  yield* Routes.serve(`${studio}/`, (url, request) => {
+    if (request.method === "OPTIONS")
+      return fulfilled({
+        status: 204,
+        contentType: "text/plain",
+        body: "",
+        headers: {
+          "access-control-allow-origin": casino,
+          "access-control-allow-methods": "POST, GET",
+          "access-control-allow-headers": "content-type",
+        },
+      });
+    if (url.pathname === "/opal-crown/" || url.pathname === "/opal-crown/index.html")
+      return fulfilled(html(slot));
+    if (url.pathname === "/api/v2/session" && request.method === "POST")
+      return fulfilled(json(configuration(open())));
+    if (url.pathname === "/api/v2/spin" && request.method === "POST") {
+      const body = Schema.decodeOption(
+        Schema.fromJsonString(
+          Schema.Struct({
+            sessionId: Schema.optional(Schema.String),
+            bet: Schema.optional(Schema.Finite),
+          }),
+        ),
+      )(request.body ?? "{}");
+
+      const session =
+        body._tag === "Some" && body.value.sessionId !== undefined
+          ? sessions.get(body.value.sessionId)
+          : undefined;
+
+      const bet = body._tag === "Some" ? Number(body.value.bet) : Number.NaN;
+
+      if (session === undefined) return fulfilled(json({ error: "SESSION_EXPIRED" }, 401));
+      if (!(Slot.betLevels as ReadonlyArray<number>).includes(bet))
+        return fulfilled(json({ error: "INVALID_BET" }, 400));
+      if (session.balance < bet) return fulfilled(json({ error: "INSUFFICIENT_FUNDS" }, 402));
+      const played = spin(session, bet);
+
+      spins.push(played);
+
+      return fulfilled(json(played));
+    }
+
+    return fulfilled(notFound);
+  });
 
   return { seed, spins: Effect.sync((): ReadonlyArray<Spin> => [...spins]) };
 });

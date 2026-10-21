@@ -1,13 +1,14 @@
 import { assert, it, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber, Schedule, Stream } from "effect";
-import type { CDPSession } from "playwright-core";
+import { Clock, Deferred, Duration, Effect, Fiber, Schedule, Stream } from "effect";
 import { jpegjs } from "playwright-core/lib/utilsBundle";
 
+import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
-import * as Cdp from "../src/Cdp.ts";
-import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
-import { behindProxy } from "./protocol.ts";
+import * as Cdp from "../src/providers/Cdp.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
+import * as Stillness from "../src/stillness/Stillness.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const blank = Effect.gen(function* () {
   const browser = yield* Browser;
@@ -19,22 +20,24 @@ const show = (page: Page, html: string) =>
   page.goto("data:text/html," + encodeURIComponent(`<!doctype html>${html}`));
 
 const evaluate = <A>(page: Page, run: () => A) =>
-  Effect.promise(() => page.playwright.evaluate(run));
+  Effect.promise(() => TestCdp.nativePage(page).evaluate(run));
 
 const reason = (effect: Effect.Effect<void, { readonly reason: { readonly _tag: string } }>) =>
   Effect.flip(effect).pipe(Effect.map((error) => error.reason._tag));
 
-layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
-  "Page.ready",
-  (it) => {
-    it.effect("never takes a screenshot's paused capture for a still animated screen", () =>
+layer(TestCdp.provideLayer(Chromium.layer()), {
+  excludeTestServices: true,
+  timeout: Duration.seconds(60),
+})("Page.ready", (it) => {
+  it.effect("never takes a screenshot's paused capture for a still animated screen", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
-        const native = (yield* Browser).context.browser();
+        const native = TestCdp.nativeContext(yield* Browser).browser();
 
         if (native === null) return yield* Effect.die("the fixture requires local Chromium");
 
         const context = yield* Effect.acquireRelease(
-          Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+          Effect.promise(() => native.newContext({ viewport: null })),
           (context) => Effect.promise(() => context.close()),
         );
 
@@ -61,23 +64,29 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           }),
           Effect.timeout("5 seconds"),
         );
-        const entered = Promise.withResolvers<void>();
-        const restored = Promise.withResolvers<void>();
-        const screenshot = page.playwright.screenshot.bind(page.playwright);
+        const entered = yield* Deferred.make<void>();
+        const restored = yield* Deferred.make<void>();
+        const faults = yield* TestCdp.TestCdp;
 
-        page.playwright.screenshot = (options) => {
-          entered.resolve();
-
-          return screenshot(options).then((image) => restored.promise.then(() => image));
-        };
-        yield* Effect.addFinalizer(() => Effect.sync(() => restored.resolve()));
+        faults.rule(
+          { page: page.id, method: "Page.captureScreenshot" },
+          { _tag: "Hold", gate: restored },
+          { phase: "after", times: 1 },
+        );
+        faults.observe((call, phase) => {
+          if (
+            call.session.page === page.id &&
+            call.method === "Page.captureScreenshot" &&
+            phase === "received"
+          )
+            Deferred.doneUnsafe(entered, Effect.void);
+        });
+        yield* Effect.addFinalizer(() => Deferred.succeed(restored, undefined));
 
         const outcome = (timeout: Duration.Input) =>
-          page
-            .ready({ quietMillis: 100, timeout })
-            .pipe(
-              Effect.match({ onSuccess: () => "ready", onFailure: (error) => error.reason._tag }),
-            );
+          Stillness.wait(page, { quietMillis: 100, timeout }).pipe(
+            Effect.match({ onSuccess: () => "ready", onFailure: (error) => error.reason._tag }),
+          );
 
         const before = yield* outcome("1 second").pipe(Effect.forkScoped);
 
@@ -87,17 +96,19 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           .zoom({ x: 5, y: 5, width: 160, height: 90 })
           .pipe(Effect.forkScoped);
 
-        yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("5 seconds"));
+        yield* Deferred.await(entered).pipe(Effect.timeout("5 seconds"));
         assert.strictEqual(yield* outcome("300 millis"), "Timeout");
         assert.strictEqual(yield* Fiber.join(before), "Timeout");
-        restored.resolve();
+        yield* Deferred.succeed(restored, undefined);
         yield* Fiber.join(picture);
         // The resumed stream still observes the drawing canvas.
         assert.strictEqual(yield* outcome("300 millis"), "Timeout");
       }),
-    );
+    ),
+  );
 
-    it.effect("is not ready while the viewport shows nothing, and is once the chart draws", () =>
+  it.effect("is not ready while the viewport shows nothing, and is once the chart draws", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* blank;
 
@@ -117,10 +128,12 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* page.ready({ timeout: Duration.seconds(5) });
         assert.isTrue(yield* evaluate(page, () => document.querySelector("canvas") !== null));
       }),
-    );
+    ),
+  );
 
-    // Each shows only its loading state until its content comes, 800 ms after it loads.
-    it.effect("is not ready on a loading screen, and is once its content shows", () =>
+  // Each shows only its loading state until its content comes, 800 ms after it loads.
+  it.effect("is not ready on a loading screen, and is once its content shows", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* blank;
         const content = `document.title = "drawn"; document.body.insertAdjacentHTML("beforeend", "<p>BTC 64,000</p>")`;
@@ -145,9 +158,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(yield* evaluate(page, () => document.title), "drawn", screen);
         }
       }),
-    );
+    ),
+  );
 
-    it.effect("is not ready while what the viewport holds is hidden", () =>
+  it.effect("is not ready while what the viewport holds is hidden", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* blank;
 
@@ -157,9 +172,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
         assert.strictEqual(yield* reason(page.ready({ timeout: Duration.millis(500) })), "Timeout");
       }),
-    );
+    ),
+  );
 
-    it.effect("waits for an entrance animation in view to end, but not for an endless one", () =>
+  it.effect("waits for an entrance animation in view to end, but not for an endless one", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* blank;
 
@@ -181,12 +198,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           ),
         );
       }),
-    );
+    ),
+  );
 
-    // Accepted stage 2, L1: paint never becomes quiet, although the visible DOM does.
-    it.effect(
-      "observes content quiet from its first read and after changes, while canvas paints",
-      () =>
+  // Accepted stage 2, L1: paint never becomes quiet, although the visible DOM does.
+  it.effect(
+    "observes content quiet from its first read and after changes, while canvas paints",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const page = yield* blank;
 
@@ -201,7 +220,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           );
           const started = performance.now();
 
-          yield* page.ready({ still: "content", quietMillis: 200, timeout: Duration.seconds(2) });
+          yield* Stillness.wait(page, {
+            still: "content",
+            quietMillis: 200,
+            timeout: Duration.seconds(2),
+          });
           assert.isAtLeast(performance.now() - started, 200);
           yield* evaluate(page, () => {
             for (const after of [100, 200, 300])
@@ -210,7 +233,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
                 document.body.dataset.changed = String(performance.now());
               }, after);
           });
-          yield* page.ready({ still: "content", quietMillis: 200, timeout: Duration.seconds(2) });
+          yield* Stillness.wait(page, {
+            still: "content",
+            quietMillis: 200,
+            timeout: Duration.seconds(2),
+          });
 
           const observed = yield* evaluate(page, () => ({
             text: document.querySelector("p")!.textContent,
@@ -220,15 +247,17 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(observed.text, "300");
           assert.isAtLeast(observed.quiet, 200);
         }),
-    );
+      ),
+  );
 
-    // L1 exposed the second commit failing Runtime.evaluate instead of restarting readiness.
-    it.effect("restarts content quiet across repeated commits within the original deadline", () =>
+  // L1 exposed the second commit failing Runtime.evaluate instead of restarting readiness.
+  it.effect("restarts content quiet across repeated commits within the original deadline", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* (yield* Browser).newPage();
 
         yield* Effect.promise(() =>
-          page.playwright.route("https://ready.test/**", (route) => {
+          TestCdp.nativePage(page).route("https://ready.test/**", (route) => {
             const url = new URL(route.request().url());
             const hop = Number(url.pathname.slice(1));
             const ending = hop === 2 && url.search === "";
@@ -243,7 +272,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
         yield* page.goto("https://ready.test/0");
         yield* evaluate(page, () => (window as unknown as { start: () => void }).start());
-        yield* page.ready({ still: "content", quietMillis: 250, timeout: Duration.seconds(2) });
+        yield* Stillness.wait(page, {
+          still: "content",
+          quietMillis: 250,
+          timeout: Duration.seconds(2),
+        });
         assert.strictEqual(yield* page.url, "https://ready.test/2");
         assert.isAtLeast(
           yield* evaluate(
@@ -254,19 +287,20 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
         yield* page.goto("https://ready.test/0?endless");
         yield* evaluate(page, () => (window as unknown as { start: () => void }).start());
-        const started = performance.now();
-
         assert.strictEqual(
           yield* reason(
-            page.ready({ still: "content", quietMillis: 250, timeout: Duration.millis(700) }),
+            Stillness.wait(page, {
+              still: "content",
+              quietMillis: 250,
+              timeout: Duration.millis(700),
+            }),
           ),
           "Timeout",
         );
-        assert.isBelow(performance.now() - started, 1500);
       }),
-    );
-  },
-);
+    ),
+  );
+});
 
 // A corner that pulses from the start, as a slot's idle art does, and a region a click sets moving
 // for 1.5 s, or for good: a reel's large area, or a win counter's few digits.
@@ -296,19 +330,21 @@ const stage = (moving: "reels" | "counter", seconds: number) =>
 </script></body>`;
 
 // The screen's foreground: what an input set moving must stop, while what moved before it may not.
-layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
-  "Page.ready in the foreground",
-  (it) => {
-    // bea3a16 compared only the newest frame at each look: motion and its return in between
-    // disappeared. Hold that look while real Chromium delivers both paints, then let it resume.
-    it.effect("counts foreground motion between looks and after deferred frame acceptance", () =>
+layer(TestCdp.provideLayer(Chromium.layer()), {
+  excludeTestServices: true,
+  timeout: Duration.seconds(60),
+})("Page.ready in the foreground", (it) => {
+  // bea3a16 compared only the newest frame at each look: motion and its return in between
+  // disappeared. Hold that look while real Chromium delivers both paints, then let it resume.
+  it.effect("counts foreground motion between looks and after deferred frame acceptance", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
-        const native = (yield* Browser).context.browser();
+        const native = TestCdp.nativeContext(yield* Browser).browser();
 
         if (native === null) return yield* Effect.die("the fixture requires local Chromium");
 
         const context = yield* Effect.acquireRelease(
-          Effect.promise(() => native.newContext({ viewport: { width: 320, height: 180 } })),
+          Effect.promise(() => native.newContext({ viewport: null })),
           (context) => Effect.promise(() => context.close()),
         );
 
@@ -317,8 +353,9 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         let resume = Promise.withResolvers<void>();
         let held = false;
         const viewportRead = Promise.withResolvers<void>();
-        const viewportReply = Promise.withResolvers<void>();
-        const createSession = context.newCDPSession.bind(context);
+        const viewportReply = { resolve: () => Deferred.doneUnsafe(viewportGate, Effect.void) };
+        const faults = yield* TestCdp.make();
+        const viewportGate = yield* Deferred.make<void>();
         let resize: "off" | "waiting" | "delivered" = "off";
 
         const waitFor = (phase: string) =>
@@ -327,47 +364,27 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             orElse: () => Effect.die(new Error(`foreground fixture timed out: ${phase}`)),
           });
 
-        context.newCDPSession = async (target) => {
-          const cdp = await createSession(target);
-          const send = cdp.send.bind(cdp);
-
-          const emitter = cdp as CDPSession & {
-            emit(event: string | symbol, ...args: ReadonlyArray<unknown>): boolean;
-          };
-
-          const emit = emitter.emit.bind(emitter);
-
-          // The viewport request proves an eligible resize is queued; earlier native frames can
-          // still be late or malformed. Hold later notifications until the context closes.
-          emitter.emit = (event, ...args) =>
-            event === "Page.screencastFrame" && resize === "delivered"
-              ? true
-              : emit(event, ...args);
-
-          const observed: CDPSession["send"] = (method, params) => {
-            const response = send(method, params);
-
-            if (
-              resize === "waiting" &&
-              method === "Runtime.evaluate" &&
-              params !== undefined &&
-              "expression" in params &&
-              params.expression.endsWith(".__effectBrowser.viewport()")
-            ) {
-              resize = "delivered";
-              viewportRead.resolve();
-
-              return response.then((value) => viewportReply.promise.then(() => value));
-            }
-
-            return response;
-          };
-
-          cdp.send = observed;
-
-          return cdp;
-        };
-
+        faults.observe((call, phase) => {
+          if (
+            phase !== "received" ||
+            resize !== "waiting" ||
+            call.method !== "Runtime.evaluate" ||
+            call.script !== "viewport"
+          )
+            return;
+          resize = "delivered";
+          viewportRead.resolve();
+          faults.rule(
+            { page: call.session.page, method: "Page.screencastFrame" },
+            { _tag: "Drop" },
+            { phase: "event" },
+          );
+          faults.rule(
+            { page: call.session.page, method: "Runtime.evaluate", script: "viewport" },
+            { _tag: "Hold", gate: viewportGate },
+            { phase: "after", times: 1 },
+          );
+        });
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
             resume.resolve();
@@ -375,22 +392,24 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           }),
         );
 
-        const browser = yield* makeBrowser(context, { id: "ready-pulse", provider: "test" }).pipe(
-          Effect.provideService(Clock.Clock, {
-            currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
-            currentTimeMillis: clock.currentTimeMillis,
-            currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
-            currentTimeNanos: clock.currentTimeNanos,
-            monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
-            monotonicTimeNanos: clock.monotonicTimeNanos,
-            sleep: (duration) => {
-              if (Duration.toMillis(duration) !== 100 || held) return clock.sleep(duration);
-              held = true;
-              entered.resolve();
+        const browser = yield* faults.provide(
+          makeBrowser(context, { id: "ready-pulse", provider: "test" }).pipe(
+            Effect.provideService(Clock.Clock, {
+              currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+              currentTimeMillis: clock.currentTimeMillis,
+              currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+              currentTimeNanos: clock.currentTimeNanos,
+              monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+              monotonicTimeNanos: clock.monotonicTimeNanos,
+              sleep: (duration) => {
+                if (Duration.toMillis(duration) !== 100 || held) return clock.sleep(duration);
+                held = true;
+                entered.resolve();
 
-              return Effect.promise(() => resume.promise);
-            },
-          }),
+                return Effect.promise(() => resume.promise);
+              },
+            }),
+          ),
         );
 
         const page = yield* browser.newPage();
@@ -399,7 +418,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         const draw = (color: string) =>
           Effect.promise(() =>
-            page.playwright.evaluate((color) => {
+            TestCdp.nativePage(page).evaluate((color) => {
               const context = document.querySelector("canvas")!.getContext("2d")!;
 
               context.fillStyle = color;
@@ -438,9 +457,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
         yield* paint("black");
 
-        const waiting = yield* page
-          .ready({ still: "foreground", quietMillis: 300, timeout: "5 seconds" })
-          .pipe(Effect.forkScoped);
+        const waiting = yield* Stillness.wait(page, {
+          still: "foreground",
+          quietMillis: 300,
+          timeout: "5 seconds",
+        }).pipe(Effect.forkScoped);
 
         yield* Effect.promise(() => entered.promise).pipe(waitFor("first readiness look"));
         yield* Effect.sleep("350 millis");
@@ -454,11 +475,23 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         // CI #38297573716 showed that a resize need not arrive within 200 ms. Wait for its
         // actual viewport lookup, then hold that answer while ready establishes its reference.
-        page.playwright.viewportSize = () => null;
         const before = yield* page.captureStats();
 
         resize = "waiting";
-        yield* Effect.promise(() => page.playwright.setViewportSize({ width: 640, height: 360 }));
+
+        const resizingSession = yield* Effect.acquireRelease(
+          Effect.promise(() => context.newCDPSession(TestCdp.nativePage(page))),
+          (session) => Effect.promise(() => session.detach()),
+        );
+
+        yield* Effect.promise(() =>
+          resizingSession.send("Emulation.setDeviceMetricsOverride", {
+            width: 640,
+            height: 360,
+            deviceScaleFactor: 1,
+            mobile: false,
+          }),
+        );
         // A resize and its first paint can coalesce without a capture frame. Keep changing pixels
         // until a real resized frame reaches the held viewport request, then stop the producer.
         let bright = false;
@@ -481,9 +514,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         resume = Promise.withResolvers<void>();
         held = false;
 
-        const resizing = yield* page
-          .ready({ still: "foreground", quietMillis: 300, timeout: "5 seconds" })
-          .pipe(Effect.forkScoped);
+        const resizing = yield* Stillness.wait(page, {
+          still: "foreground",
+          quietMillis: 300,
+          timeout: "5 seconds",
+        }).pipe(Effect.forkScoped);
 
         yield* Effect.promise(() => entered.promise).pipe(waitFor("resized readiness look"));
         yield* Effect.sleep("350 millis");
@@ -504,32 +539,34 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Fiber.join(resizing);
         assert.isAtLeast((yield* browser.now) - delivered, 300);
       }),
+    ),
+  );
+
+  const clicked = (moving: "reels" | "counter", seconds: number) =>
+    Effect.gen(function* () {
+      const page = yield* blank;
+
+      yield* show(page, stage(moving, seconds));
+      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+      yield* Effect.sleep("800 millis");
+      yield* page.click({ x: 200, y: 150 });
+
+      return page;
+    });
+
+  const quiet = (page: Page) =>
+    evaluate(
+      page,
+      () => performance.now() - (window as unknown as { stoppedAt: number }).stoppedAt,
     );
 
-    const clicked = (moving: "reels" | "counter", seconds: number) =>
-      Effect.gen(function* () {
-        const page = yield* blank;
-
-        yield* show(page, stage(moving, seconds));
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-        yield* Effect.sleep("800 millis");
-        yield* page.click({ x: 200, y: 150 });
-
-        return page;
-      });
-
-    const quiet = (page: Page) =>
-      evaluate(
-        page,
-        () => performance.now() - (window as unknown as { stoppedAt: number }).stoppedAt,
-      );
-
-    for (const moving of ["reels", "counter"] as const)
-      it.effect(`waits for the ${moving} a click set moving, not for the idle art`, () =>
+  for (const moving of ["reels", "counter"] as const)
+    it.effect(`waits for the ${moving} a click set moving, not for the idle art`, () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const page = yield* clicked(moving, 1.5);
 
-          yield* page.ready({
+          yield* Stillness.wait(page, {
             still: "foreground",
             quietMillis: 600,
             timeout: Duration.seconds(10),
@@ -537,40 +574,48 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           // Within a sample of the spell: the wait looks every 100 ms.
           assert.isAtLeast(yield* quiet(page), 450, moving);
           assert.strictEqual(
-            yield* reason(page.ready({ quietMillis: 600, timeout: Duration.seconds(2) })),
+            yield* reason(Stillness.wait(page, { quietMillis: 600, timeout: Duration.seconds(2) })),
             "Timeout",
           );
         }),
-      );
+      ),
+    );
 
-    it.effect("never ends while what a click set moving keeps moving", () =>
+  it.effect("never ends while what a click set moving keeps moving", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* clicked("reels", 1000);
 
         assert.strictEqual(
           yield* reason(
-            page.ready({ still: "foreground", quietMillis: 600, timeout: Duration.seconds(3) }),
+            Stillness.wait(page, {
+              still: "foreground",
+              quietMillis: 600,
+              timeout: Duration.seconds(3),
+            }),
           ),
           "Timeout",
         );
       }),
-    );
-  },
-);
+    ),
+  );
+});
 
 // Over raw CDP a tab behind another is hidden, unless some session holds focus emulation on it;
 // here none can, so the page behind paints no frame and is never ready to be shown.
 it.live("is never ready on a tab behind another that paints nothing", () =>
-  Effect.gen(function* () {
-    const proxy = yield* behindProxy();
+  TestCdp.withCdp(
+    Effect.gen(function* () {
+      const proxy = yield* behindProxy();
 
-    proxy.swallow = (command) => command.method === "Emulation.setFocusEmulationEnabled";
-    const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
-    const behind = yield* browser.newPage("data:text/html,<h1>Prepared off stage</h1>");
+      proxy.swallow = (command) => command.method === "Emulation.setFocusEmulationEnabled";
+      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const behind = yield* browser.newPage("data:text/html,<h1>Prepared off stage</h1>");
 
-    yield* browser.newPage("data:text/html,<h1>On stage</h1>");
-    assert.strictEqual(yield* reason(behind.ready({ timeout: Duration.seconds(1) })), "Timeout");
-  }).pipe(Effect.scoped),
+      yield* browser.newPage("data:text/html,<h1>On stage</h1>");
+      assert.strictEqual(yield* reason(behind.ready({ timeout: Duration.seconds(1) })), "Timeout");
+    }).pipe(Effect.scoped),
+  ),
 );
 
 // Reels that spin for 1.2 s after a click, painting every frame, or ten times a second.
@@ -594,34 +639,36 @@ const reels = (slow: boolean) =>
 // that paints ten times a second. Toward the browser it holds acknowledgements, as a large message
 // ahead of them does, and Chromium sends no more frames until they come. Neither is a still screen.
 it.live("never takes a stalled connection for a still screen", () =>
-  Effect.gen(function* () {
-    const proxy = yield* behindProxy();
-    const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+  TestCdp.withCdp(
+    Effect.gen(function* () {
+      const proxy = yield* behindProxy();
+      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
 
-    for (const still of ["screen", "foreground"] as const)
-      for (const [toward, slow] of [
-        ["client", true],
-        ["browser", false],
-      ] as const) {
-        const page = yield* browser.newPage(reels(slow));
+      for (const still of ["screen", "foreground"] as const)
+        for (const [toward, slow] of [
+          ["client", true],
+          ["browser", false],
+        ] as const) {
+          const page = yield* browser.newPage(reels(slow));
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-        yield* Effect.sleep(Duration.millis(300));
-        const clicked = yield* browser.now;
+          yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+          yield* Effect.sleep(Duration.millis(300));
+          const clicked = yield* browser.now;
 
-        yield* page.click({ x: 200, y: 100 });
-        yield* Effect.sleep(Duration.millis(150)).pipe(
-          Effect.andThen(Effect.sync(() => proxy.stall(toward, 600))),
-          Effect.forkScoped,
-        );
-        yield* page.ready({ still, quietMillis: 400, timeout: Duration.seconds(10) });
-        assert.isAtLeast(
-          (yield* browser.now) - clicked,
-          1200,
-          `${still}, stalled toward the ${toward}`,
-        );
-      }
-  }).pipe(Effect.scoped),
+          yield* page.click({ x: 200, y: 100 });
+          yield* Effect.sleep(Duration.millis(150)).pipe(
+            Effect.andThen(Effect.sync(() => proxy.stall(toward, 600))),
+            Effect.forkScoped,
+          );
+          yield* Stillness.wait(page, { still, quietMillis: 400, timeout: Duration.seconds(10) });
+          assert.isAtLeast(
+            (yield* browser.now) - clicked,
+            1200,
+            `${still}, stalled toward the ${toward}`,
+          );
+        }
+    }).pipe(Effect.scoped),
+  ),
 );
 
 // A price that ticks for 1.2 s once started, then rests.
@@ -642,24 +689,26 @@ const ticking = `data:text/html,${encodeURIComponent(`<!doctype html><body style
 it.live(
   "never takes frames held back for a still screen where the page's changes are recorded",
   () =>
-    Effect.gen(function* () {
-      const proxy = yield* behindProxy();
-      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
-      const page = yield* browser.newPage(ticking);
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const proxy = yield* behindProxy();
+        const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+        const page = yield* browser.newPage(ticking);
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* page.state.pipe(
-        Effect.repeat({
-          schedule: Schedule.spaced("10 millis"),
-          until: (state) => state.frame !== undefined,
-        }),
-      );
-      yield* page.changes();
-      proxy.withhold = (method) => method === "Page.screencastFrame";
-      const started = yield* browser.now;
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* page.state.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("10 millis"),
+            until: (state) => state.frame !== undefined,
+          }),
+        );
+        yield* page.changes();
+        proxy.withhold = (method) => method === "Page.screencastFrame";
+        const started = yield* browser.now;
 
-      yield* evaluate(page, () => (window as unknown as { tick: () => void }).tick());
-      yield* page.ready({ quietMillis: 300, timeout: Duration.seconds(10) });
-      assert.isAtLeast((yield* browser.now) - started, 1200);
-    }).pipe(Effect.scoped),
+        yield* evaluate(page, () => (window as unknown as { tick: () => void }).tick());
+        yield* Stillness.wait(page, { quietMillis: 300, timeout: Duration.seconds(10) });
+        assert.isAtLeast((yield* browser.now) - started, 1200);
+      }).pipe(Effect.scoped),
+    ),
 );

@@ -67,7 +67,8 @@ export const record = (
     const target = targetOf(event);
 
     if (!event.isTrusted || target === undefined) return;
-    inputs.push({ at: performance.timeOrigin + event.timeStamp, target });
+    // Protocol timestamps are mapped estimates; observation and mutations share this clock.
+    inputs.push({ at: epoch(), target });
     if (inputs.length > 8) inputs.shift();
   };
 
@@ -83,6 +84,7 @@ export const record = (
 
   const stop = () => {
     running = false;
+    document.removeEventListener("DOMContentLoaded", begin);
     observer.disconnect();
     for (const [type, listener] of listeners) document.removeEventListener(type, listener, options);
     seeing.clear();
@@ -117,6 +119,7 @@ export const record = (
   };
 
   return {
+    stop,
     /** Record from now, once the document is parsed; each read keeps the record going. */
     start: () => {
       lastRead = epoch();

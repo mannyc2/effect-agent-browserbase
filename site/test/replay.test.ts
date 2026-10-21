@@ -61,6 +61,7 @@ describe("pointerAt", () => {
       startedAt: 2000,
       page: "p1",
       name: "type",
+      value: { _tag: "Type", text: "" },
       x: 30,
       y: 40,
       ok: true,

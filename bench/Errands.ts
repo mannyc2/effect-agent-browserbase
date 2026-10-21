@@ -3,6 +3,7 @@
 // buying. Like the bench's other operate pages, each varies with the seed, and each grader reads the
 // page, not only the answer.
 import { Duration, Effect, Schema } from "effect";
+import * as Stillness from "effect-browser/Stillness";
 
 import { style, truth } from "./Sites.ts";
 import { operate, press, type Task } from "./Tasks.ts";
@@ -165,7 +166,7 @@ const policyFind = operate({
       if (menu === undefined) return yield* Effect.die(`the header has no ${layout.menu} menu`);
       yield* page.hover(menu.ref);
       yield* press(page, "link", layout.link);
-      yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(5) });
+      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(5) });
 
       return { code: (yield* truth(page, PolicyTruth)).code ?? "" };
     }),

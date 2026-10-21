@@ -4,12 +4,14 @@
 // show the task can be done and graded without a model.
 import { Deferred, Duration, Effect, Fiber, Option, Schedule, Schema, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
-import type { BrowserError } from "effect-browser/BrowserError";
+import { type BrowserError, refuse } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import * as Presentation from "effect-browser/Presentation";
 import type { Snapshot } from "effect-browser/Snapshot";
+import * as Stillness from "effect-browser/Stillness";
+import { TestPage } from "effect-browser/testing";
 import { type AiError, LanguageModel, Prompt, type Response } from "effect/ai";
 
 import * as Arms from "./Arms.ts";
@@ -175,6 +177,11 @@ export interface Task {
     AiError.AiError | BrowserError | Arms.OperateError | EvidenceIncomplete | FixtureUnreadable | E,
     Browser | Arms.Requirements
   >;
+  /** Re-run this grader on saved fixture evidence, without a model or browser. */
+  readonly regrade: (
+    answer: unknown,
+    truth: unknown,
+  ) => Effect.Effect<Grade, BrowserError | FixtureUnreadable | Schema.SchemaError>;
   readonly scripted: (
     options?: TrialOptions,
   ) => Effect.Effect<Outcome, BrowserError | EvidenceIncomplete | FixtureUnreadable, Browser>;
@@ -266,6 +273,43 @@ const buy = (page: Page, quantity: string) =>
   });
 
 // A model that leaves the fixture, for another page or another tab's game, has not done the task.
+/** Graders read one declared fixture value. Recording wraps the same read, so it cannot race. */
+const recordingTruth = (page: Page, trace: TrialOptions["trace"]): Page =>
+  trace === undefined
+    ? page
+    : {
+        ...page,
+        read: (script, options) =>
+          page
+            .read(script, options)
+            .pipe(
+              Effect.tap(({ value }) =>
+                options.arg === "bench-truth" ? trace({ _tag: "Truth", value }) : Effect.void,
+              ),
+            ),
+      };
+
+const savedTruth = (truth: unknown) =>
+  Effect.gen(function* () {
+    const { page } = yield* TestPage.make();
+
+    const read: Page["read"] = (_script, options) =>
+      options.arg !== "bench-truth"
+        ? refuse("read", "offline graders can only read recorded fixture truth")
+        : Schema.decodeUnknownEffect(options.result)(truth).pipe(
+            Effect.map((value) => ({ value, document: 0, connection: "recording" })),
+            Effect.mapError(
+              () =>
+                new FixtureUnreadable({ detail: "recorded fixture truth is missing or invalid" }),
+            ),
+            Effect.catchTag("FixtureUnreadable", () =>
+              refuse("read", "recorded fixture truth is missing or invalid"),
+            ),
+          );
+
+    return { ...page, read };
+  });
+
 const unreadable = (error: FixtureUnreadable): Effect.Effect<Grade> =>
   Effect.succeed({ pass: false, detail: error.message, onPage: false });
 
@@ -286,6 +330,12 @@ export const operate = <A, I>(spec: {
   kind: "operate",
   summary: spec.summary,
   prompt: spec.prompt,
+  regrade: (answer, state) =>
+    Effect.gen(function* () {
+      const decoded = yield* Schema.decodeUnknownEffect(spec.answer)(answer);
+
+      return yield* spec.grade(decoded, yield* savedTruth(state));
+    }).pipe(Effect.scoped),
   withModel: (options) =>
     Effect.gen(function* () {
       const page = yield* open(spec.start, options, spec.pages);
@@ -321,7 +371,7 @@ export const operate = <A, I>(spec: {
       yield* options.onUsage(result.usage);
 
       const grade = yield* spec
-        .grade(result.answer, page)
+        .grade(result.answer, recordingTruth(page, options.trace))
         .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
       return {
@@ -338,7 +388,7 @@ export const operate = <A, I>(spec: {
       const answer = yield* spec.solve(page);
 
       const grade = yield* spec
-        .grade(answer, page)
+        .grade(answer, recordingTruth(page, options.trace))
         .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
       return { ...grade, answer, steps: 0, actions: 0, usage: noUsage };
@@ -469,7 +519,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
       if (uncovered !== undefined)
         return yield* new EvidenceIncomplete({ detail: `${uncovered}; ${detail}` });
 
-      const expected = yield* spec.expected(page);
+      const expected = yield* spec.expected(recordingTruth(page, options.trace));
 
       if (options.trace !== undefined)
         yield* options.trace({ _tag: "Moment", moment, question: spec.instructions, expected });
@@ -480,6 +530,12 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
   return {
     name: spec.name,
     kind: "understand",
+    regrade: (answer, state) =>
+      Effect.gen(function* () {
+        const decoded = yield* Schema.decodeUnknownEffect(spec.answer)(answer);
+
+        return spec.grade(decoded, yield* spec.expected(yield* savedTruth(state)));
+      }).pipe(Effect.scoped),
     summary: spec.summary,
     prompt: spec.instructions,
     withModel: (options) =>
@@ -566,7 +622,7 @@ const spin = (page: Page) =>
     const { spins } = yield* truth(page, ReelsTruth);
 
     yield* page.click(spinAt);
-    yield* page.ready({ quietMillis: 400, timeout: Duration.seconds(10) });
+    yield* Stillness.wait(page, { quietMillis: 400, timeout: Duration.seconds(10) });
     // `ready` can take a stalled screencast for a still page while the reels turn, and the game
     // ignores a click while they do, so the reels' own state says when the spin has ended.
     yield* truth(page, ReelsTruth).pipe(
@@ -862,7 +918,7 @@ const tumbleWin = understand({
         Effect.timeout("20 seconds"),
         Effect.orDie,
       );
-      yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
     }),
   // Three frames can omit an entire paying cascade; give the describer its visual evidence.
   capture: { frames: 12, windowMillis: 20_000 },
@@ -909,7 +965,7 @@ const orderFilled = understand({
       // Keep an earlier no-order frame distinct from the final filled row.
       yield* Effect.sleep("700 millis");
       yield* buy(page, "0.25");
-      yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
   minimumSpanMillis: () => Effect.succeed(500),
@@ -958,7 +1014,7 @@ const navigated = understand({
     Effect.gen(function* () {
       yield* Effect.sleep("700 millis");
       yield* playReels(page);
-      yield* page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
   minimumSpanMillis: () => Effect.succeed(500),
@@ -1115,13 +1171,21 @@ const boardAnswer = (page: Page) =>
 
 /** Push a tick or an alert through the board's feed, as a live page receives one. */
 export const feed = (page: Page, push: "tick" | "flash" | "churn" | "settle") =>
-  Effect.promise(() =>
-    page.playwright.evaluate(
-      (name) =>
-        (window as unknown as { __benchBoard: Record<string, () => void> }).__benchBoard[name]?.(),
-      push,
-    ),
-  );
+  Effect.gen(function* () {
+    const { document } = yield* page.state;
+
+    yield* page.act(
+      (name) => {
+        const feed = Reflect.get(window, "__benchBoard");
+
+        const pushed =
+          typeof feed === "object" && feed !== null ? Reflect.get(feed, name) : undefined;
+
+        if (typeof pushed === "function") pushed();
+      },
+      { arg: push, document, result: Schema.Void },
+    );
+  });
 
 const boardWhen = (page: Page, ready: (board: typeof BoardTruth.Type) => boolean) =>
   truth(page, BoardTruth).pipe(
@@ -1133,7 +1197,8 @@ const boardWhen = (page: Page, ready: (board: typeof BoardTruth.Type) => boolean
     }),
   );
 
-const settle = (page: Page) => page.ready({ quietMillis: 150, timeout: Duration.seconds(3) });
+const settle = (page: Page) =>
+  Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
 
 /** The first selected frame was painted before `at`, so the pictures hold the earlier state. */
 const startsBefore = (frames: ReadonlyArray<Frame>, at: number | null, what: string) => {

@@ -1,4 +1,4 @@
-/** A bounded H2 probe: exclusive persisted rotation, retained work and durable browser read-back. */
+/** A bounded H2 probe: exclusive persisted rotation, revoked work and durable browser read-back. */
 import {
   Cause,
   Clock,
@@ -9,10 +9,10 @@ import {
   Fiber,
   Schedule,
   Schema,
-  Scope,
   Stream,
 } from "effect";
 import type * as Browser from "effect-browser/Browser";
+import * as Supervisor from "effect-browser/Supervisor";
 import * as Browserbase from "effect-browserbase/Browserbase";
 import {
   BrowserbaseClient,
@@ -22,6 +22,7 @@ import {
 import { BrowserbaseError, InvalidRequest } from "effect-browserbase/BrowserbaseError";
 
 import { BenchError, refuse } from "./Budget.ts";
+import * as Fixtures from "./FixtureRoutes.ts";
 import { uncertainAllocation } from "./Trial.ts";
 
 /** Owner-supplied dashboard verification for this key's project; this is not a billing API check. */
@@ -188,14 +189,12 @@ export const admission = (source: Service, now: () => number) => {
 
 const fixture = (browser: Browser.Service) =>
   Effect.gen(function* () {
-    yield* Effect.promise(() =>
-      browser.context.route("https://h2.browser.test/**", (route) =>
-        route.fulfill({
-          contentType: "text/html",
-          body: "<title>H2 scratch</title><h1>H2 scratch</h1>",
-        }),
-      ),
-    );
+    yield* Fixtures.serve("https://h2.browser.test/", () => ({
+      _tag: "Fulfilled",
+      status: 200,
+      contentType: "text/html",
+      body: "<title>H2 scratch</title><h1>H2 scratch</h1>",
+    }));
     const page = yield* browser.firstPage;
 
     yield* page.goto("https://h2.browser.test/");
@@ -205,6 +204,7 @@ const fixture = (browser: Browser.Service) =>
 
 /** A probe's report remains readable after failure or interruption; run owns all browser cleanup. */
 export const make = Effect.fnUntraced(function* (runId: string) {
+  const fixtures = yield* Fixtures.make;
   const clock = yield* Clock.Clock;
 
   const limited = admission(
@@ -219,13 +219,12 @@ export const make = Effect.fnUntraced(function* (runId: string) {
     at: number;
     hostTime: number;
     state: string;
-    revokeAt?: number;
     released?: string;
   }> = [];
 
   const checks = {
-    heldReadable: false,
-    noOverlapDuringHold: false,
+    revokedBeforeRelease: false,
+    noOverlapDuringCleanup: false,
     cleanupBeforeRelease: false,
     terminalBeforeCreate: false,
     contextSettled: false,
@@ -276,23 +275,26 @@ export const make = Effect.fnUntraced(function* (runId: string) {
 
     contextId = context.id;
 
-    const sessions = yield* Browserbase.supervise({
-      session: {
-        timeout: 120,
-        proxies: false,
-        userMetadata: { probe: "h2", run: runId },
-        browserSettings: {
-          context: { id: context.id, persist: true },
-          viewport: { width: 1280, height: 720 },
-          solveCaptchas: false,
-          recordSession: false,
-          logSession: false,
-          verified: false,
+    const sessions = yield* Supervisor.make({
+      ...Browserbase.generations({
+        requests: fixtures.policy,
+        build: Effect.succeed,
+        session: {
+          timeout: 120,
+          proxies: false,
+          userMetadata: { probe: "h2", run: runId },
+          browserSettings: {
+            context: { id: context.id, persist: true },
+            viewport: { width: 1280, height: 720 },
+            solveCaptchas: false,
+            recordSession: false,
+            logSession: false,
+            verified: false,
+          },
         },
-      },
+        contextSettle: "10 seconds",
+      }),
       reopen: Schedule.recurs(0),
-      handover: "30 seconds",
-      contextSettle: "10 seconds",
     });
 
     const draining = yield* Deferred.make<void>();
@@ -305,59 +307,84 @@ export const make = Effect.fnUntraced(function* (runId: string) {
             at: event.at,
             hostTime: event.hostTime,
             state: event.state._tag,
-            ...(event.state._tag === "Draining" ? { revokeAt: event.state.revokeAt } : {}),
             ...(event.state._tag === "Closed" ? { released: event.state.released?._tag } : {}),
           });
-          if (event.number === 1 && event.state._tag === "Draining")
+          if (event.number === 1 && event.state._tag === "Ending")
             Deferred.doneUnsafe(draining, Exit.void);
         }),
       ),
       Effect.forkScoped,
     );
 
-    const first = yield* sessions.use((lease) =>
-      Effect.gen(function* () {
-        const hold = yield* lease.retain;
+    const entered = yield* Deferred.make<void>();
+    const cleaning = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
 
-        yield* Scope.addFinalizer(
-          hold,
-          Effect.sync(() => limited.record("retainedCleanup", "answered", 1)),
-        );
-        const page = yield* fixture(lease.browser);
+    yield* Effect.addFinalizer(() => Deferred.succeed(finish, undefined));
 
-        yield* Effect.promise(() =>
-          page.playwright.evaluate((marker) => {
-            document.cookie = `h2=${marker}; Max-Age=600; Secure; SameSite=Lax; Path=/`;
-            localStorage.setItem("h2", marker);
-          }, runId),
-        );
+    const work = yield* sessions
+      .use((lease) =>
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() =>
+            Deferred.succeed(cleaning, undefined).pipe(
+              Effect.andThen(Deferred.await(finish)),
+              Effect.andThen(Effect.sync(() => limited.record("workCleanup", "answered", 1))),
+            ),
+          );
+          const page = yield* fixture(lease.value.browser);
 
-        return { hold, page };
-      }),
+          yield* page.act(
+            (marker) => {
+              document.cookie = `h2=${marker}; Max-Age=600; Secure; SameSite=Lax; Path=/`;
+              localStorage.setItem("h2", marker);
+            },
+            { arg: runId, document: (yield* page.state).document, result: Schema.Void },
+          );
+          yield* Deferred.succeed(entered, undefined);
+
+          return yield* Effect.never;
+        }),
+      )
+      .pipe(Effect.exit, Effect.forkChild);
+
+    yield* Effect.raceFirst(
+      Deferred.await(entered),
+      Fiber.join(work).pipe(
+        Effect.flatMap((exit) =>
+          Effect.gen(function* () {
+            if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause);
+
+            return yield* refuse("H2 work ended before entry");
+          }),
+        ),
+      ),
     );
-
-    const rotation = yield* sessions.rotate.pipe(Effect.forkChild);
+    const rotation = yield* sessions.rotate().pipe(Effect.forkChild);
 
     yield* Deferred.await(draining);
-    yield* Effect.sleep("5 seconds");
-    checks.heldReadable = (yield* first.page.snapshot()).text.includes("H2 scratch");
-    checks.noOverlapDuringHold =
+    yield* Deferred.await(cleaning);
+    checks.revokedBeforeRelease = work.pollUnsafe() === undefined;
+    checks.noOverlapDuringCleanup =
       limited.evidence().attempts === 1 &&
       !limited.evidence().calls.some((call) => call.operation === "releaseSession");
-    yield* Scope.close(first.hold, Exit.void);
+    yield* Deferred.succeed(finish, undefined);
+    const revoked = yield* Fiber.join(work);
+
+    checks.revokedBeforeRelease = checks.revokedBeforeRelease && Exit.isFailure(revoked);
     yield* Fiber.join(rotation);
     yield* sessions.use((lease) =>
       Effect.gen(function* () {
-        const page = yield* fixture(lease.browser);
+        const page = yield* fixture(lease.value.browser);
 
-        const saved = yield* Effect.promise(() =>
-          page.playwright.evaluate(
-            (marker) => ({
-              cookie: document.cookie.split("; ").includes(`h2=${marker}`),
-              storage: localStorage.getItem("h2") === marker,
-            }),
-            runId,
-          ),
+        const { value: saved } = yield* page.read(
+          (marker) => ({
+            cookie: document.cookie.split("; ").includes(`h2=${marker}`),
+            storage: localStorage.getItem("h2") === marker,
+          }),
+          {
+            arg: runId,
+            result: Schema.Struct({ cookie: Schema.Boolean, storage: Schema.Boolean }),
+          },
         );
 
         checks.cookie = saved.cookie;
@@ -376,7 +403,7 @@ export const make = Effect.fnUntraced(function* (runId: string) {
           failure = Exit.hasInterrupts(exit) ? "interrupted" : "operation-failed";
         for (const id of limited.ids()) yield* client.getSession(id).pipe(Effect.exit);
         const evidence = limited.evidence();
-        const cleanup = evidence.calls.find((call) => call.operation === "retainedCleanup");
+        const cleanup = evidence.calls.find((call) => call.operation === "workCleanup");
 
         const release = evidence.calls.find(
           (call) => call.operation === "releaseSession" && call.phase === "sent",
@@ -425,5 +452,5 @@ export const make = Effect.fnUntraced(function* (runId: string) {
     ),
   );
 
-  return { run, report };
+  return { run: run.pipe(Effect.provideService(Fixtures.FixtureRoutes, fixtures)), report };
 });

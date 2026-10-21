@@ -57,7 +57,7 @@ const assisted = <E>(
   );
 
 export const run = Effect.fn("Workflow.run")(function* <A, E, O = never>(
-  sessions: Supervisor.Supervisor<A>,
+  sessions: Supervisor.Supervisor<{ readonly browser: Browser.Service; readonly value: A }>,
   journal: Journal<E>,
   run: string,
   plan: Plan.Plan,
@@ -69,7 +69,7 @@ export const run = Effect.fn("Workflow.run")(function* <A, E, O = never>(
 
   yield* sessions.use((lease) =>
     Effect.gen(function* () {
-      const page = yield* Effect.acquireRelease(lease.browser.newPage(), (page) =>
+      const page = yield* Effect.acquireRelease(lease.value.browser.newPage(), (page) =>
         Effect.ignore(page.close),
       );
 
@@ -82,7 +82,7 @@ export const run = Effect.fn("Workflow.run")(function* <A, E, O = never>(
         // If interruption, revocation, a lost acknowledgement or a journal failure follows this
         // write, recovery treats the input as unknown. No catch/retry discards that evidence.
         yield* journal.begun(run, index);
-        const receipt = yield* assisted(lease.browser, page, plan, at, options);
+        const receipt = yield* assisted(lease.value.browser, page, plan, at, options);
 
         yield* journal.done(run, receipt);
         at = index + 1;

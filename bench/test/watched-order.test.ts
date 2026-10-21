@@ -2,10 +2,10 @@
 // Scripted public capture streams hold cleanup precisely; Chromium cannot reliably force this race.
 import { assert, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Exit, Fiber, Option, Scope, Stream } from "effect";
-import type * as Browser from "effect-browser/Browser";
 import { Frame, Screenshot } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 import * as Supervisor from "effect-browser/Supervisor";
+import { TestBrowser, TestPage } from "effect-browser/testing";
 
 import * as Watched from "../Watched.ts";
 
@@ -14,10 +14,10 @@ it.live(
   () =>
     Effect.gen(function* () {
       const clock = yield* Clock.Clock;
-      const browser = { disconnected: Effect.never } as unknown as Browser.Service;
+      const { browser } = yield* TestBrowser.make();
 
       const sessions = yield* Supervisor.make({
-        open: Effect.succeed({ browser, value: undefined }),
+        open: () => Effect.succeed({ value: { browser, value: undefined } }),
       });
 
       const watched = yield* Watched.make(sessions);
@@ -26,7 +26,10 @@ it.live(
       const order: Array<string> = [];
       const closed: Array<string> = [];
 
-      const prepare = Effect.fnUntraced(function* (id: string, release = Effect.void) {
+      const prepare = Effect.fnUntraced(function* (
+        id: string,
+        release: Effect.Effect<void> = Effect.void,
+      ) {
         const hold = yield* Scope.fork(yield* Effect.scope);
         const at = Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
 
@@ -48,13 +51,26 @@ it.live(
           timing: new Screenshot({ hostTime: at, uncertaintyMillis: 0 }),
         });
 
-        // Only the public custom-page capture path is used by reveal.
-        const page = {
-          id,
-          playwright: { isClosed: () => false },
-          screencast: () =>
-            Stream.concat(Stream.succeed(frame), Stream.never).pipe(Stream.ensuring(release)),
-        } as unknown as Page;
+        const simulated = yield* TestPage.make(
+          { url: frame.url },
+          { id, session: "fixture", connection: frame.connection },
+        ).pipe(Effect.provideService(Scope.Scope, hold));
+
+        // Its held stream isolates the FIFO handover race; all other contracts use the public kit.
+        const page: Page = {
+          ...simulated.page,
+          capture: () =>
+            Effect.succeed({
+              stream: Stream.concat(Stream.succeed(frame), Stream.never).pipe(
+                Stream.ensuring(release),
+              ),
+              current: undefined,
+              isCurrent: () => true,
+              confirm: () => Effect.succeed(true),
+              sync: Effect.void,
+              stats: (options) => simulated.page.captureStats(options),
+            }),
+        };
 
         return {
           id,

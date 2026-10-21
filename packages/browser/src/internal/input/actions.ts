@@ -1,6 +1,6 @@
 /**
  * The page's actions: click, hover, drag, type, press, scroll and select, each sent in a style,
- * plainly or performed for viewers, and the aim a performed click starts early. Each runs through
+ * plainly or performed for viewers. Each runs through
  * `perform`, which admits it, puts it to the input guard and records it. A click, a key or a scroll
  * then waits for the page to settle: a task and a frame, and a document if the input asked for one.
  */
@@ -20,7 +20,6 @@ import * as Keys from "./keys.ts";
 import * as Perform from "./perform.ts";
 import * as Pointer from "./pointer.ts";
 import * as Settle from "./settle.ts";
-import { plain, type Style } from "./style.ts";
 import * as Targets from "./targets.ts";
 
 const partsOf = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
@@ -45,55 +44,34 @@ const partsOf = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
 
 type Parts = ReturnType<typeof partsOf>;
 
-/** Whether every number given is finite; a number left out is. */
-const finite = (...values: ReadonlyArray<number | undefined>) =>
-  values.every((value) => value === undefined || Number.isFinite(value));
-
 const named = (target: Target) => (typeof target === "string" ? target : `${target.x},${target.y}`);
 
 /** The ref a target names, if it names one rather than a point. */
 const refOf = (target: Target | undefined) => (typeof target === "string" ? target : undefined);
 
-/** A click's options, once its counts are finite. */
-const clickable = (options: ClickOptions) =>
-  finite(options.clickCount, options.holdMillis)
-    ? Effect.void
-    : refuse("click", "clickCount and holdMillis must be finite");
-
-/** The keys a press sends, once they and its options are valid. */
-const pressed = (keys: string, options: PressOptions) => {
+/** Key names have a finite vocabulary beyond the action's structural schema. */
+const pressed = (keys: string) => {
   const parts = Keys.parts(keys);
 
-  if (!finite(options.times, options.holdMillis))
-    return refuse("press", "times and holdMillis must be finite");
-  if (parts === undefined)
-    return refuse("press", `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`);
-
-  return Effect.succeed(parts);
+  return parts === undefined
+    ? refuse("press", `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`)
+    : Effect.succeed(parts);
 };
 
 const click = (input: Parts) => {
   const { settings } = input.page;
   const { perform, preparePolicy, targetFor, moveTo, sendMouse, flush, mark, settle } = input;
 
-  return (target: Target, clickOptions: ClickOptions = {}, style: Style = plain) =>
+  return (target: Target, clickOptions: ClickOptions = {}) =>
     perform(
       "click",
       {
         target: named(target),
-        options: {
-          button: clickOptions.button,
-          clickCount: clickOptions.clickCount,
-          holdMillis: clickOptions.holdMillis,
-        },
       },
       settings.actionTimeout,
-      Effect.suspend(() => clickable(clickOptions)).pipe(
-        Effect.andThen(preparePolicy("click", { target: refOf(target) }, [target])),
-      ),
+      preparePolicy("click", { target: refOf(target) }, [target]),
       (marks, approval) =>
         Effect.gen(function* () {
-          yield* clickable(clickOptions);
           const resolved = yield* targetFor("click", target, approval, marks);
           const { point } = resolved;
           const button = clickOptions.button ?? "left";
@@ -141,7 +119,6 @@ const click = (input: Parts) => {
 
           return resolved;
         }),
-      style,
     );
 };
 
@@ -149,7 +126,7 @@ const hover = (input: Parts) => {
   const { settings } = input.page;
   const { perform, preparePolicy, targetFor, moveTo, flush } = input;
 
-  return (target: Target, style: Style = plain) =>
+  return (target: Target) =>
     perform(
       "hover",
       { target: named(target) },
@@ -165,40 +142,14 @@ const hover = (input: Parts) => {
           yield* moveTo("hover", marks, point, resolved.cursor, "hover");
           yield* flush("hover", marks.input);
         }),
-      style,
     );
-};
-
-/**
- * The pointer's travel to a target, before its action is asked: no guard holds it, no action is
- * recorded, and nothing is pressed. A guarded page aims nothing, as its input waits for approval.
- */
-const aim = (input: Parts) => {
-  const { settings } = input.page;
-  const { perform, targetFor, moveTo, flush } = input;
-
-  return (target: Target, style: Style) =>
-    settings.guard === undefined
-      ? perform(
-          "aim",
-          { target: named(target), recorded: false },
-          settings.actionTimeout,
-          Effect.die("an aim is never put to a guard"),
-          (marks) =>
-            targetFor("aim", target, undefined, marks).pipe(
-              Effect.flatMap(({ point, cursor }) => moveTo("aim", marks, point, cursor)),
-              Effect.andThen(flush("aim", marks.input)),
-            ),
-          style,
-        )
-      : Effect.void;
 };
 
 const drag = (input: Parts) => {
   const { settings } = input.page;
   const { perform, preparePolicy, targetFor, resolve, moveTo, sendMouse, flush } = input;
 
-  return (from: Target, to: Target, style: Style = plain) =>
+  return (from: Target, to: Target) =>
     perform(
       "drag",
       { target: `${JSON.stringify(from)} -> ${JSON.stringify(to)}` },
@@ -230,7 +181,6 @@ const drag = (input: Parts) => {
           yield* sendMouse("drag", marks.input, buttonAt("mouseReleased", end.point));
           yield* flush("drag", marks.input);
         }),
-      style,
     );
 };
 
@@ -239,15 +189,11 @@ const typeText = (input: Parts) => {
   const { perform, preparePolicy, mutate, targetFor, moveTo, sendMouse, flush, evaluate } = input;
   const { currentDocument, sameDocument, keyStroke, typeEvent, mark, settle } = input;
 
-  return (text: string, typeOptions: TypeOptions = {}, style: Style = plain) =>
+  return (text: string, typeOptions: TypeOptions = {}) =>
     perform(
       "type",
       {
         target: typeOptions.into,
-        options: {
-          replace: typeOptions.into === undefined ? false : typeOptions.replace,
-          submit: typeOptions.submit,
-        },
         text,
         secret: true,
       },
@@ -257,11 +203,9 @@ const typeText = (input: Parts) => {
       }),
       (marks, approval) =>
         Effect.gen(function* () {
+          const events = yield* marks.style.typing(text, approval !== undefined);
           const replace = typeOptions.replace ?? true;
           const into = typeOptions.into;
-
-          if (into !== undefined && !/^e\d+$/.test(into))
-            return yield* refuse("type", `"${into}" is not a ref; refs look like e12`);
 
           // A typed space or letter can press a focused button or change a control. Refuse
           // those before any input, on every path.
@@ -333,7 +277,6 @@ const typeText = (input: Parts) => {
             yield* sameDocument("type", since);
             yield* keyStroke("type", marks.input, ["Delete"]);
           } else {
-            const events = yield* marks.style.typing(text, approval !== undefined);
             const keyed = events.some((event) => event.phase === "down");
 
             const checks =
@@ -367,7 +310,6 @@ const typeText = (input: Parts) => {
             yield* settle("type", before);
           }
         }),
-      style,
     );
 };
 
@@ -376,12 +318,12 @@ const press = (input: Parts) => {
   const { perform, preparePolicy, currentDocument, sameDocument, keyStroke, flush } = input;
   const { mark, settle, targetFor, mutate } = input;
 
-  return (keys: string, pressOptions: PressOptions = {}, style: Style = plain) =>
+  return (keys: string, pressOptions: PressOptions = {}) =>
     perform(
       "press",
-      { target: keys, options: { times: pressOptions.times, holdMillis: pressOptions.holdMillis } },
+      { target: keys },
       settings.actionTimeout,
-      Effect.suspend(() => pressed(keys, pressOptions)).pipe(
+      Effect.suspend(() => pressed(keys)).pipe(
         Effect.flatMap((parts) =>
           preparePolicy(
             "press",
@@ -393,7 +335,7 @@ const press = (input: Parts) => {
       ),
       (marks, approval) =>
         Effect.gen(function* () {
-          const parts = yield* pressed(keys, pressOptions);
+          const parts = yield* pressed(keys);
           const times = Math.max(1, Math.min(50, pressOptions.times ?? 1));
           const hold = pressOptions.holdMillis ?? 0;
           const activates = parts.at(-1) === "Enter" || parts.at(-1) === "Space";
@@ -403,6 +345,9 @@ const press = (input: Parts) => {
           // The keys go to the element asked for, which must hold focus before the first.
           if (on !== undefined) {
             yield* marks.on(yield* targetFor("press", on, approval, marks));
+
+            // Focus handlers may change the page before the protocol reply returns.
+            yield* marks.sent;
 
             const focused = yield* mutate("press", scriptCall("focusOn", on), approval).pipe(
               Effect.flatMap(decodeWith("press", Script.EditResultSchema)),
@@ -433,7 +378,6 @@ const press = (input: Parts) => {
           yield* flush("press", marks.input);
           yield* settle("press", before);
         }),
-      style,
     );
 };
 
@@ -442,30 +386,18 @@ const scroll = (input: Parts) => {
   const { perform, preparePolicy, viewportFor, targetFor, resolve, moveTo, wheel, flush } = input;
   const { mark, settle } = input;
 
-  return (scrollOptions: ScrollOptions = {}, style: Style = plain) => {
+  return (scrollOptions: ScrollOptions = {}) => {
     const target = scrollOptions.at;
-
-    const valid =
-      Number.isFinite(scrollOptions.dx ?? 0) && Number.isFinite(scrollOptions.dy ?? 0)
-        ? Effect.void
-        : refuse("scroll", "scroll deltas must be finite");
 
     return perform(
       "scroll",
       {
         target: target === undefined ? undefined : named(target),
-        options: { dx: scrollOptions.dx, dy: scrollOptions.dy },
       },
       settings.actionTimeout,
-      valid.pipe(
-        Effect.andThen(
-          // Scrolling the page has no target: whatever sits mid-viewport is not what is scrolled.
-          preparePolicy("scroll", { target: refOf(target) }, target === undefined ? [] : [target]),
-        ),
-      ),
+      preparePolicy("scroll", { target: refOf(target) }, target === undefined ? [] : [target]),
       (marks, approval) =>
         Effect.gen(function* () {
-          yield* valid;
           // Over CDP the page reports its own viewport, so the read shares the action's deadline.
           const viewport = yield* viewportFor("scroll");
 
@@ -479,6 +411,8 @@ const scroll = (input: Parts) => {
           const dy =
             scrollOptions.dy ??
             (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
+
+          const steps = yield* marks.style.wheel(dx, dy);
 
           // A page scroll has no target, but viewers still see the cursor it lands on.
           const resolved =
@@ -498,11 +432,10 @@ const scroll = (input: Parts) => {
           const before = mark();
 
           yield* marks.sent;
-          yield* wheel("scroll", marks, point, dx, dy);
+          yield* wheel("scroll", marks, point, dx, dy, steps);
           yield* flush("scroll", marks.input);
           yield* settle("scroll", before);
         }),
-      style,
     );
   };
 };
@@ -514,7 +447,7 @@ const select = (input: Parts) => {
   return (ref: string, values: ReadonlyArray<string>) =>
     perform(
       "select",
-      { target: ref, options: { values }, text: values.join(", ") },
+      { target: ref, text: values.join(", ") },
       settings.actionTimeout,
       preparePolicy("select", { target: ref, text: values.join(", ") }, [ref]),
       (marks, approval) =>
@@ -553,7 +486,6 @@ export const make = (page: PageContext, bridge: Bridge, viewport: Viewport) => {
     preparePolicy: parts.preparePolicy,
     click: click(parts),
     hover: hover(parts),
-    aim: aim(parts),
     drag: drag(parts),
     type: typeText(parts),
     press: press(parts),

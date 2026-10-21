@@ -6,7 +6,7 @@
 import { Schema } from "effect";
 
 import { Box, Subject } from "../../BrowserEvent.ts";
-import { Point } from "../../Motion.ts";
+import { Point } from "../../Geometry.ts";
 import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Walk } from "../reading/walk.inpage.ts";

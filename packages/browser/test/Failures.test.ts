@@ -7,8 +7,9 @@ import { Arbitrary, Effect, Redacted } from "effect";
 
 import { BrowserError, consequence } from "../src/BrowserError.ts";
 import { DisconnectCause } from "../src/BrowserEvent.ts";
-import * as Cdp from "../src/Cdp.ts";
-import * as Chromium from "../src/Chromium.ts";
+import * as Cdp from "../src/providers/Cdp.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const timeoutOf = (error: BrowserError) =>
   error.reason._tag === "Timeout" ? error.reason.millis : error.reason._tag;
@@ -47,83 +48,88 @@ const refusingPort = Effect.suspend(() => {
 const secret = "sk-0123456789abcdef";
 
 it.live("a connect timeout reports the bound the caller gave", () =>
-  Effect.gen(function* () {
-    const port = yield* silentPort;
+  TestCdp.withCdp(
+    Effect.gen(function* () {
+      const port = yield* silentPort;
 
-    const error = yield* Effect.flip(
-      Cdp.open({ endpoint: `http://127.0.0.1:${port}`, connectTimeoutMillis: 700 }),
-    );
+      const error = yield* Effect.flip(
+        Cdp.open({ endpoint: `http://127.0.0.1:${port}`, connectTimeoutMillis: 700 }),
+      );
 
-    assert.deepStrictEqual(
-      [error.operation, timeoutOf(error), error.dispatched],
-      ["connect", 700, false],
-    );
-  }).pipe(Effect.scoped),
+      assert.deepStrictEqual(
+        [error.operation, timeoutOf(error), error.dispatched],
+        ["connect", 700, false],
+      );
+    }).pipe(Effect.scoped),
+  ),
 );
 
 it.live("a screenshot timeout reports the action timeout", () =>
-  Effect.gen(function* () {
-    const browser = yield* Chromium.open({ actionTimeout: "1 second" });
-    const page = yield* browser.newPage("data:text/html,<h1>Busy</h1>");
+  TestCdp.withCdp(
+    Effect.gen(function* () {
+      const browser = yield* Chromium.open({ actionTimeout: "1 second" });
+      const page = yield* browser.newPage("data:text/html,<h1>Busy</h1>");
 
-    // A renderer stuck in script cannot produce the frame a screenshot waits for.
-    yield* Effect.promise(() =>
-      page.playwright.evaluate(() => {
-        setTimeout(() => {
-          const end = Date.now() + 5000;
+      // A renderer stuck in script cannot produce the frame a screenshot waits for.
+      yield* Effect.promise(() =>
+        TestCdp.nativePage(page).evaluate(() => {
+          setTimeout(() => {
+            const end = Date.now() + 5000;
 
-          while (Date.now() < end);
-        }, 0);
-      }),
-    );
+            while (Date.now() < end);
+          }, 0);
+        }),
+      );
 
-    const error = yield* Effect.flip(page.screenshot({ maxAge: 0 }));
+      const error = yield* Effect.flip(page.screenshot({ maxAge: 0 }));
 
-    assert.deepStrictEqual([error.operation, timeoutOf(error)], ["screenshot", 1000]);
-  }).pipe(Effect.scoped),
+      assert.deepStrictEqual([error.operation, timeoutOf(error)], ["screenshot", 1000]);
+    }).pipe(Effect.scoped),
+  ),
 );
 
 it.live("a failed connect never repeats the endpoint's credential", () =>
-  Effect.gen(function* () {
-    const port = yield* refusingPort;
-    const host = `127.0.0.1:${port}`;
+  TestCdp.withCdp(
+    Effect.gen(function* () {
+      const port = yield* refusingPort;
+      const host = `127.0.0.1:${port}`;
 
-    // Playwright echoes query, userinfo and path for some of these forms, and the raw text for a
-    // malformed endpoint. Each failure must still say where it failed.
-    for (const [endpoint, where] of [
-      [`http://${host}/?signingKey=${secret}`, `http://${host}`],
-      [`http://user:${secret}@${host}/`, `http://${host}`],
-      [`ws://${host}/?signingKey=${secret}`, `ws://${host}`],
-      [`ws://user:${secret}@${host}/`, `ws://${host}`],
-      [`ws://${host}/devtools/browser/${secret}`, `ws://${host}`],
-      [`wss//${host}/?signingKey=${secret}`, "Invalid URL"],
-    ] as const) {
-      const error = yield* Effect.flip(
-        Cdp.open({ endpoint: Redacted.make(endpoint), connectTimeoutMillis: 5000 }),
-      );
+      // Playwright echoes query, userinfo and path for some of these forms, and the raw text for a
+      // malformed endpoint. Each failure must still say where it failed.
+      for (const [endpoint, where] of [
+        [`http://${host}/?signingKey=${secret}`, `http://${host}`],
+        [`http://user:${secret}@${host}/`, `http://${host}`],
+        [`ws://${host}/?signingKey=${secret}`, `ws://${host}`],
+        [`ws://user:${secret}@${host}/`, `ws://${host}`],
+        [`ws://${host}/devtools/browser/${secret}`, `ws://${host}`],
+        [`wss//${host}/?signingKey=${secret}`, "Invalid URL"],
+      ] as const) {
+        const error = yield* Effect.flip(
+          Cdp.open({ endpoint: Redacted.make(endpoint), connectTimeoutMillis: 5000 }),
+        );
 
-      for (const shown of [
-        error.message,
-        JSON.stringify(error),
-        String(error),
-        error.stack ?? "",
-        error.reason._tag === "Failed" ? error.reason.detail : "",
-      ])
-        assert.notInclude(shown, secret, endpoint);
-      assert.deepStrictEqual([error.operation, error.reason._tag], ["connect", "Failed"]);
-      assert.include(error.message, where);
-    }
-  }).pipe(Effect.scoped),
+        for (const shown of [
+          error.message,
+          JSON.stringify(error),
+          String(error),
+          error.stack ?? "",
+          error.reason._tag === "Failed" ? error.reason.detail : "",
+        ])
+          assert.notInclude(shown, secret, endpoint);
+        assert.deepStrictEqual([error.operation, error.reason._tag], ["connect", "Failed"]);
+        assert.include(error.message, where);
+      }
+    }).pipe(Effect.scoped),
+  ),
 );
 
 const pointless = [
+  "Threw",
   "StaleRef",
   "NotFound",
   "NotActionable",
   "InvalidRequest",
-  "Limit",
   "PolicyDenied",
-  "PolicyTimeout",
 ];
 
 // What a failure leaves follows from its reason, and whether it was dispatched, alone: whatever
@@ -151,9 +157,19 @@ it.prop(
         closedBy !== undefined && DisconnectCause.literals.some((cause) => cause === closedBy),
         key,
       );
-      // A request that cannot succeed as it is, or a cursor that expired, says so either way.
-      assert.strictEqual(repeat === "resume", reason._tag === "EventHistoryExpired", key);
-      assert.strictEqual(repeat === "pointless", pointless.includes(reason._tag), key);
+      // Requested regression (21 October audit #1): dispatch evidence takes precedence over a
+      // refusal reason; the page may already have changed before a later target went stale.
+      assert.strictEqual(
+        repeat === "resume",
+        !dispatched && reason._tag === "EventHistoryExpired",
+        key,
+      );
+      if (dispatched) assert.strictEqual(repeat, "check", key);
+      assert.strictEqual(
+        repeat === "pointless",
+        !dispatched && pointless.includes(reason._tag),
+        key,
+      );
       // Otherwise repeating is safe unless the call reached the browser, then it waits for a look.
       if (repeat === "safe" || repeat === "check")
         assert.strictEqual(repeat, dispatched ? "check" : "safe", key);

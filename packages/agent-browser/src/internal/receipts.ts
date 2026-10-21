@@ -6,7 +6,7 @@
 import { Effect, Option, Result, Schema } from "effect";
 import { BrowserError, consequence, InvalidRequest } from "effect-browser/BrowserError";
 import { DialogShown, Navigated, PageOpened } from "effect-browser/BrowserEvent";
-import * as Change from "effect-browser/Change";
+import { describeChange } from "effect-browser/Moment";
 import type * as Page from "effect-browser/Page";
 
 /** A failure as a model is told it: what happened, then what to do about it. */
@@ -90,7 +90,7 @@ export const followed = (page: Page.Page, since: number) =>
         : [
             `It changed: ${caused
               .slice(0, maxChanges)
-              .map((change) => Change.describe(change))
+              .map((change) => describeChange(change))
               .join("; ")}${more > 0 ? `; and ${more} more` : ""}.`,
           ]),
       ...Option.match(Result.getFailure(changes), {

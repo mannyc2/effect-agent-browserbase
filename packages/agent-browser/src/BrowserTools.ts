@@ -32,11 +32,14 @@ import {
   Schema,
   SchemaTransformation,
 } from "effect";
+import { Action } from "effect-browser/Action";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type * as Moment from "effect-browser/Moment";
 import * as Page from "effect-browser/Page";
+import * as Stillness from "effect-browser/Stillness";
 import { Prompt, Tool, Toolkit } from "effect/ai";
 
+import type * as AdapterState from "./AdapterState.ts";
 import * as Moments from "./internal/moments.ts";
 import * as PageControl from "./PageControl.ts";
 
@@ -66,6 +69,7 @@ const ref = absent(Schema.String, {
 /** What a pointer tool did, and what followed on its page while it ran. */
 export const Receipt = Schema.Struct({
   did: Schema.String,
+  action: Schema.optional(Action),
   followed: Schema.Array(Schema.String),
 });
 
@@ -164,6 +168,8 @@ const single = BrowserUse.make({ mode: "single" });
 const batched = BrowserUse.make({ mode: "batched" });
 
 export interface LayerOptions extends PageControl.Options {
+  readonly initialMoments?: AdapterState.Moments | undefined;
+  readonly initialZooms?: ReadonlyArray<Page.Zoom> | undefined;
   /**
    * What the model sees of the page: `true`, the default, a screenshot of the current tab before
    * each turn; `"moments"`, in its thread, what the tab did since its previous turn, with frames
@@ -234,9 +240,10 @@ const pointing = (
   const act = <A>(
     run: (page: Page.Page) => Effect.Effect<A, BrowserError>,
     did: (value: A) => string,
+    action?: Action,
   ) =>
     controller.perform(run).pipe(
-      Effect.map(({ value, followed }) => ({ did: did(value), followed })),
+      Effect.map(({ value, followed }) => ({ did: did(value), followed, action })),
       Effect.mapError(PageControl.useError),
     );
 
@@ -245,6 +252,11 @@ const pointing = (
       act(
         (page) => page.click({ x, y }, { button, clickCount: double === true ? 2 : 1 }),
         ({ element, point }) => `Clicked ${element} at (${point.x}, ${point.y}).`,
+        {
+          _tag: "Click",
+          target: { x, y },
+          options: { button, clickCount: double === true ? 2 : 1 },
+        },
       ),
     hover: (place) =>
       Option.match(target(place), {
@@ -253,6 +265,7 @@ const pointing = (
           act(
             (page) => page.hover(to),
             () => `Hovered over ${named(to)}.`,
+            { _tag: "Hover", target: to },
           ),
       }),
     drag: (drag) => {
@@ -264,17 +277,20 @@ const pointing = (
         : act(
             (page) => page.drag(from.value, to.value),
             () => `Dragged from ${named(from.value)} to ${named(to.value)}.`,
+            { _tag: "Drag", from: from.value, to: to.value },
           );
     },
     type_text: ({ text: typed, submit }) =>
       act(
         (page) => page.type(typed, { submit }),
         () => `Typed ${JSON.stringify(typed)}${submit === true ? " and pressed Enter" : ""}.`,
+        { _tag: "Type", text: typed, options: { submit } },
       ),
     press_keys: ({ keys, times, holdMillis }) =>
       act(
         (page) => page.press(keys, { times, holdMillis }),
         () => `Pressed ${keys}${times === undefined || times === 1 ? "" : ` ${times} times`}.`,
+        { _tag: "Press", keys, options: { times, holdMillis } },
       ),
     zoom: (region) =>
       vision !== false
@@ -299,7 +315,7 @@ const pointing = (
         (page) =>
           // What was already moving before the input, such as a game's idle animation, is not
           // what the model waits for.
-          page.ready({
+          Stillness.wait(page, {
             still: "foreground",
             quietMillis: 600,
             timeout: `${Math.min(Math.max(seconds ?? 15, 0), 30)} seconds`,
@@ -310,6 +326,7 @@ const pointing = (
       act(
         (page) => page.back,
         () => "Went back.",
+        { _tag: "Back" },
       ),
   });
 };
@@ -329,7 +346,7 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
     Layer.unwrap(
       Effect.gen(function* () {
         const controller = yield* PageControl.make(target, options);
-        const zooms = yield* Ref.make<Array<Page.Zoom>>([]);
+        const zooms = yield* Ref.make<Array<Page.Zoom>>([...(options.initialZooms ?? [])]);
         const vision = options.vision ?? true;
         const { control } = controller;
 
@@ -361,6 +378,7 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
                   controller.look,
                   Ref.getAndSet(zooms, []),
                   options.onMoment ?? (() => Effect.void),
+                  options.initialMoments,
                 ),
               )
             : vision

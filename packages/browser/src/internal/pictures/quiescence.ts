@@ -2,7 +2,7 @@
 import { Cause, Clock, Duration, Effect, Exit, Fiber } from "effect";
 
 import type { BrowserError } from "../../BrowserError.ts";
-import * as Replies from "../input/replies.ts";
+import * as Replies from "../page/replies.ts";
 
 const deadline = Duration.seconds(2);
 

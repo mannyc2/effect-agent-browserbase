@@ -2,8 +2,6 @@
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, describe, it } from "@effect/vitest";
 import { Cause, ConfigProvider, Deferred, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
-import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import type { BrowserContext } from "playwright-core";
@@ -16,6 +14,8 @@ import {
   modelRunner,
 } from "../Budget.ts";
 import { isolatedTrial, trialSeed, workDeadline } from "../Trial.ts";
+import * as Chromium from "./browser.ts";
+import { NativeContext } from "./browser.ts";
 
 const receipt = (cost: number) => ({
   prompt_tokens: 100,
@@ -357,6 +357,42 @@ describe("unbudgeted routes", () => {
   );
 });
 
+describe("recorded provider payloads", () => {
+  it.effect("keeps complete payloads after settling the reservation", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+      const account = yield* budget.account;
+
+      const native = yield* OpenRouterClient.make({}).pipe(
+        Effect.provideService(HttpClient.HttpClient, byokResponse({ cost: 0.002 })),
+      );
+
+      const recorded: Array<{ request: unknown; response: unknown }> = [];
+
+      const wrapped = budgetedClient(native, account, {
+        rates: { input: 1e-6, output: 2e-6 },
+        maxOutputTokens: 64,
+        record: (request, response) =>
+          Effect.gen(function* () {
+            assert.closeTo((yield* budget.snapshot).knownUsd, 0.002, 1e-9);
+            recorded.push({ request, response });
+          }),
+      });
+
+      const prompt = "x".repeat(9000);
+
+      const [response] = yield* wrapped.createChatCompletion({
+        model: "openai/test",
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      assert.strictEqual(recorded.length, 1);
+      assert.strictEqual(JSON.stringify(recorded[0]?.request).includes(prompt), true);
+      assert.deepStrictEqual(recorded[0]?.response, response);
+    }),
+  );
+});
+
 describe("streamed requests", () => {
   it.effect("are sent as one charged completion and read back as a stream that sent it whole", () =>
     Effect.gen(function* () {
@@ -610,15 +646,14 @@ describe("trial ownership", () => {
           (trial) =>
             isolatedTrial(
               Effect.gen(function* () {
-                const browser = yield* Browser;
-
-                contexts.push(browser.context);
+                contexts.push(yield* NativeContext);
                 const current = yield* Ref.updateAndGet(active, (count) => count + 1);
 
                 yield* Ref.update(maximum, (count) => Math.max(count, current));
                 if (current === 2) yield* Deferred.succeed(bothStarted, undefined);
 
-                const page = yield* Effect.promise(() => browser.context.newPage());
+                const context = yield* NativeContext;
+                const page = yield* Effect.promise(() => context.newPage());
 
                 yield* Effect.promise(() => page.setContent(`<input value="trial-${trial}">`));
                 if (trial === 1) yield* Deferred.await(bothStarted);

@@ -40,6 +40,8 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   session: Schema.String,
   /** Owning Browser connection; document counters restart on adoption or reattachment. */
   connection: Schema.String.check(Schema.isNonEmpty()),
+  /** Native capture identity. Screenshots have no capture generation or sequence. */
+  capture: Schema.optionalKey(Schema.Struct({ generation: Count, sequence: Count })),
   data: Schema.Uint8Array,
   timing: Schema.Union([BrowserPaint, Screenshot]),
   receivedAt: Schema.Finite,
@@ -71,6 +73,18 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
     });
   }
 }
+
+/** Equal capture lineage survives an image copy; untagged pictures retain object identity only. */
+export const sameCapture = (frame: Frame, other: Frame | undefined): boolean =>
+  other !== undefined &&
+  (frame === other ||
+    (frame.capture !== undefined &&
+      frame.page === other.page &&
+      frame.session === other.session &&
+      frame.connection === other.connection &&
+      frame.document === other.document &&
+      frame.capture.generation === other.capture?.generation &&
+      frame.capture.sequence === other.capture?.sequence));
 
 /**
  * A page's capture counts, over its life or a window of the latest minute: what Chromium sent,

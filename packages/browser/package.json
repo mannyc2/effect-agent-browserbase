@@ -17,9 +17,9 @@
   "exports": {
     ".": {
       "workerd": {
-        "@effect-browser/source": "./src/workerd/index.ts",
-        "types": "./dist/workerd/index.d.mts",
-        "default": "./dist/workerd/index.mjs"
+        "@effect-browser/source": "./src/index.ts",
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
       },
       "@effect-browser/source": "./src/index.ts",
       "types": "./dist/index.d.mts",
@@ -51,19 +51,14 @@
         "types": "./dist/workerd/Cdp.d.mts",
         "default": "./dist/workerd/Cdp.mjs"
       },
-      "@effect-browser/source": "./src/Cdp.ts",
-      "types": "./dist/Cdp.d.mts",
-      "default": "./dist/Cdp.mjs"
+      "@effect-browser/source": "./src/providers/Cdp.ts",
+      "types": "./dist/providers/Cdp.d.mts",
+      "default": "./dist/providers/Cdp.mjs"
     },
     "./Chromium": {
-      "@effect-browser/source": "./src/Chromium.ts",
-      "types": "./dist/Chromium.d.mts",
-      "default": "./dist/Chromium.mjs"
-    },
-    "./Expect": {
-      "@effect-browser/source": "./src/Expect.ts",
-      "types": "./dist/Expect.d.mts",
-      "default": "./dist/Expect.mjs"
+      "@effect-browser/source": "./src/providers/Chromium.ts",
+      "types": "./dist/providers/Chromium.d.mts",
+      "default": "./dist/providers/Chromium.mjs"
     },
     "./Frame": {
       "@effect-browser/source": "./src/Frame.ts",
@@ -71,14 +66,14 @@
       "default": "./dist/Frame.mjs"
     },
     "./Moment": {
-      "@effect-browser/source": "./src/Moment.ts",
-      "types": "./dist/Moment.d.mts",
-      "default": "./dist/Moment.mjs"
+      "@effect-browser/source": "./src/moment/Moment.ts",
+      "types": "./dist/moment/Moment.d.mts",
+      "default": "./dist/moment/Moment.mjs"
     },
     "./Motion": {
-      "@effect-browser/source": "./src/Motion.ts",
-      "types": "./dist/Motion.d.mts",
-      "default": "./dist/Motion.mjs"
+      "@effect-browser/source": "./src/presentation/Motion.ts",
+      "types": "./dist/presentation/Motion.d.mts",
+      "default": "./dist/presentation/Motion.mjs"
     },
     "./Page": {
       "@effect-browser/source": "./src/Page.ts",
@@ -86,19 +81,19 @@
       "default": "./dist/Page.mjs"
     },
     "./Plan": {
-      "@effect-browser/source": "./src/Plan.ts",
-      "types": "./dist/Plan.d.mts",
-      "default": "./dist/Plan.mjs"
+      "@effect-browser/source": "./src/plan/index.ts",
+      "types": "./dist/plan/index.d.mts",
+      "default": "./dist/plan/index.mjs"
     },
     "./Policy": {
-      "@effect-browser/source": "./src/Policy.ts",
-      "types": "./dist/Policy.d.mts",
-      "default": "./dist/Policy.mjs"
+      "@effect-browser/source": "./src/policy/Policy.ts",
+      "types": "./dist/policy/Policy.d.mts",
+      "default": "./dist/policy/Policy.mjs"
     },
     "./Presentation": {
-      "@effect-browser/source": "./src/Presentation.ts",
-      "types": "./dist/Presentation.d.mts",
-      "default": "./dist/Presentation.mjs"
+      "@effect-browser/source": "./src/presentation/Presentation.ts",
+      "types": "./dist/presentation/Presentation.d.mts",
+      "default": "./dist/presentation/Presentation.mjs"
     },
     "./Snapshot": {
       "@effect-browser/source": "./src/Snapshot.ts",
@@ -106,14 +101,69 @@
       "default": "./dist/Snapshot.mjs"
     },
     "./Stage": {
-      "@effect-browser/source": "./src/Stage.ts",
-      "types": "./dist/Stage.d.mts",
-      "default": "./dist/Stage.mjs"
+      "@effect-browser/source": "./src/presentation/Stage.ts",
+      "types": "./dist/presentation/Stage.d.mts",
+      "default": "./dist/presentation/Stage.mjs"
     },
     "./Supervisor": {
-      "@effect-browser/source": "./src/Supervisor.ts",
-      "types": "./dist/Supervisor.d.mts",
-      "default": "./dist/Supervisor.mjs"
+      "@effect-browser/source": "./src/supervisor/Supervisor.ts",
+      "types": "./dist/supervisor/Supervisor.d.mts",
+      "default": "./dist/supervisor/Supervisor.mjs"
+    },
+    "./Released": {
+      "@effect-browser/source": "./src/providers/Released.ts",
+      "types": "./dist/providers/Released.d.mts",
+      "default": "./dist/providers/Released.mjs"
+    },
+    "./Action": {
+      "@effect-browser/source": "./src/Action.ts",
+      "types": "./dist/Action.d.mts",
+      "default": "./dist/Action.mjs"
+    },
+    "./Clock": {
+      "@effect-browser/source": "./src/Clock.ts",
+      "types": "./dist/Clock.d.mts",
+      "default": "./dist/Clock.mjs"
+    },
+    "./Geometry": {
+      "@effect-browser/source": "./src/Geometry.ts",
+      "types": "./dist/Geometry.d.mts",
+      "default": "./dist/Geometry.mjs"
+    },
+    "./Style": {
+      "@effect-browser/source": "./src/Style.ts",
+      "types": "./dist/Style.d.mts",
+      "default": "./dist/Style.mjs"
+    },
+    "./Window": {
+      "@effect-browser/source": "./src/Window.ts",
+      "types": "./dist/Window.d.mts",
+      "default": "./dist/Window.mjs"
+    },
+    "./Stillness": {
+      "@effect-browser/source": "./src/stillness/Stillness.ts",
+      "types": "./dist/stillness/Stillness.d.mts",
+      "default": "./dist/stillness/Stillness.mjs"
+    },
+    "./Matching": {
+      "@effect-browser/source": "./src/Matching.ts",
+      "types": "./dist/Matching.d.mts",
+      "default": "./dist/Matching.mjs"
+    },
+    "./testing": {
+      "@effect-browser/source": "./src/testing/index.ts",
+      "types": "./dist/testing/index.d.mts",
+      "default": "./dist/testing/index.mjs"
+    },
+    "./Url": {
+      "@effect-browser/source": "./src/Url.ts",
+      "types": "./dist/Url.d.mts",
+      "default": "./dist/Url.mjs"
+    },
+    "./ActionPort": {
+      "@effect-browser/source": "./src/ActionPort.ts",
+      "types": "./dist/ActionPort.d.mts",
+      "default": "./dist/ActionPort.mjs"
     }
   },
   "publishConfig": {

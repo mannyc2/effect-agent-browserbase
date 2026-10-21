@@ -4,8 +4,10 @@ import { assert, describe, it } from "@effect/vitest";
 import { Clock, ConfigProvider, DateTime, Deferred, Effect, Fiber } from "effect";
 import { BrowserbaseClient } from "effect-browserbase/BrowserbaseClient";
 import { BrowserbaseError, Transport } from "effect-browserbase/BrowserbaseError";
+import * as ContextLease from "effect-browserbase/ContextLease";
 import { TestBrowserbase } from "effect-browserbase/testing";
 import { Command } from "effect/cli";
+import { TestClock } from "effect/testing";
 
 import * as Handover from "../handover.ts";
 import * as Probe from "../HandoverProbe.ts";
@@ -167,3 +169,24 @@ describe("H2 hosted admission", () => {
     }).pipe(Effect.provide(TestBrowserbase.layer())),
   );
 });
+
+it.effect("fails promptly when its child cannot acquire the first generation", () =>
+  Effect.gen(function* () {
+    const probe = yield* Probe.make("rejected-first-generation").pipe(
+      Effect.provide(TestBrowserbase.layer({ creates: [{ _tag: "Reject", status: 403 }] })),
+    );
+
+    const running = yield* probe.run.pipe(
+      Effect.provide(ContextLease.layer),
+      Effect.exit,
+      Effect.forkChild,
+    );
+
+    yield* TestClock.adjust("1 second");
+    yield* Effect.yieldNow;
+    const result = running.pollUnsafe();
+
+    assert.isDefined(result, "provider refusal must not leave the entry rendezvous suspended");
+    if (result?._tag === "Success") assert.strictEqual(result.value._tag, "Failure");
+  }).pipe(Effect.scoped),
+);

@@ -2,7 +2,13 @@
 import { Deferred, Effect, Exit } from "effect";
 import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 
-import { BrowserError, Closed, Failed, type Reason } from "../../BrowserError.ts";
+import {
+  undispatched,
+  type BrowserError,
+  Closed,
+  Failed,
+  type Reason,
+} from "../../BrowserError.ts";
 
 /** How the browser's registration of each tab it was told of ended, once it has. */
 export type Registrations = WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>;
@@ -19,8 +25,7 @@ export const make = Effect.fnUntraced(function* (
   registrations: Registrations,
   closedBy: () => Closed["cause"],
 ) {
-  const failed = (reason: Reason) =>
-    Exit.fail(new BrowserError({ operation: "newPage", reason, dispatched: false }));
+  const failed = (reason: Reason) => Exit.fail(undispatched("newPage", reason));
 
   let active: Mark | undefined;
   const gone = Deferred.makeUnsafe<never, BrowserError>();

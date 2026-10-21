@@ -195,6 +195,16 @@ Recording runs a screencast on every page, so it adds capture load to operate tr
 continues 500 ms after a trial so it ends on the settled page. Lost frames or events are listed in
 `problems`.
 
+New recordings also retain complete moments (including their JSON-encoded frame bytes), the raw
+fixture state actually read by the grader, full provider request/response pairs keyed by turn,
+and HTTP exchanges beneath the real provider codec. The existing live opt-in and reservation cap
+still apply before any recorded provider request. Recordings remain private local evidence.
+`bun run --cwd bench bench regrade path/to/recording.json` re-runs the current task grader using
+that saved truth, with no browser or model; a changed task prompt is refused. The public
+`effect-agent-browser/testing` HTTP cassette can replay the saved `http` exchanges beneath the
+same provider layer. Changed request bodies or tool schemas fail with re-record guidance.
+These codec checks do not claim deterministic replay of a live page's changing screenshots.
+
 `--narrate <seconds>`, with `--model`, captions an operate task's page that often while its agent
 works: each caption is one structured call over a `Moment` of the time since the previous one, with
 reasoning off. Captions go to the recording; they neither steer nor grade the agent. Their calls
@@ -425,7 +435,7 @@ and Jev `jev-1.13.0`, for $0.018 in all:
 
 The separate [hosted capability probes](../docs/HOSTED_CHECKS.md) make no model calls:
 
-- `bun run bench handover --allowance /private/h2-allowance.json`: H2, a live retained hold,
+- `bun run bench handover --allowance /private/h2-allowance.json`: H2, revoked work and scoped cleanup,
   exclusive replacement and persisted cookie/local-storage read-back; at most two 120-second sessions.
 - `bun run bench cue --allowance /private/h1-allowance.json`: H1, two retained captures for a full
   five-minute window, 20 cued reveals and a third loading page; one 420-second session.

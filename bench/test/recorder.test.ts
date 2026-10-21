@@ -7,11 +7,12 @@ import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import * as Chromium from "effect-browser/Chromium";
 
 import * as Recorder from "../Recorder.ts";
 import { plain, Recording } from "../Recording.ts";
+import { grade } from "../regrade.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
+import * as Chromium from "./browser.ts";
 
 const record = Effect.fnUntraced(function* (name: string, humanize: boolean) {
   const task = tasks.find((candidate) => candidate.name === name);
@@ -23,6 +24,15 @@ const record = Effect.fnUntraced(function* (name: string, humanize: boolean) {
     Effect.sync(() => rmSync(directory, { recursive: true, force: true })),
   );
   const recorder = yield* Recorder.make(directory);
+
+  yield* recorder.model(
+    { prompt: "x".repeat(9000), tools: [{ name: "observe" }] },
+    { text: "complete" },
+  );
+  yield* recorder.http({
+    key: "fixture",
+    response: { status: 200, headers: { "content-type": "application/json" }, body: "{}" },
+  });
 
   const outcome = yield* recorder
     .around(task.scripted({ seed: 23, trace: recorder.trace, humanize }))
@@ -71,6 +81,24 @@ describe("recorder", () => {
 
       assert.deepStrictEqual(recording.problems, []);
       assert.isTrue(recording.outcome.pass);
+      assert.deepStrictEqual((yield* grade(recording)).pass, recording.outcome.pass);
+      assert.isFalse(
+        (yield* grade(
+          new Recording({
+            ...recording,
+            outcome: { ...recording.outcome, answer: { confirmation: "wrong" } },
+          }),
+        )).pass,
+      );
+      assert.deepStrictEqual(recording.model, [
+        {
+          turn: 0,
+          request: { prompt: "x".repeat(9000), tools: [{ name: "observe" }] },
+          response: { text: "complete" },
+        },
+      ]);
+      assert.strictEqual(recording.http?.[0]?.response.body, "{}");
+      assert.isDefined(recording.truth);
       assert.isAbove(recording.frames.length, 0);
       assert.isTrue(filesExist);
       assert.deepStrictEqual(
@@ -96,6 +124,19 @@ describe("recorder", () => {
       assert.strictEqual(moment?.frames.length, 3);
       assert.isTrue(moment?.frames.every((frame) => existsSync(join(directory, frame.file))));
       assert.deepStrictEqual(moment?.expected, recording.outcome.answer);
+      assert.strictEqual(moment?.value?.frames.length, 3);
+      assert.isTrue(
+        moment?.value?.frames.every(
+          (frame) => frame.data instanceof Uint8Array && frame.data.byteLength > 0,
+        ),
+      );
+      assert.isTrue((yield* grade(recording)).pass);
+
+      const rejected = yield* grade(
+        new Recording({ ...recording, task: { ...recording.task, prompt: "changed" } }),
+      ).pipe(Effect.flip);
+
+      assert.strictEqual(rejected._tag, "BenchError");
     }).pipe(Effect.scoped),
   );
 });

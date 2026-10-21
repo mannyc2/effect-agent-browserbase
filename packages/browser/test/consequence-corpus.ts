@@ -7,7 +7,7 @@
  * only a judge reading the evidence can recognise them, and the bench grades judges against them.
  */
 import type { Fact } from "../src/Page.ts";
-import type { Risk } from "../src/Policy.ts";
+import type { Risk } from "../src/policy/Policy.ts";
 
 export type Kind =
   | "named"

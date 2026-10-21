@@ -19,13 +19,13 @@ import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
 import type { CaptureSource } from "../../Browser.ts";
 import * as Errors from "../../BrowserError.ts";
 import type { BrowserEvent } from "../../BrowserEvent.ts";
+import * as BrowserClock from "../../Clock.ts";
 import type { InputGuard, Point } from "../../Page.ts";
 import type { Gate } from "../input/gate.ts";
-import { Current } from "../input/replies.ts";
-import * as BrowserClock from "../pictures/clock.ts";
 import * as Lane from "./lane.ts";
 import type { Openings } from "./openings.ts";
-import * as Url from "./url.ts";
+import * as Port from "./port.ts";
+import { Current } from "./replies.ts";
 
 /** Why a page is gone. */
 export type ClosedCause = Errors.Closed["cause"];
@@ -51,6 +51,7 @@ export interface MakeOptions {
   readonly url: string;
   readonly playwright: PlaywrightPage;
   readonly cdp: CDPSession;
+  readonly nativePort?: Port.Hooks["native"] | undefined;
   /** A call's reply, or a failure as for a closed page once the browser is lost first. */
   readonly untilLost: <A>(reply: Promise<A>) => Promise<A>;
   readonly settings: Settings;
@@ -74,48 +75,8 @@ export interface MakeOptions {
   readonly capture?: CaptureSource | undefined;
 }
 
-const messageOf = (cause: unknown): string =>
-  cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "unknown error";
-
-const closedPattern =
-  /has been closed|Target closed|Session closed|browser has disconnected|Target page, context or browser/i;
-
-/**
- * Map a Playwright or protocol failure to a reason, `Closed` with `closed` as its cause for a page
- * or browser that is gone. A call that gives Playwright a timeout passes the same bound, so its
- * `Timeout` reports it; without one, Playwright's own message stays.
- */
-export const reasonOf = (
-  cause: unknown,
-  timeoutMillis?: number,
-  closed: ClosedCause = "connection",
-  redact: (message: string) => string = Url.redactWithin,
-): Errors.Reason => {
-  const message = messageOf(cause);
-
-  if (closedPattern.test(message)) return new Errors.Closed({ cause: closed });
-  if (cause instanceof Error && cause.name === "TimeoutError" && timeoutMillis !== undefined)
-    return new Errors.Timeout({ millis: timeoutMillis });
-  const line = redact(message).split("\n")[0] ?? message;
-
-  return new Errors.Failed({ detail: line.replace(/^[\w.]+: /, "") });
-};
-
-/**
- * One Playwright or protocol call, failing undispatched. A closed page says why it is gone as the
- * browser knows then: the library's own calls fail with the browser's loss, and Playwright fails
- * its calls on a dropped connection after reporting the context closed.
- */
-export const call = <A>(
-  operation: string,
-  run: () => Promise<A>,
-  closedBy: () => ClosedCause,
-  timeoutMillis?: number,
-) =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) => undispatched(operation, reasonOf(cause, timeoutMillis, closedBy())),
-  });
+export { call, reasonOf, undispatched, failWith, refuse } from "../../BrowserError.ts";
+import { call, failWith, undispatched } from "../../BrowserError.ts";
 
 export const contextGone = (error: Errors.BrowserError) =>
   error.reason._tag === "Failed" &&
@@ -151,18 +112,7 @@ const track = <A>(reply: Promise<A>) => Fiber.getCurrent()?.getRef(Current)?.tra
 
 // A message's size on the wire, give or take its envelope.
 const sizeOf = (value: unknown) =>
-  value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
-
-/** A failure of `operation` before any of its input reached the browser. */
-export const undispatched = (operation: string, reason: Errors.Reason) =>
-  new Errors.BrowserError({ operation, reason, dispatched: false });
-
-export const failWith = (operation: string, reason: Errors.Reason) =>
-  Effect.fail(undispatched(operation, reason));
-
-/** Refuse a request to `operation` that could never succeed, before sending anything. */
-export const refuse = (operation: string, detail: string) =>
-  failWith(operation, new Errors.InvalidRequest({ detail }));
+  value === undefined ? 0 : new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
 export const decodeWith =
   <A>(operation: string, schema: Schema.Codec<A, unknown>) =>
@@ -263,7 +213,9 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
   // Every protocol or Playwright call. Errors are undispatched here; `perform` marks them
   // dispatched once input has gone out.
   const native = <A>(operation: string, run: () => Promise<A>, timeoutMillis?: number) =>
-    call(operation, () => track(run()), options.closedBy, timeoutMillis);
+    call(operation, () => options.untilLost(track(run())), options.closedBy, timeoutMillis).pipe(
+      Effect.provideService(Port.Operation, operation),
+    );
 
   /** Fail with `Timeout` once `duration` has passed, the action timeout unless another is given. */
   const within =
@@ -300,7 +252,8 @@ export const make = (options: MakeOptions, scope: Scope.Scope) => {
     documentAt: () => activity.documentAt,
     gone: (operation) => undispatched(operation, new Errors.Closed({ cause: options.closedBy() })),
     scope,
-    inputGate: options.inputGate,
+    beforeWrite: options.inputGate?.check,
+    refusal: options.inputGate?.refused,
   });
 
   // Where this page's latest move left its pointer, which is where its next plain glide starts and

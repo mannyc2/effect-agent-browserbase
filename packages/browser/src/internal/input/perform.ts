@@ -4,17 +4,18 @@
  */
 import { Deferred, Duration, Effect, Exit, Option, Ref } from "effect";
 
-import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
-import { Action, type ActionOptions, Subject } from "../../BrowserEvent.ts";
+import { Current as CurrentAction, recorded, type Name } from "../../Action.ts";
+import { BrowserError, PolicyTimeout, Timeout, InvalidRequest } from "../../BrowserError.ts";
+import { Action, Subject } from "../../BrowserEvent.ts";
+import type * as BrowserClock from "../../Clock.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
+import { Current, type Style, validated } from "../../Style.ts";
+import { redact } from "../../Url.ts";
 import { failWith, type PageContext, undispatched } from "../page/context.ts";
-import { Correlation } from "../page/lane.ts";
-import { redact } from "../page/url.ts";
-import type * as BrowserClock from "../pictures/clock.ts";
+import { Correlation, FailFast } from "../page/lane.ts";
+import * as Replies from "../page/replies.ts";
 import type { Dispatch } from "./dispatch.ts";
 import type { Approval, PolicyPlan } from "./guard.ts";
-import * as Replies from "./replies.ts";
-import { plain, type Style } from "./style.ts";
 
 export interface InputMarks {
   /** How the action's input is sent: plainly, or performed for viewers. */
@@ -62,19 +63,37 @@ const subjectAttributes = (prefix: string, subject: Subject | undefined) =>
 /** What an action's record keeps of its call. */
 export interface Call {
   readonly target?: string | undefined;
-  /** The rest of what the caller asked, recorded so a plan can ask it again. */
-  readonly options?: ActionOptions | undefined;
   readonly text?: string | undefined;
   /** The text may be a secret: it is recorded only once the action reveals that it is not. */
   readonly secret?: boolean | undefined;
   /** False for navigation, which sends no input. */
   readonly input?: boolean | undefined;
-  /** False for the pointer's travel ahead of an action, which is no action of its own. */
-  readonly recorded?: boolean | undefined;
 }
 
 const timedOut = (operation: string, timeout: Duration.Duration) =>
   failWith(operation, new Timeout({ millis: Duration.toMillis(timeout) }));
+
+/** Trace summaries carry lengths and subjects, never typed text. */
+const annotate = (
+  dispatched: boolean,
+  queuedMillis: number | undefined,
+  info: Call,
+  revealed: boolean,
+  subject: Subject | undefined,
+  to: Subject | undefined,
+  failure: Option.Option<BrowserError>,
+) =>
+  Effect.annotateCurrentSpan({
+    dispatched,
+    ...(queuedMillis === undefined ? {} : { queuedMillis }),
+    ...(info.text !== undefined && revealed ? { chars: info.text.length } : {}),
+    ...subjectAttributes("subject", subject),
+    ...subjectAttributes("to", to),
+    ...Option.match(failure, {
+      onNone: () => ({}),
+      onSome: (error) => ({ "error.type": error.reason._tag }),
+    }),
+  });
 
 /**
  * Fail `effect` with `Timeout` once `timeout` has passed, and as much later again as `presented`
@@ -140,7 +159,11 @@ const useRun = <A>(
   canStop: Effect.Effect<boolean>,
 ) =>
   action.pipe(
-    Effect.tapError(() => run.close.pipe(Effect.andThen(sender.flush(name, run)), Effect.ignore)),
+    Effect.tapError((error) =>
+      error.reason._tag === "Closed"
+        ? run.close
+        : run.close.pipe(Effect.andThen(sender.flush(name, run)), Effect.ignore),
+    ),
     Effect.tap(() => run.close.pipe(Effect.andThen(sender.flush(name, run)))),
     // Cleanup submits missing releases; the page retains replies after caller interruption.
     Effect.ensuring(run.close.pipe(Effect.andThen(page.openings.clear))),
@@ -157,14 +180,24 @@ export const make = (page: PageContext, sender: Dispatch) => {
   // Record the whole operation, but never hold the page's turn or spend its action timeout while
   // a policy is waiting. Validation binds approval to the document and targets it saw.
   const perform = <A>(
-    name: string,
+    name: Name,
     info: Call,
     timeout: Duration.Duration,
     prepare: Effect.Effect<PolicyPlan, BrowserError>,
     body: (marks: InputMarks, approval: Approval | undefined) => Effect.Effect<A, BrowserError>,
-    style: Style = plain,
   ): Effect.Effect<A, BrowserError> =>
     Effect.gen(function* () {
+      const value = yield* CurrentAction;
+
+      if (value === undefined)
+        return yield* failWith(name, new InvalidRequest({ detail: "an action value is required" }));
+      const style = validated(yield* Current);
+      const failFast = yield* FailFast;
+
+      const styled =
+        style.withInput?.({ operation: name, wait: timeout, failFast }) ??
+        (<Value, Error, Requirements>(effect: Effect.Effect<Value, Error, Requirements>) => effect);
+
       const startedAt = now();
       const sent = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
@@ -242,29 +275,31 @@ export const make = (page: PageContext, sender: Dispatch) => {
         Effect.suspend(() => {
           const asked = now();
 
-          return lane.write(
-            name,
-            timeout,
-          )(
-            ticket.enter.pipe(
-              Effect.andThen(
-                Effect.suspend(() =>
-                  admit.pipe(
-                    Effect.timeoutOrElse({
-                      duration: Duration.millis(
-                        Math.max(0, Duration.toMillis(timeout) - (now() - asked)),
-                      ),
-                      orElse: () => timedOut(name, timeout),
-                    }),
+          return styled(
+            lane.write(
+              name,
+              timeout,
+            )(
+              ticket.enter.pipe(
+                Effect.andThen(
+                  Effect.suspend(() =>
+                    admit.pipe(
+                      Effect.timeoutOrElse({
+                        duration: Duration.millis(
+                          Math.max(0, Duration.toMillis(timeout) - (now() - asked)),
+                        ),
+                        orElse: () => timedOut(name, timeout),
+                      }),
+                    ),
                   ),
                 ),
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    queuedMillis = Math.round(now() - asked);
+                  }),
+                ),
+                Effect.andThen(deadline(name, timeout, now, () => presented)(action)),
               ),
-              Effect.tap(() =>
-                Effect.sync(() => {
-                  queuedMillis = Math.round(now() - asked);
-                }),
-              ),
-              Effect.andThen(deadline(name, timeout, now, () => presented)(action)),
             ),
           );
         });
@@ -303,8 +338,6 @@ export const make = (page: PageContext, sender: Dispatch) => {
               );
             });
 
-      const record = info.recorded === false ? () => 0 : publish;
-
       // Record the outcome even when the caller interrupts: its input may already be in the page.
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
@@ -317,29 +350,18 @@ export const make = (page: PageContext, sender: Dispatch) => {
           const { subject, to, box } = yield* Ref.get(acted);
           const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
 
-          // What the Action records, less its text: only a revealed text's length.
-          yield* Effect.annotateCurrentSpan({
-            dispatched,
-            ...(queuedMillis === undefined ? {} : { queuedMillis }),
-            ...(info.text !== undefined && revealed ? { chars: info.text.length } : {}),
-            ...subjectAttributes("subject", subject),
-            ...subjectAttributes("to", to),
-            ...Option.match(failure, {
-              onNone: () => ({}),
-              onSome: (error) => ({ "error.type": error.reason._tag }),
-            }),
-          });
+          yield* annotate(dispatched, queuedMillis, info, revealed, subject, to, failure);
 
-          record(
+          publish(
             new Action({
               at: now(),
               startedAt,
               page: id,
               name,
+              value: recorded(value, revealed),
               url: redact(page.playwright.url()),
               correlation: yield* Correlation,
               target: info.target,
-              options: Exit.isSuccess(exit) ? info.options : undefined,
               subject,
               to,
               box,

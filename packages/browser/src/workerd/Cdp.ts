@@ -4,8 +4,8 @@
  *
  * @since 0.3.0
  */
-import { make } from "../internal/cdp.ts";
+import { make } from "../providers/connection.ts";
 
-export type { Connector, ConnectOptions, Options } from "../internal/cdp.ts";
+export type { Connector, ConnectOptions, Options } from "../providers/connection.ts";
 
 export const { open, layer } = make();

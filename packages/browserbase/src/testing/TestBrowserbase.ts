@@ -19,10 +19,12 @@ import {
   Clock,
   Context,
   DateTime,
+  Duration,
   Effect,
   Layer,
   Option,
   Predicate,
+  PubSub,
   Redacted,
   Schema,
 } from "effect";
@@ -78,19 +80,6 @@ export const Read = Schema.Union([
   Schema.TaggedStruct("Lost", {}),
 ]);
 
-export const Script = Schema.Struct({
-  /** How creates answer, in turn; once these run out, each is accepted. */
-  creates: Schema.optional(Schema.Array(Create)),
-  /** How releases answer, in turn; once these run out, each ends its session. */
-  releases: Schema.optional(Schema.Array(Release)),
-  /** How session reads answer, in turn; once these run out, each answers. */
-  reads: Schema.optional(Schema.Array(Read)),
-  /** The DevTools address each session hands out. Without it, sessions have none. */
-  connectUrl: Schema.optional(Schema.String),
-});
-
-export type Script = typeof Script.Type;
-
 /** A session as the fake keeps it, with how many releases it was asked. */
 export interface Kept {
   readonly id: string;
@@ -110,6 +99,10 @@ export interface Handle {
   readonly requests: Effect.Effect<ReadonlyArray<string>>;
   /** Each session as Browserbase would describe it now, oldest first. */
   readonly sessions: Effect.Effect<ReadonlyArray<Kept>>;
+  /** Wait for state or clock changes without sending requests or polling. */
+  readonly waitUntil: (
+    predicate: (sessions: ReadonlyArray<Kept>) => boolean,
+  ) => Effect.Effect<ReadonlyArray<Kept>>;
   /** End a session as Browserbase does on its own, as when its browser fails. */
   readonly end: (id: string) => Effect.Effect<void>;
 }
@@ -122,65 +115,93 @@ export class TestBrowserbase extends Context.Service<TestBrowserbase, Handle>()(
 /** The API key the fake takes; any other is unauthorized. */
 export const apiKey = "test-browserbase-key";
 
-const CreateBody = Schema.fromJsonString(
-  Schema.Struct({
-    projectId: Schema.optional(Schema.String),
-    extensionId: Schema.optional(Schema.String),
-    timeout: Schema.optional(Schema.Finite),
-    keepAlive: Schema.optional(Schema.Boolean),
-    region: Schema.optional(
-      Schema.Literals(["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]),
-    ),
-    proxies: Schema.optional(
-      Schema.Union([
-        Schema.Boolean,
-        Schema.Array(
-          Schema.Union([
-            Schema.Struct({
-              type: Schema.Literal("browserbase"),
-              geolocation: Schema.optional(
-                Schema.Struct({
-                  country: Schema.String,
-                  state: Schema.optional(Schema.String),
-                  city: Schema.optional(Schema.String),
-                }),
-              ),
-              domainPattern: Schema.optional(Schema.String),
-            }),
-            Schema.Struct({
-              type: Schema.Literal("external"),
-              server: Schema.String,
-              username: Schema.optional(Schema.String),
-              password: Schema.optional(Schema.String),
-              domainPattern: Schema.optional(Schema.String),
-            }),
-            Schema.Struct({
-              type: Schema.Literal("none"),
-              domainPattern: Schema.optional(Schema.String),
-            }),
-          ]),
-        ),
-      ]),
-    ),
-    userMetadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-    browserSettings: Schema.optional(
+const Settings = Schema.Struct({
+  projectId: Schema.optional(Schema.String),
+  extensionId: Schema.optional(Schema.String),
+  timeout: Schema.optional(Schema.Finite),
+  keepAlive: Schema.optional(Schema.Boolean),
+  region: Schema.optional(
+    Schema.Literals(["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]),
+  ),
+  proxies: Schema.optional(
+    Schema.Union([
+      Schema.Boolean,
+      Schema.Array(
+        Schema.Union([
+          Schema.Struct({
+            type: Schema.Literal("browserbase"),
+            geolocation: Schema.optional(
+              Schema.Struct({
+                country: Schema.String,
+                state: Schema.optional(Schema.String),
+                city: Schema.optional(Schema.String),
+              }),
+            ),
+            domainPattern: Schema.optional(Schema.String),
+          }),
+          Schema.Struct({
+            type: Schema.Literal("external"),
+            server: Schema.String,
+            username: Schema.optional(Schema.String),
+            password: Schema.optional(Schema.String),
+            domainPattern: Schema.optional(Schema.String),
+          }),
+          Schema.Struct({
+            type: Schema.Literal("none"),
+            domainPattern: Schema.optional(Schema.String),
+          }),
+        ]),
+      ),
+    ]),
+  ),
+  userMetadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  browserSettings: Schema.optional(
+    Schema.Struct({
+      context: Schema.optional(
+        Schema.Struct({ id: Schema.String, persist: Schema.optional(Schema.Boolean) }),
+      ),
+      viewport: Schema.optional(Schema.Struct({ width: Schema.Finite, height: Schema.Finite })),
+      blockAds: Schema.optional(Schema.Boolean),
+      solveCaptchas: Schema.optional(Schema.Boolean),
+      recordSession: Schema.optional(Schema.Boolean),
+      logSession: Schema.optional(Schema.Boolean),
+      verified: Schema.optional(Schema.Boolean),
+      os: Schema.optional(Schema.Literals(["windows", "mac", "linux", "mobile", "tablet"])),
+      allowedDomains: Schema.optional(Schema.Array(Schema.String)),
+      ignoreCertificateErrors: Schema.optional(Schema.Boolean),
+    }),
+  ),
+});
+
+const CreateBody = Schema.fromJsonString(Settings);
+
+export const Script = Schema.Struct({
+  /** How creates answer, in turn; once these run out, each is accepted. */
+  creates: Schema.optional(Schema.Array(Create)),
+  /** How releases answer, in turn; once these run out, each ends its session. */
+  releases: Schema.optional(Schema.Array(Release)),
+  /** How session reads answer, in turn; once these run out, each answers. */
+  reads: Schema.optional(Schema.Array(Read)),
+  /** Initial API state, before any requests. IDs must be valid UUIDs. */
+  contexts: Schema.optional(
+    Schema.Array(Schema.Struct({ id: Schema.String.check(Schema.isUUID()) })),
+  ),
+  sessions: Schema.optional(
+    Schema.Array(
       Schema.Struct({
-        context: Schema.optional(
-          Schema.Struct({ id: Schema.String, persist: Schema.optional(Schema.Boolean) }),
-        ),
-        viewport: Schema.optional(Schema.Struct({ width: Schema.Finite, height: Schema.Finite })),
-        blockAds: Schema.optional(Schema.Boolean),
-        solveCaptchas: Schema.optional(Schema.Boolean),
-        recordSession: Schema.optional(Schema.Boolean),
-        logSession: Schema.optional(Schema.Boolean),
-        verified: Schema.optional(Schema.Boolean),
-        os: Schema.optional(Schema.Literals(["windows", "mac", "linux", "mobile", "tablet"])),
-        allowedDomains: Schema.optional(Schema.Array(Schema.String)),
-        ignoreCertificateErrors: Schema.optional(Schema.Boolean),
+        id: Schema.String.check(Schema.isUUID()),
+        status: Schema.Literals(["PENDING", "RUNNING", "COMPLETED", "ERROR", "TIMED_OUT"]),
+        options: Schema.optional(Settings),
+        /** A pending session starts after this delay; absent it stays pending until released or timed out. */
+        pendingMillis: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
       }),
     ),
-  }),
-);
+  ),
+  /** The DevTools address each session hands out. Without it, sessions have none. */
+  connectUrl: Schema.optional(Schema.String),
+});
+
+export type Script = typeof Script.Type;
 
 const ReleaseBody = Schema.fromJsonString(
   Schema.Struct({ status: Schema.Literal("REQUEST_RELEASE") }),
@@ -193,6 +214,7 @@ interface Row {
   /** When a list first shows it. */
   readonly listedAt: number;
   readonly expiresAt: number;
+  readonly runningAt: number;
   readonly keepAlive: boolean;
   readonly userMetadata: Readonly<Record<string, unknown>> | undefined;
   readonly context: { readonly id: string; readonly persist: boolean } | undefined;
@@ -222,8 +244,11 @@ const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The next id, a UUID as Browserbase's are, counted so that every run hands out the same. */
-const nextId = (fake: Fake) =>
-  `00000000-0000-4000-8000-${(++fake.made.count).toString(16).padStart(12, "0")}`;
+const nextId = (fake: Fake): string => {
+  const id = `00000000-0000-4000-8000-${(++fake.made.count).toString(16).padStart(12, "0")}`;
+
+  return fake.sessions.has(id) || fake.contexts.has(id) ? nextId(fake) : id;
+};
 
 /** How the session ended by now, or undefined while it runs. */
 const endOf = (fake: Fake, row: Row) => {
@@ -234,6 +259,9 @@ const endOf = (fake: Fake, row: Row) => {
 
   return end.at <= fake.now() ? end : undefined;
 };
+
+const statusOf = (fake: Fake, row: Row) =>
+  endOf(fake, row)?.status ?? (fake.now() < row.runningAt ? "PENDING" : "RUNNING");
 
 /** The session as Browserbase answers it; only creates and reads hand out its address. */
 const describe = (fake: Fake, row: Row, connect: boolean) => {
@@ -246,7 +274,7 @@ const describe = (fake: Fake, row: Row, connect: boolean) => {
     startedAt: iso(row.createdAt),
     expiresAt: iso(row.expiresAt),
     projectId: row.options.projectId ?? "test-project",
-    status: end?.status ?? "RUNNING",
+    status: statusOf(fake, row),
     proxyBytes: 0,
     keepAlive: row.keepAlive,
     region: row.options.region ?? "us-west-2",
@@ -344,6 +372,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
         createdAt,
         listedAt: createdAt + (reply._tag === "Lost" ? (reply.listedAfter ?? 0) : 0),
         expiresAt: createdAt + (body.timeout ?? 300) * 1000,
+        runningAt: createdAt,
         keepAlive: body.keepAlive ?? false,
         userMetadata: body.userMetadata,
         context:
@@ -373,7 +402,7 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
           .filter(
             (kept) =>
               kept.listedAt <= fake.now() &&
-              (status === null || (endOf(fake, kept)?.status ?? "RUNNING") === status) &&
+              (status === null || statusOf(fake, kept) === status) &&
               matches(kept.userMetadata),
           )
           .map((kept) => describe(fake, kept, false)),
@@ -469,29 +498,90 @@ export const make = Effect.fnUntraced(function* (script: Script = {}) {
     made: { count: 0 },
   };
 
+  const changes = yield* PubSub.unbounded<void>();
+
+  const snapshot = () =>
+    [...fake.sessions.values()].map((row) => ({
+      id: row.id,
+      options: row.options,
+      status: statusOf(fake, row),
+      userMetadata: row.userMetadata,
+      releases: row.releases,
+      keepAlive: row.keepAlive,
+      context: row.context,
+    }));
+
+  for (const initial of decoded.contexts ?? []) fake.contexts.set(initial.id, fake.now());
+  for (const initial of decoded.sessions ?? []) {
+    const options = initial.options ?? {};
+    const context = options.browserSettings?.context;
+    const now = fake.now();
+
+    fake.sessions.set(initial.id, {
+      id: initial.id,
+      options,
+      createdAt: now,
+      listedAt: now,
+      expiresAt: now + (options.timeout ?? 300) * 1000,
+      runningAt: initial.status === "PENDING" ? now + (initial.pendingMillis ?? Infinity) : now,
+      keepAlive: options.keepAlive ?? false,
+      userMetadata: options.userMetadata,
+      context:
+        context === undefined ? undefined : { id: context.id, persist: context.persist ?? false },
+      ends:
+        initial.status === "PENDING" || initial.status === "RUNNING"
+          ? undefined
+          : { status: initial.status, at: now },
+      releases: 0,
+    });
+  }
+
   const handle: Handle = {
     requests: Effect.sync(() => [...fake.requests]),
-    sessions: Effect.sync(() =>
-      [...fake.sessions.values()].map((row) => ({
-        id: row.id,
-        options: row.options,
-        status: endOf(fake, row)?.status ?? "RUNNING",
-        userMetadata: row.userMetadata,
-        releases: row.releases,
-        keepAlive: row.keepAlive,
-        context: row.context,
-      })),
-    ),
+    sessions: Effect.sync(snapshot),
+    waitUntil: (predicate) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(changes);
+
+          while (true) {
+            const rows = snapshot();
+
+            if (predicate(rows)) return rows;
+            const now = fake.now();
+
+            const next = Math.min(
+              ...[...fake.sessions.values()].flatMap((row) =>
+                [row.runningAt, row.expiresAt, row.ends?.at ?? Infinity].filter((at) => at > now),
+              ),
+            );
+
+            const changed = PubSub.take(subscription);
+
+            yield* Number.isFinite(next)
+              ? Effect.raceFirst(changed, clock.sleep(Duration.millis(next - now)))
+              : changed;
+          }
+        }),
+      ),
     end: (id) =>
       Effect.sync(() => {
         const row = fake.sessions.get(id);
 
         if (row !== undefined && endOf(fake, row) === undefined)
           row.ends = { status: "ERROR", at: fake.now() };
+        PubSub.publishUnsafe(changes, undefined);
       }),
   };
 
-  return { http: HttpClient.make((request, url) => serve(fake, request, url)), handle };
+  return {
+    http: HttpClient.make((request, url) =>
+      serve(fake, request, url).pipe(
+        Effect.ensuring(Effect.sync(() => void PubSub.publishUnsafe(changes, undefined))),
+      ),
+    ),
+    handle,
+  };
 });
 
 /** The real `BrowserbaseClient` over the fake, and the fake's handle. */

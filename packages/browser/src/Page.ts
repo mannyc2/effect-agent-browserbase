@@ -2,12 +2,12 @@
  * One browser tab: navigation, snapshots, pictures and input.
  *
  * A page waits only for itself: its operations take turns in one lane of its own. An action, which
- * sends input or navigates, has the page to itself, in the order actions were asked; reads share
+ * sends input or navigates, has the page to itself, in the order admitted after policy approval; reads share
  * it, after the action in flight and every action asked before them, so a read describes the page
  * an action left. A wait for a turn ends at the operation's deadline as `Busy`, never `Timeout`,
  * and a full deadline then bounds the operation itself; `failFast` fails it at once instead.
  * Identical reads asked between the same actions share one call to the page, and one whose
- * callers gave up finishes for the next caller to ask it. A policy holds outside the lane while
+ * callers gave up finishes for the next caller to ask it within 250 ms. A policy holds outside the lane while
  * other operations continue; its target is revalidated before dispatch. Element targets are refs
  * from a snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
  * screenshot's pixels. Mouse and keyboard input share a bounded pipeline, so pacing does not wait
@@ -15,20 +15,26 @@
  *
  * @since 0.3.0
  */
-import { type Duration, Effect, Schema, type Stream } from "effect";
-import type { Page as PlaywrightPage } from "playwright-core";
+import { type Clock, type Duration, Effect, Schema, type Scope, type Stream } from "effect";
 
+import {
+  Action,
+  type ClickOptions as ClickOptionsSchema,
+  type TypeOptions as TypeOptionsSchema,
+  type PressOptions as PressOptionsSchema,
+  type ScrollOptions as ScrollOptionsSchema,
+} from "./Action.ts";
 import { type BrowserError, type PolicyDenied } from "./BrowserError.ts";
 import { Box, type BrowserEvent, PageLoaded, Subject } from "./BrowserEvent.ts";
 import type { Changes } from "./Change.ts";
 import { type CaptureStats, Frame, Image, type ScreencastOptions } from "./Frame.ts";
+import * as Motion from "./Geometry.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
-import * as Url from "./internal/page/url.ts";
-import type { Window } from "./Moment.ts";
-import * as Motion from "./Motion.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
+import * as Url from "./Url.ts";
+import type { Cursor, Window } from "./Window.ts";
 
 export type Point = Motion.Point;
 
@@ -61,46 +67,11 @@ export class ResolvedTarget extends Schema.Class<ResolvedTarget>("effect-browser
   href: Schema.optional(Schema.String),
 }) {}
 
-export interface ClickOptions {
-  readonly button?: "left" | "right" | "middle" | undefined;
-  /** 2 for a double click. */
-  readonly clickCount?: number | undefined;
-  /** Hold the button down this long before releasing it. */
-  readonly holdMillis?: number | undefined;
-}
-
-export interface TypeOptions {
-  /** Type into this text field: it is focused first, and its content replaced unless `replace` is false. */
-  readonly into?: string | undefined;
-  readonly replace?: boolean | undefined;
-  /** Press Enter afterwards. */
-  readonly submit?: boolean | undefined;
-  /**
-   * The text is a secret: type it only into a field the page marks secret, such as a password,
-   * and otherwise refuse with `NotActionable` before any input. A replayed password asks this.
-   */
-  readonly secret?: boolean | undefined;
-}
-
-export interface PressOptions {
-  /**
-   * Focus this element, by ref, before the first press: a link, a button or a field. The keys go to
-   * whatever has focus otherwise.
-   */
-  readonly on?: string | undefined;
-  /** Press the keys this many times. */
-  readonly times?: number | undefined;
-  /** Hold the keys down this long before releasing them, as a game control might need. */
-  readonly holdMillis?: number | undefined;
-}
-
-export interface ScrollOptions {
-  readonly dx?: number | undefined;
-  /** Pixels to scroll down; negative scrolls up. Defaults to most of a viewport. */
-  readonly dy?: number | undefined;
-  /** Scroll whatever is under this point or element. Defaults to the middle of the viewport. */
-  readonly at?: Target | undefined;
-}
+/** Action options share the execution codec. */
+export type ClickOptions = typeof ClickOptionsSchema.Type;
+export type TypeOptions = typeof TypeOptionsSchema.Type;
+export type PressOptions = typeof PressOptionsSchema.Type;
+export type ScrollOptions = typeof ScrollOptionsSchema.Type;
 
 /**
  * How current a picture must be. The newest screencast frame serves when it qualifies, at no cost;
@@ -137,6 +108,10 @@ export interface ScreenshotOptions {
  * that has a role or is a control.
  */
 export interface FindQuery {
+  /** Narrow matching to this CSS selector. Invalid CSS fails InvalidRequest. */
+  readonly selector?: string | undefined;
+  /** Require a visible match, optionally enabled. */
+  readonly state?: "visible" | "enabled" | undefined;
   /** An ARIA role, such as `"button"` or `"heading"`, ignoring case. */
   readonly role?: string | undefined;
   /**
@@ -204,26 +179,8 @@ export class Text extends Schema.Class<Text>("effect-browser/Text")({
   at: Schema.Finite,
 }) {}
 
-/** What `waitFor` waits for. */
-export interface WaitCondition {
-  /** A CSS selector for what to watch; the document's body without one. */
-  readonly selector?: string | undefined;
-  /**
-   * `"visible"` (the default): something it matches shows; `"hidden"`: nothing it matches shows;
-   * `"enabled"`: something it matches shows and is not disabled.
-   */
-  readonly state?: "visible" | "hidden" | "enabled" | undefined;
-  /** Only what shows this text counts, case and all, with runs of spaces read as one. */
-  readonly text?: string | undefined;
-}
-
 export interface ReadyOptions {
-  /**
-   * What must stay still during quietMillis: screen paint (default); recorded content; or the
-   * `"foreground"`, the screen but for what was already moving before the page's latest input.
-   */
-  readonly still?: "screen" | "content" | "foreground" | undefined;
-  /** How long the selected evidence must stay still; screen paint by default. */
+  /** How long recorded content must stay unchanged. Screen stillness is a separate feature. */
   readonly quietMillis?: number | undefined;
   readonly timeout?: Duration.Input | undefined;
 }
@@ -253,7 +210,7 @@ export interface WindowOptions {
    * paint; host monotonic milliseconds; or a `Duration` back from `until`. A start after `until`
    * leaves the window empty there.
    */
-  readonly since: Window | Frame | Duration.Duration | number;
+  readonly since: Window | Cursor | Frame | Duration.Duration | number;
   /**
    * Where it ends: a frame, at its paint, such as one a delayed consumer airs now; or host
    * monotonic milliseconds. Defaults to now, and is never later.
@@ -270,6 +227,8 @@ export interface WindowOptions {
  */
 export class State extends Schema.Class<State>("effect-browser/PageState")({
   page: Schema.String,
+  /** The tracking connection that owns this document counter. */
+  connection: Schema.String,
   /** When this was taken. */
   at: Schema.Finite,
   /** Where the main frame last committed or moved, without userinfo or known secret parameters. */
@@ -326,7 +285,7 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Inp
   url: Schema.String,
   /** The page's title, at most 120 characters. */
   title: Schema.String,
-  action: Schema.String,
+  action: Action,
   target: Schema.optional(Schema.String),
   element: Schema.optional(Schema.String),
   /** Literal pixel targets only; ref coordinates are resolved after the policy allows them. */
@@ -384,11 +343,72 @@ export const correlate =
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
+/** What a wait requires of the query's matches. */
+export type UntilWant = "some" | "none" | { readonly other: string };
+
+export interface UntilResult {
+  readonly met: boolean;
+  readonly mark: string;
+}
+
+/** Scoped access to one page's shared capture and its current-document evidence. */
+export interface Capture {
+  readonly stream: Stream.Stream<Frame, BrowserError>;
+  readonly current: Frame | undefined;
+  readonly isCurrent: (frame: Frame) => boolean;
+  readonly confirm: (frame: Frame) => Effect.Effect<boolean, BrowserError>;
+  readonly sync: Effect.Effect<void, BrowserError>;
+  readonly stats: (options?: {
+    readonly window?: Duration.Input | undefined;
+  }) => Effect.Effect<CaptureStats, BrowserError>;
+}
+
+/** Script values cross the page boundary through the caller's Schema. A bundler may rewrite functions. */
+export interface ScriptOptions<A, Arg> {
+  readonly arg: Arg;
+  readonly result: Schema.Codec<A, unknown>;
+}
+
+export interface ActOptions<A, Arg> extends ScriptOptions<A, Arg> {
+  readonly document: number;
+  /** Supplying the read's connection also refuses a document counter from another connection. */
+  readonly connection?: string | undefined;
+}
+
 export interface Page {
+  /** Decode and perform a data action through the same policy and lane as the named methods. */
+  readonly perform: (action: Action) => Effect.Effect<ResolvedTarget | string | void, BrowserError>;
+  /** Read declared side-effect-free code in the main world, retrying one replaced document. */
+  readonly read: <A, Arg>(
+    script: (arg: Arg) => unknown,
+    options: ScriptOptions<A, Arg>,
+  ) => Effect.Effect<
+    { readonly value: A; readonly document: number; readonly connection: string },
+    BrowserError
+  >;
+  /** Run code as a guarded, recorded action bound to the caller's document. */
+  readonly act: <A, Arg>(
+    script: (arg: Arg) => unknown,
+    options: ActOptions<A, Arg>,
+  ) => Effect.Effect<A, BrowserError>;
+  /** Owning browser clock: deadlines and all frame/event timestamps use this clock. */
+  readonly clock: Clock.Clock;
+  /** Wait for admitted input and retain a bounded read turn through effect. */
+  readonly afterInput: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | BrowserError, R>;
+  /** A scoped lease starts capture immediately, independently of its first frame. */
+  readonly capture: (
+    options?: ScreencastOptions,
+  ) => Effect.Effect<Capture, BrowserError, Scope.Scope>;
+  /** One page-side wait; replaced documents share one deadline. Unmet is met:false; an empty mark means no stable document could be sampled. */
+  readonly until: (
+    query: FindQuery,
+    want: UntilWant,
+    millis: number,
+  ) => Effect.Effect<UntilResult, BrowserError>;
   /** The page's CDP target id: the same page has it again after a reconnect to its browser. */
   readonly id: string;
-  /** The Playwright page, for anything this API does not cover. Never give it to a model. */
-  readonly playwright: PlaywrightPage;
   /** The page's address, without its userinfo or known secret parameters. */
   readonly url: Effect.Effect<string>;
   /**
@@ -478,26 +498,10 @@ export interface Page {
   ) => Effect.Effect<string, BrowserError>;
 
   /**
-   * Wait until a condition holds, in one call that the page answers as it comes, looking every
-   * 100 ms, or `Timeout` after `timeout`, 10 seconds by default. A selector that is not CSS is an
-   * `InvalidRequest`.
-   */
-  readonly waitFor: (
-    condition: WaitCondition,
-    timeout?: Duration.Input,
-  ) => Effect.Effect<void, BrowserError>;
-  /**
-   * Wait until the page is ready to be shown, asking the page every 100 ms: its document is parsed
-   * and has painted since, nothing that ends is animating in view, its fonts and the images in
-   * view have loaded, and the viewport shows something. With `quietMillis`, the screen must then
-   * also stay still that long: nothing in view changed, where the page's changes are recorded, and
-   * no frame comes, counted from the first frame of a capture the wait starts itself. A canvas
-   * that keeps drawing, such as a live chart, is never still. With `still: "foreground"`, frames
-   * may keep coming, but nothing may move in them outside what moved in the frames of the 1.5 s
-   * before the page's latest input, such as an idle animation; reels set spinning, or a counter
-   * set rolling, by the input keep the wait going. Without those frames, as where they are older
-   * than the browser's `frameHistory`, nothing may move at all. A page is never ready without a
-   * painted frame, as a hidden tab may be. `Timeout` after `timeout`, 15 seconds by default.
+   * Wait for document evidence, polling every 50 ms: parsed, painted, visible, fonts and visible
+   * images loaded, and finite animations finished. Optional quietMillis requires recorded content
+   * to stay unchanged. Screen or foreground stillness belongs to the Stillness feature.
+   * Fails Timeout after timeout, 15 seconds by default.
    */
   readonly ready: (options?: ReadyOptions) => Effect.Effect<void, BrowserError>;
 

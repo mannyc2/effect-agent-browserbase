@@ -5,7 +5,7 @@
 import { Schema } from "effect";
 
 import { type Control, Snapshot } from "../../Snapshot.ts";
-import type { addresses } from "../page/url.ts";
+import type { addresses } from "../../Url.ts";
 import type { Controls } from "./controls.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
@@ -18,7 +18,6 @@ export interface SnapshotRequest {
   /** A CSS selector: only what is inside the elements it matches is read. */
   readonly within: string | null;
   readonly maxChars: number;
-  readonly firstRef: number;
 }
 
 /**
@@ -38,7 +37,7 @@ export const outline = (
   controlling: Controls,
   url: Url,
 ) => {
-  const { clean, containers, isFrame, nameOf, refFor, refs, roleOf, textOf } = names;
+  const { clean, containers, isFrame, nameOf, refFor, roleOf, textOf } = names;
   const { visit } = walked;
   const { isControl } = subjects;
   const { cut } = texts;
@@ -86,7 +85,6 @@ export const outline = (
     const roots = request.within === null ? [null] : controlling.rootsOf(request.within);
 
     if ("invalid" in roots) return roots;
-    if (refs.next < request.firstRef) refs.next = request.firstRef;
     const width = window.innerWidth;
     const height = window.innerHeight;
     const query = request.query === null ? null : request.query.toLowerCase();
@@ -241,7 +239,6 @@ export const outline = (
         // Only the controls whose lines were kept.
         controls: controls.filter((control) => outlined.text.includes(`[ref=${control.ref}]`)),
       },
-      nextRef: refs.next,
     };
   };
 
@@ -253,7 +250,7 @@ export const outline = (
 export type Outline = ReturnType<typeof outline>;
 
 export const SnapshotResultSchema = Schema.Union([
-  Schema.Struct({ snapshot: Snapshot, nextRef: Schema.Finite }),
+  Schema.Struct({ snapshot: Snapshot }),
   Schema.Struct({ invalid: Schema.String }),
 ]);
 

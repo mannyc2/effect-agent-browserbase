@@ -268,6 +268,7 @@ export const track = (events: ReadonlyArray<RecordedEvent>): Track => {
       case "TextInserted":
       case "CursorChanged":
       case "DialogShown":
+      case "RequestRefused":
       case "Navigated":
       case "PageClosed":
       case "PageOpened":

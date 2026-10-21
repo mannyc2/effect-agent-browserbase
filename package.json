@@ -18,7 +18,9 @@
     "test": "bun run --filter '*' test",
     "build": "bun run --filter '*' build",
     "size": "tools/check-size.sh",
-    "ready": "bun run fmt:check && bun run lint && bun run size && bun run check && bun run test && bun run build"
+    "boundaries": "node tools/test-boundaries.mjs && node tools/check-boundaries.mjs",
+    "ready": "bun run fmt:check && bun run lint && bun run size && bun run boundaries && bun run check && bun run test && bun run build",
+    "test:latency": "bun run --cwd packages/browser test --config vite.latency.config.ts"
   },
   "devDependencies": {
     "@effect/tsgo": "0.51.0",

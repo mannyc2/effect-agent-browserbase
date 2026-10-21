@@ -113,9 +113,9 @@ export const trialSeed = (base: number, task: string, trial: number, split: Spli
 };
 
 /** A local memo map prevents parallel trials from sharing a scoped browser layer. */
-export const isolatedTrial = <A, E, R, E2, R2>(
+export const isolatedTrial = <A, E, R, Provided, E2, R2>(
   trial: Effect.Effect<A, E, R | Browser>,
-  browser: Layer.Layer<Browser, E2, R2>,
+  browser: Layer.Layer<Browser | Provided, E2, R2>,
 ) => trial.pipe(Effect.provide(browser, { local: true }));
 
 /**
