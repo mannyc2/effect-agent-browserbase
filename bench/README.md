@@ -337,10 +337,11 @@ difference speaks to these pages only. It then gives:
   Browserbase.
 
 A wrong answer counts against its arm; an infrastructure failure leaves its pair out of the test.
-On the page, an operate trial counts when its page holds the work the task asked for, whatever
-the answer said, so an order placed and then reported inside a sentence counts there but fails its
-grade. Each record keeps it as `onPage`, so a report counts format-only failures both ways until
-answers are judged rather than matched.
+A code answer passes when it quotes the issued code, however it is worded. "Order ORD-3136 was
+filled." passes, but an answer that also names another code does not. On the page, an operate
+trial counts when its page holds the work the task asked for, whatever the answer said. Each record
+keeps this as `onPage`. The runs recorded below matched answers exactly, so their pass counts fail
+a code given inside a sentence.
 
 | Arm | Operate tasks                                                                                                                                                         | Understand tasks                               |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |

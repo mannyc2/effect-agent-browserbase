@@ -242,6 +242,17 @@ export const fill = (page: Page, name: string, text: string) =>
       Effect.flatMap((snapshot) => page.type(text, { into: refOf(snapshot, "textbox", name) })),
     );
 
+/**
+ * Whether an answer quotes the issued `code`, however it is worded: it names that code and no other
+ * code of a code's shape, capitals, a hyphen and digits. "Booking reference: HP-94030." quotes
+ * HP-94030; "HP-94030 or HP-12345" does not.
+ */
+export const quotes = (answer: string, code: string | null | undefined) => {
+  const named = answer.toUpperCase().match(/\b[A-Z]+-\d+\b/g) ?? [];
+
+  return named.length > 0 && named.every((name) => name === code);
+};
+
 // The lobby's banner and age check, as this seed words them.
 const enterLobby = (page: Page) =>
   Effect.gen(function* () {
@@ -803,7 +814,7 @@ const chartTrade = operate({
           order.type === "market";
 
         return {
-          pass: placed && order.id === answer.orderId,
+          pass: placed && quotes(answer.orderId, order.id),
           onPage: placed,
           detail: `The page holds ${market.orders.length === 0 ? "no orders" : market.orders.map((placed) => `${placed.id}, a ${placed.type} ${placed.side} of ${placed.qty} BTC (${placed.status})`).join("; ")}. The answer reported ${answer.orderId === "" ? "no order id" : answer.orderId}.`,
         };
@@ -855,7 +866,7 @@ const checkout = operate({
         return {
           pass:
             shop.confirmation !== null &&
-            answer.confirmation === shop.confirmation &&
+            quotes(answer.confirmation, shop.confirmation) &&
             wrong.length === 0,
           onPage: shop.confirmation !== null && wrong.length === 0,
           detail:

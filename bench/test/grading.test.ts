@@ -19,7 +19,7 @@ import {
   TumbleTruth,
   truth,
 } from "../Sites.ts";
-import { frameHistory, tasks } from "../Tasks.ts";
+import { frameHistory, quotes, tasks } from "../Tasks.ts";
 import { classify } from "../Trial.ts";
 import * as Chromium from "./browser.ts";
 import { NativeContext } from "./browser.ts";
@@ -204,6 +204,21 @@ const textOf = (prompt: Prompt.Prompt) =>
         : message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])),
     )
     .join("\n");
+
+describe("code answers", () => {
+  it("quote the issued code however they word it, and fail beside another code", () => {
+    assert.isTrue(
+      quotes("Booking confirmed for seats C6 and C7. Reference: HP-94030.", "HP-94030"),
+    );
+    assert.isTrue(quotes("hp-94030", "HP-94030"));
+    assert.isTrue(quotes("Bought 0.25 BTC-USD, order ORD-1182.", "ORD-1182"));
+    assert.isFalse(quotes("HP-94030 or HP-12345", "HP-94030"));
+    assert.isFalse(quotes("RP-48213, and the shipping policy is SP-11873", "RP-48213"));
+    assert.isFalse(quotes("HP-940301", "HP-94030"));
+    assert.isFalse(quotes("Booking confirmed.", "HP-94030"));
+    assert.isFalse(quotes("HP-94030", null));
+  });
+});
 
 describe("grading", () => {
   it.live("a made-up confirmation number fails checkout", () =>

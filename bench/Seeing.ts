@@ -7,7 +7,7 @@
 import { Effect, Schema } from "effect";
 
 import { draws, style, truth } from "./Sites.ts";
-import { operate, press, type Task } from "./Tasks.ts";
+import { operate, press, quotes, type Task } from "./Tasks.ts";
 
 const Code = Schema.Struct({ code: Schema.String });
 
@@ -180,7 +180,7 @@ const noteFormat = operate({
         const kept = saved === null ? undefined : described(saved);
 
         return {
-          pass: kept === wanted && answer.code === saved?.code,
+          pass: kept === wanted && quotes(answer.code, saved?.code),
           onPage: kept === wanted,
           detail: `${saved === null ? "The note was never saved" : `The last save, revision ${saved.code}, kept ${kept}`}; the comment asked for ${wanted}. The answer reported ${reported(answer.code)}.`,
         };
@@ -302,7 +302,7 @@ const seatBook = operate({
           second - first === 1;
 
         return {
-          pass: together && answer.code === booked.code,
+          pass: together && quotes(answer.code, booked.code),
           onPage: together,
           detail: `${booked === null ? "Nothing was booked" : `Booked ${booked.seats.join(", ")}, reference ${booked.code}`}; the row nearest the stage with two free seats together is ${row}. The answer reported ${reported(answer.code)}.`,
         };
@@ -413,7 +413,7 @@ const paymentRefund = operate({
         const right = refunded.length === 1 && refunded[0]?.index === target;
 
         return {
-          pass: right && answer.code === wanted?.refund,
+          pass: right && quotes(answer.code, wanted?.refund),
           onPage: right,
           detail: `${refunded.length === 0 ? "Nothing was refunded" : `Refunded ${refunded.map(paid).join("; ")}`}; the ticket asked about ${wanted === undefined ? "no listed payment" : paid(wanted)}. The answer reported ${reported(answer.code)}.`,
         };

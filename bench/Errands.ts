@@ -6,7 +6,7 @@ import { Duration, Effect, Schema } from "effect";
 import * as Stillness from "effect-browser/Stillness";
 
 import { draws, style, truth } from "./Sites.ts";
-import { operate, press, type Task } from "./Tasks.ts";
+import { operate, press, quotes, type Task } from "./Tasks.ts";
 
 const target = "Rotate the API keys";
 
@@ -168,7 +168,7 @@ const policyFind = operate({
   grade: (answer, page) =>
     truth(page, PolicyTruth).pipe(
       Effect.map((shown) => ({
-        pass: shown.page === "returns" && answer.code === shown.code,
+        pass: shown.page === "returns" && quotes(answer.code, shown.code),
         onPage: shown.page === "returns",
         detail: `The tab shows the ${shown.page} page${shown.code === null ? "" : `, reference ${shown.code}`}. The answer reported ${answer.code === "" ? "no code" : answer.code}.`,
       })),
