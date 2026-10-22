@@ -25,8 +25,10 @@ export interface Options extends Browser.Options {
    * fails and says so.
    */
   readonly sandbox?: boolean | undefined;
-  /** Defaults to 1280x720 CSS pixels at a device scale factor of 1. */
+  /** Defaults to 1280x720 CSS pixels. */
   readonly viewport?: { readonly width: number; readonly height: number } | undefined;
+  /** Device pixels per CSS pixel, as a high-density screen has two. Defaults to 1. */
+  readonly deviceScaleFactor?: number | undefined;
   readonly executablePath?: string | undefined;
   readonly args?: ReadonlyArray<string> | undefined;
   readonly userAgent?: string | undefined;
@@ -82,7 +84,7 @@ export const open = Effect.fn("Chromium.open")(function* (options: Options = {})
     try: () =>
       launched.newContext({
         viewport: options.viewport ?? { width: 1280, height: 720 },
-        deviceScaleFactor: 1,
+        deviceScaleFactor: options.deviceScaleFactor ?? 1,
         ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
         ...(options.locale === undefined ? {} : { locale: options.locale }),
       }),

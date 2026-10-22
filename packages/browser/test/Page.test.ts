@@ -810,7 +810,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     ),
   );
 
-  it.effect("zooms a scrolled viewport in CSS pixels at device scale factor two", () =>
+  it.effect("zooms a scrolled viewport in CSS or device pixels at device scale factor two", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
         const browser = yield* Browser;
@@ -858,6 +858,18 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.isBelow(pixel[0] ?? 255, 40);
         assert.isAbove(pixel[1] ?? 0, 180);
         assert.isBelow(pixel[2] ?? 255, 60);
+
+        const sharp = yield* page.zoom(region, { scale: "device" });
+        const screen = yield* page.screenshot({ scale: "device" });
+
+        assert.deepStrictEqual({ ...sharp.region }, region);
+        assert.deepStrictEqual([sharp.image.width, sharp.image.height], [200, 120]);
+        assert.deepStrictEqual(yield* centerPixel(page, sharp.image), pixel);
+        assert.deepStrictEqual([screen.width, screen.height], [1280, 960]);
+        assert.deepStrictEqual(
+          [(yield* page.screenshot()).width, (yield* page.screenshot()).height],
+          [640, 480],
+        );
 
         const clicked = yield* page.click({ x: 130, y: 150 });
 
