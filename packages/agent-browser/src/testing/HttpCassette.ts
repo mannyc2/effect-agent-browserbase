@@ -41,6 +41,11 @@ export type Options =
   | (Paid & {
       readonly mode: "record";
       readonly append: (exchange: Exchange) => Effect.Effect<void, ScriptError>;
+      /**
+       * The charge a recorded response shows. The cap then counts it instead of the request's
+       * reservation, so the cap bounds spend rather than requests. Undefined keeps the reservation.
+       */
+      readonly settle?: (response: Exchange["response"]) => number | undefined;
     });
 
 const problem = (detail: string) => new ScriptError({ detail });
@@ -148,7 +153,10 @@ export const make = (options: Options) =>
         );
 
         const exchange: Exchange = { key, response: { status: response.status, headers, body } };
+        const charge = options.settle?.(exchange.response);
 
+        if (charge !== undefined && Number.isFinite(charge) && charge >= 0)
+          yield* Ref.update(used, (total) => total - bound + charge);
         yield* options.append(exchange);
 
         return responseOf(request, exchange.response);

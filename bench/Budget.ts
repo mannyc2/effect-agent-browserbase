@@ -123,12 +123,23 @@ const Billed = Schema.Union([
 ]);
 
 /** USD a receipt establishes, or undefined when it does not show the whole charge. */
-export const chargeOf = (usage: RawUsage): number | undefined =>
+export const chargeOf = (usage: unknown): number | undefined =>
   Option.getOrUndefined(
     Option.map(Schema.decodeUnknownOption(Billed)(usage), (billed) =>
       "cost_details" in billed
         ? billed.cost + billed.cost_details.upstream_inference_cost
         : billed.cost,
+    ),
+  );
+
+// A chat completion's body, for the usage its receipt carries.
+const Receipt = Schema.fromJsonString(Schema.Struct({ usage: Schema.Unknown }));
+
+/** The charge a recorded chat completion's receipt shows, or undefined when it shows none. */
+export const recordedCharge = (body: string) =>
+  Option.getOrUndefined(
+    Option.flatMap(Schema.decodeOption(Receipt)(body), ({ usage }) =>
+      Option.fromUndefinedOr(chargeOf(usage)),
     ),
   );
 
@@ -820,12 +831,15 @@ export const modelRunner = (options: {
                 const native = yield* HttpClient.HttpClient;
 
                 // account.run already reserves this request before reaching the HTTP seam. This cap
-                // independently bounds recording transport; it does not charge the ledger twice.
+                // independently bounds recording transport; it does not charge the ledger twice. A
+                // receipt settles its request at the charge it shows, as the ledger does, so the cap
+                // bounds a trial's spend rather than its calls.
                 const cassette = yield* HttpCassette.make({
                   mode: "record",
                   http: native,
                   cap: options.maxUsd,
                   reserve: () => Effect.succeed(endpoint.requestUsd),
+                  settle: (response) => recordedCharge(response.body),
                   append: recorder.http,
                 }).pipe(Effect.mapError((error) => new BenchError({ message: error.detail })));
 

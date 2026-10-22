@@ -12,6 +12,7 @@ import {
   ledger,
   ListedEndpoint,
   modelRunner,
+  recordedCharge,
 } from "../Budget.ts";
 import { isolatedTrial, trialSeed, workDeadline } from "../Trial.ts";
 import * as Chromium from "./browser.ts";
@@ -312,6 +313,29 @@ describe("BYOK receipts", () => {
       assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0, reservedUsd: 0.04 });
     }),
   );
+});
+
+describe("recorded receipts", () => {
+  it("settle a recorded call at the charge its receipt shows, and only then", () => {
+    const body = (usage: unknown) => `\n         \n${JSON.stringify({ id: "gen-1", usage })}`;
+    const usage = { prompt_tokens: 2215, completion_tokens: 35 };
+
+    assert.strictEqual(recordedCharge(body({ ...usage, cost: 0.000291225 })), 0.000291225);
+    assert.strictEqual(
+      recordedCharge(
+        body({
+          ...usage,
+          cost: 0.0001,
+          is_byok: true,
+          cost_details: { upstream_inference_cost: 0.0002 },
+        }),
+      ),
+      0.0001 + 0.0002,
+    );
+    assert.isUndefined(recordedCharge(body({ ...usage, is_byok: true, cost: 0.0001 })));
+    assert.isUndefined(recordedCharge(body(usage)));
+    assert.isUndefined(recordedCharge('{"error":{"message":"overloaded"}}'));
+  });
 });
 
 describe("unbudgeted routes", () => {
