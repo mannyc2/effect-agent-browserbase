@@ -250,6 +250,65 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("with vision ask, shows the screen only after look, and a crop on its own", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      const looking = Agent.make("browser-test-look", {
+        input: Schema.String,
+        output: Output.text(Schema.String),
+        instructions: "Use the browser tools to do the task, then say what you did.",
+        toolkit: Toolkit.merge(tools.toolkit, BrowserTools.Look),
+        policy: { maxTurns: 6, maxToolCalls: 12, maxDuration: "1 minute", toolConcurrency: 1 },
+      });
+
+      const model = scripted([
+        () => calling(call("observe", {})),
+        () => calling(call("look", {})),
+        () => calling(call("zoom", { x: 0, y: 0, width: 200, height: 100 })),
+        () => answer("Looked."),
+      ]);
+
+      yield* AgentRuntime.run(looking, "Look at the form").pipe(
+        Effect.provide(
+          Layer.mergeAll(tools.layer({ page }, { vision: "ask" }), InMemory.layer, model.layer),
+        ),
+      );
+
+      assert.deepStrictEqual(
+        model.prompts.map((prompt) => pictures(prompt).length),
+        [0, 0, 1, 1],
+      );
+      assert.include(textOf(model.prompts[2]!), "The current tab's viewport");
+      assert.include(textOf(model.prompts[3]!), "Zoom: viewport origin (0, 0), 200x100");
+      assert.notInclude(textOf(model.prompts[3]!), "The current tab's viewport");
+    }),
+  );
+
+  it.effect("with vision page, shows the screen after pointer input and over a canvas", () =>
+    Effect.gen(function* () {
+      const form = yield* run(
+        "Hover the amount",
+        [
+          () => calling(call("observe", {})),
+          (prompt) => calling(call("hover", { ref: refIn(prompt, "textbox", "Amount") })),
+          () => calling(call("observe", {})),
+          () => answer("Hovered."),
+        ],
+        { vision: "page" },
+      );
+
+      assert.deepStrictEqual(
+        form.prompts.map((prompt) => pictures(prompt).length),
+        [0, 0, 1, 0],
+      );
+
+      const slots = yield* run("Look at the spin", [() => answer("Seen.")], { vision: "page" });
+
+      assert.strictEqual(pictures(slots.prompts[0]!).length, 1);
+    }),
+  );
+
   // #293 discussion_r4249413830: a lost page must stop preparation before another model call.
   it.effect("fails moment preparation after the current page closes", () =>
     Effect.gen(function* () {

@@ -11,7 +11,10 @@
  * the crops `zoom` took since its last, as context the run never keeps, so only the current picture
  * is ever in a request. Its pixel coordinates are viewport coordinates, which the pointer tools
  * take. The pictures are `RunContextPreparation`'s transient context, which a run's own
- * `transientContext` option replaces. With `vision: "moments"`, the model's thread holds, after
+ * `transientContext` option replaces. With `vision: "ask"`, the screenshot comes only before a turn
+ * after the model called `look`; with `vision: "page"`, also after pointer input and while the
+ * viewport shows a canvas, a video or another site's frame. `Look` is that tool, for the agent's
+ * toolkit beside `make`'s. With `vision: "moments"`, the model's thread holds, after
  * each turn's tool results, a moment of the current tab since the turn before: what happened, what
  * changed. These stable accounts can be compacted. The latest three moments' pictures follow as
  * reference messages labeled by turn, with their frame times. A run's own `context` option
@@ -142,6 +145,20 @@ export const Pointer = Toolkit.make(
   }),
 );
 
+/**
+ * The tool that asks for a screenshot before the next turn, for `vision: "ask"` and `"page"`, which
+ * otherwise show none on some turns. The layer serves it whether or not the agent has it.
+ */
+export const Look = Toolkit.make(
+  Tool.make("look", {
+    description: "See a screenshot of the current tab before your next turn.",
+    parameters: Tool.EmptyParams,
+    success: Receipt,
+    failure: BrowserUse.BrowserUseError,
+    failureMode: "return",
+  }),
+);
+
 const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 
 const Delta = Schema.Int.check(Schema.isBetween({ minimum: -100_000, maximum: 100_000 }));
@@ -261,35 +278,49 @@ const batched = Toolkit.make(
   ),
 );
 
+/** What the model sees of the page; see `LayerOptions`. */
+export type Vision = boolean | "ask" | "page" | "moments";
+
 export interface LayerOptions extends PageControl.Options {
   readonly initialMoments?: AdapterState.Moments | undefined;
   readonly initialZooms?: ReadonlyArray<Page.Zoom> | undefined;
   /**
    * What the model sees of the page: `true`, the default, a screenshot of the current tab before
-   * each turn; `"moments"`, in its thread, what the tab did since its previous turn, with frames
-   * from a running screencast, or one screenshot without one; `false`, no pictures.
+   * each turn; `"ask"`, one only before a turn after `look`; `"page"`, one also after pointer input
+   * and while the viewport shows a canvas, a video or another site's frame; `"moments"`, in its
+   * thread, what the tab did since its previous turn, with frames from a running screencast, or one
+   * screenshot without one; `false`, no pictures.
    */
-  readonly vision?: boolean | "moments" | undefined;
+  readonly vision?: Vision | undefined;
   /** With moments, called with each moment as the model is first shown it, as for a recording. */
   readonly onMoment?: ((moment: Moment.Moment) => Effect.Effect<void>) | undefined;
 }
 
 const text = (value: string) => ({ type: "text" as const, text: value });
 
-/** What the model sees before a turn: the current tab's screenshot, and the crops since its last. */
-const pictures = (controller: PageControl.Controller, zooms: Ref.Ref<Array<Page.Zoom>>) =>
+/**
+ * What the model sees before a turn: the current tab's screenshot if `screen` says so, and the crops
+ * since its last.
+ */
+const pictures = (
+  controller: PageControl.Controller,
+  zooms: Ref.Ref<Array<Page.Zoom>>,
+  screen: (page: Page.Page) => Effect.Effect<boolean, BrowserError>,
+) =>
   Effect.gen(function* () {
     // A look before a turn shows a tab an action opened, as `follow` says.
     const parts = yield* Effect.flatMap(controller.look, (page) =>
       Effect.gen(function* () {
         const crops = Moments.cropped(yield* Ref.getAndSet(zooms, []), page.id);
-        const screen = yield* page.screenshot();
+
+        if (!(yield* screen(page))) return crops;
+        const shot = yield* page.screenshot();
 
         return [
           text(
-            `The current tab's viewport, ${screen.width}x${screen.height}. Its pixel coordinates are viewport coordinates.`,
+            `The current tab's viewport, ${shot.width}x${shot.height}. Its pixel coordinates are viewport coordinates.`,
           ),
-          { type: "file" as const, mediaType: screen.mediaType, data: screen.data },
+          { type: "file" as const, mediaType: shot.mediaType, data: shot.data },
           ...crops,
         ];
       }),
@@ -300,8 +331,28 @@ const pictures = (controller: PageControl.Controller, zooms: Ref.Ref<Array<Page.
       controller.withTask,
     );
 
-    return Prompt.make([{ role: "user", content: parts }]);
+    return parts.length === 0 ? Prompt.empty : Prompt.make([{ role: "user", content: parts }]);
   });
+
+// Whether the viewport shows what an outline cannot: a canvas, a video, or a frame from another
+// site or holding either, at least 64 pixels square. Page-side code: it stands alone.
+const pictorial = () => {
+  const shown = (element: Element) => {
+    const box = element.getBoundingClientRect();
+    const width = Math.min(box.right, window.innerWidth) - Math.max(box.left, 0);
+    const height = Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0);
+
+    return width >= 64 && height >= 64;
+  };
+
+  return Array.from(document.querySelectorAll("canvas, video, iframe")).some(
+    (element) =>
+      shown(element) &&
+      (!(element instanceof HTMLIFrameElement) ||
+        element.contentDocument === null ||
+        element.contentDocument.querySelector("canvas, video, iframe") !== null),
+  );
+};
 
 // A point is the more specific of the two, such as a spot on a canvas a ref names.
 const target = (place: {
@@ -325,11 +376,15 @@ const missing = (what: string) =>
     }),
   );
 
-/** The pointer tools' handlers over the controller's current tab. */
+/**
+ * The pointer tools' handlers over the controller's current tab. Each sets `pointed` once its input
+ * reaches the page, but going back.
+ */
 const pointing = (
   controller: PageControl.Controller,
   zooms: Ref.Ref<Array<Page.Zoom>>,
-  vision: boolean | "moments",
+  vision: Vision,
+  pointed: Ref.Ref<boolean>,
 ) => {
   const act = <A>(
     run: (page: Page.Page) => Effect.Effect<A, BrowserError>,
@@ -337,6 +392,9 @@ const pointing = (
     action?: Action,
   ) =>
     controller.perform(run).pipe(
+      Effect.tap(() =>
+        action === undefined || action._tag === "Back" ? Effect.void : Ref.set(pointed, true),
+      ),
       Effect.map(({ value, followed }) => ({ did: did(value), followed, action })),
       Effect.mapError(PageControl.useError),
     );
@@ -443,6 +501,25 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
         const zooms = yield* Ref.make<Array<Page.Zoom>>([...(options.initialZooms ?? [])]);
         const vision = options.vision ?? true;
         const { control } = controller;
+        // Since the last turn: whether the model called `look`, and whether pointer input ran.
+        const asked = yield* Ref.make(false);
+        const pointed = yield* Ref.make(false);
+
+        // Whether the screen is shown before a turn: always with `true`, after `look` with `"ask"`,
+        // and with `"page"` also after pointer input or while the viewport shows a picture.
+        const wanted = (page: Page.Page) =>
+          Effect.gen(function* () {
+            const looked = yield* Ref.getAndSet(asked, false);
+            const input = yield* Ref.getAndSet(pointed, false);
+
+            if (vision === true || looked) return true;
+            if (vision !== "page") return false;
+
+            return (
+              input ||
+              (yield* page.read(pictorial, { arg: undefined, result: Schema.Boolean })).value
+            );
+          });
 
         const handlers = Layer.mergeAll(
           serve(controller.actions),
@@ -454,7 +531,26 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
             press: control.press,
             select_tab: control.selectTab,
           }),
-          Pointer.toLayer(pointing(controller, zooms, vision)),
+          Pointer.toLayer(pointing(controller, zooms, vision, pointed)),
+          Look.toLayer({
+            look: () =>
+              vision === false
+                ? Effect.fail(
+                    new BrowserUse.BrowserUseError({
+                      code: "invalid",
+                      message: "These tools show no pictures.",
+                    }),
+                  )
+                : Ref.set(asked, true).pipe(
+                    Effect.as({
+                      did:
+                        vision === "ask" || vision === "page"
+                          ? "A screenshot of the current tab is shown before your next turn."
+                          : "A screenshot is shown before every turn already.",
+                      followed: [],
+                    }),
+                  ),
+          }),
         );
 
         // Without pictures, an application's own context preparation stays as it is.
@@ -469,11 +565,13 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
                   options.initialMoments,
                 ),
               )
-            : vision
-              ? Layer.succeed(RunContextPreparation, {
-                  transientContext: { load: () => pictures(controller, zooms) },
-                })
-              : Layer.empty;
+            : vision === false
+              ? Layer.empty
+              : Layer.succeed(RunContextPreparation, {
+                  transientContext: {
+                    load: () => pictures(controller, zooms, wanted),
+                  },
+                });
 
         return Layer.mergeAll(handlers, preparation);
       }),

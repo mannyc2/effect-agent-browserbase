@@ -88,6 +88,10 @@ the layer serves every tool either way. `make({ mode: "single" })` lets `act` ta
   Its pixel coordinates are viewport coordinates, which the pointer tools take. `vision: false`
   leaves the pictures out, and `zoom` then refuses. A queued crop is discarded if another tab
   becomes current before the next turn, so its coordinates never describe that other tab.
+- `vision: "ask"` shows the screenshot only before a turn after the model called `look`, a tool in
+  `BrowserTools.Look` to merge into the agent's toolkit; crops still follow `zoom`. `vision: "page"`
+  also shows it after pointer input, and while the viewport shows a canvas, a video or another
+  site's frame, where the outline cannot say what is there.
 - An observation after an action begins with what followed it: a dialog and how the browser
   answered it, where the page went, a tab it opened and up to three changes its input caused,
   such as `"Full" became "Kept"`. A pointer tool's result says the same in `followed`.
