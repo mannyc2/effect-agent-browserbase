@@ -1,9 +1,23 @@
 // Native pixels are checked in Capture.test; this transport exercises settlement and ownership.
 import { assert, it } from "@effect/vitest";
-import { Clock, Duration, Effect, Exit, Fiber, Option, Schedule, Scope, Stream } from "effect";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Schedule,
+  Scope,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 
 import { BrowserError, Failed } from "../src/BrowserError.ts";
-import * as Replies from "../src/internal/input/replies.ts";
+import type { Estimate } from "../src/Clock.ts";
+import { Frame } from "../src/Frame.ts";
+import * as Replies from "../src/internal/page/replies.ts";
 import * as Capture from "../src/internal/pictures/capture.ts";
 import type { Transport } from "../src/internal/pictures/transport.ts";
 
@@ -23,10 +37,11 @@ const fixture = Effect.fnUntraced(function* () {
   let restore = () => Promise.resolve();
   let viewport = Effect.succeed({ width: 10, height: 10 });
   let timestamp = 0;
+  let mapping: Estimate | undefined;
 
-  const emit = () =>
+  const emit = (data = "AA==") =>
     listening?.frame({
-      data: "AA==",
+      data,
       sessionId: ++timestamp,
       metadata: { timestamp, deviceWidth: 10, deviceHeight: 10 },
     });
@@ -75,7 +90,7 @@ const fixture = Effect.fnUntraced(function* () {
       roundTripMillis: 0,
       sampledAt: 0,
     }),
-    latest: () => undefined,
+    latest: () => mapping,
     renew: Effect.void,
     watch: Effect.void,
     frameHistory: Duration.seconds(5),
@@ -86,10 +101,12 @@ const fixture = Effect.fnUntraced(function* () {
   });
 
   let shots = 0;
+  const started = yield* Deferred.make<void>();
 
   const picture = (reply: Promise<void>) =>
     Effect.gen(function* () {
       shots++;
+      yield* Deferred.succeed(started, undefined);
       const run = yield* Effect.service(Replies.Current);
 
       yield* Effect.promise(() => (run === undefined ? reply : run.track(reply)));
@@ -97,9 +114,14 @@ const fixture = Effect.fnUntraced(function* () {
 
   return {
     controller,
+    emit,
+    onEstimate: (estimate: Estimate) => {
+      mapping = estimate;
+    },
     starts,
     stops: () => stops,
     shots: () => shots,
+    started: Deferred.await(started),
     picture,
     onStart: (next: () => Promise<void>) => {
       start = next;
@@ -118,6 +140,95 @@ const fixture = Effect.fnUntraced(function* () {
       .pipe(Stream.runDrain, Effect.exit, Effect.forkScoped),
   };
 });
+
+// Capture evidence must survive a Schema/JSON copy, and recalibration must not reverse paint.
+it.live("capture IDs survive copies and a disjoint estimate widens monotonic frame evidence", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+
+    yield* f.controller.open();
+    const first = Option.getOrThrow(yield* f.controller.latest);
+
+    assert.isTrue(f.controller.current(new Frame({ ...first })));
+    for (const foreign of [
+      { page: "another-page" },
+      { session: "another-session" },
+      { connection: "another-connection" },
+      { document: first.document + 1 },
+    ])
+      assert.isFalse(f.controller.current(new Frame({ ...first, ...foreign })));
+    f.onEstimate({ offsetMillis: 2000, uncertaintyMillis: 1, roundTripMillis: 2, sampledAt: 0 });
+    f.emit();
+    const next = Option.getOrThrow(yield* f.controller.latest);
+
+    assert.strictEqual(next.hostTime, first.hostTime);
+    assert.isAtLeast(next.timing.uncertaintyMillis, 1001);
+    assert.isFalse(f.controller.current(first));
+  }).pipe(Effect.scoped),
+);
+
+it.live("invalid base64 fails a capture through its typed channel", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+
+    yield* f.controller.open();
+    f.emit("not base64");
+    const error = yield* f.controller.sync.pipe(Effect.flip);
+
+    assert.strictEqual(error.reason._tag, "Failed");
+    assert.isFalse(error.dispatched);
+    assert.isFalse(error.message.includes("not base64"));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a joined reader leaves while another reader's picture is restoring", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+
+    yield* f.controller.open();
+    const joined = yield* Scope.make();
+
+    yield* f.controller.open().pipe(Scope.provide(joined));
+    const reply = Promise.withResolvers<void>();
+    const picture = yield* f.controller.excluding(f.picture(reply.promise)).pipe(Effect.forkChild);
+
+    yield* Effect.gen(function* () {
+      yield* f.started;
+      const leaving = yield* Scope.close(joined, Exit.void).pipe(Effect.forkChild);
+
+      yield* TestClock.adjust("1 millis");
+      assert.isDefined(leaving.pollUnsafe(), "another reader still owns the native capture");
+      assert.strictEqual(f.shots(), 1);
+      assert.strictEqual(f.starts.length, 1);
+    }).pipe(Effect.ensuring(Effect.sync(() => reply.resolve())));
+    yield* Fiber.join(picture);
+    assert.isTrue(yield* f.controller.active);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("canceling capture acquisition does not wait for another reader's picture", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+
+    yield* f.controller.open();
+    const reply = Promise.withResolvers<void>();
+    const picture = yield* f.controller.excluding(f.picture(reply.promise)).pipe(Effect.forkChild);
+
+    yield* Effect.gen(function* () {
+      yield* f.started;
+      const opening = yield* f.controller.open().pipe(Effect.scoped, Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      const canceling = yield* Fiber.interrupt(opening).pipe(Effect.forkChild);
+
+      yield* TestClock.adjust("1 millis");
+      assert.isDefined(canceling.pollUnsafe(), "an unacquired reader owns no native cleanup");
+      assert.strictEqual(f.starts.length, 1);
+    }).pipe(Effect.ensuring(Effect.sync(() => reply.resolve())));
+    yield* Fiber.join(picture);
+    assert.isTrue(yield* f.controller.active);
+  }).pipe(Effect.scoped),
+);
 
 it.live("canceling a pending native pause waits for its reply before restoring capture", () =>
   Effect.gen(function* () {

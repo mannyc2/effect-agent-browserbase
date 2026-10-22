@@ -4,11 +4,13 @@
  * one call where a device pixel is a CSS pixel and nothing is cropped, and two otherwise, unless
  * Playwright emulates the viewport. The page's first clipped picture also holds the screen it reads.
  */
-import { Duration, Effect, Option, Schedule, Schema } from "effect";
+import { Duration, Effect, Option, Result, Schedule, Schema } from "effect";
+import { Base64 } from "effect/encoding";
 
 import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
+import * as BrowserClock from "../../Clock.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
-import type { Point } from "../../Motion.ts";
+import type { Point } from "../../Geometry.ts";
 import { type FrameOptions, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import {
@@ -19,13 +21,15 @@ import {
   refuse,
   undispatched,
 } from "../page/context.ts";
+import * as Port from "../page/port.ts";
 import type { Viewport } from "../page/viewport.ts";
 import * as Capture from "./capture.ts";
-import * as BrowserClock from "./clock.ts";
+import { countsKept } from "./counts.ts";
+import type { Size } from "./dimensions.ts";
 import * as Transport from "./transport.ts";
 
 /** Read a JPEG's dimensions from its start-of-frame marker. */
-export const jpegSize = (bytes: Uint8Array): Capture.Size | undefined => {
+export const jpegSize = (bytes: Uint8Array): Size | undefined => {
   let offset = 2;
 
   while (offset + 9 < bytes.length) {
@@ -45,7 +49,7 @@ export const jpegSize = (bytes: Uint8Array): Capture.Size | undefined => {
 };
 
 /** Read a PNG's dimensions from its header chunk. */
-export const pngSize = (bytes: Uint8Array): Capture.Size | undefined => {
+export const pngSize = (bytes: Uint8Array): Size | undefined => {
   if (bytes.length < 24 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47)
     return undefined;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -225,14 +229,20 @@ const camera = (
     operation: string,
     format: Format,
     quality: number,
-    clip?: Capture.Size & Point & { readonly scale: number },
+    clip?: Size & Point & { readonly scale: number },
   ) =>
     take(operation, format, () =>
       send("Page.captureScreenshot", {
         format,
         ...(format === "jpeg" ? { quality } : {}),
         ...(clip === undefined ? {} : { clip }),
-      }).then(({ data }) => Buffer.from(data, "base64")),
+      }).then(({ data }) => {
+        const decoded = Base64.decode(data);
+
+        return Result.isSuccess(decoded)
+          ? decoded.success
+          : Promise.reject(new Error("the browser sent invalid base64 picture data"));
+      }),
     );
 
   // Playwright's promise owns native restoration; the outer Effect alone bounds callers.
@@ -355,10 +365,10 @@ export const make = Effect.fnUntraced(function* (
   // only a browser with no estimate yet needs this page's renderer to answer.
   const capture = yield* Capture.make({
     id,
-    transport:
-      page.capture === undefined
-        ? Effect.succeed(Transport.own(page, bridge))
-        : Transport.apart(page, bridge, page.capture, error, yield* Effect.scope),
+    transport: (page.capture === undefined
+      ? Effect.succeed(Transport.own(page, bridge))
+      : Transport.apart(page, bridge, page.capture, error, yield* Effect.scope)
+    ).pipe(Effect.provideService(Port.Current, yield* Port.Current)),
     clock,
     // A capture starts once the page's own session keeps it painting behind other tabs, which a
     // renderer stuck in a script never confirms, and with the browser's clock mapped. Only a
@@ -490,7 +500,7 @@ export const make = Effect.fnUntraced(function* (
     if (options.window === undefined) return capture.stats();
     const millis = millisOf(options.window);
 
-    return millis > 0 && millis <= Duration.toMillis(Capture.countsKept)
+    return millis > 0 && millis <= Duration.toMillis(countsKept)
       ? capture.stats(millis)
       : refuse("captureStats", "window must be over zero and at most a minute");
   };

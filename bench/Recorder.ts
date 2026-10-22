@@ -11,6 +11,7 @@ import {
   Stream,
   type Tracer,
 } from "effect";
+import { type HttpCassette } from "effect-agent-browser/testing";
 import { Browser } from "effect-browser/Browser";
 import type { RecordedEvent } from "effect-browser/BrowserEvent";
 
@@ -35,6 +36,9 @@ export interface Recorder {
   readonly trace: (entry: Trace) => Effect.Effect<void>;
   /** Record the trial's browser while `work` runs. */
   readonly around: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R | Browser>;
+  /** Provider payloads are private recording data; transport credentials are never supplied. */
+  readonly model: (request: unknown, response: unknown) => Effect.Effect<void>;
+  readonly http: (exchange: HttpCassette.Exchange) => Effect.Effect<void>;
   /** Write recording.json, with the trial's spans when traced; a trial that never ran writes none. */
   readonly finish: (
     details: Pick<Recording, "task" | "run" | "outcome"> & {
@@ -70,12 +74,20 @@ export const make = Effect.fnUntraced(function* (
   const frames: Array<RecordedFrame> = [];
   const steps: Array<RecordedStep> = [];
   const moments: Array<RecordedMoment> = [];
+  const model: Array<{ turn: number; request: unknown; response: unknown }> = [];
+  const http: Array<HttpCassette.Exchange> = [];
+  let truth: unknown;
   // A recording that lost frames or events says so instead of looking complete.
   const problems: Array<string> = [];
   const viewports: Array<RecordedViewport> = [];
 
   const trace = (entry: Trace) =>
     Effect.gen(function* () {
+      if (entry._tag === "Truth") {
+        truth = entry.value;
+
+        return;
+      }
       if (entry._tag === "Moment") {
         const index = moments.length;
 
@@ -98,6 +110,7 @@ export const make = Effect.fnUntraced(function* (
 
         moments.push(
           new RecordedMoment({
+            value: entry.moment,
             at: entry.moment.until,
             from: entry.moment.since,
             frames: pictures,
@@ -235,6 +248,9 @@ export const make = Effect.fnUntraced(function* (
             frames: frames.toSorted((left, right) => left.hostTime - right.hostTime),
             steps,
             moments,
+            model,
+            http,
+            ...(truth === undefined ? {} : { truth }),
             viewports,
             problems,
           });
@@ -244,5 +260,17 @@ export const make = Effect.fnUntraced(function* (
           yield* fs.writeFileString(path.join(directory, "recording.json"), `${json}\n`);
         }).pipe(Effect.mapError(unwritten));
 
-  return { trace, around, finish };
+  return {
+    trace,
+    around,
+    finish,
+    model: (request, response) =>
+      Effect.sync(() => {
+        model.push({ turn: model.length, request, response });
+      }),
+    http: (exchange) =>
+      Effect.sync(() => {
+        http.push(exchange);
+      }),
+  };
 });

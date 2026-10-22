@@ -7,22 +7,23 @@
  * read of a page's changes, its session registers the recorder too, so every later document
  * records from its start.
  */
-import { Effect, Schema, SynchronizedRef } from "effect";
+import { Deferred, Effect, Schema, SynchronizedRef } from "effect";
 
 import { type BrowserError, Failed } from "../../BrowserError.ts";
 import { Navigated, PageLoaded } from "../../BrowserEvent.ts";
+import { match } from "../../Matching.ts";
+import * as Url from "../../Url.ts";
 import { edit, type Edit } from "../input/edit.inpage.ts";
 import { evidence } from "../input/evidence.inpage.ts";
 import { guard, type Guard } from "../input/guard.inpage.ts";
 import { targets, type Targets } from "../input/targets.inpage.ts";
 import { context } from "../reading/context.inpage.ts";
-import { controls, type Controls } from "../reading/controls.inpage.ts";
+import { controls } from "../reading/controls.inpage.ts";
 import { expectations, type Expectations } from "../reading/expect.inpage.ts";
-import { match } from "../reading/match.inpage.ts";
-import { names } from "../reading/names.inpage.ts";
+import { elements, names } from "../reading/names.inpage.ts";
 import { outline, type Outline } from "../reading/outline.inpage.ts";
 import { ready } from "../reading/ready.inpage.ts";
-import { subjects, type Subjects } from "../reading/subjects.inpage.ts";
+import { states, subjects, type Subjects } from "../reading/subjects.inpage.ts";
 import { text, type Texts } from "../reading/text.inpage.ts";
 import { walk } from "../reading/walk.inpage.ts";
 import { changes, type Changes } from "../timeline/changes.inpage.ts";
@@ -31,18 +32,20 @@ import { history } from "../timeline/history.inpage.ts";
 import { marks } from "../timeline/marks.inpage.ts";
 import { record, type Recorder } from "../timeline/record.inpage.ts";
 import { sight } from "../timeline/sight.inpage.ts";
-import { contextGone, failWith, type PageContext, undispatched } from "./context.ts";
-import * as Url from "./url.ts";
+import { contextGone, decodeWith, failWith, type PageContext } from "./context.ts";
+import { Script } from "./port.ts";
 
 /** What the script installs: a version, and a function of one of its parts for each call. */
 export interface PageApi {
   readonly version: number;
+  readonly refs: { next: number };
+  dispose: () => void;
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
   until: Expectations["until"];
-  waitUntil: Controls["waitUntil"];
   text: Texts["read"];
   record: Recorder["start"];
+  stopRecord: Recorder["stop"];
   changes: Changes["read"];
   ready: ReturnType<typeof ready>["wait"];
   settle: ReturnType<typeof ready>["settle"];
@@ -64,58 +67,83 @@ declare global {
   var __effectBrowser: PageApi | undefined;
 }
 
-// Like the parts it receives, this is evaluated from its source text.
-export const install = (
-  makeNames: typeof names,
-  makeWalk: typeof walk,
-  makeMatch: typeof match,
-  makeContext: typeof context,
-  makeSubjects: typeof subjects,
-  makeExpectations: typeof expectations,
-  makeText: typeof text,
-  makeControls: typeof controls,
-  makeFold: typeof fold,
-  makeHistory: typeof history,
-  makeSight: typeof sight,
-  makeMarks: typeof marks,
-  makeRecord: typeof record,
-  makeChanges: typeof changes,
-  makeReady: typeof ready,
-  makeOutline: typeof outline,
-  makeTargets: typeof targets,
-  makeEvidence: typeof evidence,
-  makeGuard: typeof guard,
-  makeEdit: typeof edit,
-  makeAddresses: typeof Url.addresses,
-): PageApi => {
+/** Named factories make the composition contract independent of their declaration order. */
+export const parts = {
+  elements,
+  names,
+  walk,
+  match,
+  context,
+  subjects,
+  states,
+  expectations,
+  text,
+  controls,
+  fold,
+  history,
+  sight,
+  marks,
+  record,
+  changes,
+  ready,
+  outline,
+  targets,
+  evidence,
+  guard,
+  edit,
+  addresses: Url.addresses,
+};
+
+// Like the parts it receives, this is evaluated from its source text. The named function also
+// hashes its own source, so changing the composition invalidates an installation too.
+type Parts = typeof parts;
+
+export function install(parts: Parts): PageApi {
+  const source =
+    install.toString() +
+    Object.entries(parts)
+      .map(([name, factory]) => name + factory.toString())
+      .join("");
+
+  let version = 0x811c9dc5;
+
+  for (let index = 0; index < source.length; index++)
+    version = Math.imul(version ^ source.charCodeAt(index), 0x01000193);
+  version >>>= 0;
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 20) return installed;
-  const named = makeNames();
-  const walked = makeWalk(named);
-  const placing = makeContext(named, walked);
-  const subjected = makeSubjects(named, walked, makeMatch(), placing);
-  const texts = makeText(named, walked);
-  const controlled = makeControls(named, walked, subjected, texts);
-  const kept = makeHistory(makeFold());
-  const seeing = makeSight(named, walked, texts, kept);
-  const marking = makeMarks(named, kept, seeing);
-  const recorder = makeRecord(named, texts, kept, seeing, marking);
-  const read = makeOutline(named, walked, subjected, texts, controlled, makeAddresses());
-  const located = makeTargets(named, walked, placing);
-  const guarded = makeGuard(named, located, makeEvidence(named, placing));
-  const edited = makeEdit(named, guarded, placing);
-  const readiness = makeReady(walked, texts, kept, recorder);
+  if (installed !== undefined && installed.version === version) return installed;
+  installed?.dispose?.();
+  const named = parts.names(parts.elements());
+
+  if (installed?.refs !== undefined) named.refs.next = installed.refs.next;
+  const walked = parts.walk(named);
+  const placing = parts.context(named, walked);
+  const matching = parts.match();
+  const subjected = parts.subjects(named, walked, matching, placing, parts.states(named));
+  const texts = parts.text(named, walked);
+  const controlled = parts.controls(named, subjected, texts);
+  const kept = parts.history(parts.fold());
+  const seeing = parts.sight(named, walked, texts, kept);
+  const marking = parts.marks(named, kept, seeing);
+  const recorder = parts.record(named, texts, kept, seeing, marking);
+  const read = parts.outline(named, walked, subjected, texts, controlled, parts.addresses());
+  const located = parts.targets(named, walked, placing);
+  const guarded = parts.guard(named, located, parts.evidence(named, placing));
+  const edited = parts.edit(named, guarded, placing);
+  const readiness = parts.ready(walked, texts, kept);
 
   const api: PageApi = {
-    version: 20,
+    version,
+    refs: named.refs,
+    dispose: () => recorder.stop(),
     snapshot: read.snapshot,
     find: subjected.find,
-    until: makeExpectations(named, subjected).until,
-    waitUntil: controlled.waitUntil,
+    until: parts.expectations(named, subjected, matching).until,
     text: texts.read,
     record: recorder.start,
-    changes: makeChanges(named, placing, kept, seeing, marking, recorder).read,
+    stopRecord: recorder.stop,
+    changes: parts.changes(named, placing, kept, seeing, marking, recorder).read,
     ready: readiness.wait,
     settle: readiness.settle,
     point: located.point,
@@ -133,10 +161,12 @@ export const install = (
   globalThis.__effectBrowser = api;
 
   return api;
-};
+}
 
 /** The expression that installs the script and evaluates to its API; packaging freezes it. */
-export const installSource = `(${install.toString()})(${[names, walk, match, context, subjects, expectations, text, controls, fold, history, sight, marks, record, changes, ready, outline, targets, evidence, guard, edit, Url.addresses].join(", ")})`;
+export const installSource = `(${install.toString()})({${Object.entries(parts)
+  .map(([name, factory]) => `${name}: ${factory.toString()}`)
+  .join(", ")}})`;
 
 const worldName = "effect-browser";
 
@@ -146,9 +176,16 @@ const recorderSource = `if (globalThis === globalThis.top) globalThis.__effectBr
 // What a call reads in a world without the script's API. A context id can name another world once
 // the page has moved to a new process, so a cached id that reads this is not the library's world.
 const missing = "effect-browser: no __effectBrowser in this world";
+const missingSource = Schema.encodeSync(Schema.fromJsonString(Schema.String))(missing);
 
 const isMissing = (error: BrowserError) =>
   error.reason._tag === "Failed" && error.reason.detail === missing;
+
+const Evaluated = Schema.Struct({
+  value: Schema.optionalKey(Schema.Unknown),
+  error: Schema.optionalKey(Schema.String),
+  nextRef: Schema.Finite,
+});
 
 /** A frame as a page session reports its commit. */
 export const Commit = Schema.Struct({
@@ -188,19 +225,102 @@ export const mainFrame = (page: string, event: typeof MainFrameEvent.Type) =>
 export const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
+const runIn = (page: PageContext, operation: string, expression: string, contextId: number) =>
+  page
+    .native(operation, () =>
+      page.protocol.send("Runtime.evaluate", {
+        contextId,
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+      }),
+    )
+    .pipe(
+      Effect.flatMap(({ result, exceptionDetails: thrown }) =>
+        thrown === undefined
+          ? Effect.succeed<unknown>(result.value)
+          : failWith(
+              operation,
+              new Failed({ detail: thrown.exception?.description ?? thrown.text }),
+            ),
+      ),
+    );
+
+/** Session-owned registrations; the recorder can expire independently of the page script. */
+const registrationFor = Effect.fnUntraced(function* (page: PageContext) {
+  const { native, span } = page;
+  const { send } = page.protocol;
+
+  // How far this session has registered: the script, then the recorder, which the first read of
+  // changes asks for. One caller takes each step, once, while the others wait.
+  const registration = yield* SynchronizedRef.make<{
+    readonly script: boolean;
+    readonly recorder?: string | undefined;
+  }>({ script: false });
+
+  // The registration belongs to this session and the world to the page, so a session that attaches
+  // later, as after a reconnect, registers again and finds the script already installed. With the
+  // Page domain enabled, a source runs in each new document, in the order registered;
+  // `runImmediately` runs it now.
+  const addScript = (operation: string, source: string) =>
+    native(operation, () =>
+      send("Page.addScriptToEvaluateOnNewDocument", { source, worldName, runImmediately: true }),
+    );
+
+  const register = (operation: string) =>
+    Effect.all(
+      [
+        page.paging(operation),
+        addScript(operation, `if (globalThis === globalThis.top) ${installSource};`),
+      ],
+      { concurrency: "unbounded" },
+    ).pipe(span("Page.register", {}, "Debug"));
+
+  /** Register the script once; the change-reader lifetime owns its removable registration. */
+  const ensure = (operation: string, recorder: boolean) =>
+    SynchronizedRef.updateEffect(registration, (state) =>
+      Effect.gen(function* () {
+        if (!state.script) yield* register(operation);
+        if (recorder && state.recorder === undefined) {
+          const registered = yield* addScript(operation, recorderSource);
+
+          return { script: true, recorder: registered.identifier };
+        }
+
+        return { ...state, script: true };
+      }),
+    );
+
+  const removeRecorder = (operation: string) =>
+    SynchronizedRef.updateEffect(registration, (state) => {
+      const identifier = state.recorder;
+
+      return identifier === undefined
+        ? Effect.succeed(state)
+        : native(operation, () =>
+            send("Page.removeScriptToEvaluateOnNewDocument", { identifier }),
+          ).pipe(Effect.as({ script: true }));
+    });
+
+  return { ensure, removeRecorder };
+});
+
 export const make = Effect.fnUntraced(function* (page: PageContext) {
   const { id, cdp, native, span, publish, now } = page;
   const { send } = page.protocol;
-  // How far this session has registered: the script, then the recorder, which the first read of
-  // changes asks for. One caller takes each step, once, while the others wait.
-  const registration = yield* SynchronizedRef.make<"none" | "script" | "recorder">("none");
+  const { ensure, removeRecorder } = yield* registrationFor(page);
+
   // The current document's world, forgotten when the main frame commits another document; the
   // commits this session has seen, the latest marked on the page; the page's address; and how far
   // the current document has loaded.
   let world: number | undefined;
   let documents = 0;
+  let nextDocument = Deferred.makeUnsafe<void>();
   let url = Url.redact(page.url);
   let loaded: PageLoaded | undefined;
+  // Every script call can allocate refs (including guards and point input), so the bridge,
+  // rather than individual readers, owns the floor across the page's documents.
+  let nextRef = 1;
   // The latest commits' loaders and the documents they began, newest last: a capture connection
   // sees the same commits, and numbers its frames by them.
   const loaders = new Map<string, number>();
@@ -219,6 +339,8 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       page.activity.documentAt = now();
       world = undefined;
       loaded = undefined;
+      Deferred.doneUnsafe(nextDocument, Effect.void);
+      nextDocument = Deferred.makeUnsafe<void>();
     }
     url = seen.url;
     const sameDocument = seen.loader === undefined;
@@ -256,41 +378,6 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   /** The document the main frame's latest commit of `loader` began, if this session counted it. */
   const documentOf = (loader: string) => loaders.get(loader);
 
-  // The registration belongs to this session and the world to the page, so a session that attaches
-  // later, as after a reconnect, registers again and finds the script already installed. With the
-  // Page domain enabled, a source runs in each new document, in the order registered;
-  // `runImmediately` runs it now.
-  const addScript = (operation: string, source: string) =>
-    native(operation, () =>
-      send("Page.addScriptToEvaluateOnNewDocument", { source, worldName, runImmediately: true }),
-    );
-
-  const register = (operation: string) =>
-    Effect.all(
-      [
-        page.paging(operation),
-        addScript(operation, `if (globalThis === globalThis.top) ${installSource};`),
-      ],
-      { concurrency: "unbounded" },
-    ).pipe(span("Page.register", {}, "Debug"));
-
-  /** Take registration from `from` to `to` by `step`, unless it is past `from` already. */
-  const advance = (
-    from: "none" | "script",
-    to: "script" | "recorder",
-    step: Effect.Effect<unknown, BrowserError>,
-  ) =>
-    SynchronizedRef.updateEffect(registration, (state) =>
-      state === from ? Effect.as(step, to) : Effect.succeed(state),
-    );
-
-  /** Register the script once, and the recorder after it once a read of changes asks for it. */
-  const ensure = (operation: string, recorder: boolean) =>
-    Effect.andThen(
-      advance("none", "script", register(operation)),
-      recorder ? advance("script", "recorder", addScript(operation, recorderSource)) : Effect.void,
-    );
-
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
       yield* ensure(operation, false);
@@ -318,31 +405,34 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     ).pipe(Effect.map((created) => created.executionContextId));
 
   const run = (operation: string, expression: string, contextId: number) =>
-    native(operation, () =>
-      send("Runtime.evaluate", { contextId, expression, returnByValue: true, awaitPromise: true }),
-    ).pipe(
-      Effect.flatMap(({ result, exceptionDetails: thrown }) =>
-        thrown === undefined
-          ? Effect.succeed<unknown>(result.value)
-          : failWith(
-              operation,
-              new Failed({ detail: thrown.exception?.description ?? thrown.text }),
-            ),
-      ),
-    );
+    runIn(page, operation, expression, contextId);
 
   const evaluateIn = (operation: string, call: string, contextId: number) =>
-    run(
-      operation,
-      `globalThis.__effectBrowser === undefined ? ${JSON.stringify(missing)} : globalThis.__effectBrowser.${call}`,
-      contextId,
-    ).pipe(
-      Effect.filterOrFail(
-        (value) => value !== missing,
-        () => undispatched(operation, new Failed({ detail: missing })),
-      ),
+    Effect.gen(function* () {
+      const result = yield* run(
+        operation,
+        `(async () => {
+        const api = globalThis.__effectBrowser;
+        if (api === undefined) return ${missingSource};
+        api.refs.next = Math.max(api.refs.next, ${nextRef});
+        try { return { value: await globalThis.__effectBrowser.${call}, nextRef: api.refs.next }; }
+        catch (error) { return { error: error instanceof Error ? error.message : String(error), nextRef: api.refs.next }; }
+      })()`,
+        contextId,
+      );
+
+      if (result === missing) return yield* failWith(operation, new Failed({ detail: missing }));
+      const evaluated = yield* decodeWith(operation, Evaluated)(result);
+
+      nextRef = Math.max(nextRef, evaluated.nextRef);
+
+      return evaluated.error === undefined
+        ? evaluated.value
+        : yield* failWith(operation, new Failed({ detail: evaluated.error }));
+    }).pipe(
       // One round trip to the page. Its arguments can hold typed text, so only the call is named.
       span("Page.evaluate", { function: call.split("(")[0] }, "Trace"),
+      Effect.provideService(Script, call.split("(")[0]),
     );
 
   // Ordinary reads can recreate a document's world. Approval validation deliberately cannot. A
@@ -379,12 +469,18 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     evaluateIn,
     evaluateWithContext,
     currentDocument,
+    /** Wait for the owning protocol session to observe a replacement before retrying its read. */
+    waitForDocument: (before: number) =>
+      Effect.suspend(() => (documents === before ? Deferred.await(nextDocument) : Effect.void)),
     frameTag,
     documentOf,
     /** How far the current document has loaded, as this session heard; nothing until parsed. */
     loaded: () => loaded,
     /** Register the recorder, so every later document records from its start. */
     registerRecorder: (operation: string) => ensure(operation, true),
+    /** Stop future documents and the current recorder at the host idle deadline. */
+    unregisterRecorder: (operation: string) =>
+      removeRecorder(operation).pipe(Effect.andThen(evaluate(operation, scriptCall("stopRecord")))),
   };
 });
 

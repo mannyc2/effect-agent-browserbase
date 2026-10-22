@@ -5,14 +5,14 @@ import { AiError, DecisionModel, LanguageModel, type Prompt, type Response } fro
 import { TestClock } from "effect/testing";
 
 import { type InputGuard, InputRequest, redacted } from "../src/Page.ts";
-import * as Policy from "../src/Policy.ts";
+import * as Policy from "../src/policy/Policy.ts";
 
 const request = (fields: Partial<ConstructorParameters<typeof InputRequest>[0]> = {}) =>
   new InputRequest({
     page: "p1",
     url: "https://shop.example/cart",
     title: "Cart",
-    action: "click",
+    action: { _tag: "Click", target: "e1" },
     facts: [],
     context: {},
     ...fields,
@@ -103,9 +103,13 @@ it.effect("keeps input to the allowed origins, and denies the facts it is told t
         // A new tab starts blank: only where it goes counts.
         decide(
           guard,
-          request({ url: "about:blank", action: "goto", destination: "https://shop.example/" }),
+          request({
+            url: "about:blank",
+            action: { _tag: "Goto", url: "https://shop.example/" },
+            destination: "https://shop.example/",
+          }),
         ),
-        decide(guard, request({ url: "https://evil.example/", action: "scroll" })),
+        decide(guard, request({ url: "https://evil.example/", action: { _tag: "Scroll" } })),
         decide(guard, request({ facts: ["upload"] })),
       ]),
       ["allowed", outside, outside, "allowed", "allowed", "the policy denies upload input"],
@@ -138,6 +142,40 @@ it.effect("denies a risk the task does not ask for, and says why", () =>
   }),
 );
 
+it.effect("rejects invalid thresholds before judging consequential input", () =>
+  Effect.gen(function* () {
+    let judged = 0;
+
+    const judge: Policy.Judge = () =>
+      Effect.sync(() => {
+        judged += 1;
+
+        return reading({}, 0);
+      });
+
+    const input = request({ facts: ["secret"] });
+
+    for (const threshold of [Number.NaN, Infinity, -Infinity, -0.5, 0, 1.1, 50])
+      assert.strictEqual(
+        yield* decide(Policy.make({ threshold, judge }), input, "Look up the weather"),
+        "policy threshold must be finite, greater than 0, and at most 1",
+      );
+    assert.strictEqual(judged, 0);
+    assert.strictEqual(
+      yield* decide(Policy.make({ threshold: 1, judge: judging(reading({}, 0)) }), input),
+      "secret (1.00) needs a task that asks for it",
+    );
+    assert.strictEqual(
+      yield* decide(
+        Policy.make({ threshold: 1, judge: judging(reading({}, 1)) }),
+        input,
+        "Enter the requested password",
+      ),
+      "allowed",
+    );
+  }),
+);
+
 it.effect("never lets a judgement lower what structure establishes", () =>
   Effect.gen(function* () {
     const fooled = Policy.make({
@@ -147,7 +185,11 @@ it.effect("never lets a judgement lower what structure establishes", () =>
     assert.strictEqual(
       yield* decide(
         fooled,
-        request({ action: "type", text: redacted, facts: ["secret"] }),
+        request({
+          action: { _tag: "Type", text: redacted, options: { secret: true } },
+          text: redacted,
+          facts: ["secret"],
+        }),
         "Look up the weather",
       ),
       "secret (1.00) is not what the task asks for: Typing a city into a search box.",
@@ -168,8 +210,8 @@ it.effect("refuses consequential input the judge could not judge, keeping why", 
 
     assert.strictEqual(denied.detail, "risk review unavailable: RateLimitError");
     assert.strictEqual(denied.cause, limited);
-    // Structure shows nothing for a same-origin link, so it goes ahead unjudged.
-    assert.strictEqual(yield* decide(guard, request()), "allowed");
+    // Requested decision 22: absent structural facts cannot establish safety if review failed.
+    assert.strictEqual(yield* decide(guard, request()), "risk review unavailable: RateLimitError");
 
     const slow = Policy.make({ judge: () => Effect.never, timeout: Duration.seconds(1) });
     const waiting = yield* Effect.forkChild(decide(slow, request({ facts: ["form-submit"] })));
@@ -185,8 +227,8 @@ it.effect("never asks the judge about hovering or scrolling", () =>
 
     assert.deepStrictEqual(
       yield* Effect.all([
-        decide(guard, request({ action: "hover" })),
-        decide(guard, request({ action: "scroll" })),
+        decide(guard, request({ action: { _tag: "Hover", target: "e1" } })),
+        decide(guard, request({ action: { _tag: "Scroll" } })),
       ]),
       ["allowed", "allowed"],
     );

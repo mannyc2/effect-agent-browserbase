@@ -3,13 +3,13 @@
 // pair. No model is called.
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
-import * as Chromium from "effect-browser/Chromium";
 import { type Prompt, Tool } from "effect/ai";
 
-import type { Arm } from "../Arms.ts";
+import type { Arm, Step } from "../Arms.ts";
 import { noCalls } from "../Budget.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
 import { classify, isolatedTrial } from "../Trial.ts";
+import * as Chromium from "./browser.ts";
 import { answer, call, finish, pictures, scripted, textOf, type Turn } from "./scripted.ts";
 
 const parameters = (tools: ReadonlyArray<Tool.Any>, name: string): ReadonlyArray<string> => {
@@ -28,9 +28,20 @@ const trial = (name: string, arm: Arm, turns: ReadonlyArray<Turn>) =>
 
     if (task === undefined) return yield* Effect.die(`the bench has no ${name} task`);
     const model = scripted(turns);
+    const steps: Array<Step> = [];
 
     const exit = yield* isolatedTrial(
-      task.withModel({ seed: 23, arm, onUsage: () => Effect.void }),
+      task.withModel({
+        seed: 23,
+        arm,
+        onUsage: () => Effect.void,
+        // Copied when reported, as a recording copies it.
+        trace: (entry) =>
+          Effect.sync(() => {
+            if (entry._tag === "Step")
+              steps.push({ ...entry.step, results: [...entry.step.results] });
+          }),
+      }),
       Chromium.layer({ frameHistory }),
     ).pipe(Effect.provide(model.layer), Effect.exit);
 
@@ -38,6 +49,7 @@ const trial = (name: string, arm: Arm, turns: ReadonlyArray<Turn>) =>
       exit,
       outcome: classify(exit, noCalls),
       seen: model.seen,
+      steps,
       outcomeValue: Exit.isSuccess(exit) ? exit.value : undefined,
     };
   });
@@ -87,6 +99,29 @@ describe("arm 1, Yielded's tools alone", () => {
 
       // Giving up is the model's wrong answer, graded, never infrastructure.
       assert.deepStrictEqual(result.outcome, { status: "graded", reason: "gave-up", pass: false });
+    }),
+  );
+});
+
+describe("recorded steps", () => {
+  it.live("records each turn with its tools' results, which come after the turn completes", () =>
+    Effect.gen(function* () {
+      const { steps } = yield* trial("checkout", 5, [
+        () => [call("observe", {}), finish],
+        () => [call("give_up", { reason: "scripted" }), finish],
+      ]);
+
+      assert.deepStrictEqual(
+        steps.map(({ step, calls, results }) => [
+          step,
+          calls.map(({ name }) => name),
+          results.map(({ name, isFailure }) => [name, isFailure]),
+        ]),
+        [
+          [1, ["observe"], [["observe", false]]],
+          [2, ["give_up"], [["give_up", false]]],
+        ],
+      );
     }),
   );
 });

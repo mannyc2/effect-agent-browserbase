@@ -5,7 +5,7 @@
  */
 import { Schema } from "effect";
 
-import type { Point } from "../../Motion.ts";
+import type { Point } from "../../Geometry.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import { type Evidence, type EvidenceReader, EvidenceSchema } from "./evidence.inpage.ts";
 import type { Targets } from "./targets.inpage.ts";
@@ -56,6 +56,7 @@ export interface ValidationOptions {
 export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) => {
   const {
     activeElement,
+    textEntry,
     clean,
     describe,
     inCurrentDocument,
@@ -78,19 +79,19 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
   const { controlOf, details, hitAt, hrefAttribute, linkOf, receives, within } = targets;
   const { evidenceOf, isField, isFilled } = evidence;
 
+  const nativeActivation = (element: Element) =>
+    hrefAttribute(element) !== null ||
+    element.tagName === "BUTTON" ||
+    element.tagName === "SUMMARY" ||
+    (isInput(element) && element.type !== "hidden");
+
   /**
    * The element whose activation behaviour a click or key on `element` runs, as the browser
    * resolves it along the composed path: a link, button, input, summary or a label's control.
    */
   const activationTarget = (element: Element): Element | undefined => {
     for (let node: Element | null = element; node !== null; node = parentOf(node)) {
-      if (
-        hrefAttribute(node) !== null ||
-        node.tagName === "BUTTON" ||
-        node.tagName === "SUMMARY" ||
-        (isInput(node) && node.type !== "hidden")
-      )
-        return node;
+      if (nativeActivation(node)) return node;
       if (isLabel(node) && node.control !== null) return node.control;
     }
 
@@ -114,10 +115,7 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
     )
       if (
         node !== own &&
-        (hrefAttribute(node) !== null ||
-          node.tagName === "BUTTON" ||
-          node.tagName === "SUMMARY" ||
-          (isInput(node) && node.type !== "hidden") ||
+        (nativeActivation(node) ||
           isSelect(node) ||
           isTextArea(node) ||
           (isLabel(node) && node.control !== null && node.control !== own) ||
@@ -127,23 +125,6 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
 
     return undefined;
   };
-
-  const textEntry = (element: Element): boolean =>
-    (isInput(element) &&
-      ![
-        "button",
-        "reset",
-        "submit",
-        "image",
-        "checkbox",
-        "radio",
-        "file",
-        "range",
-        "color",
-        "hidden",
-      ].includes(element.type)) ||
-    isTextArea(element) ||
-    (isHtml(element) && element.isContentEditable);
 
   const activatingRoles = new Set([
     "button",
@@ -243,26 +224,19 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
         ? undefined
         : defaultSubmitter(form);
 
-    const formDestination =
+    const formValue = (
+      attribute: "action" | "method" | "target",
+      property: "formAction" | "formMethod" | "formTarget",
+    ) =>
       form === null
         ? undefined
-        : submitter?.hasAttribute("formaction") === true
-          ? submitter.formAction
-          : form.action;
+        : submitter?.hasAttribute(`form${attribute}`) === true
+          ? submitter[property]
+          : form[attribute];
 
-    const formMethod =
-      form === null
-        ? undefined
-        : submitter?.hasAttribute("formmethod") === true
-          ? submitter.formMethod
-          : form.method;
-
-    const formTarget =
-      form === null
-        ? undefined
-        : submitter?.hasAttribute("formtarget") === true
-          ? submitter.formTarget
-          : form.target;
+    const formDestination = formValue("action", "formAction");
+    const formMethod = formValue("method", "formMethod");
+    const formTarget = formValue("target", "formTarget");
 
     const link = linkOf(element);
     const href = link === undefined ? null : hrefAttribute(link);
@@ -326,7 +300,7 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
       metadata.href,
       control === element ? null : refFor(control),
       isInput(control) || isButton(control) ? control.type : control.tagName,
-      control.matches(":disabled") || isDisabled(control),
+      isDisabled(control),
       control.getAttribute("readonly"),
       control.getAttribute("aria-readonly"),
       isHtml(control) && control.isContentEditable,
@@ -455,6 +429,9 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
     return { ...prepared, evidence: explain() };
   };
 
+  const bindings = (targets: PreparedInput["targets"]) =>
+    targets.map((target) => (target === null ? null : [target.ref, target.fingerprint]));
+
   const validate = (
     plan: InputPlan,
     prepared: PreparedInput,
@@ -470,17 +447,7 @@ export const guard = (names: Names, targets: Targets, evidence: EvidenceReader) 
         ? current.destination !== prepared.destination
         : boundUrl(current.destination) !== boundUrl(prepared.destination)) ||
       JSON.stringify(current.facts) !== JSON.stringify(prepared.facts) ||
-      current.targets.length !== prepared.targets.length ||
-      current.targets.some((target, index) => {
-        const previous = prepared.targets[index];
-
-        return target === null
-          ? previous !== null
-          : previous === null ||
-              previous === undefined ||
-              target.ref !== previous.ref ||
-              target.fingerprint !== previous.fingerprint;
-      })
+      JSON.stringify(bindings(current.targets)) !== JSON.stringify(bindings(prepared.targets))
     )
       return {
         error: "changed",

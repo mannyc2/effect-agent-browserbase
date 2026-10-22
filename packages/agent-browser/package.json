@@ -29,6 +29,16 @@
       "@effect-browser/source": "./src/PageControl.ts",
       "types": "./dist/PageControl.d.mts",
       "default": "./dist/PageControl.mjs"
+    },
+    "./testing": {
+      "@effect-browser/source": "./src/testing.ts",
+      "types": "./dist/testing.d.mts",
+      "default": "./dist/testing.mjs"
+    },
+    "./AdapterState": {
+      "@effect-browser/source": "./src/AdapterState.ts",
+      "types": "./dist/AdapterState.d.mts",
+      "default": "./dist/AdapterState.mjs"
     }
   },
   "publishConfig": {

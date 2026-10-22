@@ -19,6 +19,7 @@ import * as ContextLease from "effect-browserbase/ContextLease";
 import { FetchHttpClient } from "effect/http";
 
 import { BenchError, optedIn, refuse } from "./Budget.ts";
+import * as Fixtures from "./FixtureRoutes.ts";
 import * as Handover from "./HandoverProbe.ts";
 import { revision } from "./Trial.ts";
 
@@ -140,6 +141,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
   report: () => unknown,
 ) {
   const clock = yield* Clock.Clock;
+  const fixtures = yield* Fixtures.make;
 
   const observed = single(
     yield* Client.BrowserbaseClient,
@@ -151,6 +153,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
   yield* Effect.scoped(
     Effect.gen(function* () {
       const hosted = yield* Browserbase.open({
+        requests: fixtures.policy,
         session: {
           timeout: seconds,
           proxies: false,
@@ -175,7 +178,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
           ),
         ),
       );
-      yield* work(hosted);
+      yield* work(hosted).pipe(Effect.provideService(Fixtures.FixtureRoutes, fixtures));
     }),
   ).pipe(
     Effect.provideService(Client.BrowserbaseClient, observed.client),

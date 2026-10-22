@@ -5,12 +5,13 @@
  */
 import { Deferred, Duration, Effect, Schedule } from "effect";
 
+import { type Action, nameOf } from "../../Action.ts";
 import { BrowserError, NavigationFailed, NotActionable, NotFound } from "../../BrowserError.ts";
+import * as Url from "../../Url.ts";
 import type { Guard } from "../input/guard.ts";
 import type { InputMarks, Perform } from "../input/perform.ts";
-import { Current } from "../input/replies.ts";
 import { failWith, type PageContext, refuse } from "./context.ts";
-import * as Url from "./url.ts";
+import { Current } from "./replies.ts";
 
 export const make = (
   page: PageContext,
@@ -21,14 +22,15 @@ export const make = (
   const { send } = page.protocol;
 
   // `address` is where `run` goes, as the action, the guard and a failure report it.
-  const navigation = (name: string, run: () => Promise<unknown>, address: string) => {
+  const navigation = (value: Action, run: () => Promise<unknown>, address: string) => {
+    const name = nameOf(value);
     const url = Url.redact(address);
 
     return perform(
-      name,
-      { target: url, input: false },
+      value,
+      { target: url },
       settings.navigationTimeout,
-      preparePolicy(name, { target: url }, [], { destination: url }),
+      (action) => preparePolicy(action, { target: url }, [], { destination: url }),
       (marks) =>
         marks.sent.pipe(
           Effect.andThen(native(name, run).pipe(Effect.onError(() => page.stopLoading))),
@@ -69,37 +71,38 @@ export const make = (
 
   const noPrevious = failWith("back", new NotFound({ target: "a previous page in this tab" }));
 
-  const prepareBack = Effect.gen(function* () {
-    const before = yield* history;
-    const current = before.entries[before.currentIndex];
-    const previous = before.entries[before.currentIndex - 1];
+  const prepareBack = (action: Action) =>
+    Effect.gen(function* () {
+      const before = yield* history;
+      const current = before.entries[before.currentIndex];
+      const previous = before.entries[before.currentIndex - 1];
 
-    if (previous === undefined) return yield* noPrevious;
-    const plan = yield* preparePolicy("back", {}, [], { destination: Url.redact(previous.url) });
+      if (previous === undefined) return yield* noPrevious;
+      const plan = yield* preparePolicy(action, {}, [], { destination: Url.redact(previous.url) });
 
-    return {
-      request: plan.request,
-      validate: Effect.gen(function* () {
-        const approval = yield* plan.validate;
-        const latest = yield* history;
+      return {
+        request: plan.request,
+        validate: Effect.gen(function* () {
+          const approval = yield* plan.validate;
+          const latest = yield* history;
 
-        if (
-          latest.currentIndex !== before.currentIndex ||
-          latest.entries[latest.currentIndex]?.id !== current?.id ||
-          latest.entries[latest.currentIndex - 1]?.id !== previous.id ||
-          latest.entries[latest.currentIndex - 1]?.url !== previous.url
-        )
-          return yield* failWith(
-            "back",
-            new NotActionable({
-              detail: "the navigation history changed while input policy was pending",
-            }),
-          );
+          if (
+            latest.currentIndex !== before.currentIndex ||
+            latest.entries[latest.currentIndex]?.id !== current?.id ||
+            latest.entries[latest.currentIndex - 1]?.id !== previous.id ||
+            latest.entries[latest.currentIndex - 1]?.url !== previous.url
+          )
+            return yield* failWith(
+              "back",
+              new NotActionable({
+                detail: "the navigation history changed while input policy was pending",
+              }),
+            );
 
-        return approval;
-      }),
-    };
-  });
+          return approval;
+        }),
+      };
+    });
 
   // One protocol traversal on every path. It has committed once the tab leaves its entry, which
   // also covers entries that only an iframe created, where the main frame never navigates, and
@@ -153,16 +156,21 @@ export const make = (
     )
       return refuse("navigate", `"${Url.redact(url)}" is not a URL`);
 
+    const run = () => playwright.goto(parsed.href, { waitUntil: "domcontentloaded", timeout: 0 });
+
     return navigation(
-      "navigate",
-      () => playwright.goto(parsed.href, { waitUntil: "domcontentloaded", timeout: 0 }),
+      { _tag: "Goto", url },
+      () =>
+        page.nativePort === undefined
+          ? run()
+          : page.nativePort(page.id, "goto", { url: parsed.href }, run),
       parsed.href,
     );
   };
 
   const back = perform(
-    "back",
-    { target: "back", input: false },
+    { _tag: "Back" },
+    { target: "back" },
     settings.navigationTimeout,
     prepareBack,
     goBack,
@@ -170,7 +178,7 @@ export const make = (
 
   const reload = Effect.suspend(() =>
     navigation(
-      "reload",
+      { _tag: "Reload" },
       () => playwright.reload({ waitUntil: "domcontentloaded", timeout: 0 }),
       playwright.url(),
     ),

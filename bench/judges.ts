@@ -15,14 +15,14 @@ import {
   type PlatformError,
   Schema,
 } from "effect";
-import { Browser, make as makeBrowser } from "effect-browser/Browser";
+import { make as makeBrowser } from "effect-browser/Browser";
 import { PolicyDenied } from "effect-browser/BrowserError";
-import * as Chromium from "effect-browser/Chromium";
 import type { InputRequest } from "effect-browser/Page";
 import * as Policy from "effect-browser/Policy";
 import { AiError } from "effect/ai";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
+import { chromium } from "playwright-core";
 
 import { corpus, type Case } from "../packages/browser/test/consequence-corpus.ts";
 import { type Account, BenchError, ledger, modelRunner, optedIn, refuse } from "./Budget.ts";
@@ -63,9 +63,10 @@ export const admit = Effect.fnUntraced(function* (options: Options) {
 
 /** The input each case makes, prepared and refused before it reaches the page. */
 const prepare = Effect.gen(function* () {
-  const native = (yield* Browser).context.browser();
-
-  if (native === null) return yield* new BenchError({ message: "the corpus needs Chromium" });
+  const native = yield* Effect.acquireRelease(
+    Effect.promise(() => chromium.launch()),
+    (browser) => Effect.promise(() => browser.close()),
+  );
 
   const context = yield* Effect.acquireRelease(
     Effect.promise(() => native.newContext({ viewport: { width: 1280, height: 720 } })),
@@ -93,16 +94,20 @@ const prepare = Effect.gen(function* () {
   );
 
   const page = yield* browser.newPage();
+  const nativePage = context.pages()[0];
 
-  yield* Effect.promise(() => page.playwright.goto("https://corpus.test/"));
+  if (nativePage === undefined)
+    return yield* new BenchError({ message: "the corpus fixture page did not open" });
+
+  yield* Effect.promise(() => nativePage.goto("https://corpus.test/"));
 
   return yield* Effect.forEach(corpus, (item) =>
     Effect.gen(function* () {
       seen.length = 0;
-      yield* Effect.promise(() => page.playwright.setContent(item.html));
+      yield* Effect.promise(() => nativePage.setContent(item.html));
 
       const input = Effect.gen(function* () {
-        const target = page.playwright.locator("#t");
+        const target = nativePage.locator("#t");
 
         if (item.action !== "click") {
           yield* Effect.promise(() => target.focus());
@@ -276,7 +281,7 @@ const judge = Effect.fnUntraced(function* (requested: Options) {
 
   yield* fs.makeDirectory(out, { recursive: true }).pipe(Effect.mapError(unwritten));
   const cases = path.join(out, "cases.jsonl");
-  const prepared = yield* prepare.pipe(Effect.provide(Chromium.layer()));
+  const prepared = yield* prepare;
   const model = chosen.model ?? "";
   const reviews = chosen.arms.includes("reviewer") || chosen.arms.includes("escalate");
 

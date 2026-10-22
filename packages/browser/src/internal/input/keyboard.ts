@@ -7,12 +7,21 @@ import { Duration, Effect } from "effect";
 import { NotActionable } from "../../BrowserError.ts";
 import type { Bridge } from "../page/bridge.ts";
 import { failWith, type PageContext } from "../page/context.ts";
+import type * as Replies from "../page/replies.ts";
 import type { Dispatch } from "./dispatch.ts";
 import * as Keys from "./keys.ts";
-import type * as Replies from "./replies.ts";
 
 export const make = (page: PageContext, bridge: Bridge, dispatch: Dispatch) => {
   const { playwright } = page;
+
+  const key = (direction: "down" | "up", part: string) => {
+    const run = () => playwright.keyboard[direction](part);
+
+    return page.nativePort === undefined
+      ? run()
+      : page.nativePort(page.id, `keyboard.${direction}`, { key: part }, run);
+  };
+
   const { send } = page.protocol;
   const { currentDocument } = bridge;
   const { stamp, inputCall, dispatchKey, dispatchText } = dispatch;
@@ -47,8 +56,8 @@ export const make = (page: PageContext, bridge: Bridge, dispatch: Dispatch) => {
           operation,
           run.down(
             `playwright:${part}`,
-            () => dispatchKey(part, "down", () => playwright.keyboard.down(part), run),
-            () => dispatchKey(part, "up", () => playwright.keyboard.up(part), run),
+            () => dispatchKey(part, "down", () => key("down", part), run),
+            () => dispatchKey(part, "up", () => key("up", part), run),
           ),
         );
       if (holdMillis > 0) yield* Effect.sleep(Duration.millis(holdMillis));

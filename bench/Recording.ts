@@ -2,13 +2,15 @@
 // and the moments shown to a model, on the browser's one host clock, with the trial's outcome.
 // This module has no Node imports, so a player in a web page can decode the same schema.
 import { Schema } from "effect";
+import { HttpCassette } from "effect-agent-browser/testing";
 import { RecordedEvent } from "effect-browser/BrowserEvent";
-import type * as Moment from "effect-browser/Moment";
+import * as Moment from "effect-browser/Moment";
 
 import type { Step } from "./Arms.ts";
 
 /** What a task reports to a recorder as it runs; the recorder stamps each entry on arrival. */
 export type Trace =
+  | { readonly _tag: "Truth"; readonly value: unknown }
   | { readonly _tag: "Step"; readonly step: Step }
   | {
       readonly _tag: "Moment";
@@ -64,6 +66,8 @@ export class RecordedMoment extends Schema.Class<RecordedMoment>("bench/Recorded
   expected: Schema.optional(Schema.Unknown),
   caption: Schema.optional(Schema.String),
   readyAt: Schema.Finite,
+  /** Complete moment, with frame bytes encoded through its JSON codec. */
+  value: Schema.optional(Schema.toCodecJson(Moment.Moment)),
 }) {}
 
 /**
@@ -106,6 +110,16 @@ export class Recording extends Schema.Class<Recording>("bench/Recording")({
   viewports: Schema.Array(RecordedViewport),
   steps: Schema.Array(RecordedStep),
   moments: Schema.Array(RecordedMoment),
+  /** Exact provider payloads, without transport credentials, keyed by trial and turn. */
+  model: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ turn: Schema.Int, request: Schema.Unknown, response: Schema.Unknown }),
+    ),
+  ),
+  /** HTTP exchanges preserve the actual provider codec for strict request replay. */
+  http: Schema.optional(Schema.Array(HttpCassette.Exchange)),
+  /** Raw fixture state read by the grader, before its schema-specific projection. */
+  truth: Schema.optional(Schema.Unknown),
   /**
    * The trial's spans, oldest first, on the same host clock; opening the browser comes before
    * `startedAt`. Absent from recordings made without a trace.

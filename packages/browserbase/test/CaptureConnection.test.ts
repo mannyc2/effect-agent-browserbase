@@ -3,12 +3,13 @@
 // in the order they open: Playwright's control connection is 0, and the capture connection opens
 // as the first capture starts.
 import { assert, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Schedule, Stream } from "effect";
+import { Effect, Fiber, Layer, Schedule, Schema, Stream } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
+import * as Stillness from "effect-browser/Stillness";
 
-import { behindProxy, type Command, type Proxy } from "../../browser/test/protocol.ts";
+import { behindProxy, type Command, type Proxy } from "../../../tools/testing/cdp-proxy.ts";
 import * as Browserbase from "../src/Browserbase.ts";
 import * as ContextLease from "../src/ContextLease.ts";
 import * as TestBrowserbase from "../src/testing/TestBrowserbase.ts";
@@ -138,7 +139,7 @@ it.live(
           yield* still.snapshot();
           yield* recorded(still);
           from = proxy.commands.length;
-          yield* still.ready({ quietMillis: 200 });
+          yield* Stillness.wait(still, { quietMillis: 200 });
           assert.strictEqual(sentOn(proxy, control, from).length, 2);
           assert.deepStrictEqual(methods(sentOn(proxy, capturing, from)), ["Page.getFrameTree"]);
         }),
@@ -298,7 +299,7 @@ it.live("never reads a stall on the capture connection as a still screen", () =>
               Effect.forkChild,
             );
 
-            return yield* page.ready({ quietMillis: 400, timeout: "3 seconds" }).pipe(
+            return yield* Stillness.wait(page, { quietMillis: 400, timeout: "3 seconds" }).pipe(
               Effect.as("still"),
               Effect.catch((error) => Effect.succeed(error.reason._tag)),
             );
@@ -346,9 +347,10 @@ it.live("keeps frames coming while a large message holds the connection that dri
               yield* Effect.sleep("300 millis");
               const from = yield* browser.now;
 
-              yield* Effect.promise(() =>
-                page.playwright.evaluate((text) => text.length, "x".repeat(400_000)),
-              );
+              yield* page.read((text: string) => text.length, {
+                arg: "x".repeat(400_000),
+                result: Schema.Int,
+              });
 
               return longestWait(frames, from, yield* browser.now);
             }),
@@ -373,9 +375,9 @@ const colors = ["rgb(255, 0, 0)", "rgb(0, 255, 0)", "rgb(0, 0, 255)"];
 
 /** Which of `colors` each frame shows at its centre, decoded by the page itself, or -1. */
 const shownColors = (page: Page, frames: ReadonlyArray<Frame>) =>
-  Effect.promise(() =>
-    page.playwright.evaluate(
-      async (pictures) =>
+  page
+    .read(
+      async (pictures: ReadonlyArray<ReadonlyArray<number>>) =>
         Promise.all(
           pictures.map(async (bytes) => {
             const bitmap = await createImageBitmap(
@@ -393,9 +395,9 @@ const shownColors = (page: Page, frames: ReadonlyArray<Frame>) =>
             return channels.filter((channel) => channel > 160).length === 1 ? strongest : -1;
           }),
         ),
-      frames.map((frame) => Array.from(frame.data)),
-    ),
-  );
+      { arg: frames.map((frame) => Array.from(frame.data)), result: Schema.Array(Schema.Int) },
+    )
+    .pipe(Effect.map(({ value }) => value));
 
 // What the control connection hears comes 300 ms late, so the capture connection sees each new
 // document commit first. Its frames carry the document they followed on their own connection at

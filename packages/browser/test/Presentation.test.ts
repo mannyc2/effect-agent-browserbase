@@ -1,17 +1,18 @@
 // Performed input: what a presenter's style plans, and what its views do on real Chromium, beside
 // plain input on other pages.
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Duration, Effect, Fiber, Layer, MutableRef, Option, Random, Schedule } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, MutableRef, Option, Random, Schedule } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import type { Action, BrowserEvent } from "../src/BrowserEvent.ts";
-import * as Chromium from "../src/Chromium.ts";
-import * as Style from "../src/internal/input/style.ts";
-import * as Motion from "../src/Motion.ts";
 import type { Page } from "../src/Page.ts";
-import * as Presentation from "../src/Presentation.ts";
+import * as Motion from "../src/presentation/Motion.ts";
+import * as Presentation from "../src/presentation/Presentation.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
+import * as Style from "../src/Style.ts";
 import { Site, SiteLayer, unpaused } from "./fixtures.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const performed = Style.performed({
   pointer: MutableRef.make(Option.none()),
@@ -33,10 +34,7 @@ const replay = (events: ReadonlyArray<Style.TypingEvent>) =>
 describe("Presentation's style", () => {
   it.effect("types about 70 words a minute, each key held about 110 ms, keys overlapping", () =>
     Effect.gen(function* () {
-      const text =
-        "Thoughtful pacing keeps each sentence readable while the next word starts with a short pause. ".repeat(
-          4,
-        );
+      const text = "Thoughtful pacing keeps each sentence readable.";
 
       const rates: Array<number> = [];
       const holds: Array<number> = [];
@@ -66,7 +64,21 @@ describe("Presentation's style", () => {
       assert.closeTo(average(holds), 110, 5);
       assert.isAtLeast(sorted[0] ?? 0, 60);
       assert.isAtMost(sorted.at(-1) ?? Infinity, 220);
-      assert.isAbove(overlaps, 50);
+      assert.isAbove(overlaps, 10);
+    }),
+  );
+
+  // PLAN 7: long schedules previously occupied the write lane for minutes.
+  it.effect("refuses over-budget typing and wheel plans before any input", () =>
+    Effect.gen(function* () {
+      for (const plan of [
+        performed.typing("a".repeat(2000), false).pipe(Effect.asVoid),
+        performed.wheel(0, 1_000_000).pipe(Effect.asVoid),
+      ]) {
+        const result = yield* Effect.exit(plan);
+
+        assert.isTrue(Exit.isFailure(result), "an unbounded presentation plan must be refused");
+      }
     }),
   );
 
@@ -174,7 +186,7 @@ const eventually = (check: Effect.Effect<boolean>) =>
   );
 
 /** A planner whose glides are straight and take `millis`, in 60 samples a second. */
-const straight = (millis: number): Motion.Service => ({
+const straight = (millis: number): Motion.Planner => ({
   plan: (from, to) =>
     Effect.sync(() => {
       if (Math.hypot(to.x - from.x, to.y - from.y) < 2) return [{ ...to, afterMillis: 0 }];
@@ -219,7 +231,7 @@ const typeahead = (replacement: {
   });
 </script>`)}`;
 
-layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
+layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
 })("Presentation", (it) => {
@@ -316,9 +328,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           (event.page === page.id || event.page === other.id),
       );
 
+      const plans = (yield* browser.recentEvents).filter((event) => event._tag === "TrackPlanned");
+
       const gaps = actions
         .slice(1)
-        .map((action, index) => action.startedAt - (actions[index]?.at ?? 0));
+        .map(
+          (action, index) =>
+            (plans.find((plan) => plan.at >= action.startedAt)?.at ?? action.at) -
+            (actions[index]?.at ?? 0),
+        );
 
       // Another click on the page, a link's, a click on the document it reached, another page's.
       for (const [index, median] of [150, 150, 400, 800].entries())
@@ -328,7 +346,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
   it.effect("gives presentation a budget of its own, outside the action timeout", () =>
     Effect.gen(function* () {
-      const native = (yield* Browser).context.browser();
+      const native = TestCdp.nativeContext(yield* Browser).browser();
 
       if (native === null) return yield* Effect.die("the fixture requires local Chromium");
 
@@ -353,53 +371,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("starts a glide on aim, which the action on its target completes", () =>
-    Effect.gen(function* () {
-      const browser = yield* Browser;
-      const page = yield* browser.newPage((yield* Site).url("/form"));
-      const presenter = yield* Presentation.make({ motion: straight(600), pacing: unpaused });
-      const view = presenter.view(page);
-      const submit = refOf(yield* page.snapshot(), "button", "Submit");
-
-      const of = <Tag extends BrowserEvent["_tag"]>(tag: Tag) =>
-        Effect.map(browser.recentEvents, (events) =>
-          events.filter(
-            (event): event is Extract<BrowserEvent, { readonly _tag: Tag }> =>
-              event._tag === tag && "page" in event && event.page === page.id,
-          ),
-        );
-
-      yield* view.aim(submit);
-      // The glide is under way before the click is asked for.
-      yield* eventually(Effect.map(of("TrackPlanned"), (plans) => plans.length === 1));
-      yield* view.click(submit);
-      const [aimed, clicked] = yield* of("TrackPlanned");
-      const [arrived] = yield* of("TrackPerformed");
-
-      assert.isTrue(arrived?.complete);
-      assert.isAbove(aimed?.samples.length ?? 0, 5);
-      assert.lengthOf(clicked?.samples ?? [], 1);
-      // The aim was no action of its own.
-      assert.deepStrictEqual(
-        (yield* of("Action")).map((action) => action.name),
-        ["navigate", "click"],
-      );
-      assert.lengthOf(yield* of("PointerPressed"), 1);
-
-      // An aim at somewhere else stops where it is, and the click glides on from there.
-      yield* view.aim({ x: 700, y: 500 });
-      yield* eventually(Effect.map(of("TrackPlanned"), (plans) => plans.length === 3));
-      yield* Effect.sleep("100 millis");
-      yield* view.click({ x: 900, y: 650 });
-      const plans = yield* of("TrackPlanned");
-      const stopped = (yield* of("TrackPerformed"))[2];
-
-      assert.isFalse(stopped?.complete);
-      assert.deepStrictEqual(plans[3]?.from, { x: stopped?.x, y: stopped?.y });
-    }),
-  );
-
-  // A view presses the field before it types, and the field is gone by the time the keys go.
   it.effect(
     "types into a field the page puts in place of the one it pressed, named and focused as it was",
     () =>

@@ -13,11 +13,12 @@ import {
   Subject,
   type SubjectContext,
 } from "../src/BrowserEvent.ts";
-import * as Chromium from "../src/Chromium.ts";
-import { choose } from "../src/internal/reading/choose.ts";
 import { type FindQuery, Found, type Page, redacted } from "../src/Page.ts";
-import * as Plan from "../src/Plan.ts";
+import { choose } from "../src/plan/choose.ts";
+import * as Plan from "../src/plan/index.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 import { DriftSite, DriftSiteLayer, type Operator, operators } from "./drift.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 // Context words from a small vocabulary, so elements share and differ in them often.
 const maybe = (values: ReadonlyArray<string>) =>
@@ -182,9 +183,9 @@ const typed = (text: string) =>
     at: 5,
     startedAt: 4,
     name: "type",
+    value: { _tag: "Type", text, options: { submit: true } },
     target: "e7",
     text,
-    options: { submit: true },
     subject: new Subject({ role: "textbox", name: "Search", tag: "input", context: {} }),
     ok: true,
     dispatched: true,
@@ -204,6 +205,7 @@ const walk = (text: string): ReadonlyArray<BrowserEvent> => [
     at: 3,
     startedAt: 1,
     name: "navigate",
+    value: { _tag: "Goto", url: "https://example.com/markets" },
     target: "https://example.com/markets",
     ok: true,
     dispatched: true,
@@ -214,7 +216,8 @@ const walk = (text: string): ReadonlyArray<BrowserEvent> => [
     at: 6,
     startedAt: 6,
     name: "click",
-    target: "300,320",
+    value: { _tag: "Click", target: { x: 300, y: 320 } },
+    target: "999,999",
     x: 300,
     y: 320,
     ok: true,
@@ -227,6 +230,7 @@ const walk = (text: string): ReadonlyArray<BrowserEvent> => [
     at: 8,
     startedAt: 7,
     name: "click",
+    value: { _tag: "Click", target: "e9" },
     target: "e9",
     ok: false,
     dispatched: false,
@@ -238,6 +242,7 @@ const walk = (text: string): ReadonlyArray<BrowserEvent> => [
     at: 9,
     startedAt: 9,
     name: "press",
+    value: { _tag: "Press", keys: "Enter" },
     target: "Enter",
     ok: true,
     dispatched: true,
@@ -249,35 +254,28 @@ describe("Plan.fromEvents", () => {
     const plan = Plan.fromEvents(walk("bitcoin"));
 
     assert.deepStrictEqual(
-      plan.steps.map(({ action, url, target, input, point, box }) => [
-        action,
-        url,
-        target,
-        input,
-        point,
-        box,
-      ]),
+      plan.steps.map(({ action, url, input, box }) => [action, url, input, box]),
       [
         [
-          "navigate",
+          { _tag: "Goto", url: "https://example.com/markets" },
           "https://example.com/markets-moved",
-          "https://example.com/markets",
-          undefined,
           undefined,
           undefined,
         ],
-        ["type", "https://example.com/markets-moved", undefined, "search", undefined, undefined],
         [
-          "click",
+          { _tag: "Type", text: "", options: { submit: true } },
+          "https://example.com/markets-moved",
+          "search",
+          undefined,
+        ],
+        [
+          { _tag: "Click", target: { x: 300, y: 320 } },
           "https://example.com/markets-moved",
           undefined,
-          undefined,
-          { x: 300, y: 320 },
           { x: 0, y: 100, width: 600, height: 400 },
         ],
       ],
     );
-    assert.deepStrictEqual(plan.steps[1]?.options, { submit: true });
     assert.deepStrictEqual(plan.inputs, ["search"]);
   });
 
@@ -296,15 +294,15 @@ describe("Plan.fromEvents", () => {
     const encoded = Schema.encodeSync(Plan.Plan)(plan);
 
     assert.deepStrictEqual(Schema.decodeSync(Plan.Plan)(encoded), plan);
-    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version: 3 })));
+    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version: 4 })));
     assert.isTrue(
       Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ steps: [{ id: "a", run: [] }] })),
     );
   });
 
-  it("emits version 2 only for expected effects, refusing them inside a version 1 payload", () => {
+  it("uses one typed-action encoding and rejects prior string-action versions", () => {
     const step = new Plan.Step({
-      action: "click",
+      action: { _tag: "Click", target: "e0" },
       url: "https://example.com/orders",
       expect: { _tag: "Appeared", query: { text: "Order 42" }, durable: true },
     });
@@ -312,10 +310,11 @@ describe("Plan.fromEvents", () => {
     const plan = Plan.Plan.new([step]);
     const encoded = Schema.encodeSync(Plan.Plan)(plan);
 
-    assert.strictEqual(encoded.version, 2);
+    assert.strictEqual(encoded.version, 3);
     assert.deepStrictEqual(Schema.decodeSync(Plan.Plan)(encoded), plan);
-    assert.isTrue(Exit.isFailure(Schema.decodeExit(Plan.Plan)({ ...encoded, version: 1 })));
-    assert.strictEqual(Schema.encodeSync(Plan.Plan)(Plan.Plan.new([])).version, 1);
+    for (const version of [1, 2])
+      assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version })));
+    assert.strictEqual(Schema.encodeSync(Plan.Plan)(Plan.Plan.new([])).version, 3);
   });
 });
 
@@ -411,16 +410,19 @@ const truthOf = Effect.fnUntraced(function* (page: Page, arrival?: string) {
   // Replay returns input receipts; this fixture's DOM oracle needs a parsed final document.
   if (arrival !== undefined)
     yield* Effect.promise(() =>
-      page.playwright.waitForURL(arrival, { waitUntil: "domcontentloaded", timeout: 5_000 }),
+      TestCdp.nativePage(page).waitForURL(arrival, {
+        waitUntil: "domcontentloaded",
+        timeout: 5_000,
+      }),
     );
   yield* page.ready({ timeout: "5 seconds" });
 
   return yield* Effect.promise(() =>
-    page.playwright.evaluate(() => document.body.dataset["truth"] ?? ""),
+    TestCdp.nativePage(page).evaluate(() => document.body.dataset["truth"] ?? ""),
   );
 });
 
-layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
+layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
   excludeTestServices: true,
   timeout: Duration.minutes(5),
 })("Plan.replay", (it) => {
@@ -431,264 +433,291 @@ layer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer), {
   });
 
   it.effect("keeps action arrival addresses after a 16-event history loses its navigation", () =>
-    Effect.gen(function* () {
-      const site = yield* DriftSite;
-      const browser = yield* Chromium.open({ eventHistory: 16 });
-      const page = yield* browser.newPage(site.url("/news"));
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const site = yield* DriftSite;
+        const browser = yield* Chromium.open({ eventHistory: 16 });
+        const page = yield* browser.newPage(site.url("/news"));
 
-      for (let index = 0; index < 20; index++) yield* page.press("Shift");
-      const events = yield* page.recentEvents;
-      const steps = Plan.fromEvents(events).steps;
+        for (let index = 0; index < 20; index++) yield* page.press("Shift");
+        const events = yield* page.recentEvents;
+        const steps = Plan.fromEvents(events).steps;
 
-      assert.isFalse(events.some((event) => event._tag === "Navigated"));
-      assert.isAbove(steps.length, 0);
-      assert.isTrue(steps.every((step) => step.url === site.url("/news")));
-    }),
+        assert.isFalse(events.some((event) => event._tag === "Navigated"));
+        assert.isAbove(steps.length, 0);
+        assert.isTrue(steps.every((step) => step.url === site.url("/news")));
+      }),
+    ),
   );
 
   // Regression at 0366e08: replay dropped a press's subject and sent keys to current focus.
   it.effect("replays a targeted press on its recorded field despite different focus", () =>
-    Effect.gen(function* () {
-      const recording = yield* fresh;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const recording = yield* fresh;
 
-      const address = `data:text/html,${encodeURIComponent(`
+        const address = `data:text/html,${encodeURIComponent(`
         <h1>Keyboard targets</h1><input aria-label="A" autofocus><input aria-label="B">
         <script>document.addEventListener("keydown", event => {
           if (event.key === "Enter") document.body.dataset.truth = event.target.ariaLabel;
         });</script>`)}`;
 
-      yield* recording.goto(address);
-      yield* Effect.promise(() => recording.playwright.getByLabel("A").focus());
-      yield* recording.press("Enter", { on: yield* ref(recording, { name: "B" }) });
-      assert.strictEqual(yield* truthOf(recording), "B");
-      const plan = Plan.fromEvents(yield* recording.recentEvents);
-      const replayed = yield* fresh;
+        yield* recording.goto(address);
+        yield* Effect.promise(() => TestCdp.nativePage(recording).getByLabel("A").focus());
+        yield* recording.press("Enter", { on: yield* ref(recording, { name: "B" }) });
+        assert.strictEqual(yield* truthOf(recording), "B");
+        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const replayed = yield* fresh;
 
-      yield* Plan.replay(replayed, plan);
-      assert.strictEqual(yield* truthOf(replayed), "B");
-    }),
+        yield* Plan.replay(replayed, plan);
+        assert.strictEqual(yield* truthOf(replayed), "B");
+      }),
+    ),
   );
 
   // Regression at 0366e08: typing into focus recorded no replace option, then replay selected all.
   it.effect("replays focus typing as insertion while retaining the field's existing text", () =>
-    Effect.gen(function* () {
-      const recording = yield* fresh;
-      const address = `data:text/html,${encodeURIComponent('<input aria-label="Text" value="before ">')}`;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const recording = yield* fresh;
+        const address = `data:text/html,${encodeURIComponent('<input aria-label="Text" value="before ">')}`;
 
-      yield* recording.goto(address);
-      yield* Effect.promise(() => recording.playwright.getByLabel("Text").focus());
-      yield* Effect.promise(() => recording.playwright.getByLabel("Text").press("End"));
-      yield* recording.type("after");
-      assert.strictEqual(
-        yield* Effect.promise(() => recording.playwright.getByLabel("Text").inputValue()),
-        "before after",
-      );
-      const plan = Plan.fromEvents(yield* recording.recentEvents);
-      const replayed = yield* fresh;
+        yield* recording.goto(address);
+        yield* Effect.promise(() => TestCdp.nativePage(recording).getByLabel("Text").focus());
+        yield* Effect.promise(() => TestCdp.nativePage(recording).getByLabel("Text").press("End"));
+        yield* recording.type("after");
+        assert.strictEqual(
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(recording).getByLabel("Text").inputValue(),
+          ),
+          "before after",
+        );
+        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const replayed = yield* fresh;
 
-      yield* Plan.replay(replayed, plan, { inputs: { text: "after" } });
-      // Chromium focuses a fresh field at its start; replay preserves text, not an unrecorded caret.
-      assert.strictEqual(
-        yield* Effect.promise(() => replayed.playwright.getByLabel("Text").inputValue()),
-        "afterbefore ",
-      );
-    }),
+        yield* Plan.replay(replayed, plan, { inputs: { text: "after" } });
+        // Chromium focuses a fresh field at its start; replay preserves text, not an unrecorded caret.
+        assert.strictEqual(
+          yield* Effect.promise(() => TestCdp.nativePage(replayed).getByLabel("Text").inputValue()),
+          "afterbefore ",
+        );
+      }),
+    ),
   );
 
   it.effect("says a walk that ends on another site drifted", () =>
-    Effect.gen(function* () {
-      const site = yield* DriftSite;
-      const page = yield* fresh;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const site = yield* DriftSite;
+        const page = yield* fresh;
 
-      yield* site.drift({ operator: "none", seed: 1 });
-      // The recording reached the same path on another host.
-      const elsewhere = site.url("/news").replace("127.0.0.1", "localhost");
+        yield* site.drift({ operator: "none", seed: 1 });
+        // The recording reached the same path on another host.
+        const elsewhere = site.url("/news").replace("127.0.0.1", "localhost");
 
-      const plan = new Plan.Plan({
-        version: 1,
-        steps: [new Plan.Step({ action: "navigate", target: site.url("/news"), url: elsewhere })],
-      });
+        const plan = new Plan.Plan({
+          version: 3,
+          steps: [
+            new Plan.Step({ action: { _tag: "Goto", url: site.url("/news") }, url: elsewhere }),
+          ],
+        });
 
-      const error = yield* Effect.flip(Plan.replay(page, plan));
+        const error = yield* Effect.flip(Plan.replay(page, plan));
 
-      assert.deepStrictEqual([error.step, error.reason._tag], [0, "Drifted"]);
-    }),
+        assert.deepStrictEqual([error.step, error.reason._tag], [0, "Drifted"]);
+      }),
+    ),
   );
 
   // A walk to what a page shows, named under `code` as a stock code is, then to an address with a
   // token. The first replays as it was; the second goes only where the caller says, never to the
   // address without its token, so the walk cannot buy another coin and call it done.
   it.effect("goes to each recorded address, and to one with a credential where told", () =>
-    Effect.gen(function* () {
-      const site = yield* DriftSite;
-      const token = "tok8f3a91c2d7e4b6a5";
-      const shown = site.url("/buy?coin=BTC&code=BTC");
-      const signed = site.url(`/buy?coin=ETH&token=${token}`);
-      const recording = yield* fresh;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const site = yield* DriftSite;
+        const token = "tok8f3a91c2d7e4b6a5";
+        const shown = site.url("/buy?coin=BTC&code=BTC");
+        const signed = site.url(`/buy?coin=ETH&token=${token}`);
+        const recording = yield* fresh;
 
-      yield* site.drift({ operator: "none", seed: 1 });
-      yield* recording.goto(shown);
-      yield* recording.goto(signed);
-      const plan = Plan.fromEvents(yield* recording.recentEvents);
+        yield* site.drift({ operator: "none", seed: 1 });
+        yield* recording.goto(shown);
+        yield* recording.goto(signed);
+        const plan = Plan.fromEvents(yield* recording.recentEvents);
 
-      assert.deepStrictEqual(
-        plan.steps.map(({ target, input }) => [target, input]),
-        [
-          [shown, undefined],
-          [site.url(`/buy?coin=ETH&token=${redacted}`), "address"],
-        ],
-      );
-      assert.notInclude(JSON.stringify(yield* Schema.encodeEffect(Plan.Plan)(plan)), token);
+        assert.deepStrictEqual(
+          plan.steps.map(({ action, input }) => [
+            action._tag === "Goto" ? action.url : undefined,
+            input,
+          ]),
+          [
+            [shown, undefined],
+            [site.url(`/buy?coin=ETH&token=${redacted}`), "address"],
+          ],
+        );
+        assert.notInclude(JSON.stringify(yield* Schema.encodeEffect(Plan.Plan)(plan)), token);
 
-      const unaddressed = yield* fresh;
-      const error = yield* Effect.flip(Plan.replay(unaddressed, plan));
+        const unaddressed = yield* fresh;
+        const error = yield* Effect.flip(Plan.replay(unaddressed, plan));
 
-      assert.deepStrictEqual(
-        [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
-        [0, "InvalidRequest"],
-      );
-      assert.strictEqual(yield* unaddressed.url, "about:blank");
+        assert.deepStrictEqual(
+          [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
+          [0, "InvalidRequest"],
+        );
+        assert.strictEqual(yield* unaddressed.url, "about:blank");
 
-      const replayed = yield* fresh;
+        const replayed = yield* fresh;
 
-      yield* Plan.replay(replayed, new Plan.Plan({ version: 1, steps: plan.steps.slice(0, 1) }));
-      assert.strictEqual(yield* truthOf(replayed), "buy:BTC");
-      yield* Plan.replay(replayed, plan, { inputs: { address: signed } });
-      assert.strictEqual(yield* truthOf(replayed), "buy:ETH");
-    }),
+        yield* Plan.replay(replayed, new Plan.Plan({ version: 3, steps: plan.steps.slice(0, 1) }));
+        assert.strictEqual(yield* truthOf(replayed), "buy:BTC");
+        yield* Plan.replay(replayed, plan, { inputs: { address: signed } });
+        assert.strictEqual(yield* truthOf(replayed), "buy:ETH");
+      }),
+    ),
   );
 
   it.effect("asks for every input's text before it takes a step", () =>
-    Effect.gen(function* () {
-      const page = yield* fresh;
-      const error = yield* Effect.flip(Plan.replay(page, Plan.fromEvents(walk("bitcoin"))));
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* fresh;
+        const error = yield* Effect.flip(Plan.replay(page, Plan.fromEvents(walk("bitcoin"))));
 
-      assert.deepStrictEqual(
-        [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
-        [0, "InvalidRequest"],
-      );
-      assert.strictEqual(yield* page.url, "about:blank");
-    }),
+        assert.deepStrictEqual(
+          [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
+          [0, "InvalidRequest"],
+        );
+        assert.strictEqual(yield* page.url, "about:blank");
+      }),
+    ),
   );
 
   it.effect("reads fixture truth after terminal input schedules a later navigation", () =>
-    Effect.gen(function* () {
-      const site = yield* DriftSite;
-      const recording = yield* fresh;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const site = yield* DriftSite;
+        const recording = yield* fresh;
 
-      yield* site.drift({ operator: "none", seed: 1 });
-      yield* walks.buy(recording, site.url);
-      const plan = Plan.fromEvents(yield* recording.recentEvents);
-      const arrival = plan.steps.at(-1)?.url;
+        yield* site.drift({ operator: "none", seed: 1 });
+        yield* walks.buy(recording, site.url);
+        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const arrival = plan.steps.at(-1)?.url;
 
-      assert.strictEqual(arrival, site.url("/buy?coin=ETH"));
-      const page = yield* fresh;
-      const requested = Promise.withResolvers<void>();
-      const released = Promise.withResolvers<void>();
+        assert.strictEqual(arrival, site.url("/buy?coin=ETH"));
+        const page = yield* fresh;
+        const requested = Promise.withResolvers<void>();
+        const released = Promise.withResolvers<void>();
 
-      yield* Effect.addFinalizer(() => Effect.sync(() => released.resolve()));
-      yield* Effect.promise(() =>
-        page.playwright.route("**/defer-buy", async (route) => {
-          requested.resolve();
-          await released.promise;
-          await route.fulfill({ status: 200, body: "ok" });
-        }),
-      );
-      const final = plan.steps.length - 1;
+        yield* Effect.addFinalizer(() => Effect.sync(() => released.resolve()));
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).route("**/defer-buy", async (route) => {
+            requested.resolve();
+            await released.promise;
+            await route.fulfill({ status: 200, body: "ok" });
+          }),
+        );
+        const final = plan.steps.length - 1;
 
-      for (let index = 0; index < final; index++) yield* Plan.take(page, plan, index);
-      yield* Effect.promise(() =>
-        page.playwright.evaluate(() => {
-          const link = document.querySelector<HTMLAnchorElement>('a[href="/buy?coin=ETH"]');
+        for (let index = 0; index < final; index++) yield* Plan.take(page, plan, index);
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).evaluate(() => {
+            const link = document.querySelector<HTMLAnchorElement>('a[href="/buy?coin=ETH"]');
 
-          if (link === null) throw new Error("the buy link is missing");
-          link.onclick = (event) => {
-            event.preventDefault();
-            void fetch("/defer-buy").then(() => location.assign("/buy?coin=ETH"));
-          };
-        }),
-      );
-      const replaying = yield* Plan.take(page, plan, final).pipe(Effect.forkChild);
+            if (link === null) throw new Error("the buy link is missing");
+            link.onclick = (event) => {
+              event.preventDefault();
+              void fetch("/defer-buy").then(() => location.assign("/buy?coin=ETH"));
+            };
+          }),
+        );
+        const replaying = yield* Plan.take(page, plan, final).pipe(Effect.forkChild);
 
-      yield* Effect.promise(() => requested.promise);
-      const receipt = yield* Fiber.join(replaying);
+        yield* Effect.promise(() => requested.promise);
+        const receipt = yield* Fiber.join(replaying);
 
-      assert.strictEqual(receipt.outcome, "taken");
-      const reading = yield* truthOf(page, arrival).pipe(Effect.forkChild);
+        assert.strictEqual(receipt.outcome, "taken");
+        const reading = yield* truthOf(page, arrival).pipe(Effect.forkChild);
 
-      yield* Effect.sleep("50 millis");
-      const before = reading.pollUnsafe();
+        yield* Effect.sleep("50 millis");
+        const before = reading.pollUnsafe();
 
-      released.resolve();
-      const truth = yield* Fiber.join(reading);
+        released.resolve();
+        const truth = yield* Fiber.join(reading);
 
-      assert.isUndefined(before, "fixture truth must wait for the pending document");
-      assert.strictEqual(truth, "buy:ETH");
-    }),
+        assert.isUndefined(before, "fixture truth must wait for the pending document");
+        assert.strictEqual(truth, "buy:ETH");
+      }),
+    ),
   );
 
   it.effect(
     "replays recorded walks under drift, and never in the wrong place",
     () =>
-      Effect.gen(function* () {
-        const browser = yield* Browser;
-        const site = yield* DriftSite;
-        const seeds = Number(process.env["DRIFT_SEEDS"] ?? 1);
-        const fresh = Effect.acquireRelease(browser.newPage(), (page) => Effect.ignore(page.close));
-        const outcomes: Record<string, string> = {};
-        const wanted: Record<string, string> = {};
-        const timings: Record<string, number> = {};
-        const recorded = new Map<Walk, { readonly plan: Plan.Plan; readonly truth: string }>();
-        const inputs = { search: "bitcoin", username: "alice", password: "hunter2" };
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const browser = yield* Browser;
+          const site = yield* DriftSite;
+          const seeds = Number(process.env["DRIFT_SEEDS"] ?? 1);
 
-        yield* site.drift({ operator: "none", seed: 1 });
-        for (const walk of Object.keys(walks) as Array<Walk>) {
-          const recording = yield* fresh;
+          const fresh = Effect.acquireRelease(browser.newPage(), (page) =>
+            Effect.ignore(page.close),
+          );
 
-          yield* walks[walk](recording, site.url);
-          // Read the final document before freezing its recorded arrival address.
-          const truth = yield* truthOf(recording);
+          const outcomes: Record<string, string> = {};
+          const wanted: Record<string, string> = {};
+          const timings: Record<string, number> = {};
+          const recorded = new Map<Walk, { readonly plan: Plan.Plan; readonly truth: string }>();
+          const inputs = { search: "bitcoin", username: "alice", password: "hunter2" };
 
-          recorded.set(walk, {
-            plan: Plan.fromEvents(yield* recording.recentEvents),
-            truth,
-          });
-        }
-        // Under one operator at a time, the walks replay side by side, each on a page of its own.
-        for (const operator of operators)
-          for (let seed = 1; seed <= seeds; seed++) {
-            yield* site.drift({ operator, seed });
-            yield* Effect.forEach(
-              recorded,
-              ([walk, { plan, truth }]) =>
-                Effect.gen(function* () {
-                  const page = yield* fresh;
-                  const key = `${walk} ${operator} ${seed}`;
-                  const started = performance.now();
+          yield* site.drift({ operator: "none", seed: 1 });
+          for (const walk of Object.keys(walks) as Array<Walk>) {
+            const recording = yield* fresh;
 
-                  outcomes[key] = yield* Plan.replay(page, plan, { inputs }).pipe(
-                    Effect.andThen(truthOf(page, plan.steps.at(-1)?.url)),
-                    Effect.map((reached) =>
-                      reached === truth ? "replayed" : `wrong place: ${reached}`,
-                    ),
-                    Effect.catchTag("ReplayError", (error) =>
-                      Effect.succeed(
-                        error.reason._tag === "BrowserError"
-                          ? error.reason.reason._tag
-                          : error.reason._tag,
-                      ),
-                    ),
-                  );
-                  wanted[key] = expected(operator, walk);
-                  timings[key] = Math.round(performance.now() - started);
-                }).pipe(Effect.scoped),
-              { concurrency: 4, discard: true },
-            );
+            yield* walks[walk](recording, site.url);
+            // Read the final document before freezing its recorded arrival address.
+            const truth = yield* truthOf(recording);
+
+            recorded.set(walk, {
+              plan: Plan.fromEvents(yield* recording.recentEvents),
+              truth,
+            });
           }
-        if (process.env["DRIFT_OUT"] !== undefined)
-          writeFileSync(process.env["DRIFT_OUT"], JSON.stringify({ outcomes, timings }, null, 2));
-        assert.deepStrictEqual(outcomes, wanted);
-      }),
+          // Under one operator at a time, the walks replay side by side, each on a page of its own.
+          for (const operator of operators)
+            for (let seed = 1; seed <= seeds; seed++) {
+              yield* site.drift({ operator, seed });
+              yield* Effect.forEach(
+                recorded,
+                ([walk, { plan, truth }]) =>
+                  Effect.gen(function* () {
+                    const page = yield* fresh;
+                    const key = `${walk} ${operator} ${seed}`;
+                    const started = performance.now();
+
+                    outcomes[key] = yield* Plan.replay(page, plan, { inputs }).pipe(
+                      Effect.andThen(truthOf(page, plan.steps.at(-1)?.url)),
+                      Effect.map((reached) =>
+                        reached === truth ? "replayed" : `wrong place: ${reached}`,
+                      ),
+                      Effect.catchTag("ReplayError", (error) =>
+                        Effect.succeed(
+                          error.reason._tag === "BrowserError"
+                            ? error.reason.reason._tag
+                            : error.reason._tag,
+                        ),
+                      ),
+                    );
+                    wanted[key] = expected(operator, walk);
+                    timings[key] = Math.round(performance.now() - started);
+                  }).pipe(Effect.scoped),
+                { concurrency: 4, discard: true },
+              );
+            }
+          if (process.env["DRIFT_OUT"] !== undefined)
+            writeFileSync(process.env["DRIFT_OUT"], JSON.stringify({ outcomes, timings }, null, 2));
+          assert.deepStrictEqual(outcomes, wanted);
+        }),
+      ),
     { timeout: 600_000 },
   );
 });

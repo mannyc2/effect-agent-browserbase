@@ -11,8 +11,9 @@ import { Clock, Console, DateTime, Duration, Effect, Exit, Path, Tracer } from "
 import * as Chromium from "effect-browser/Chromium";
 import { FetchHttpClient } from "effect/http";
 
+import * as Routes from "../../bench/FixtureRoutes.ts";
 import * as Casino from "./casino.ts";
-import { freshSeed } from "./casino/site.ts";
+import { casino, studio, freshSeed } from "./casino/site.ts";
 import type { DemoName } from "./defaults.ts";
 import { pack } from "./pack.ts";
 import * as Polymarket from "./polymarket.ts";
@@ -98,7 +99,10 @@ export const take = Effect.fn("demo.take")(function* (options: TakeOptions) {
     account,
   );
 
-  const browser = Chromium.layer({ frameHistory, headless: !options.headed });
+  const browser = Routes.layer(
+    (requests) => Chromium.layer({ frameHistory, headless: !options.headed, requests }),
+    [`${casino}/*`, `${studio}/*`],
+  );
 
   const startedNanos = yield* Clock.monotonicTimeNanos;
 

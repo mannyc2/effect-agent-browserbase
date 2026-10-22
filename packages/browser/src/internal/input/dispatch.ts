@@ -12,10 +12,10 @@ import {
   TextInserted,
   WheelScrolled,
 } from "../../BrowserEvent.ts";
-import type { Point } from "../../Motion.ts";
+import * as BrowserClock from "../../Clock.ts";
+import type { Point } from "../../Geometry.ts";
 import { type PageContext, reasonOf, undispatched } from "../page/context.ts";
-import * as BrowserClock from "../pictures/clock.ts";
-import type * as Replies from "./replies.ts";
+import type * as Replies from "../page/replies.ts";
 
 export interface MouseEvent extends Point {
   readonly type: "mouseMoved" | "mousePressed" | "mouseReleased" | "mouseWheel";

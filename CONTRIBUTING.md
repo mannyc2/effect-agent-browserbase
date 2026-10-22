@@ -45,9 +45,6 @@ bun run ready                       # fmt check, lint, typecheck, test, build
 - **Size.** A module holds at most 600 lines of code and a function at most 150, falling to 100;
   lint counts code only. The exceptions in `lint/.oxlintrc.json` sit at each file's size when the
   limits came in. Lower one when a change shrinks its file, and never raise one.
-  `effect-browser`'s source stays at or under 12,000 code lines (`bun run size`, in `ready`),
-  counted by lint's same rule with blank and comment-only lines excluded. A change that would
-  cross it deletes as much code as it adds.
 - **Exceptions say why.** A comment that switches a check off gives its reason after `--`, as
   in `// oxlint-disable-next-line <rule> -- <why this site is an exception>`. Lint enforces it.
 - **A PR says what it deletes,** the source and test lines it adds and removes, the public names
@@ -61,10 +58,13 @@ bun run ready                       # fmt check, lint, typecheck, test, build
 ## Layout
 
 - `packages/browser` (`effect-browser`): the browser, pages, snapshots, frames, events and moments.
-  It depends on `effect` and `playwright-core` only. Its public modules are flat
-  in `src/`; `src/internal/` is grouped by domain: page, pictures, input, reading, timeline and
-  supervisor. Code that runs inside the page sits in `*.inpage.ts` parts, each one self-contained
-  function that the bridge in `internal/page/bridge.ts` composes into the injected script.
+  It depends on `effect` and `playwright-core` only. Public kernel modules live in `src/`;
+  providers and optional features have named folders and public subpaths. `src/internal/` groups
+  kernel implementation by page, pictures, input, reading and timeline. `bun run boundaries` checks
+  dependency direction and physically deletes all feature/provider folders before typechecking
+  the kernel. Published test services share an explicit four-module ownership allowlist; runtime
+  features use only public kernel contracts. Code inside the page sits in self-contained
+  `*.inpage.ts` factories, composed by `internal/page/bridge.ts` and frozen at packaging.
 - `packages/browserbase` (`effect-browserbase`): the Browserbase client and sessions as a
   `Browser`. It depends on `effect-browser` through its public entry points.
 - `packages/agent-browser` (`effect-agent-browser`): `effect-browser` pages as Yielded Agent's browser
@@ -76,6 +76,7 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   `LICENSE-data`.
 - `bench`: private graded tasks, depending on `effect-browser`, `effect-browserbase` and
   `effect-agent-browser`, whose agents run on Yielded.
-- `tools/`: the pinned-toolchain installer, and `check-packed.sh`, which checks the packed
-  packages in a clean consumer. Releases are `.github/workflows/publish.yml`; see
+- `tools/`: the pinned-toolchain installer, `check-packed.sh`, which checks the packed
+  packages in a clean consumer, and shared repository-only CDP test support in `tools/testing/`.
+  Package test cases stay in their package; shared support does not import package-private code. Releases are `.github/workflows/publish.yml`; see
   `docs/RELEASING.md`.

@@ -26,6 +26,8 @@ const flags = [
   "--no-sandbox",
   "--no-first-run",
   "--no-default-browser-check",
+  "--disable-extensions",
+  "--disable-component-extensions-with-background-pages",
   "--disable-background-timer-throttling",
   "--disable-backgrounding-occluded-windows",
   "--disable-renderer-backgrounding",

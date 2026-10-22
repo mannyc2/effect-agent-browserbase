@@ -2,7 +2,6 @@
 import { assert, describe, expectTypeOf, it, layer } from "@effect/vitest";
 import { Arbitrary, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Prompt, type Response } from "effect/ai";
-import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { BrowserError, Failed } from "../src/BrowserError.ts";
@@ -16,13 +15,14 @@ import {
   TrackEvent,
 } from "../src/BrowserEvent.ts";
 import { Change, Changes } from "../src/Change.ts";
-import * as Chromium from "../src/Chromium.ts";
 import { BrowserPaint, Frame, Screenshot } from "../src/Frame.ts";
 import { boundsOf, within } from "../src/internal/timeline/window.ts";
-import * as Moment from "../src/Moment.ts";
+import * as Moment from "../src/moment/Moment.ts";
 import type { Page } from "../src/Page.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 import { Snapshot } from "../src/Snapshot.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const texts = (prompt: Prompt.Prompt) =>
   prompt.content.flatMap((message) =>
@@ -75,6 +75,7 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
         startedAt: 8700,
         page: "p1",
         name: "click",
+        value: { _tag: "Click", target: "e3" },
         target: "e3",
         subject: new Subject({ role: "button", name: "Pay", tag: "button", context: {} }),
         x: 40,
@@ -88,6 +89,7 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
         startedAt: 8900,
         page: "p1",
         name: "navigate",
+        value: { _tag: "Goto", url: "https://shop.example/paid" },
         ok: true,
         dispatched: true,
       }),
@@ -138,6 +140,7 @@ it("names what each action acted on, never by a ref", () => {
       ok: true,
       dispatched: true,
       ...fields,
+      value: fields.value ?? { _tag: "Click", target: fields.target?.match(/^e\d+$/)?.[0] ?? "e1" },
     });
 
   const prompt = Moment.toPrompt(
@@ -542,357 +545,377 @@ const start = (path: string) =>
 
 const usage = { inputTokens: { total: 100 }, outputTokens: { total: 10 } };
 
-layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
+layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
 })("Moment", (it) => {
   it.effect("captures a spinning game and gives it to a model in one call", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/slots");
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/slots");
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* Effect.sleep(Duration.millis(300));
-      yield* page.click({ x: 300, y: 320 });
-      yield* Effect.sleep(Duration.millis(400));
-      const moment = yield* Moment.capture(page, { frames: 2 });
-      const prompts: Array<Prompt.Prompt> = [];
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Effect.sleep(Duration.millis(300));
+        yield* page.click({ x: 300, y: 320 });
+        yield* Effect.sleep(Duration.millis(400));
+        const moment = yield* Moment.capture(page, { frames: 2 });
+        const prompts: Array<Prompt.Prompt> = [];
 
-      const model = yield* LanguageModel.make({
-        generateText: (options) =>
-          Effect.sync(() => {
-            prompts.push(options.prompt);
+        const model = yield* LanguageModel.make({
+          generateText: (options) =>
+            Effect.sync(() => {
+              prompts.push(options.prompt);
 
-            const parts: Array<Response.PartEncoded> = [
-              { type: "text", text: JSON.stringify({ spinning: true }) },
-              { type: "finish", reason: "stop", usage },
-            ];
+              const parts: Array<Response.PartEncoded> = [
+                { type: "text", text: JSON.stringify({ spinning: true }) },
+                { type: "finish", reason: "stop", usage },
+              ];
 
-            return parts;
-          }),
-        streamText: () => Stream.empty,
-      });
+              return parts;
+            }),
+          streamText: () => Stream.empty,
+        });
 
-      const { value } = yield* LanguageModel.generateObject({
-        prompt: Prompt.setSystem(Moment.toPrompt(moment), "Say whether the reels are spinning."),
-        schema: Schema.Struct({ spinning: Schema.Boolean }),
-      }).pipe(Effect.provideService(LanguageModel.LanguageModel, model));
+        const { value } = yield* LanguageModel.generateObject({
+          prompt: Prompt.setSystem(Moment.toPrompt(moment), "Say whether the reels are spinning."),
+          schema: Schema.Struct({ spinning: Schema.Boolean }),
+        }).pipe(Effect.provideService(LanguageModel.LanguageModel, model));
 
-      const prompt = prompts[0];
+        const prompt = prompts[0];
 
-      if (prompt === undefined) return yield* Effect.die("the model was not called");
-      assert.deepStrictEqual(
-        prompt.content.map((message) => message.role),
-        ["system", "user"],
-      );
-      assert.strictEqual(moment.frames.length, 2);
-      assert.isTrue(
-        moment.events.some((event) => event._tag === "Action" && event.name === "click"),
-      );
-      assert.isTrue(value.spinning);
-    }),
+        if (prompt === undefined) return yield* Effect.die("the model was not called");
+        assert.deepStrictEqual(
+          prompt.content.map((message) => message.role),
+          ["system", "user"],
+        );
+        assert.strictEqual(moment.frames.length, 2);
+        assert.isTrue(
+          moment.events.some((event) => event._tag === "Action" && event.name === "click"),
+        );
+        assert.isTrue(value.spinning);
+      }),
+    ),
   );
 
   it.effect("tiles moments, so consecutive ones neither repeat nor skip an event", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/form");
-      const first = yield* Moment.capture(page);
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/form");
+        const first = yield* Moment.capture(page);
 
-      yield* page.press("Tab");
-      const second = yield* Moment.capture(page, { since: first });
+        yield* page.press("Tab");
+        const second = yield* Moment.capture(page, { since: first });
 
-      yield* page.goto((yield* Site).url("/next"));
-      const third = yield* Moment.capture(page, { since: second, snapshot: true });
+        yield* page.goto((yield* Site).url("/next"));
+        const third = yield* Moment.capture(page, { since: second, snapshot: true });
 
-      // A moment needs only its page: no Browser in context.
-      expectTypeOf(Moment.capture(page)).toEqualTypeOf<
-        Effect.Effect<Moment.Moment, BrowserError>
-      >();
-      assert.strictEqual(second.since, first.until);
-      assert.strictEqual(third.since, second.until);
-      assert.isUndefined(second.snapshot);
-      assert.strictEqual(third.snapshot?.title, "Next");
+        // A moment needs only its page: no Browser in context.
+        expectTypeOf(Moment.capture(page)).toEqualTypeOf<
+          Effect.Effect<Moment.Moment, BrowserError>
+        >();
+        assert.strictEqual(second.since, first.until);
+        assert.strictEqual(third.since, second.until);
+        assert.isUndefined(second.snapshot);
+        assert.strictEqual(third.snapshot?.title, "Next");
 
-      // Without a screencast, each moment is one new screenshot, and ends when it was taken.
-      for (const moment of [first, second, third]) {
-        assert.strictEqual(moment.frames.length, 1);
-        assert.strictEqual(moment.frames[0]?.timing._tag, "Screenshot");
-        assert.strictEqual(moment.until, moment.frames[0]?.hostTime);
-      }
-      assert.deepStrictEqual(
-        second.events.map((event) => [event._tag, event._tag === "Action" ? event.name : ""]),
-        [["Action", "press"]],
-      );
-      assert.isTrue(third.events.some((event) => event._tag === "Navigated"));
-      assert.isFalse(
-        third.events.some((event) => event._tag === "Action" && event.name === "press"),
-      );
+        // Without a screencast, each moment is one new screenshot, and ends when it was taken.
+        for (const moment of [first, second, third]) {
+          assert.strictEqual(moment.frames.length, 1);
+          assert.strictEqual(moment.frames[0]?.timing._tag, "Screenshot");
+          assert.strictEqual(moment.until, moment.frames[0]?.hostTime);
+        }
+        assert.deepStrictEqual(
+          second.events.map((event) => [event._tag, event._tag === "Action" ? event.name : ""]),
+          [["Action", "press"]],
+        );
+        assert.isTrue(third.events.some((event) => event._tag === "Navigated"));
+        assert.isFalse(
+          third.events.some((event) => event._tag === "Action" && event.name === "press"),
+        );
 
-      // Together they hold each of the page's events after the first moment exactly once.
-      assert.deepStrictEqual(
-        [...second.events, ...third.events],
-        (yield* page.recentEvents).filter(
-          (event) => event.at > first.until && event.at <= third.until && !isTrackEvent(event),
-        ),
-      );
-    }),
+        // Together they hold each of the page's events after the first moment exactly once.
+        assert.deepStrictEqual(
+          [...second.events, ...third.events],
+          (yield* page.recentEvents).filter(
+            (event) => event.at > first.until && event.at <= third.until && !isTrackEvent(event),
+          ),
+        );
+      }),
+    ),
   );
 
   it.effect("names the control a navigating click acted on, though its ref now means another", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/form");
-      const before = yield* page.snapshot();
-      const ref = /link "Next page" \[ref=(e\d+)\]/.exec(before.text)?.[1];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/form");
+        const before = yield* page.snapshot();
+        const ref = /link "Next page" \[ref=(e\d+)\]/.exec(before.text)?.[1];
 
-      if (ref === undefined) return yield* Effect.die("the form has no Next page link");
-      yield* page.click(ref);
-      yield* page.waitFor({ text: "The next page" });
-      const moment = yield* Moment.capture(page, { snapshot: true });
+        if (ref === undefined) return yield* Effect.die("the form has no Next page link");
+        yield* page.click(ref);
+        yield* page.until({ text: "The next page" }, "some", 5000);
+        const moment = yield* Moment.capture(page, { snapshot: true });
 
-      const click = moment.events.find(
-        (event) => event._tag === "Action" && event.name === "click",
-      );
+        const click = moment.events.find(
+          (event) => event._tag === "Action" && event.name === "click",
+        );
 
-      assert.deepStrictEqual(
-        click?._tag === "Action" ? click.subject : undefined,
-        new Subject({ role: "link", name: "Next page", tag: "a", context: {} }),
-      );
-      // The new page's outline gives refs to its own elements; what follows it uses none of them.
-      // The click came before the new document's record began, so it is told as a step.
-      const [text = ""] = texts(Moment.toPrompt(moment));
-      const outline = moment.snapshot?.rendered ?? "";
-      const timeline = text.slice(text.indexOf(outline) + outline.length);
+        assert.deepStrictEqual(
+          click?._tag === "Action" ? click.subject : undefined,
+          new Subject({ role: "link", name: "Next page", tag: "a", context: {} }),
+        );
+        // The new page's outline gives refs to its own elements; what follows it uses none of them.
+        // The click came before the new document's record began, so it is told as a step.
+        const [text = ""] = texts(Moment.toPrompt(moment));
+        const outline = moment.snapshot?.rendered ?? "";
+        const timeline = text.slice(text.indexOf(outline) + outline.length);
 
-      assert.match(text, /\[ref=e\d+\]/);
-      assert.include(timeline, '"Next page"');
-      assert.notMatch(timeline, /\be\d+\b/);
-    }),
+        assert.match(text, /\[ref=e\d+\]/);
+        assert.include(timeline, '"Next page"');
+        assert.notMatch(timeline, /\be\d+\b/);
+      }),
+    ),
   );
 
   // #259: the release gate observed a new-document picture before its click's final reply.
   // Replay that timing at the public frame boundary; navigation, event history and windows are
   // native. Waiting for this narrow paint/reply race failed to reproduce it in 73 prior runs.
   it.effect("keeps a navigation's trigger when its cached picture predates the action's end", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/form");
-      const first = yield* Moment.capture(page);
-      const [link] = yield* page.find({ role: "link", name: "Next page" });
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/form");
+        const first = yield* Moment.capture(page);
+        const [link] = yield* page.find({ role: "link", name: "Next page" });
 
-      if (link === undefined) return yield* Effect.die("missing navigation link");
-      yield* page.click(link.ref);
-      const events = yield* page.recentEvents;
-      const action = events.findLast((event) => event._tag === "Action" && event.name === "click");
-      const navigation = events.findLast((event) => event._tag === "Navigated");
+        if (link === undefined) return yield* Effect.die("missing navigation link");
+        yield* page.click(link.ref);
+        const events = yield* page.recentEvents;
 
-      if (action?._tag !== "Action" || navigation?._tag !== "Navigated")
-        return yield* Effect.die("missing native navigation evidence");
-      assert.isBelow(navigation.at, action.at);
-      const picture = yield* page.frame({ maxAge: 0 });
-
-      const painted = new Frame({
-        ...picture,
-        timing: new Screenshot({
-          hostTime: (navigation.at + action.at) / 2,
-          uncertaintyMillis: 0,
-        }),
-      });
-
-      // A narrator's earlier window can end while the click is in flight. The completed Action
-      // belongs to the following window even though its startedAt falls in the earlier one.
-      const during = yield* page.window({
-        since: first,
-        until: (action.startedAt + navigation.at) / 2,
-      });
-
-      const cached: Page = {
-        ...page,
-        frame: (options) => (options?.maxAge === 0 ? page.frame(options) : Effect.succeed(painted)),
-      };
-
-      const moment = yield* Moment.capture(cached, { since: during });
-      const following = yield* Moment.capture(page, { since: moment });
-
-      assert.include(moment.events, action);
-      assert.include(moment.events, navigation);
-      assert.isAtLeast(moment.until, action.at);
-      assert.include(texts(Moment.toPrompt(moment)).join("\n"), 'click link "Next page"');
-      assert.deepStrictEqual(
-        [...during.events, ...moment.events, ...following.events].filter(
+        const action = events.findLast(
           (event) => event._tag === "Action" && event.name === "click",
-        ),
-        [action],
-      );
-    }),
+        );
+
+        const navigation = events.findLast((event) => event._tag === "Navigated");
+
+        if (action?._tag !== "Action" || navigation?._tag !== "Navigated")
+          return yield* Effect.die("missing native navigation evidence");
+        assert.isBelow(navigation.at, action.at);
+        const picture = yield* page.frame({ maxAge: 0 });
+
+        const painted = new Frame({
+          ...picture,
+          timing: new Screenshot({
+            hostTime: (navigation.at + action.at) / 2,
+            uncertaintyMillis: 0,
+          }),
+        });
+
+        // A narrator's earlier window can end while the click is in flight. The completed Action
+        // belongs to the following window even though its startedAt falls in the earlier one.
+        const during = yield* page.window({
+          since: first,
+          until: (action.startedAt + navigation.at) / 2,
+        });
+
+        const cached: Page = {
+          ...page,
+          frame: (options) =>
+            options?.maxAge === 0 ? page.frame(options) : Effect.succeed(painted),
+        };
+
+        const moment = yield* Moment.capture(cached, { since: during });
+        const following = yield* Moment.capture(page, { since: moment });
+
+        assert.include(moment.events, action);
+        assert.include(moment.events, navigation);
+        assert.isAtLeast(moment.until, action.at);
+        assert.include(texts(Moment.toPrompt(moment)).join("\n"), 'click link "Next page"');
+        assert.deepStrictEqual(
+          [...during.events, ...moment.events, ...following.events].filter(
+            (event) => event._tag === "Action" && event.name === "click",
+          ),
+          [action],
+        );
+      }),
+    ),
   );
 
   it.effect("reaches back as far as `since` says, for frames and events alike", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/slots");
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/slots");
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* Effect.sleep(Duration.millis(300));
-      yield* page.click({ x: 300, y: 320 });
-      yield* Effect.sleep(Duration.millis(1500));
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Effect.sleep(Duration.millis(300));
+        yield* page.click({ x: 300, y: 320 });
+        yield* Effect.sleep(Duration.millis(1500));
 
-      const recent = yield* Moment.capture(page, { since: Duration.millis(500), frames: 3 });
-      const longer = yield* Moment.capture(page, { frames: 3 });
+        const recent = yield* Moment.capture(page, { since: Duration.millis(500), frames: 3 });
+        const longer = yield* Moment.capture(page, { frames: 3 });
 
-      assert.closeTo(recent.until - recent.since, 500, 1e-6);
-      assert.isTrue(recent.frames.every((frame) => frame.hostTime >= recent.since));
-      assert.isFalse(recent.events.some((event) => event._tag === "Action"));
-      assert.closeTo(longer.until - longer.since, 5000, 1e-6);
+        assert.closeTo(recent.until - recent.since, 500, 1e-6);
+        assert.isTrue(recent.frames.every((frame) => frame.hostTime >= recent.since));
+        assert.isFalse(recent.events.some((event) => event._tag === "Action"));
+        assert.closeTo(longer.until - longer.since, 5000, 1e-6);
 
-      const click = longer.events.find(
-        (event) => event._tag === "Action" && event.name === "click",
-      );
+        const click = longer.events.find(
+          (event) => event._tag === "Action" && event.name === "click",
+        );
 
-      // The screencast ran from before the click, so the longer window's frames reach back past it.
-      assert.isDefined(click);
-      assert.isBelow(longer.frames[0]?.hostTime ?? Infinity, click?.at ?? -Infinity);
-    }),
+        // The screencast ran from before the click, so the longer window's frames reach back past it.
+        assert.isDefined(click);
+        assert.isBelow(longer.frames[0]?.hostTime ?? Infinity, click?.at ?? -Infinity);
+      }),
+    ),
   );
 
   it.effect("rejects fewer than one frame, and a window that is not a finite duration", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/form");
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/form");
 
-      const invalid: ReadonlyArray<Moment.CaptureOptions> = [
-        { frames: 0 },
-        { frames: 1.5 },
-        { since: Duration.millis(-1) },
-        { since: Number.NaN },
-        { since: Duration.infinity },
-      ];
+        const invalid: ReadonlyArray<Moment.CaptureOptions> = [
+          { frames: 0 },
+          { frames: 1.5 },
+          { since: Duration.millis(-1) },
+          { since: Number.NaN },
+          { since: Duration.infinity },
+        ];
 
-      for (const options of invalid) {
-        const error = yield* Moment.capture(page, options).pipe(Effect.flip);
+        for (const options of invalid) {
+          const error = yield* Moment.capture(page, options).pipe(Effect.flip);
 
-        assert.strictEqual(error.reason._tag, "InvalidRequest", JSON.stringify(options));
-        assert.isFalse(error.dispatched);
-      }
-    }),
+          assert.strictEqual(error.reason._tag, "InvalidRequest", JSON.stringify(options));
+          assert.isFalse(error.dispatched);
+        }
+      }),
+    ),
   );
 
   // A delayed consumer airs a frame painted some seconds before, so it describes a window that
   // ended then.
   it.effect("reads a window that ended 3 s before, each of its tracks ending where it does", () =>
-    Effect.gen(function* () {
-      const browser = yield* Browser;
-      const page = yield* start("/desk");
-      const [menu] = yield* page.find({ role: "button", name: "Menu" });
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const browser = yield* Browser;
+        const page = yield* start("/desk");
+        const [menu] = yield* page.find({ role: "button", name: "Menu" });
 
-      const price = (shown: string) =>
-        Effect.promise(() =>
-          page.playwright.evaluate((text) => {
-            document.querySelector("#btc")!.textContent = text;
-          }, shown),
+        const price = (shown: string) =>
+          Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate((text) => {
+              document.querySelector("#btc")!.textContent = text;
+            }, shown),
+          );
+
+        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* page.changes();
+        yield* price("$1");
+        yield* Effect.sleep(Duration.millis(300));
+        const until = yield* browser.now;
+
+        // After the window ends, the price moves again and a click lands, and both paint.
+        yield* Effect.sleep(Duration.millis(100));
+        yield* price("$2");
+        yield* page.click(menu?.ref ?? "no menu");
+        yield* Effect.sleep(Duration.millis(2900));
+        const window = yield* page.window({ since: Duration.seconds(2), until });
+        const kept = { events: yield* page.recentEvents, frames: yield* page.recentFrames };
+
+        assert.deepStrictEqual([window.since, window.until], [until - 2000, until]);
+        assert.isEmpty(window.missing);
+        // Each track holds what came by the window's end, and nothing the page kept from after it.
+        assert.deepStrictEqual(
+          window.changes?.changes.map((change) => [change.before, change.after]),
+          [["$61,240", "$1"]],
         );
+        assert.closeTo(window.changes?.until ?? Number.NaN, until, 1);
+        assert.isAbove(window.frames.length, 0);
+        assert.isTrue(window.frames.every((frame) => frame.hostTime <= until));
+        assert.isTrue(kept.frames.some((frame) => frame.hostTime > until));
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-      yield* page.changes();
-      yield* price("$1");
-      yield* Effect.sleep(Duration.millis(300));
-      const until = yield* browser.now;
+        const clicked = (events: ReadonlyArray<BrowserEvent>) =>
+          events.some((event) => event._tag === "Action" && event.name === "click");
 
-      // After the window ends, the price moves again and a click lands, and both paint.
-      yield* Effect.sleep(Duration.millis(100));
-      yield* price("$2");
-      yield* page.click(menu?.ref ?? "no menu");
-      yield* Effect.sleep(Duration.millis(2900));
-      const window = yield* page.window({ since: Duration.seconds(2), until });
-      const kept = { events: yield* page.recentEvents, frames: yield* page.recentFrames };
-
-      assert.deepStrictEqual([window.since, window.until], [until - 2000, until]);
-      assert.isEmpty(window.missing);
-      // Each track holds what came by the window's end, and nothing the page kept from after it.
-      assert.deepStrictEqual(
-        window.changes?.changes.map((change) => [change.before, change.after]),
-        [["$61,240", "$1"]],
-      );
-      assert.closeTo(window.changes?.until ?? Number.NaN, until, 1);
-      assert.isAbove(window.frames.length, 0);
-      assert.isTrue(window.frames.every((frame) => frame.hostTime <= until));
-      assert.isTrue(kept.frames.some((frame) => frame.hostTime > until));
-
-      const clicked = (events: ReadonlyArray<BrowserEvent>) =>
-        events.some((event) => event._tag === "Action" && event.name === "click");
-
-      assert.isTrue(window.events.every((event) => event.at <= until));
-      assert.isFalse(clicked(window.events));
-      assert.isTrue(clicked(kept.events));
-    }),
+        assert.isTrue(window.events.every((event) => event.at <= until));
+        assert.isFalse(clicked(window.events));
+        assert.isTrue(clicked(kept.events));
+      }),
+    ),
   );
 
   it.effect("accounts a price that still ticks as under way, and one that stopped as settled", () =>
-    Effect.gen(function* () {
-      const page = yield* start("/ticker");
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* start("/ticker");
 
-      yield* page.changes();
-      // Both prices tick every 250 ms; ETH's stops after its fourth tick, two seconds before the
-      // window ends.
-      yield* Effect.promise(() =>
-        page.playwright.evaluate(() => {
-          const [btc, eth] = document.querySelectorAll("tbody tr td:nth-child(2)");
-          let ticks = 0;
+        yield* page.changes();
+        // Both prices tick every 250 ms; ETH's stops after its fourth tick, two seconds before the
+        // window ends.
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).evaluate(() => {
+            const [btc, eth] = document.querySelectorAll("tbody tr td:nth-child(2)");
+            let ticks = 0;
 
-          setInterval(() => {
-            ticks += 1;
-            if (btc !== undefined) btc.textContent = `$64,${210 + ticks}`;
-            if (eth !== undefined && ticks <= 4) eth.textContent = `$3,${105 + ticks}`;
-          }, 250);
-        }),
-      );
-      yield* Effect.sleep(Duration.seconds(3));
-      const window = yield* page.window({ since: Duration.millis(2500) });
-      const { changing, settled } = Moment.account(window);
+            setInterval(() => {
+              ticks += 1;
+              if (btc !== undefined) btc.textContent = `$64,${210 + ticks}`;
+              if (eth !== undefined && ticks <= 4) eth.textContent = `$3,${105 + ticks}`;
+            }, 250);
+          }),
+        );
+        yield* Effect.sleep(Duration.seconds(3));
+        const window = yield* page.window({ since: Duration.millis(2500) });
+        const { changing, settled } = Moment.account(window);
 
-      const rows = (changes: ReadonlyArray<Change>) =>
-        changes.map(({ subject }) => subject.context.row);
+        const rows = (changes: ReadonlyArray<Change>) =>
+          changes.map(({ subject }) => subject.context.row);
 
-      assert.deepStrictEqual(rows(changing), ["BTC"]);
-      assert.deepStrictEqual(rows(settled), ["ETH"]);
+        assert.deepStrictEqual(rows(changing), ["BTC"]);
+        assert.deepStrictEqual(rows(settled), ["ETH"]);
 
-      // The prompt tells each as it was at the end, the settled one first.
-      const [text = ""] = texts(Moment.toPrompt(new Moment.Moment(window)));
-      const [eth = "", btc = ""] = text.split("\n").filter((line) => line.includes('row "'));
+        // The prompt tells each as it was at the end, the settled one first.
+        const [text = ""] = texts(Moment.toPrompt(new Moment.Moment(window)));
+        const [eth = "", btc = ""] = text.split("\n").filter((line) => line.includes('row "'));
 
-      assert.include(eth, '"ETH"');
-      assert.include(eth, "settled");
-      assert.include(btc, "still changing");
-    }),
+        assert.include(eth, '"ETH"');
+        assert.include(eth, "settled");
+        assert.include(btc, "still changing");
+      }),
+    ),
   );
 
   it.effect("keeps a moment whose picture or changes could not be read, saying why", () =>
-    Effect.gen(function* () {
-      const { browser, refuse } = yield* refusing;
-      const page = yield* browser.newPage((yield* Site).url("/desk"));
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { browser, refuse } = yield* refusing;
+        const page = yield* browser.newPage((yield* Site).url("/desk"));
 
-      yield* page.changes();
-      // No capture runs, so the picture is a new screenshot, which the page refuses; then the read
-      // of what changed fails.
-      refuse((method) => method === "Page.captureScreenshot");
-      const unpictured = yield* Moment.capture(page);
+        yield* page.changes();
+        // No capture runs, so the picture is a new screenshot, which the page refuses; then the read
+        // of what changed fails.
+        refuse({ method: "Page.captureScreenshot" });
+        const unpictured = yield* Moment.capture(page);
 
-      refuse(
-        (method, params) =>
-          method === "Runtime.evaluate" && JSON.stringify(params).includes(".changes("),
-      );
-      const unchanged = yield* Moment.capture(page, { since: unpictured });
+        refuse({ method: "Runtime.evaluate", script: "changes" });
+        const unchanged = yield* Moment.capture(page, { since: unpictured });
 
-      const why = (moment: Moment.Moment) =>
-        moment.missing.map((error) => [error.operation, error.reason.message]);
+        const why = (moment: Moment.Moment) =>
+          moment.missing.map((error) => [error.operation, error.reason.message]);
 
-      assert.deepStrictEqual(why(unpictured), [["frame", "the page could not answer"]]);
-      assert.isDefined(unpictured.changes);
-      assert.isEmpty(unpictured.frames);
-      assert.deepStrictEqual(why(unchanged), [["changes", "the page could not answer"]]);
-      assert.isUndefined(unchanged.changes);
-      assert.strictEqual(unchanged.frames.length, 1);
-      assert.strictEqual(unchanged.since, unpictured.until);
-      // Its prompt says what could not be read and why, and no older frame poses as the moment.
-      for (const moment of [unpictured, unchanged])
-        assert.include(texts(Moment.toPrompt(moment)).join("\n"), "the page could not answer");
-      assert.notInclude(texts(Moment.toPrompt(unpictured)), "The moment:");
-    }),
+        assert.deepStrictEqual(why(unpictured), [["frame", "the page could not answer"]]);
+        assert.isDefined(unpictured.changes);
+        assert.isEmpty(unpictured.frames);
+        assert.deepStrictEqual(why(unchanged), [["changes", "the page could not answer"]]);
+        assert.isUndefined(unchanged.changes);
+        assert.strictEqual(unchanged.frames.length, 1);
+        assert.strictEqual(unchanged.since, unpictured.until);
+        // Its prompt says what could not be read and why, and no older frame poses as the moment.
+        for (const moment of [unpictured, unchanged])
+          assert.include(texts(Moment.toPrompt(moment)).join("\n"), "the page could not answer");
+        assert.notInclude(texts(Moment.toPrompt(unpictured)), "The moment:");
+      }),
+    ),
   );
 });
 
@@ -901,7 +924,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
  * them would.
  */
 const refusing = Effect.gen(function* () {
-  const native = (yield* Browser).context.browser();
+  const native = TestCdp.nativeContext(yield* Browser).browser();
 
   if (native === null) return yield* Effect.die("the fixture requires local Chromium");
 
@@ -910,27 +933,14 @@ const refusing = Effect.gen(function* () {
     (context) => Effect.promise(() => context.close()),
   );
 
-  const createSession = context.newCDPSession.bind(context);
-  let refused = (_method: string, _params: unknown) => false;
-
-  context.newCDPSession = async (target) => {
-    const cdp = await createSession(target);
-    const send = cdp.send.bind(cdp);
-
-    const answering: CDPSession["send"] = (method, params) =>
-      refused(method, params)
-        ? Promise.reject(new Error("the page could not answer"))
-        : send(method, params);
-
-    cdp.send = answering;
-
-    return cdp;
-  };
+  const faults = yield* TestCdp.make();
+  let stop = () => {};
 
   return {
-    browser: yield* makeBrowser(context, { id: "refusing", provider: "test" }),
-    refuse: (which: typeof refused) => {
-      refused = which;
+    browser: yield* faults.provide(makeBrowser(context, { id: "refusing", provider: "test" })),
+    refuse: (match: TestCdp.Match) => {
+      stop();
+      stop = faults.rule(match, { _tag: "Fail", error: new Error("the page could not answer") });
     },
   };
 });

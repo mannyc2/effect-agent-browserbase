@@ -32,11 +32,14 @@ import {
   Schema,
   SchemaTransformation,
 } from "effect";
+import { Action } from "effect-browser/Action";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type * as Moment from "effect-browser/Moment";
 import * as Page from "effect-browser/Page";
+import * as Stillness from "effect-browser/Stillness";
 import { Prompt, Tool, Toolkit } from "effect/ai";
 
+import type * as AdapterState from "./AdapterState.ts";
 import * as Moments from "./internal/moments.ts";
 import * as PageControl from "./PageControl.ts";
 
@@ -66,6 +69,7 @@ const ref = absent(Schema.String, {
 /** What a pointer tool did, and what followed on its page while it ran. */
 export const Receipt = Schema.Struct({
   did: Schema.String,
+  action: Schema.optional(Action),
   followed: Schema.Array(Schema.String),
 });
 
@@ -146,16 +150,48 @@ export const Pointer = Toolkit.make(
 );
 
 const { tools } = BrowserUse.browserTools;
+const { InspectRequest, ScrollRequest, WaitRequest } = BrowserUse;
+
+// Yielded's tool as it is, but for its parameters. Its own refuse null for a parameter left out,
+// and its runtime reports that refusal to the model as "Unknown error".
+const lenient = <
+  Name extends string,
+  Success extends Schema.Top,
+  Fields extends Schema.Struct.Fields,
+>(
+  tool: {
+    readonly name: Name;
+    readonly description?: string | undefined;
+    readonly successSchema: Success;
+  },
+  parameters: Fields,
+) =>
+  Tool.make(tool.name, {
+    description: tool.description,
+    parameters: Schema.Struct(parameters),
+    success: tool.successSchema,
+    failure: BrowserUse.BrowserUseError,
+    failureMode: "return",
+  });
 
 /**
  * Yielded's browser tools but two: `screenshot`, since the model sees the page before each turn
- * instead, and `respond_dialog`, since the browser answers dialogs itself.
+ * instead, and `respond_dialog`, since the browser answers dialogs itself. Their optional
+ * parameters read null as left out, as this package's own do.
  */
 export const Control = Toolkit.make(
-  tools.inspect,
+  lenient(tools.inspect, {
+    selector: absent(InspectRequest.fields.selector.schema),
+    frame: absent(InspectRequest.fields.frame.schema),
+    optionFilter: absent(InspectRequest.fields.optionFilter.schema),
+  }),
   tools.navigate,
-  tools.scroll,
-  tools.wait,
+  lenient(tools.scroll, { ...ScrollRequest.fields, ref: absent(ScrollRequest.fields.ref.schema) }),
+  lenient(tools.wait, {
+    ...WaitRequest.fields,
+    frame: absent(WaitRequest.fields.frame.schema),
+    text: absent(WaitRequest.fields.text.schema),
+  }),
   tools.press,
   tools.select_tab,
 );
@@ -164,6 +200,8 @@ const single = BrowserUse.make({ mode: "single" });
 const batched = BrowserUse.make({ mode: "batched" });
 
 export interface LayerOptions extends PageControl.Options {
+  readonly initialMoments?: AdapterState.Moments | undefined;
+  readonly initialZooms?: ReadonlyArray<Page.Zoom> | undefined;
   /**
    * What the model sees of the page: `true`, the default, a screenshot of the current tab before
    * each turn; `"moments"`, in its thread, what the tab did since its previous turn, with frames
@@ -234,9 +272,10 @@ const pointing = (
   const act = <A>(
     run: (page: Page.Page) => Effect.Effect<A, BrowserError>,
     did: (value: A) => string,
+    action?: Action,
   ) =>
     controller.perform(run).pipe(
-      Effect.map(({ value, followed }) => ({ did: did(value), followed })),
+      Effect.map(({ value, followed }) => ({ did: did(value), followed, action })),
       Effect.mapError(PageControl.useError),
     );
 
@@ -245,6 +284,11 @@ const pointing = (
       act(
         (page) => page.click({ x, y }, { button, clickCount: double === true ? 2 : 1 }),
         ({ element, point }) => `Clicked ${element} at (${point.x}, ${point.y}).`,
+        {
+          _tag: "Click",
+          target: { x, y },
+          options: { button, clickCount: double === true ? 2 : 1 },
+        },
       ),
     hover: (place) =>
       Option.match(target(place), {
@@ -253,6 +297,7 @@ const pointing = (
           act(
             (page) => page.hover(to),
             () => `Hovered over ${named(to)}.`,
+            { _tag: "Hover", target: to },
           ),
       }),
     drag: (drag) => {
@@ -264,17 +309,20 @@ const pointing = (
         : act(
             (page) => page.drag(from.value, to.value),
             () => `Dragged from ${named(from.value)} to ${named(to.value)}.`,
+            { _tag: "Drag", from: from.value, to: to.value },
           );
     },
     type_text: ({ text: typed, submit }) =>
       act(
         (page) => page.type(typed, { submit }),
         () => `Typed ${JSON.stringify(typed)}${submit === true ? " and pressed Enter" : ""}.`,
+        { _tag: "Type", text: typed, options: { submit } },
       ),
     press_keys: ({ keys, times, holdMillis }) =>
       act(
         (page) => page.press(keys, { times, holdMillis }),
         () => `Pressed ${keys}${times === undefined || times === 1 ? "" : ` ${times} times`}.`,
+        { _tag: "Press", keys, options: { times, holdMillis } },
       ),
     zoom: (region) =>
       vision !== false
@@ -299,7 +347,7 @@ const pointing = (
         (page) =>
           // What was already moving before the input, such as a game's idle animation, is not
           // what the model waits for.
-          page.ready({
+          Stillness.wait(page, {
             still: "foreground",
             quietMillis: 600,
             timeout: `${Math.min(Math.max(seconds ?? 15, 0), 30)} seconds`,
@@ -310,6 +358,7 @@ const pointing = (
       act(
         (page) => page.back,
         () => "Went back.",
+        { _tag: "Back" },
       ),
   });
 };
@@ -329,7 +378,7 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
     Layer.unwrap(
       Effect.gen(function* () {
         const controller = yield* PageControl.make(target, options);
-        const zooms = yield* Ref.make<Array<Page.Zoom>>([]);
+        const zooms = yield* Ref.make<Array<Page.Zoom>>([...(options.initialZooms ?? [])]);
         const vision = options.vision ?? true;
         const { control } = controller;
 
@@ -361,6 +410,7 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
                   controller.look,
                   Ref.getAndSet(zooms, []),
                   options.onMoment ?? (() => Effect.void),
+                  options.initialMoments,
                 ),
               )
             : vision

@@ -8,9 +8,10 @@
  *
  * @since 0.3.0
  */
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import { DisconnectCause } from "./BrowserEvent.ts";
+import * as Url from "./Url.ts";
 
 /** The operation did not finish in time. */
 export class Timeout extends Schema.TaggedError<Timeout>()("Timeout", {
@@ -162,6 +163,13 @@ export class Failed extends Schema.TaggedError<Failed>()("Failed", {
   }
 }
 
+/** Caller code threw in the page's main world. Its source and payload stay private. */
+export class Threw extends Schema.TaggedError<Threw>()("Threw", {}) {
+  override get message() {
+    return "the page script threw";
+  }
+}
+
 export const Reason = Schema.Union([
   Timeout,
   Busy,
@@ -177,6 +185,7 @@ export const Reason = Schema.Union([
   PolicyTimeout,
   EventHistoryExpired,
   Failed,
+  Threw,
 ]);
 
 export type Reason = typeof Reason.Type;
@@ -195,7 +204,7 @@ export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserErr
  * What a failure leaves. `lost` is `"page"` when the page is gone and its browser stands, and
  * `"session"` when the browser is gone with its pages. `repeat` says whether the call can be made
  * again, on what still stands: `"safe"`, as nothing reached the browser; `"check"`, as it may have
- * taken effect, so look first, as an `Expect` attempt does; `"pointless"`, as it fails again unless
+ * taken effect, so look first, as a Plan expectation does; `"pointless"`, as it fails again unless
  * something changes, such as
  * a new ref; or `"resume"`, reading events again from a newer cursor.
  */
@@ -214,6 +223,8 @@ export const consequence = ({ reason, dispatched }: BrowserError): Consequence =
         lost: reason.cause === "page" || reason.cause === "crashed" ? "page" : "session",
         repeat,
       };
+    case "Limit":
+    case "PolicyTimeout":
     case "Busy":
     case "Suspended":
     case "Timeout":
@@ -221,14 +232,60 @@ export const consequence = ({ reason, dispatched }: BrowserError): Consequence =
     case "NavigationFailed":
       return { lost: "nothing", repeat };
     case "EventHistoryExpired":
-      return { lost: "nothing", repeat: "resume" };
+      return { lost: "nothing", repeat: dispatched ? "check" : "resume" };
+    case "Threw":
     case "StaleRef":
     case "NotFound":
     case "NotActionable":
     case "InvalidRequest":
-    case "Limit":
     case "PolicyDenied":
-    case "PolicyTimeout":
-      return { lost: "nothing", repeat: "pointless" };
+      return { lost: "nothing", repeat: dispatched ? "check" : "pointless" };
   }
 };
+
+/** A failure before any of the operation's input reached the page. */
+export const undispatched = (operation: string, reason: Reason) =>
+  new BrowserError({ operation, reason, dispatched: false });
+
+/** Fail an operation before dispatch, preserving its typed reason. */
+export const failWith = (operation: string, reason: Reason) =>
+  Effect.fail(undispatched(operation, reason));
+
+/** Refuse an invalid request before sending anything. */
+export const refuse = (operation: string, detail: string) =>
+  failWith(operation, new InvalidRequest({ detail }));
+
+/** Translate a protocol/provider failure, redacting diagnostic addresses by default. */
+export const reasonOf = (
+  cause: unknown,
+  timeoutMillis?: number,
+  closed: Closed["cause"] = "connection",
+  redact: (message: string) => string = Url.redactWithin,
+): Reason => {
+  const message =
+    cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "unknown error";
+
+  if (
+    /has been closed|Target closed|Session closed|browser has disconnected|Target page, context or browser/i.test(
+      message,
+    )
+  )
+    return new Closed({ cause: closed });
+  if (cause instanceof Error && cause.name === "TimeoutError" && timeoutMillis !== undefined)
+    return new Timeout({ millis: timeoutMillis });
+  const line = redact(message).split("\n")[0] ?? "unknown error";
+
+  return new Failed({ detail: line.replace(/^[\w.]+: /, "") });
+};
+
+/** A native call whose action wrapper owns any later dispatch evidence. */
+export const call = <A>(
+  operation: string,
+  run: () => Promise<A>,
+  closedBy: () => Closed["cause"],
+  timeoutMillis?: number,
+) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) => undispatched(operation, reasonOf(cause, timeoutMillis, closedBy())),
+  });

@@ -1,0 +1,5 @@
+// Package declarations use public source; tests can import repository-only helpers.
+{
+  "extends": "./tsconfig.json",
+  "include": ["src"]
+}

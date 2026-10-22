@@ -4,12 +4,12 @@
 // still counts on the page. No model is called.
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
-import * as Chromium from "effect-browser/Chromium";
 import type { Prompt } from "effect/ai";
 
 import { tasks } from "../Catalog.ts";
 import { frameHistory } from "../Tasks.ts";
 import { isolatedTrial } from "../Trial.ts";
+import * as Chromium from "./browser.ts";
 import { call, finish, modelOf, scripted, textOf } from "./scripted.ts";
 
 /** An agent that reports this answer at once, without looking at the page. */

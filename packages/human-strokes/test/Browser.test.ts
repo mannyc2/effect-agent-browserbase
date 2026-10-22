@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Random } from "effect";
+import { Duration, Effect, Random, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import * as Presentation from "effect-browser/Presentation";
@@ -14,10 +14,16 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         const browser = yield* Browser;
         const page = yield* browser.firstPage;
 
-        yield* Effect.promise(() =>
-          page.playwright.setContent(
-            '<div id="position"></div><script>document.addEventListener("mousemove", event => { document.querySelector("#position").textContent = event.clientX + "," + event.clientY; });</script>',
-          ),
+        yield* page.act(
+          () => {
+            document.body.innerHTML = '<div id="position"></div>';
+            document.addEventListener("mousemove", (event) => {
+              const output = document.querySelector("#position");
+
+              if (output !== null) output.textContent = `${event.clientX},${event.clientY}`;
+            });
+          },
+          { document: (yield* page.state).document, arg: undefined, result: Schema.Void },
         );
         const from = { x: 640, y: 360 };
         const to = { x: 796, y: 372 };
@@ -42,7 +48,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(performed.dispatched, expected.length);
         assert.isTrue(performed.complete);
         assert.strictEqual(
-          yield* Effect.promise(() => page.playwright.locator("#position").textContent()),
+          (yield* page.read(() => document.querySelector("#position")?.textContent ?? "", {
+            arg: undefined,
+            result: Schema.String,
+          })).value,
           "796,372",
         );
       }),

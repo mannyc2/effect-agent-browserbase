@@ -5,6 +5,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { Connector } from "effect-browser/Cdp";
+import * as Supervisor from "effect-browser/Supervisor";
 import { type Browser as PlaywrightBrowser, chromium } from "playwright-core";
 
 import * as Browserbase from "../src/Browserbase.ts";
@@ -71,9 +72,11 @@ it.live("passes the connector through open, layer, attach and supervised generat
 
     yield* Effect.flatMap(Browser, read).pipe(Effect.provide(Browserbase.layer(options)));
     yield* Effect.gen(function* () {
-      const supervised = yield* Browserbase.supervise(options);
+      const supervised = yield* Supervisor.make(
+        Browserbase.generations({ ...options, build: ({ browser }) => Effect.succeed(browser) }),
+      );
 
-      yield* supervised.use(({ browser }) => read(browser));
+      yield* supervised.use(({ value }) => read(value));
     }).pipe(Effect.scoped);
 
     assert.deepStrictEqual(

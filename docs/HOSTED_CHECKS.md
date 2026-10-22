@@ -67,7 +67,9 @@ Use these supervision settings, with `contextId` obtained from a newly created s
 ```ts
 const sessions =
   yield *
-  Browserbase.supervise({
+  Supervisor.make({
+    ...Browserbase.generations({
+      build: Effect.succeed,
     session: {
       timeout: 120,
       proxies: false,
@@ -80,27 +82,26 @@ const sessions =
         verified: false,
       },
     },
+    }),
     reopen: Schedule.recurs(0),
-    handover: "30 seconds",
   });
 ```
 
 ## Probe sequence
 
 1. Subscribe to `sessions.states` before borrowing. Record only generation numbers, lifecycle
-   tags, `hostTime`, `at`, revocation deadlines and release tags. Separately observe the client's
+   tags, `hostTime`, `at` and release tags. Separately observe the client's
    create/release/status calls with host timestamps and local session aliases. Never serialize
    a whole `Session`, request headers or URLs.
-2. In generation 1's `use`, retain its lease and register a cleanup marker in that retained
-   scope. Route `https://h2.browser.test/**` through `browser.context.route` to a small static HTML
-   page, so the fixture requires no public server. On that origin, write a unique harmless
-   marker to a persistent cookie and local storage through `page.playwright.evaluate`.
-3. Start `sessions.rotate` in a separate fiber, outside `use`. Await generation 1's `Draining`,
-   then hold it for five seconds. During the hold, page reads must still work and no second
-   session create may be dispatched. This observes the exclusive barrier, not just two events
-   that happened to be ordered.
-4. Close the retained scope with `Scope.close(hold, Exit.void)`. Its cleanup marker must precede
-   the provider release request. Await rotation, retaining every release outcome. A missing
+2. In generation 1's `use`, register a scoped cleanup marker and suspend that cleanup behind a
+   test-owned gate. Route `https://h2.browser.test/**` through the browser's request controls to a
+   small static HTML page. On that origin, write a unique harmless marker to a persistent cookie
+   and local storage through the page's typed script contract.
+3. Start `sessions.rotate()` in a separate fiber, outside `use`. Await generation 1's `Ending`
+   and the start of its revoked work's cleanup. Before releasing the cleanup gate, no provider
+   release or second session create may be dispatched. This observes the exclusive barrier.
+4. Open the cleanup gate. Its cleanup marker must precede the provider release request. Await
+   the revoked work's failure and rotation, retaining every release outcome. A missing
    acknowledgement, `Unconfirmed`, create failure or context refusal is an incomplete check,
    never a pass or a reason to retry the whole probe blindly.
 5. Read the first session's terminal status and `endedAt` through `getSession`. Compare the

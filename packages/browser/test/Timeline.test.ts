@@ -13,13 +13,14 @@ describe("Timeline", () => {
 
       for (let at = 1; at <= 4; at++) assert.strictEqual(timeline.publish(opened(at)), at);
       const recent = yield* timeline.recent;
-      const replay = yield* timeline.stream(1).pipe(Stream.take(3), Stream.runCollect);
-      const resumed = yield* timeline.stream(3).pipe(Stream.take(1), Stream.runCollect);
 
       assert.deepStrictEqual(
         recent.map((record) => record.sequence),
         [2, 3, 4],
       );
+      const replay = yield* timeline.stream(1).pipe(Stream.take(3), Stream.runCollect);
+      const resumed = yield* timeline.stream(3).pipe(Stream.take(1), Stream.runCollect);
+
       assert.deepStrictEqual(replay, recent);
       assert.deepStrictEqual(resumed, recent.slice(-1));
       const expired = yield* timeline.stream(0).pipe(Stream.runCollect, Effect.flip);
@@ -73,6 +74,44 @@ describe("Timeline", () => {
         assert.strictEqual(error.reason.oldest, 3);
         yield* timeline.close;
       }),
+  );
+
+  it.effect("matches a bounded history model through repeated wraps and closure", () =>
+    Effect.gen(function* () {
+      let random = 0x518a;
+
+      const next = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
+
+      for (let history = 0; history < 100; history++) {
+        const capacity = 1 + (next() % 11);
+        const timeline = Timeline.make(capacity);
+        const model: number[] = [];
+        const count = 20 + (next() % 80);
+
+        for (let at = 1; at <= count; at++) {
+          assert.strictEqual(timeline.publish(opened(at)), at);
+          model.push(at);
+          if (model.length > capacity) model.shift();
+          assert.deepStrictEqual(
+            (yield* timeline.recent).map((record) => record.sequence),
+            model,
+          );
+        }
+        yield* timeline.close;
+        const oldest = count - model.length + 1;
+        const replay = yield* timeline.stream(oldest - 1).pipe(Stream.runCollect);
+
+        assert.deepStrictEqual(
+          replay.map((record) => record.sequence),
+          model,
+        );
+        assert.strictEqual(timeline.publish(opened(count + 1)), count);
+        assert.deepStrictEqual(
+          (yield* timeline.recent).map((record) => record.sequence),
+          model,
+        );
+      }
+    }),
   );
 
   it.effect("closes waiting readers and keeps the retained tail available for finite replay", () =>

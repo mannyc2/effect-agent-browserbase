@@ -1,7 +1,8 @@
 /** Packaging owns page code as a closed source string, before any consumer transforms it. */
 import { fileURLToPath } from "node:url";
 
-import { type Plugin, rolldown } from "vite/rolldown";
+import type { Plugin } from "vite";
+import { rolldown } from "vite/rolldown";
 import { parseSync } from "vite/rolldown/utils";
 
 const bridge = fileURLToPath(new URL("./src/internal/page/bridge.ts", import.meta.url));
@@ -29,7 +30,9 @@ const pageDefinitions = (code: string, id: string) => {
       if (node.type === "ImportDeclaration")
         return (
           id === bridge &&
-          (node.source.value.endsWith(".inpage.ts") || node.source.value === "./url.ts")
+          (node.source.value.endsWith(".inpage.ts") ||
+            node.source.value.endsWith("/Url.ts") ||
+            node.source.value.endsWith("/Matching.ts"))
         );
       const declaration = node.type === "ExportNamedDeclaration" ? node.declaration : node;
 
@@ -41,7 +44,7 @@ const pageDefinitions = (code: string, id: string) => {
               binding.type === "Identifier" &&
               (id === bridge
                 ? binding.name === "install" || binding.name === "parts"
-                : id.endsWith("/page/url.ts")
+                : id.endsWith("/Url.ts")
                   ? binding.name === "addresses"
                   : init?.type === "ArrowFunctionExpression"),
           ))
@@ -50,24 +53,12 @@ const pageDefinitions = (code: string, id: string) => {
     .map((node) => code.slice(node.start, node.end))
     .join("\n");
 
-  if (id !== bridge) return definitions;
-  const expression = installExpression(code, id);
-  const call = expression.type === "TemplateLiteral" ? expression.expressions[1] : undefined;
-
-  const factories =
-    call?.type === "CallExpression" &&
-    call.callee.type === "MemberExpression" &&
-    call.callee.object.type === "ArrayExpression"
-      ? call.callee.object
-      : undefined;
-
-  if (factories === undefined) throw new Error("The bridge must serialize its page factory array.");
-
-  return `${definitions}\nexport const parts = ${code.slice(factories.start, factories.end)};`;
+  return definitions;
 };
 
 export const pageScript = (): Plugin => ({
   name: "effect-browser-page-script",
+  enforce: "pre",
   async transform(code, id) {
     if (id !== bridge) return;
     const entry = "\0effect-browser-page-script";
@@ -81,10 +72,13 @@ export const pageScript = (): Plugin => ({
           resolveId: (name) => (name === entry ? entry : undefined),
           load: (name) =>
             name === entry
-              ? `import { install, parts } from ${JSON.stringify(bridge)}; export default install(...parts);`
+              ? `import { install, parts } from ${JSON.stringify(bridge)}; export default install(parts);`
               : undefined,
           transform: (source, name) =>
-            name === bridge || name.endsWith(".inpage.ts") || name.endsWith("/page/url.ts")
+            name === bridge ||
+            name.endsWith(".inpage.ts") ||
+            name.endsWith("/Url.ts") ||
+            name.endsWith("/Matching.ts")
               ? pageDefinitions(source, name)
               : undefined,
         },

@@ -1,8 +1,8 @@
 // The ports over a real Chromium page, called directly: no model.
 import { assert, layer } from "@effect/vitest";
 import type { BrowserUse } from "@yielded/agent";
-import { Duration, Effect, Exit, Layer, Scope } from "effect";
-import { Browser, make as makeBrowser } from "effect-browser/Browser";
+import { Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
+import { Browser } from "effect-browser/Browser";
 import { BrowserError, PolicyDenied, Timeout } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
 import type * as Page from "effect-browser/Page";
@@ -31,25 +31,17 @@ const refOf = (seen: Observation, name: string) => {
   return ref ?? "";
 };
 
-const outcome = (page: {
-  readonly playwright: { textContent: (s: string) => Promise<string | null> };
-}) => Effect.promise(() => page.playwright.textContent("#outcome"));
+const outcome = (page: Page.Page) =>
+  page
+    .read(() => document.querySelector("#outcome")?.textContent ?? null, {
+      arg: undefined,
+      result: Schema.NullOr(Schema.String),
+    })
+    .pipe(Effect.map(({ value }) => value));
 
-/** A browser of its own in a new context, whose every input goes to `guard`. */
-const guarded = Effect.fnUntraced(function* (
-  guard: (request: Page.InputRequest) => Effect.Effect<void, PolicyDenied>,
-) {
-  const native = (yield* Browser).context.browser();
-
-  if (native === null) return yield* Effect.die("the test needs a launched Chromium");
-
-  const context = yield* Effect.acquireRelease(
-    Effect.promise(() => native.newContext({ viewport: { width: 1280, height: 720 } })),
-    (context) => Effect.promise(() => context.close()),
-  );
-
-  return yield* makeBrowser(context, { id: "guarded", provider: "test" }, { guard });
-});
+/** A browser of its own whose every input goes to the guard. */
+const guarded = (guard: (request: Page.InputRequest) => Effect.Effect<void, PolicyDenied>) =>
+  Chromium.open({ guard });
 
 /** A browser whose pages count each time something brings them to front. */
 const watched = (browser: Browser["Service"]) => {
@@ -148,10 +140,16 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       const view: Page.Page = {
         ...page,
-        type: (text, options) =>
+        perform: (request) =>
           page
-            .type(text, options)
-            .pipe(Effect.tap(() => browser.suspend({ drain: 0 }).pipe(Scope.provide(hold)))),
+            .perform(request)
+            .pipe(
+              Effect.tap(() =>
+                request._tag === "Type"
+                  ? browser.suspend({ drain: 0 }).pipe(Scope.provide(hold))
+                  : Effect.void,
+              ),
+            ),
       };
 
       const { actions } = yield* PageControl.make({ page: view });
@@ -178,7 +176,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       const late: Page.Page = {
         ...page,
-        click: () =>
+        perform: () =>
           Effect.fail(
             new BrowserError({
               operation: "click",
@@ -225,7 +223,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const browser = yield* guarded((request) =>
         Effect.gen(function* () {
           // Opening the page is the test's own navigation, outside the ports.
-          if (request.action !== "navigate") tasks.push(yield* Policy.Task);
+          if (request.action._tag !== "Goto") tasks.push(yield* Policy.Task);
           if (request.name === "Submit") return yield* new PolicyDenied({ detail: "not this one" });
         }),
       );

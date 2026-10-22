@@ -10,12 +10,13 @@
  * session. They are numbered as the page's own session counts documents: a commit it has counted
  * keeps its number, and one the capture connection sees first takes the next, until it is counted.
  */
-import { Effect, Exit, Option, Schema, Scope } from "effect";
+import { Effect, Exit, Option, Schema, Scope, Semaphore } from "effect";
 
 import type { CaptureSource } from "../../Browser.ts";
 import { type BrowserError, Failed } from "../../BrowserError.ts";
 import { type Bridge, Commit, commitOf, mainFrame, MainFrameEvent } from "../page/bridge.ts";
 import { type PageContext, undispatched } from "../page/context.ts";
+import * as Port from "../page/port.ts";
 
 /** Where a capture's screencast runs. Its calls never throw: a failure rejects. */
 export interface Transport {
@@ -58,7 +59,19 @@ export const own = (page: PageContext, bridge: Bridge): Transport => {
     acknowledge: (frame) => send("Page.screencastFrameAck", { sessionId: frame }),
     stop: () => send("Page.stopScreencast"),
     sync: () => Promise.resolve(),
-    listen: ({ frame }) => {
+    listen: (on) => {
+      const frame = (value: unknown) =>
+        Option.match(Schema.decodeUnknownOption(ScreencastFrame)(value), {
+          onNone: () =>
+            on.lost(
+              undispatched(
+                "screencast",
+                new Failed({ detail: "the page connection sent an unreadable screencast frame" }),
+              ),
+            ),
+          onSome: on.frame,
+        });
+
       page.cdp.on("Page.screencastFrame", frame);
 
       return () => {
@@ -135,6 +148,7 @@ export const apart = (
   error: (cause: unknown) => BrowserError,
   pageScope: Scope.Scope,
 ): Effect.Effect<Transport, BrowserError> => {
+  const lock = Semaphore.makeUnsafe(1);
   let state: State = { _tag: "Detached" };
   let listening: Parameters<Transport["listen"]>[0] | undefined;
   const latest = (): State => state;
@@ -172,7 +186,10 @@ export const apart = (
           end(scope, error(new Error("Target page has been closed")));
       };
 
-      const send = yield* source.attach(page.id, { event, lost: (lost) => end(scope, lost) });
+      const send = yield* Port.openCapture(page.id, source, {
+        event,
+        lost: (lost) => end(scope, lost),
+      });
 
       // Tracked from the frame tree's answer on, set as it arrives so that no commit after it is
       // missed.
@@ -239,5 +256,5 @@ export const apart = (
     }
   });
 
-  return current;
+  return lock.withPermits(1)(current);
 };

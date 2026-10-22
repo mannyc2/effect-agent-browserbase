@@ -2,10 +2,10 @@
 import { assert, it } from "@effect/vitest";
 import { Effect, Exit, Option, Random, Schema, Stream } from "effect";
 
-import * as Cdp from "../src/Cdp.ts";
+import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Frame } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
-import { behindProxy } from "./protocol.ts";
+import * as Cdp from "../src/providers/Cdp.ts";
 
 const html = (title: string) => `data:text/html,${encodeURIComponent(`<h1>${title}</h1>`)}`;
 

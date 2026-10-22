@@ -1,14 +1,14 @@
 import { assert, layer } from "@effect/vitest";
 import { Deferred, Duration, Effect, Fiber, Random } from "effect";
-import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import { PolicyDenied } from "../src/BrowserError.ts";
-import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
-import * as Presentation from "../src/Presentation.ts";
+import * as Presentation from "../src/presentation/Presentation.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
 import { unpaused } from "./fixtures.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 interface Input {
   readonly type?: string;
@@ -40,7 +40,7 @@ const refOf = (snapshot: Snapshot, name: string) => {
 };
 
 const setup = Effect.fnUntraced(function* (html: string, options: Options = {}) {
-  const native = (yield* Browser).context.browser();
+  const native = TestCdp.nativeContext(yield* Browser).browser();
 
   if (native === null) return yield* Effect.die("the fixture requires local Chromium");
 
@@ -49,32 +49,24 @@ const setup = Effect.fnUntraced(function* (html: string, options: Options = {}) 
     (context) => Effect.promise(() => context.close()),
   );
 
-  const createSession = context.newCDPSession.bind(context);
+  const faults = yield* TestCdp.make();
   const calls: Array<{ readonly method: string; readonly input: Input }> = [];
 
-  context.newCDPSession = async (target) => {
-    const cdp = await createSession(target);
-    const send = cdp.send.bind(cdp);
+  faults.observe(({ method, params }, phase) => {
+    if (phase === "before" && (method === "Runtime.evaluate" || method.startsWith("Input.")))
+      calls.push({ method, input: (params as Input | undefined) ?? {} });
+  });
 
-    const observed: CDPSession["send"] = (method, params) => {
-      if (method === "Runtime.evaluate" || method.startsWith("Input."))
-        calls.push({ method, input: (params as Input | undefined) ?? {} });
+  const browser = yield* faults.provide(
+    makeBrowser(context, { id: "rhythm-test", provider: "test" }, options),
+  );
 
-      return send(method, params);
-    };
-
-    cdp.send = observed;
-
-    return cdp;
-  };
-
-  const browser = yield* makeBrowser(context, { id: "rhythm-test", provider: "test" }, options);
   // Performed, as viewers watch it, with no wait before each action.
   const page = (yield* Presentation.make({ pacing: unpaused })).view(yield* browser.newPage());
 
-  yield* Effect.promise(() => page.playwright.setContent(html));
+  yield* Effect.promise(() => TestCdp.nativePage(page).setContent(html));
   yield* Effect.promise(() =>
-    page.playwright.evaluate(() => {
+    TestCdp.nativePage(page).evaluate(() => {
       const recorded = window as unknown as RecordedWindow;
 
       Object.assign(recorded, { events: [] });
@@ -99,7 +91,7 @@ const setup = Effect.fnUntraced(function* (html: string, options: Options = {}) 
 
 const events = (page: Page) =>
   Effect.promise(() =>
-    page.playwright.evaluate(() => (window as unknown as RecordedWindow).events),
+    TestCdp.nativePage(page).evaluate(() => (window as unknown as RecordedWindow).events),
   );
 
 const wheelCalls = (calls: ReadonlyArray<{ readonly input: Input }>) =>
@@ -110,12 +102,14 @@ const distantButton =
 
 // Every scenario keeps native Chromium input and the public browser track. The protocol observer
 // only counts work, so fallback and policy tests cannot pass by substituting an instant mock.
-layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
-  "Rhythm",
-  (it) => {
-    it.effect(
-      "reaches an offscreen control with visible wheels and records the dispatched track",
-      () =>
+layer(TestCdp.provideLayer(Chromium.layer()), {
+  excludeTestServices: true,
+  timeout: Duration.seconds(60),
+})("Rhythm", (it) => {
+  it.effect(
+    "reaches an offscreen control with visible wheels and records the dispatched track",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const { browser, page, snapshot, calls } = yield* setup(distantButton);
 
@@ -153,9 +147,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             16 + 4,
           );
         }),
-    );
+      ),
+  );
 
-    it.effect("bounds blocked wheel work before revealing a nested target by fallback", () =>
+  it.effect("bounds blocked wheel work before revealing a nested target by fallback", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const { page, snapshot, calls } = yield* setup(
           '<div id="scroller" style="width:500px;height:250px;overflow:auto;margin:20px"><div style="height:6000px;position:relative"><button id="target" style="position:absolute;top:5000px;left:200px">Target</button></div></div><script>document.addEventListener("wheel",event=>event.preventDefault(),{passive:false})</script>',
@@ -174,14 +170,18 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
         assert.isAbove(
           yield* Effect.promise(() =>
-            page.playwright.locator("#scroller").evaluate((element) => element.scrollTop),
+            TestCdp.nativePage(page)
+              .locator("#scroller")
+              .evaluate((element) => element.scrollTop),
           ),
           0,
         );
       }),
-    );
+    ),
+  );
 
-    it.effect("does not start approaching a denied or held offscreen target", () =>
+  it.effect("does not start approaching a denied or held offscreen target", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const denied = yield* setup(distantButton, {
           guard: () => Effect.fail(new PolicyDenied({ detail: "not approved" })),
@@ -216,7 +216,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         yield* Effect.sleep("75 millis");
         assert.isEmpty(held.calls.filter((call) => call.method.startsWith("Input.")));
         assert.strictEqual(
-          yield* Effect.promise(() => held.page.playwright.evaluate(() => window.scrollY)),
+          yield* Effect.promise(() => TestCdp.nativePage(held.page).evaluate(() => window.scrollY)),
           0,
         );
         yield* Deferred.succeed(released, undefined);
@@ -224,9 +224,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(approvals, 1);
         assert.isAbove(wheelCalls(held.calls).length, 0);
       }),
-    );
+    ),
+  );
 
-    it.effect("refuses activation if wheel handlers change the approved control", () =>
+  it.effect("refuses activation if wheel handlers change the approved control", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const { page, snapshot, calls } = yield* setup(
           distantButton +
@@ -243,9 +245,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.isEmpty(calls.filter((call) => call.input.type === "mousePressed"));
         assert.isEmpty((yield* events(page)).filter((event) => event.type === "click"));
       }),
-    );
+    ),
+  );
 
-    it.effect("refreshes both drag endpoints after scrolling and refuses an impossible span", () =>
+  it.effect("refreshes both drag endpoints after scrolling and refuses an impossible span", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const pair = (end: number) =>
           '<body style="margin:0;height:3000px"><button id="from" style="position:absolute;top:1400px;left:250px;width:100px;height:60px">From</button><button id="to" style="position:absolute;top:' +
@@ -268,9 +272,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(error.reason._tag, "NotActionable");
         assert.isEmpty(apart.calls.filter((call) => call.input.type === "mousePressed"));
       }),
-    );
+    ),
+  );
 
-    it.effect("does not revalidate performed input when no guard is set", () =>
+  it.effect("does not revalidate performed input when no guard is set", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         // Text that changes between any two tasks: there is no approval to invalidate.
         const { page } = yield* setup(
@@ -283,21 +289,25 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           3,
         );
       }),
-    );
+    ),
+  );
 
-    it.effect("stops typing when the page moves to another document mid-text", () =>
+  it.effect("stops typing when the page moves to another document mid-text", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const { page, snapshot } = yield* setup(
           '<input id="note" aria-label="Note" oninput="if (this.value.length === 2) location.href = \'https://rhythm.test/armed\'">',
         );
 
         yield* Effect.promise(() =>
-          page.playwright.context().route("https://rhythm.test/armed", (route) =>
-            route.fulfill({
-              contentType: "text/html",
-              body: "<title>Armed</title><button autofocus onclick=\"document.title='Deleted'\">Delete account</button>",
-            }),
-          ),
+          TestCdp.nativePage(page)
+            .context()
+            .route("https://rhythm.test/armed", (route) =>
+              route.fulfill({
+                contentType: "text/html",
+                body: "<title>Armed</title><button autofocus onclick=\"document.title='Deleted'\">Delete account</button>",
+              }),
+            ),
         );
 
         const error = yield* page
@@ -308,6 +318,6 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.isTrue(error.dispatched);
         assert.strictEqual(yield* page.title, "Armed");
       }),
-    );
-  },
-);
+    ),
+  );
+});

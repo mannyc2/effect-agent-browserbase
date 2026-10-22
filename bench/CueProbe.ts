@@ -5,6 +5,7 @@ import type { CaptureStats } from "effect-browser/Frame";
 import * as Stage from "effect-browser/Stage";
 
 import { refuse } from "./Budget.ts";
+import * as Fixtures from "./FixtureRoutes.ts";
 
 export const cuts = Array.from({ length: 20 }, (_, index) => ({
   index,
@@ -64,14 +65,12 @@ export const make = Effect.fnUntraced(function* (browser: Browser.Service) {
 
   const run = Effect.scoped(
     Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        browser.context.route(`${origin}/**`, (route) =>
-          route.fulfill({
-            contentType: "text/html",
-            body: route.request().url().includes("/load") ? loading : animated,
-          }),
-        ),
-      );
+      yield* Fixtures.serve(origin + "/", (url) => ({
+        _tag: "Fulfilled",
+        status: 200,
+        contentType: "text/html",
+        body: url.pathname.includes("/load") ? loading : animated,
+      }));
       const first = yield* browser.newPage(`${origin}/one`);
       const second = yield* browser.newPage(`${origin}/two`);
       const third = yield* browser.newPage();

@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Arbitrary, Effect, Option, Schema } from "effect";
+import { Arbitrary, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect";
+import { TestClock } from "effect/testing";
 
-import * as Clock from "../src/internal/pictures/clock.ts";
+import * as Clock from "../src/Clock.ts";
 
 const between = (minimum: number, maximum: number) =>
   Arbitrary.schema(Schema.Finite.check(Schema.isBetween({ minimum, maximum })));
@@ -198,3 +199,60 @@ describe("Clock calibration", () => {
     );
   });
 });
+
+it.effect("concurrent first captures share one clock measurement", () =>
+  Effect.gen(function* () {
+    const mapping = Clock.mapping(() => 0);
+    const began = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let measured = 0;
+    const estimate = { offsetMillis: 0, uncertaintyMillis: 1, roundTripMillis: 2, sampledAt: 0 };
+
+    const measure = Effect.sync(() => measured++).pipe(
+      Effect.andThen(Deferred.succeed(began, undefined)),
+      Effect.andThen(Deferred.await(release)),
+      Effect.as(estimate),
+    );
+
+    const first = yield* Effect.forkChild(mapping.current(measure));
+
+    yield* Deferred.await(began);
+    const second = yield* Effect.forkChild(mapping.current(measure));
+
+    yield* Effect.yieldNow;
+    assert.strictEqual(measured, 1);
+    yield* Deferred.succeed(release, undefined);
+    assert.deepStrictEqual(yield* Fiber.join(first), yield* Fiber.join(second));
+  }),
+);
+
+// Regression in 1d6d7c7: a stalled renewal blocked captures despite an existing estimate.
+it.effect("serves existing clock evidence while another page renews", () =>
+  Effect.gen(function* () {
+    let now = 0;
+    const mapping = Clock.mapping(() => now);
+    const estimate = { offsetMillis: 1000, uncertaintyMillis: 1, roundTripMillis: 2, sampledAt: 0 };
+
+    yield* mapping.current(Effect.succeed(estimate));
+    now = 10_000;
+    const began = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+
+    const renewal = yield* mapping
+      .renew(
+        Deferred.succeed(began, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({ ...estimate, sampledAt: now }),
+        ),
+      )
+      .pipe(Effect.forkChild);
+
+    yield* Deferred.await(began);
+    const reader = yield* mapping.current(Effect.die("an estimate exists")).pipe(Effect.forkChild);
+
+    yield* TestClock.adjust(1);
+    assert.deepStrictEqual(reader.pollUnsafe(), Exit.succeed(estimate));
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(renewal);
+  }),
+);

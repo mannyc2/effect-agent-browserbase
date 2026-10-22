@@ -6,27 +6,7 @@
  * stay self-contained: it uses only its parameters, the DOM and what it defines itself.
  */
 
-export const names = () => {
-  const byElement = new WeakMap<Element, string>();
-  const byRef = new Map<string, WeakRef<Element>>();
-  const refs = { next: 1 };
-
-  const interactiveRoles = new Set(
-    "button link checkbox radio tab menuitem menuitemcheckbox menuitemradio option switch slider combobox listbox textbox searchbox spinbutton treeitem".split(
-      " ",
-    ),
-  );
-
-  const containers: Record<string, string> = {
-    HEADER: "banner",
-    NAV: "navigation",
-    MAIN: "main",
-    ASIDE: "complementary",
-    FOOTER: "contentinfo",
-    FORM: "form",
-    DIALOG: "dialog",
-  };
-
+export const elements = () => {
   // Elements of a same-origin frame come from another realm, so tag names decide, not instanceof.
   const isInput = (element: Element): element is HTMLInputElement => element.tagName === "INPUT";
 
@@ -46,6 +26,68 @@ export const names = () => {
 
   const isElement = (node: Node): node is Element => node.nodeType === Node.ELEMENT_NODE;
   const isDocument = (node: Node): node is Document => node.nodeType === Node.DOCUMENT_NODE;
+
+  /** The native fields and editable regions that can receive typed text. */
+  const textEntry = (element: Element): boolean =>
+    (isInput(element) &&
+      ![
+        "button",
+        "reset",
+        "submit",
+        "image",
+        "checkbox",
+        "radio",
+        "file",
+        "range",
+        "color",
+        "hidden",
+      ].includes(element.type)) ||
+    isTextArea(element) ||
+    (isHtml(element) && element.isContentEditable);
+
+  const clean = (value: string | null | undefined, max = 160): string => {
+    const text = (value ?? "").replace(/\s+/g, " ").trim();
+
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  };
+
+  return {
+    clean,
+    isInput,
+    isTextArea,
+    isSelect,
+    isFrame,
+    isHtml,
+    isButton,
+    isLabel,
+    textOf,
+    isElement,
+    isDocument,
+    textEntry,
+  };
+};
+
+export const names = (native: ReturnType<typeof elements>) => {
+  const { clean, isInput, isTextArea, isSelect, isFrame, textOf, isElement } = native;
+  const byElement = new WeakMap<Element, string>();
+  const byRef = new Map<string, WeakRef<Element>>();
+  const refs = { next: 1 };
+
+  const interactiveRoles = new Set(
+    "button link checkbox radio tab menuitem menuitemcheckbox menuitemradio option switch slider combobox listbox textbox searchbox spinbutton treeitem".split(
+      " ",
+    ),
+  );
+
+  const containers: Record<string, string> = {
+    HEADER: "banner",
+    NAV: "navigation",
+    MAIN: "main",
+    ASIDE: "complementary",
+    FOOTER: "contentinfo",
+    FORM: "form",
+    DIALOG: "dialog",
+  };
 
   // Controls whose text is a value or a choice, not words of a label around them.
   const valueRoles = new Set(
@@ -76,13 +118,7 @@ export const names = () => {
     return text;
   };
 
-  const clean = (value: string | null | undefined, max = 160): string => {
-    const text = (value ?? "").replace(/\s+/g, " ").trim();
-
-    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-  };
-
-  const roleOf = (element: Element): string | null => {
+  const roleOf = (element: Element, structural = false): string | null => {
     const explicit = element.getAttribute("role");
 
     if (explicit !== null && explicit.trim() !== "") return explicit.trim().split(/\s+/)[0] ?? null;
@@ -95,7 +131,7 @@ export const names = () => {
     if (isInput(element)) {
       const type = element.type;
 
-      if (type === "hidden") return null;
+      if (type === "hidden" || type === "color" || type === "file") return null;
       if (type === "checkbox" || type === "radio") return type;
       if (type === "range") return "slider";
       if (type === "number") return "spinbutton";
@@ -110,14 +146,30 @@ export const names = () => {
     if (tag === "CANVAS") return "canvas";
     if (tag === "IFRAME") return "iframe";
     if (element.getAttribute("contenteditable") === "true") return "textbox";
+    if (structural) {
+      if (tag === "TH")
+        return element.getAttribute("scope") === "row" ? "rowheader" : "columnheader";
+
+      const roles: Record<string, string> = {
+        TABLE: "table",
+        TR: "row",
+        TD: "cell",
+        TBODY: "rowgroup",
+        THEAD: "rowgroup",
+        TFOOT: "rowgroup",
+        UL: "list",
+        OL: "list",
+        MENU: "list",
+        LI: "listitem",
+      };
+
+      if (roles[tag] !== undefined) return roles[tag];
+    }
 
     return containers[tag] ?? null;
   };
 
   const nameOf = (element: Element, role: string | null): string => {
-    const label = element.getAttribute("aria-label");
-
-    if (label !== null && clean(label) !== "") return clean(label);
     const labelledBy = element.getAttribute("aria-labelledby");
 
     if (labelledBy !== null) {
@@ -132,6 +184,9 @@ export const names = () => {
 
       if (clean(text) !== "") return clean(text);
     }
+    const label = element.getAttribute("aria-label");
+
+    if (label !== null && clean(label) !== "") return clean(label);
     if (isInput(element) || isTextArea(element) || isSelect(element)) {
       const labels = element.labels === null ? "" : Array.from(element.labels, labelText).join(" ");
 
@@ -174,8 +229,7 @@ export const names = () => {
   };
 
   const isDisabled = (element: Element): boolean =>
-    ("disabled" in element && element.disabled === true) ||
-    element.getAttribute("aria-disabled") === "true";
+    element.matches(":disabled") || element.getAttribute("aria-disabled") === "true";
 
   const refFor = (element: Element): string => {
     const known = byElement.get(element);
@@ -275,31 +329,21 @@ export const names = () => {
   };
 
   return {
+    ...native,
     activeElement,
-    clean,
     containers,
     describe,
     inCurrentDocument,
     interactiveRoles,
-    isButton,
     isDisabled,
-    isDocument,
-    isElement,
-    isFrame,
-    isHtml,
-    isInput,
-    isLabel,
     isRoot,
     isSecret,
-    isSelect,
-    isTextArea,
     lookup,
     nameOf,
     parentOf,
     refFor,
     refs,
     roleOf,
-    textOf,
   };
 };
 

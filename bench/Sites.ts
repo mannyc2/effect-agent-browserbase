@@ -3,8 +3,10 @@
 // its ground truth in `window.__bench` for grading; models never see it.
 import { Effect, Schema } from "effect";
 import type * as Browser from "effect-browser/Browser";
-import { BrowserError, Closed } from "effect-browser/BrowserError";
+import type { BrowserError } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
+
+import * as Fixtures from "./FixtureRoutes.ts";
 
 export const origin = "https://bench.test";
 
@@ -590,38 +592,30 @@ const streams = `window.__benchStream = (salt) => { let state = (window.__benchS
  * is open.
  */
 export const serve = (
-  browser: Browser.Service,
+  _browser: Browser.Service,
   seed = 0,
   more: Readonly<Record<string, string>> = {},
 ) =>
-  Effect.acquireRelease(
-    Effect.promise(() =>
-      browser.context.route(`${origin}/**`, (route) => {
-        const path = new URL(route.request().url()).pathname;
-        const page = more[path] ?? pages[path];
+  Fixtures.serve(origin + "/", (url) => {
+    const page = more[url.pathname] ?? pages[url.pathname];
 
-        return route.fulfill(
-          page === undefined
-            ? { status: 404, contentType: "text/plain", body: "not found" }
-            : {
-                status: 200,
-                contentType: "text/html; charset=utf-8",
-                // Seed every document at this boundary so redirects retain the trial's identity.
-                body: page
-                  .replace(
-                    "<head>",
-                    `<head><script>window.__benchSeed = ${seed};${settled}${streams}</script>`,
-                  )
-                  .replace(
-                    "</body>",
-                    `<script>Object.assign(window.__bench, { frameAfter: performance.timeOrigin + performance.now(), url: location.href, title: document.title, trigger: sessionStorage.getItem("bench-navigation-trigger") ?? "direct" });</script></body>`,
-                  ),
-              },
-        );
-      }),
-    ),
-    () => Effect.promise(() => browser.context.unrouteAll({ behavior: "ignoreErrors" })),
-  );
+    return page === undefined
+      ? { _tag: "Fulfilled", status: 404, contentType: "text/plain", body: "not found" }
+      : {
+          _tag: "Fulfilled",
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          body: page
+            .replace(
+              "<head>",
+              `<head><script>window.__benchSeed = ${seed};${settled}${streams}</script>`,
+            )
+            .replace(
+              "</body>",
+              `<script>Object.assign(window.__bench, { frameAfter: performance.timeOrigin + performance.now(), url: location.href, title: document.title, trigger: sessionStorage.getItem("bench-navigation-trigger") ?? "direct" });</script></body>`,
+            ),
+        };
+  });
 
 /** A page's ground truth, decoded with `schema`. */
 /**
@@ -645,28 +639,20 @@ export const truth = <A, I>(
   page: Page,
   schema: Schema.Codec<A, I>,
 ): Effect.Effect<A, BrowserError | FixtureUnreadable> =>
-  Effect.tryPromise({
-    try: () => page.playwright.evaluate(() => (window as unknown as { __bench: unknown }).__bench),
-    catch: (cause) =>
-      page.playwright.isClosed()
-        ? new BrowserError({
-            operation: "truth",
-            reason: new Closed({ cause: "page" }),
-            dispatched: false,
-          })
-        : new FixtureUnreadable({
-            detail: `${page.playwright.url()} could not be evaluated: ${cause instanceof Error ? cause.message.split("\n")[0] : "unknown"}`,
-          }),
-  }).pipe(
-    Effect.flatMap((value) =>
-      Schema.decodeUnknownEffect(schema)(value).pipe(
-        Effect.mapError(
-          () =>
-            new FixtureUnreadable({ detail: `${page.playwright.url()} holds no matching state` }),
+  page
+    .read(() => Reflect.get(window, "__bench"), { arg: "bench-truth", result: Schema.Unknown })
+    .pipe(
+      Effect.flatMap(({ value }) =>
+        Schema.decodeUnknownEffect(schema)(value).pipe(
+          Effect.mapError(
+            () =>
+              new FixtureUnreadable({
+                detail: "the current document holds no matching fixture state",
+              }),
+          ),
         ),
       ),
-    ),
-  );
+    );
 
 export const ReelsTruth = Schema.Struct({
   credits: Schema.Finite,

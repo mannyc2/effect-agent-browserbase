@@ -1,10 +1,11 @@
 // Models that answer from a script, for the bench's tests: no model is called. A script's turn is a
 // response's parts; an agent's run, which streams, gets them as a stream that sent everything at
 // once, and a single call, such as an understand task's, gets them whole.
-import { Effect, Layer, Stream } from "effect";
+import { Effect } from "effect";
+import { TestModel } from "effect-agent-browser/testing";
 import {
   type AiError,
-  LanguageModel,
+  type LanguageModel,
   Model,
   type Prompt,
   type Response,
@@ -20,26 +21,8 @@ export interface Seen {
   readonly tools: ReadonlyArray<Tool.Any>;
 }
 
-/** A response's parts as a stream sends them. */
-export const streamed = (
-  parts: ReadonlyArray<Response.PartEncoded>,
-): ReadonlyArray<Response.StreamPartEncoded> =>
-  parts.flatMap((part, order): ReadonlyArray<Response.StreamPartEncoded> =>
-    part.type === "text"
-      ? [
-          { type: "text-start", id: `text-${order}` },
-          { type: "text-delta", id: `text-${order}`, delta: part.text },
-          { type: "text-end", id: `text-${order}` },
-        ]
-      : part.type === "tool-call" || part.type === "finish"
-        ? [part]
-        : [],
-  );
+export const streamed = TestModel.streamed;
 
-/**
- * A model from how it answers one call, which an agent's run gets as a stream that sent everything
- * at once, named as Yielded's runtime asks.
- */
 export const modelOf = (
   answer: (
     options: LanguageModel.ProviderOptions,
@@ -48,42 +31,30 @@ export const modelOf = (
   Model.make(
     "scripted",
     "test-model",
-    Layer.effect(
-      LanguageModel.LanguageModel,
-      LanguageModel.make({
-        generateText: (options) => Effect.map(answer(options), (parts) => [...parts]),
-        streamText: (options) => Stream.fromIterableEffect(Effect.map(answer(options), streamed)),
-      }),
-    ),
+    TestModel.layer({ respond: (request) => Effect.map(answer(request.options), TestModel.reply) }),
   );
 
 /** A model that answers each call with the next turn of its script, and keeps what it was shown. */
 export const scripted = (turns: ReadonlyArray<Turn>) => {
   const seen: Array<Seen> = [];
 
-  const layer = modelOf((options) =>
-    Effect.suspend(() => {
-      const turn = turns[seen.length];
-
-      seen.push({ prompt: options.prompt, tools: options.tools });
-
-      return turn === undefined
-        ? Effect.die(`no turn ${seen.length} in the script`)
-        : Effect.succeed(turn(options.prompt));
-    }),
+  const layer = Model.make(
+    "scripted",
+    "test-model",
+    TestModel.layer(
+      turns.map(
+        (turn) =>
+          ({ prompt }) =>
+            Effect.sync(() => TestModel.reply(turn(prompt))),
+      ),
+      { onRequest: ({ prompt, tools }) => Effect.sync(() => void seen.push({ prompt, tools })) },
+    ),
   );
 
   return { layer, seen };
 };
 
-let ids = 0;
-
-/** A tool call in a scripted response. */
-export const call = (name: string, params: unknown): Response.PartEncoded => {
-  ids += 1;
-
-  return { type: "tool-call", id: `call-${ids}`, name, params };
-};
+export const call = TestModel.call;
 
 /** A response's end, after its tool calls. */
 export const finish: Response.PartEncoded = {

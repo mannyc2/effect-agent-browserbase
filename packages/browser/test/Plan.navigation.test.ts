@@ -8,9 +8,10 @@ import { Deferred, Duration, Effect, Exit, Fiber } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import { Subject } from "../src/BrowserEvent.ts";
-import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
-import * as Plan from "../src/Plan.ts";
+import * as Plan from "../src/plan/index.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const named = (name: string) => new Subject({ role: "button", name, tag: "button", context: {} });
 
@@ -78,17 +79,23 @@ const open = Effect.fnUntraced(function* (url: string) {
   return yield* Effect.acquireRelease(browser.newPage(url), (page) => Effect.ignore(page.close));
 });
 
-layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(30) })(
-  "Plan relative navigation",
-  (it) => {
-    for (const phase of ["ready", "arrival"] as const)
-      it.effect(`does not skip input because an earlier redirect completed during ${phase}`, () =>
+layer(TestCdp.provideLayer(Chromium.layer()), {
+  excludeTestServices: true,
+  timeout: Duration.seconds(30),
+})("Plan relative navigation", (it) => {
+  for (const phase of ["ready", "arrival", "resolution"] as const)
+    it.effect(`does not skip input because an earlier redirect completed during ${phase}`, () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const site = yield* fixture(phase === "arrival");
           const page = yield* open(site.start);
 
           const earlier = Plan.Plan.new([
-            new Plan.Step({ action: "click", subject: named("Fetch"), url: site.start }),
+            new Plan.Step({
+              action: { _tag: "Click", target: "e0" },
+              subject: named("Fetch"),
+              url: site.start,
+            }),
           ]);
 
           yield* Plan.take(page, earlier, 0, { settle: false });
@@ -105,12 +112,24 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
               phase === "arrival"
                 ? Deferred.succeed(preparing, undefined).pipe(Effect.andThen(page.url))
                 : page.url,
+            find: (query) =>
+              phase === "resolution"
+                ? Deferred.succeed(preparing, undefined).pipe(
+                    Effect.andThen(
+                      Effect.promise(() => TestCdp.nativePage(page).waitForURL(site.destination)),
+                    ),
+                    Effect.andThen(page.find(query)),
+                  )
+                : page.find(query),
           };
 
           const plan = Plan.Plan.new([
-            new Plan.Step({ action: "navigate", url: site.destination }),
             new Plan.Step({
-              action: "click",
+              action: { _tag: "Goto", url: site.destination },
+              url: site.destination,
+            }),
+            new Plan.Step({
+              action: { _tag: "Click", target: "e0" },
               subject: named("Still"),
               url: site.destination,
               expect: { _tag: "Navigated" },
@@ -118,7 +137,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
           ]);
 
           const taking = yield* Plan.take(observed, plan, 1, {
-            settle: phase === "ready" ? { still: "content", quietMillis: 50 } : false,
+            settle: phase === "ready" ? { quietMillis: 50 } : false,
             arrival: "1 second",
           }).pipe(Effect.exit, Effect.forkChild);
 
@@ -138,22 +157,24 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
           }
           assert.strictEqual(
             yield* Effect.promise(() =>
-              page.playwright.evaluate(() => document.body.dataset["pressed"]),
+              TestCdp.nativePage(page).evaluate(() => document.body.dataset["pressed"]),
             ),
             "1",
             "the current action must be sent exactly once",
           );
         }),
-      );
+      ),
+    );
 
-    it.effect("verifies a document change caused by the current action", () =>
+  it.effect("verifies a document change caused by the current action", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* fixture();
         const page = yield* open(site.start);
 
         const plan = Plan.Plan.new([
           new Plan.Step({
-            action: "click",
+            action: { _tag: "Click", target: "e0" },
             subject: named("Navigate"),
             url: site.done,
             expect: { _tag: "Navigated" },
@@ -165,6 +186,6 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
         assert.strictEqual(receipt.outcome, "verified");
         assert.strictEqual(yield* page.url, site.done);
       }),
-    );
-  },
-);
+    ),
+  );
+});

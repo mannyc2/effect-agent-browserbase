@@ -1,14 +1,17 @@
 import { assert, layer } from "@effect/vitest";
 import { Deferred, Duration, Effect, Fiber, Layer } from "effect";
+import { TestClock } from "effect/testing";
 
+import { nameOf } from "../src/Action.ts";
 import { Browser, make as makeBrowser, type Options as BrowserOptions } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
-import * as Chromium from "../src/Chromium.ts";
 import { type InputRequest, type Page, redacted } from "../src/Page.ts";
-import * as Presentation from "../src/Presentation.ts";
+import * as Presentation from "../src/presentation/Presentation.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
 import { Site, SiteLayer, unpaused } from "./fixtures.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const refOf = (snapshot: Snapshot, role: string, name: string): string => {
   const ref = new RegExp(role + ' "' + name + '"[^\\n]*?\\[ref=(e\\d+)\\]').exec(
@@ -26,7 +29,7 @@ const setup = Effect.fnUntraced(function* ({
   ...options
 }: BrowserOptions & { readonly performed?: boolean }) {
   const host = yield* Browser;
-  const native = host.context.browser();
+  const native = TestCdp.nativeContext(host).browser();
 
   if (native === null) return yield* Effect.die("the fixture requires a launched Chromium");
 
@@ -41,7 +44,7 @@ const setup = Effect.fnUntraced(function* ({
   const url = (yield* Site).url("/form");
 
   // Fixture loading bypasses the policy so denied navigation remains independently testable.
-  yield* Effect.promise(() => page.playwright.goto(url));
+  yield* Effect.promise(() => TestCdp.nativePage(page).goto(url));
 
   return { browser, page };
 });
@@ -56,449 +59,552 @@ const failure = <R>(operation: Effect.Effect<unknown, BrowserError, R>) =>
   );
 
 const valueOf = (page: Page, selector: string) =>
-  Effect.promise(() => page.playwright.locator(selector).inputValue());
+  Effect.promise(() => TestCdp.nativePage(page).locator(selector).inputValue());
 
 const outcome = (page: Page) =>
-  Effect.promise(() => page.playwright.locator("#outcome").textContent());
+  Effect.promise(() => TestCdp.nativePage(page).locator("#outcome").textContent());
 
-layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
+layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
 })("Policy", (it) => {
   it.effect("reports structural facts before input, never what a control is called", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
 
-      const { page } = yield* setup({
-        guard: (request) =>
-          Effect.sync(() => requests.push(request)).pipe(
-            Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
-          ),
-      });
-
-      const external = new URL((yield* Site).url("/next"));
-
-      external.hostname = "localhost";
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          [
-            '<form action="/next"><label>Amount <input id="amount" value="10"></label><button type="submit">Submit form</button><label>Notes <textarea id="notes"></textarea></label></form>',
-            '<button type="button">Buy now</button><button type="button">Pay now</button><button type="button">Place order</button>',
-            '<button type="button">Delete item</button><button type="button">Confirm transfer</button><button type="button">Ordinary action</button>',
-            '<a href="' +
-              external.href +
-              '">External destination</a><a href="/asset" download>Save file</a>',
-            '<label>Upload file <input type="file"></label>',
-          ].join(""),
-        ),
-      );
-      const snapshot = yield* page.snapshot();
-
-      for (const [role, name, expected] of [
-        ["button", "Submit form", ["form-submit"]],
-        ["button", "Buy now", ["scripted"]],
-        ["button", "Pay now", ["scripted"]],
-        ["button", "Place order", ["scripted"]],
-        ["button", "Delete item", ["scripted"]],
-        ["button", "Confirm transfer", ["scripted"]],
-        ["button", "Ordinary action", ["scripted"]],
-        ["link", "External destination", ["cross-origin"]],
-        ["link", "Save file", ["download"]],
-        ["textbox", "Upload file", ["upload"]],
-      ] as const) {
-        assert.deepStrictEqual(yield* failure(page.click(refOf(snapshot, role, name))), {
-          tag: "PolicyDenied",
-          dispatched: false,
+        const { page } = yield* setup({
+          guard: (request) =>
+            Effect.sync(() => requests.push(request)).pipe(
+              Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+            ),
         });
-        const request = requests.at(-1)!;
 
-        assert.strictEqual(request.role, role);
-        assert.strictEqual(request.name, name);
-        assert.deepStrictEqual(
-          [...request.facts].sort((left, right) => left.localeCompare(right)),
-          [...expected].sort((left, right) => left.localeCompare(right)),
+        const external = new URL((yield* Site).url("/next"));
+
+        external.hostname = "localhost";
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            [
+              '<form action="/next"><label>Amount <input id="amount" value="10"></label><button type="submit">Submit form</button><label>Notes <textarea id="notes"></textarea></label></form>',
+              '<button type="button">Buy now</button><button type="button">Pay now</button><button type="button">Place order</button>',
+              '<button type="button">Delete item</button><button type="button">Confirm transfer</button><button type="button">Ordinary action</button>',
+              '<a href="' +
+                external.href +
+                '">External destination</a><a href="/asset" download>Save file</a>',
+              '<label>Upload file <input type="file"></label>',
+            ].join(""),
+          ),
         );
-      }
+        const snapshot = yield* page.snapshot();
 
-      const buy = yield* Effect.promise(() =>
-        page.playwright.getByRole("button", { name: "Buy now", exact: true }).boundingBox(),
-      );
+        for (const [role, name, expected] of [
+          ["button", "Submit form", ["form-submit"]],
+          ["button", "Buy now", ["scripted"]],
+          ["button", "Pay now", ["scripted"]],
+          ["button", "Place order", ["scripted"]],
+          ["button", "Delete item", ["scripted"]],
+          ["button", "Confirm transfer", ["scripted"]],
+          ["button", "Ordinary action", ["scripted"]],
+          ["link", "External destination", ["cross-origin"]],
+          ["link", "Save file", ["download"]],
+          ["clickable", "Upload file", ["upload"]],
+        ] as const) {
+          assert.deepStrictEqual(yield* failure(page.click(refOf(snapshot, role, name))), {
+            tag: "PolicyDenied",
+            dispatched: false,
+          });
+          const request = requests.at(-1)!;
 
-      assert.isNotNull(buy);
-      if (buy === null) return;
-      const point = { x: buy.x + buy.width / 2, y: buy.y + buy.height / 2 };
+          assert.strictEqual(request.role, role === "clickable" ? null : role);
+          assert.strictEqual(request.name, name);
+          assert.deepStrictEqual(
+            [...request.facts].sort((left, right) => left.localeCompare(right)),
+            [...expected].sort((left, right) => left.localeCompare(right)),
+          );
+        }
 
-      yield* failure(page.click(point));
-      assert.strictEqual(requests.at(-1)!.name, "Buy now");
-      assert.deepStrictEqual(requests.at(-1)!.point, point);
-      assert.deepStrictEqual(requests.at(-1)!.facts, ["scripted"]);
+        const buy = yield* Effect.promise(() =>
+          TestCdp.nativePage(page)
+            .getByRole("button", { name: "Buy now", exact: true })
+            .boundingBox(),
+        );
 
-      yield* Effect.promise(() => page.playwright.locator("#amount").focus());
-      yield* failure(page.press("Enter"));
-      assert.include(requests.at(-1)!.facts, "form-submit");
-      assert.strictEqual(requests.at(-1)!.name, "Amount");
-      yield* failure(page.type("25", { into: refOf(snapshot, "textbox", "Amount"), submit: true }));
-      assert.include(requests.at(-1)!.facts, "form-submit");
-      yield* failure(page.press("ArrowLeft"));
-      assert.notInclude(requests.at(-1)!.facts, "form-submit");
-      yield* Effect.promise(() => page.playwright.locator("#notes").focus());
-      yield* failure(page.press("Enter"));
-      assert.notInclude(requests.at(-1)!.facts, "form-submit");
-      yield* failure(
-        page.type("text", { into: refOf(snapshot, "textbox", "Notes"), submit: true }),
-      );
-      assert.notInclude(requests.at(-1)!.facts, "form-submit");
-      yield* failure(page.goto(external.href));
-      assert.include(requests.at(-1)!.facts, "cross-origin");
-      assert.strictEqual(requests.at(-1)!.destination, external.href);
-      assert.strictEqual(yield* valueOf(page, "#amount"), "10");
-    }),
+        assert.isNotNull(buy);
+        if (buy === null) return;
+        const point = { x: buy.x + buy.width / 2, y: buy.y + buy.height / 2 };
+
+        yield* failure(page.click(point));
+        assert.strictEqual(requests.at(-1)!.name, "Buy now");
+        assert.deepStrictEqual(requests.at(-1)!.point, point);
+        assert.deepStrictEqual(requests.at(-1)!.facts, ["scripted"]);
+
+        yield* Effect.promise(() => TestCdp.nativePage(page).locator("#amount").focus());
+        yield* failure(page.press("Enter"));
+        assert.include(requests.at(-1)!.facts, "form-submit");
+        assert.strictEqual(requests.at(-1)!.name, "Amount");
+        yield* failure(
+          page.type("25", { into: refOf(snapshot, "textbox", "Amount"), submit: true }),
+        );
+        assert.include(requests.at(-1)!.facts, "form-submit");
+        yield* failure(page.press("ArrowLeft"));
+        assert.notInclude(requests.at(-1)!.facts, "form-submit");
+        yield* Effect.promise(() => TestCdp.nativePage(page).locator("#notes").focus());
+        yield* failure(page.press("Enter"));
+        assert.notInclude(requests.at(-1)!.facts, "form-submit");
+        yield* failure(
+          page.type("text", { into: refOf(snapshot, "textbox", "Notes"), submit: true }),
+        );
+        assert.notInclude(requests.at(-1)!.facts, "form-submit");
+        yield* failure(page.goto(external.href));
+        assert.include(requests.at(-1)!.facts, "cross-origin");
+        assert.strictEqual(requests.at(-1)!.destination, external.href);
+        assert.strictEqual(yield* valueOf(page, "#amount"), "10");
+      }),
+    ),
   );
 
   it.effect("gives a guard the page's evidence around a target, never a field's value", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
 
-      const { page } = yield* setup({
-        guard: (request) =>
-          Effect.sync(() => requests.push(request)).pipe(
-            Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+        const { page } = yield* setup({
+          guard: (request) =>
+            Effect.sync(() => requests.push(request)).pipe(
+              Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+            ),
+        });
+
+        const site = yield* Site;
+
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            "<title>Team settings</title><h1>Settings</h1><section><h2>Team members</h2>" +
+              '<ul><li>alex@example.com · Editor <button type="button" aria-describedby="hint">Remove</button></li></ul>' +
+              '<p id="hint">Removes their access at once.</p></section>' +
+              '<dialog open aria-label="Delete repository"><p>This cannot be undone.</p>' +
+              '<form action="/repos/delete" method="post"><label>Repository name <input value="octo-repo-7"></label>' +
+              '<label>Password <input type="password" autocomplete="current-password" value="hunter2"></label>' +
+              '<input type="hidden" name="_method" value="DESTROY"><button>Delete this repository</button></form></dialog>',
           ),
-      });
+        );
+        const snapshot = yield* page.snapshot();
 
-      const site = yield* Site;
+        yield* failure(page.click(refOf(snapshot, "button", "Remove")));
+        yield* failure(page.click(refOf(snapshot, "button", "Delete this repository")));
 
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          "<title>Team settings</title><h1>Settings</h1><section><h2>Team members</h2>" +
-            '<ul><li>alex@example.com · Editor <button type="button" aria-describedby="hint">Remove</button></li></ul>' +
-            '<p id="hint">Removes their access at once.</p></section>' +
-            '<dialog open aria-label="Delete repository"><p>This cannot be undone.</p>' +
-            '<form action="/repos/delete" method="post"><label>Repository name <input value="octo-repo-7"></label>' +
-            '<label>Password <input type="password" autocomplete="current-password" value="hunter2"></label>' +
-            '<input type="hidden" name="_method" value="DESTROY"><button>Delete this repository</button></form></dialog>',
-        ),
-      );
-      const snapshot = yield* page.snapshot();
+        const [remove, destroy] = requests.map(
+          ({ url, title, description, facts, context, form }) => ({
+            url,
+            title,
+            description,
+            facts,
+            context,
+            form,
+          }),
+        );
 
-      yield* failure(page.click(refOf(snapshot, "button", "Remove")));
-      yield* failure(page.click(refOf(snapshot, "button", "Delete this repository")));
+        assert.deepStrictEqual(remove, {
+          url: site.url("/form"),
+          title: "Team settings",
+          description: "Removes their access at once.",
+          facts: ["scripted"],
+          context: {
+            dialog: undefined,
+            heading: "Team members",
+            nearby: "alex@example.com · Editor",
+          },
+          form: undefined,
+        });
+        assert.deepStrictEqual(destroy, {
+          url: site.url("/form"),
+          title: "Team settings",
+          description: undefined,
+          facts: ["form-submit", "secret"],
+          context: {
+            dialog: "Delete repository",
+            heading: undefined,
+            nearby: "Repository name Password",
+          },
+          form: {
+            method: "post",
+            action: site.url("/repos/delete"),
+            fields: [
+              { type: "text", name: "Repository name", filled: true },
+              {
+                type: "password",
+                name: "Password",
+                autocomplete: "current-password",
+                filled: true,
+              },
+              { type: "hidden", name: "_method", filled: true },
+            ],
+          },
+        });
+        for (const value of ["octo-repo-7", "hunter2", "DESTROY"])
+          assert.notInclude(JSON.stringify(requests), value);
+      }),
+    ),
+  );
 
-      const [remove, destroy] = requests.map(
-        ({ url, title, description, facts, context, form }) => ({
-          url,
-          title,
-          description,
-          facts,
-          context,
-          form,
-        }),
-      );
+  it.effect("redacts credentials from form evidence sent to a guard", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
 
-      assert.deepStrictEqual(remove, {
-        url: site.url("/form"),
-        title: "Team settings",
-        description: "Removes their access at once.",
-        facts: ["scripted"],
-        context: {
-          dialog: undefined,
-          heading: "Team members",
-          nearby: "alex@example.com · Editor",
-        },
-        form: undefined,
-      });
-      assert.deepStrictEqual(destroy, {
-        url: site.url("/form"),
-        title: "Team settings",
-        description: undefined,
-        facts: ["form-submit", "secret"],
-        context: {
-          dialog: "Delete repository",
-          heading: undefined,
-          nearby: "Repository name Password",
-        },
-        form: {
-          method: "post",
-          action: site.url("/repos/delete"),
-          fields: [
-            { type: "text", name: "Repository name", filled: true },
-            { type: "password", name: "Password", autocomplete: "current-password", filled: true },
-            { type: "hidden", name: "_method", filled: true },
-          ],
-        },
-      });
-      for (const value of ["octo-repo-7", "hunter2", "DESTROY"])
-        assert.notInclude(JSON.stringify(requests), value);
-    }),
+        const { page } = yield* setup({
+          guard: (request) =>
+            Effect.sync(() => requests.push(request)).pipe(
+              Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+            ),
+        });
+
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<form action="https://user:password@provider.test/pay?token=private-value&amp;ticker=ETH"><button>Send</button></form>',
+          ),
+        );
+        const [button] = yield* page.find({ role: "button", name: "Send" });
+
+        yield* failure(page.click(button!.ref));
+
+        assert.strictEqual(
+          requests[0]?.form?.action,
+          "https://provider.test/pay?token=••••••••&ticker=ETH",
+        );
+        for (const credential of ["user:", "password", "private-value"])
+          assert.notInclude(JSON.stringify(requests), credential);
+      }),
+    ),
   );
 
   it.effect("keeps typed secrets out of the guard's request and the recorded events", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
 
-      const guarded = yield* setup({
-        guard: (request) => Effect.sync(() => requests.push(request)),
-      });
+        const guarded = yield* setup({
+          guard: (request) => Effect.sync(() => requests.push(request)),
+        });
 
-      const open = yield* setup({});
+        const open = yield* setup({});
 
-      for (const { page } of [guarded, open])
-        yield* Effect.promise(() =>
-          page.playwright.setContent(
-            '<label>Email <input id="email" autocomplete="username"></label>' +
-              '<label>Password <input id="password" type="password" autocomplete="current-password"></label>' +
-              // A field that becomes a password field once focused.
-              '<label>PIN <input id="pin" onfocus="this.type=\'password\'"></label>',
-          ),
+        for (const { page } of [guarded, open])
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).setContent(
+              '<label>Email <input id="email" autocomplete="username"></label>' +
+                '<label>Password <input id="password" type="password" autocomplete="current-password"></label>' +
+                // A field that becomes a password field once focused.
+                '<label>PIN <input id="pin" onfocus="this.type=\'password\'"></label>',
+            ),
+          );
+
+        const typed = yield* guarded.page.snapshot();
+
+        yield* guarded.page.type("alex@example.com", { into: refOf(typed, "textbox", "Email") });
+        yield* guarded.page.type("hunter2", { into: refOf(typed, "textbox", "Password") });
+        // Without a guard nothing is prepared: the field's own state decides, after focusing it.
+        yield* open.page.type("4321", {
+          into: refOf(yield* open.page.snapshot(), "textbox", "PIN"),
+        });
+
+        assert.deepStrictEqual(
+          requests.map(({ text, facts }) => [text, facts]),
+          [
+            ["alex@example.com", []],
+            [redacted, ["secret"]],
+          ],
         );
 
-      const typed = yield* guarded.page.snapshot();
+        const recorded = (events: ReadonlyArray<BrowserEvent>) => ({
+          actions: events.flatMap((event) => (event._tag === "Action" ? [event.text] : [])),
+          keys: events.flatMap((event) =>
+            event._tag === "KeyChanged" && event.phase === "down" ? [event.key] : [],
+          ),
+          inserted: events.flatMap((event) => (event._tag === "TextInserted" ? [event.text] : [])),
+        });
 
-      yield* guarded.page.type("alex@example.com", { into: refOf(typed, "textbox", "Email") });
-      yield* guarded.page.type("hunter2", { into: refOf(typed, "textbox", "Password") });
-      // Without a guard nothing is prepared: the field's own state decides, after focusing it.
-      yield* open.page.type("4321", { into: refOf(yield* open.page.snapshot(), "textbox", "PIN") });
+        // Under a guard, plain text goes in one insertion, a secret's recorded as one mark.
+        assert.deepStrictEqual(recorded(yield* guarded.browser.recentEvents), {
+          actions: ["alex@example.com", redacted],
+          keys: [],
+          inserted: ["alex@example.com", "•"],
+        });
+        assert.deepStrictEqual(recorded(yield* open.browser.recentEvents), {
+          actions: [redacted],
+          keys: Array.from("4321", () => "Unidentified"),
+          inserted: [],
+        });
+        assert.strictEqual(yield* valueOf(guarded.page, "#password"), "hunter2");
+        assert.strictEqual(yield* valueOf(open.page, "#pin"), "4321");
+      }),
+    ),
+  );
 
-      assert.deepStrictEqual(
-        requests.map(({ text, facts }) => [text, facts]),
-        [
-          ["alex@example.com", []],
-          [redacted, ["secret"]],
-        ],
-      );
+  it.effect("withholds explicitly secret text before a guard sees an unmarked field", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: InputRequest[] = [];
 
-      const recorded = (events: ReadonlyArray<BrowserEvent>) => ({
-        actions: events.flatMap((event) => (event._tag === "Action" ? [event.text] : [])),
-        keys: events.flatMap((event) =>
-          event._tag === "KeyChanged" && event.phase === "down" ? [event.key] : [],
-        ),
-        inserted: events.flatMap((event) => (event._tag === "TextInserted" ? [event.text] : [])),
-      });
+        const { browser, page } = yield* setup({
+          guard: (request) => Effect.sync(() => requests.push(request)),
+        });
 
-      // Under a guard, plain text goes in one insertion, a secret's recorded as one mark.
-      assert.deepStrictEqual(recorded(yield* guarded.browser.recentEvents), {
-        actions: ["alex@example.com", redacted],
-        keys: [],
-        inserted: ["alex@example.com", "•"],
-      });
-      assert.deepStrictEqual(recorded(yield* open.browser.recentEvents), {
-        actions: [redacted],
-        keys: Array.from("4321", () => "Unidentified"),
-        inserted: [],
-      });
-      assert.strictEqual(yield* valueOf(guarded.page, "#password"), "hunter2");
-      assert.strictEqual(yield* valueOf(open.page, "#pin"), "4321");
-    }),
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<label>Notes <textarea id="notes"></textarea></label>',
+          ),
+        );
+        const secret = "caller-marked-credential";
+
+        const error = yield* page
+          .type(secret, {
+            into: refOf(yield* page.snapshot(), "textbox", "Notes"),
+            secret: true,
+          })
+          .pipe(Effect.flip);
+
+        assert.strictEqual(error.reason._tag, "NotActionable");
+        assert.isFalse(error.dispatched);
+        assert.lengthOf(requests, 1);
+        assert.strictEqual(requests[0]?.text, redacted);
+        assert.notInclude(JSON.stringify(requests), secret);
+        assert.notInclude(JSON.stringify(yield* browser.recentEvents), secret);
+        assert.strictEqual(yield* valueOf(page, "#notes"), "");
+      }),
+    ),
   );
 
   it.effect("reports the first image submitter when Enter implicitly submits a form", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
 
-      const { page } = yield* setup({
-        guard: (request) =>
-          Effect.sync(() => requests.push(request)).pipe(
-            Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
-          ),
-      });
-
-      const external = new URL((yield* Site).url("/next"));
-
-      external.hostname = "localhost";
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<form action="/next"><label>Amount <input id="amount" value="10"></label>' +
-            '<input type="image" aria-label="Image submit" formaction="' +
-            external.href +
-            '">' +
-            '<button type="submit">Ordinary submit</button></form>',
-        ),
-      );
-      yield* Effect.promise(() => page.playwright.locator("#amount").focus());
-
-      assert.deepStrictEqual(yield* failure(page.press("Enter")), {
-        tag: "PolicyDenied",
-        dispatched: false,
-      });
-      assert.strictEqual(requests.at(-1)!.destination, external.href);
-      assert.includeMembers([...requests.at(-1)!.facts], ["form-submit", "cross-origin"]);
-      assert.strictEqual(yield* valueOf(page, "#amount"), "10");
-    }),
-  );
-
-  it.effect("reports what a click activates: SVG links, map areas and submitter children", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
-
-      const { page } = yield* setup({
-        guard: (request) =>
-          Effect.sync(() => requests.push(request)).pipe(
-            Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
-          ),
-      });
-
-      const external = new URL((yield* Site).url("/next"));
-
-      external.hostname = "localhost";
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<body style="margin:0"><svg width="300" height="100" style="display:block"><a href="' +
-            external.href +
-            '"><rect width="300" height="100" fill="red"></rect></a></svg>' +
-            '<img usemap="#map" width="300" height="100" style="display:block" src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="><map name="map"><area shape="rect" coords="0,0,300,100" href="' +
-            external.href +
-            '" download></map>' +
-            '<form action="' +
-            external.href +
-            '"><input name="q" value="1"><button style="display:block;width:300px;height:60px"><span onclick="void 0" style="display:inline-block;width:280px;height:50px">Continue</span></button></form></body>',
-        ),
-      );
-      const continueAt = yield* Effect.promise(() => page.playwright.locator("span").boundingBox());
-
-      assert.isNotNull(continueAt);
-      if (continueAt === null) return;
-
-      // Neither the SVG link nor the map area has a name, so both are opaque as well.
-      for (const [target, expected] of [
-        [{ x: 150, y: 50 }, ["cross-origin", "opaque"]],
-        [{ x: 150, y: 150 }, ["cross-origin", "download", "opaque"]],
-        [
-          { x: continueAt.x + continueAt.width / 2, y: continueAt.y + continueAt.height / 2 },
-          ["cross-origin", "form-submit"],
-        ],
-        [refOf(yield* page.snapshot(), "clickable", "Continue"), ["cross-origin", "form-submit"]],
-      ] as const) {
-        assert.deepStrictEqual(yield* failure(page.click(target)), {
-          tag: "PolicyDenied",
-          dispatched: false,
+        const { page } = yield* setup({
+          guard: (request) =>
+            Effect.sync(() => requests.push(request)).pipe(
+              Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+            ),
         });
-        assert.deepStrictEqual(
-          [...requests.at(-1)!.facts].sort((left, right) => left.localeCompare(right)),
-          [...expected],
-        );
-        assert.strictEqual(requests.at(-1)!.destination, external.href);
-      }
-    }),
-  );
 
-  it.effect("reports no facts for hover and scroll over consequential controls", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
+        const external = new URL((yield* Site).url("/next"));
 
-      const { page } = yield* setup({
-        guard: (request) => Effect.sync(() => requests.push(request)),
-      });
-
-      const external = new URL((yield* Site).url("/next"));
-
-      external.hostname = "localhost";
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<body style="margin:0;height:3000px"><a href="' +
-            external.href +
-            '">Docs</a><button style="position:absolute;left:540px;top:330px;width:200px;height:60px">Delete</button></body>',
-        ),
-      );
-      const snapshot = yield* page.snapshot();
-
-      yield* page.hover(refOf(snapshot, "link", "Docs"));
-      yield* page.scroll({ at: refOf(snapshot, "button", "Delete"), dy: 100 });
-
-      assert.deepStrictEqual(
-        requests.map((request) => [request.action, request.facts, request.destination]),
-        [
-          ["hover", [], undefined],
-          ["scroll", [], undefined],
-        ],
-      );
-    }),
-  );
-
-  it.effect("refuses typing into a control before asking, and reports Enter on toggles", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
-
-      const { page } = yield* setup({
-        guard: (request) =>
-          Effect.sync(() => requests.push(request)).pipe(
-            Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+        external.hostname = "localhost";
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<form action="/next"><label>Amount <input id="amount" value="10"></label>' +
+              '<input type="image" aria-label="Image submit" formaction="' +
+              external.href +
+              '">' +
+              '<button type="submit">Ordinary submit</button></form>',
           ),
-      });
+        );
+        yield* Effect.promise(() => TestCdp.nativePage(page).locator("#amount").focus());
 
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<form action="/next"><input name="q" value="1"><input type="checkbox" id="checkbox">' +
-            '<input type="radio" id="radio" name="r"><input type="range" id="range"><button id="go">Go</button></form>',
-        ),
-      );
-      yield* Effect.promise(() => page.playwright.locator("#go").focus());
-      assert.deepStrictEqual(yield* failure(page.type("a b")), {
-        tag: "NotActionable",
-        dispatched: false,
-      });
-      assert.isEmpty(requests);
-
-      for (const id of ["checkbox", "radio", "range"]) {
-        yield* Effect.promise(() => page.playwright.locator("#" + id).focus());
         assert.deepStrictEqual(yield* failure(page.press("Enter")), {
           tag: "PolicyDenied",
           dispatched: false,
         });
-        assert.include(requests.at(-1)!.facts, "form-submit");
-      }
-    }),
+        assert.strictEqual(requests.at(-1)!.destination, external.href);
+        assert.includeMembers([...requests.at(-1)!.facts], ["form-submit", "cross-origin"]);
+        assert.strictEqual(yield* valueOf(page, "#amount"), "10");
+      }),
+    ),
+  );
+
+  it.effect("reports what a click activates: SVG links, map areas and submitter children", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
+
+        const { page } = yield* setup({
+          guard: (request) =>
+            Effect.sync(() => requests.push(request)).pipe(
+              Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+            ),
+        });
+
+        const external = new URL((yield* Site).url("/next"));
+
+        external.hostname = "localhost";
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<body style="margin:0"><svg width="300" height="100" style="display:block"><a href="' +
+              external.href +
+              '"><rect width="300" height="100" fill="red"></rect></a></svg>' +
+              '<img usemap="#map" width="300" height="100" style="display:block" src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="><map name="map"><area shape="rect" coords="0,0,300,100" href="' +
+              external.href +
+              '" download></map>' +
+              '<form action="' +
+              external.href +
+              '"><input name="q" value="1"><button style="display:block;width:300px;height:60px"><span onclick="void 0" style="display:inline-block;width:280px;height:50px">Continue</span></button></form></body>',
+          ),
+        );
+
+        const continueAt = yield* Effect.promise(() =>
+          TestCdp.nativePage(page).locator("span").boundingBox(),
+        );
+
+        assert.isNotNull(continueAt);
+        if (continueAt === null) return;
+
+        // Neither the SVG link nor the map area has a name, so both are opaque as well.
+        for (const [target, expected] of [
+          [{ x: 150, y: 50 }, ["cross-origin", "opaque"]],
+          [{ x: 150, y: 150 }, ["cross-origin", "download", "opaque"]],
+          [
+            { x: continueAt.x + continueAt.width / 2, y: continueAt.y + continueAt.height / 2 },
+            ["cross-origin", "form-submit"],
+          ],
+          [refOf(yield* page.snapshot(), "clickable", "Continue"), ["cross-origin", "form-submit"]],
+        ] as const) {
+          assert.deepStrictEqual(yield* failure(page.click(target)), {
+            tag: "PolicyDenied",
+            dispatched: false,
+          });
+          assert.deepStrictEqual(
+            [...requests.at(-1)!.facts].sort((left, right) => left.localeCompare(right)),
+            [...expected],
+          );
+          assert.strictEqual(requests.at(-1)!.destination, external.href);
+        }
+      }),
+    ),
+  );
+
+  it.effect("reports no facts for hover and scroll over consequential controls", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
+
+        const { page } = yield* setup({
+          guard: (request) => Effect.sync(() => requests.push(request)),
+        });
+
+        const external = new URL((yield* Site).url("/next"));
+
+        external.hostname = "localhost";
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<body style="margin:0;height:3000px"><a href="' +
+              external.href +
+              '">Docs</a><button style="position:absolute;left:540px;top:330px;width:200px;height:60px">Delete</button></body>',
+          ),
+        );
+        const snapshot = yield* page.snapshot();
+
+        yield* page.hover(refOf(snapshot, "link", "Docs"));
+        yield* page.scroll({ at: refOf(snapshot, "button", "Delete"), dy: 100 });
+
+        assert.deepStrictEqual(
+          requests.map((request) => [nameOf(request.action), request.facts, request.destination]),
+          [
+            ["hover", [], undefined],
+            ["scroll", [], undefined],
+          ],
+        );
+      }),
+    ),
+  );
+
+  it.effect("refuses typing into a control before asking, and reports Enter on toggles", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
+
+        const { page } = yield* setup({
+          guard: (request) =>
+            Effect.sync(() => requests.push(request)).pipe(
+              Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+            ),
+        });
+
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<form action="/next"><input name="q" value="1"><input type="checkbox" id="checkbox">' +
+              '<input type="radio" id="radio" name="r"><input type="range" id="range"><button id="go">Go</button></form>',
+          ),
+        );
+        yield* Effect.promise(() => TestCdp.nativePage(page).locator("#go").focus());
+        assert.deepStrictEqual(yield* failure(page.type("a b")), {
+          tag: "NotActionable",
+          dispatched: false,
+        });
+        assert.isEmpty(requests);
+
+        for (const id of ["checkbox", "radio", "range"]) {
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page)
+              .locator("#" + id)
+              .focus(),
+          );
+          assert.deepStrictEqual(yield* failure(page.press("Enter")), {
+            tag: "PolicyDenied",
+            dispatched: false,
+          });
+          assert.include(requests.at(-1)!.facts, "form-submit");
+        }
+      }),
+    ),
   );
 
   it.effect("binds a held approval to controls, not to page text that keeps changing", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
 
-      const { page } = yield* setup({
-        guard: (request) =>
-          Effect.sync(() => requests.push(request)).pipe(
-            Effect.andThen(Effect.sleep("300 millis")),
+        const { page } = yield* setup({
+          guard: (request) =>
+            Effect.sync(() => requests.push(request)).pipe(
+              Effect.andThen(Effect.sleep("300 millis")),
+            ),
+        });
+
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<body style="margin:0;height:3000px"><p>Updated <span id="clock">0</span></p>' +
+              '<table style="position:absolute;top:300px;left:500px"><tr><td id="price" style="width:300px;height:120px">64,210</td></tr></table>' +
+              "<script>let tick = 0; setInterval(() => { clock.textContent = String(++tick); price.textContent = String(64210 + tick); }, 50)</script></body>",
           ),
-      });
+        );
 
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<body style="margin:0;height:3000px"><p>Updated <span id="clock">0</span></p>' +
-            '<table style="position:absolute;top:300px;left:500px"><tr><td id="price" style="width:300px;height:120px">64,210</td></tr></table>' +
-            "<script>let tick = 0; setInterval(() => { clock.textContent = String(++tick); price.textContent = String(64210 + tick); }, 50)</script></body>",
-        ),
-      );
-
-      yield* page.press("ArrowDown");
-      yield* page.scroll({ dy: 400 });
-      assert.strictEqual(requests.at(-1)?.action, "scroll");
-      assert.isUndefined(requests.at(-1)?.element);
-    }),
+        yield* page.press("ArrowDown");
+        yield* page.scroll({ dy: 400 });
+        assert.strictEqual(requests.at(-1)?.action._tag, "Scroll");
+        assert.isUndefined(requests.at(-1)?.element);
+      }),
+    ),
   );
 
   it.effect("submits only to the approved field after typing moved focus", () =>
-    Effect.gen(function* () {
-      const { page } = yield* setup({ guard: () => Effect.void });
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { page } = yield* setup({ guard: () => Effect.void });
 
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<input id="query" aria-label="Search"><button id="remove" onclick="document.body.dataset.removed=\'yes\'">Remove all</button>' +
-            '<script>query.addEventListener("input", () => { if (query.value.length >= 3) remove.focus(); });</script>',
-        ),
-      );
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<input id="query" aria-label="Search"><button id="remove" onclick="document.body.dataset.removed=\'yes\'">Remove all</button>' +
+              '<script>query.addEventListener("input", () => { if (query.value.length >= 3) remove.focus(); });</script>',
+          ),
+        );
 
-      assert.deepStrictEqual(
-        yield* failure(
-          page.type("abc", {
-            into: refOf(yield* page.snapshot(), "textbox", "Search"),
-            submit: true,
-          }),
-        ),
-        { tag: "NotActionable", dispatched: true },
-      );
-      assert.isUndefined(
-        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.removed)),
-      );
-    }),
+        assert.deepStrictEqual(
+          yield* failure(
+            page.type("abc", {
+              into: refOf(yield* page.snapshot(), "textbox", "Search"),
+              submit: true,
+            }),
+          ),
+          { tag: "NotActionable", dispatched: true },
+        );
+        assert.isUndefined(
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate(() => document.body.dataset.removed),
+          ),
+        );
+      }),
+    ),
   );
 
   for (const performed of [false, true]) {
@@ -507,356 +613,368 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     // Performed keys check focus before each space, which could press a button; plain text goes in
     // one insertion that no key handler can split, so no key reaches another control either way.
     it.effect("sends no key to a control focused while typing, " + mode, () =>
-      Effect.gen(function* () {
-        const { page } = yield* setup({
-          performed,
-          guard: (request) =>
-            request.facts.includes("form-submit")
-              ? Effect.fail(new PolicyDenied({ detail: "submission is denied" }))
-              : Effect.void,
-        });
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const { page } = yield* setup({
+            performed,
+            guard: (request) =>
+              request.facts.includes("form-submit")
+                ? Effect.fail(new PolicyDenied({ detail: "submission is denied" }))
+                : Effect.void,
+          });
 
-        // Approval for a text field must not authorize Space on a control its input handler focuses.
-        yield* Effect.promise(() =>
-          page.playwright.setContent(
-            "<form onsubmit=\"event.preventDefault(); document.body.dataset.submitted='yes'\">" +
-              '<label>Query <input id="query"></label><button id="remove">Delete order</button></form>' +
-              '<script>query.addEventListener("input", () => remove.focus());' +
-              "remove.addEventListener(\"keydown\", () => document.body.dataset.activated='yes');</script>",
-          ),
-        );
-
-        const result = yield* page
-          .type("a b", { into: refOf(yield* page.snapshot(), "textbox", "Query") })
-          .pipe(
-            Effect.match({
-              onFailure: (error) => ({ tag: error.reason._tag, dispatched: error.dispatched }),
-              onSuccess: () => undefined,
-            }),
+          // Approval for a text field must not authorize Space on a control its input handler focuses.
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).setContent(
+              "<form onsubmit=\"event.preventDefault(); document.body.dataset.submitted='yes'\">" +
+                '<label>Query <input id="query"></label><button id="remove">Delete order</button></form>' +
+                '<script>query.addEventListener("input", () => remove.focus());' +
+                "remove.addEventListener(\"keydown\", () => document.body.dataset.activated='yes');</script>",
+            ),
           );
 
-        const effects = yield* Effect.promise(() =>
-          page.playwright.evaluate(() => ({
-            submitted: document.body.dataset.submitted,
-            activated: document.body.dataset.activated,
-          })),
-        );
+          const result = yield* page
+            .type("a b", { into: refOf(yield* page.snapshot(), "textbox", "Query") })
+            .pipe(
+              Effect.match({
+                onFailure: (error) => ({ tag: error.reason._tag, dispatched: error.dispatched }),
+                onSuccess: () => undefined,
+              }),
+            );
 
-        assert.deepStrictEqual(
-          { result, typed: yield* valueOf(page, "#query"), ...effects },
-          {
-            result: performed ? { tag: "NotActionable", dispatched: true } : undefined,
-            typed: performed ? "a" : "a b",
-            submitted: undefined,
-            activated: undefined,
-          },
-        );
-      }),
+          const effects = yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate(() => ({
+              submitted: document.body.dataset.submitted,
+              activated: document.body.dataset.activated,
+            })),
+          );
+
+          assert.deepStrictEqual(
+            { result, typed: yield* valueOf(page, "#query"), ...effects },
+            {
+              result: performed ? { tag: "NotActionable", dispatched: true } : undefined,
+              typed: performed ? "a" : "a b",
+              submitted: undefined,
+              activated: undefined,
+            },
+          );
+        }),
+      ),
     );
 
     it.effect("stops a double-click before pressing a replacement control, " + mode, () =>
-      Effect.gen(function* () {
-        const { page } = yield* setup({
-          performed,
-          guard: (request) =>
-            request.facts.includes("form-submit")
-              ? Effect.fail(new PolicyDenied({ detail: "submission is denied" }))
-              : Effect.void,
-        });
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const { page } = yield* setup({
+            performed,
+            guard: (request) =>
+              request.facts.includes("form-submit")
+                ? Effect.fail(new PolicyDenied({ detail: "submission is denied" }))
+                : Effect.void,
+          });
 
-        // A second press must still hit the approved control after its first click changes the DOM.
-        yield* Effect.promise(() =>
-          page.playwright.setContent(
-            "<style>button{position:absolute;left:10px;top:10px;width:150px;height:60px}</style>" +
-              '<button id="first" type="button" onclick="this.remove(); document.getElementById(\'remove\').hidden=false">Continue</button>' +
-              "<form onsubmit=\"event.preventDefault(); document.body.dataset.submitted='yes'\">" +
-              '<button id="remove" hidden onpointerdown="document.body.dataset.activated=\'yes\'">Delete order</button></form>',
-          ),
-        );
-
-        const result = yield* page
-          .click(refOf(yield* page.snapshot(), "button", "Continue"), { clickCount: 2 })
-          .pipe(
-            Effect.match({
-              onFailure: (error) => ({ tag: error.reason._tag, dispatched: error.dispatched }),
-              onSuccess: () => undefined,
-            }),
+          // A second press must still hit the approved control after its first click changes the DOM.
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).setContent(
+              "<style>button{position:absolute;left:10px;top:10px;width:150px;height:60px}</style>" +
+                '<button id="first" type="button" onclick="this.remove(); document.getElementById(\'remove\').hidden=false">Continue</button>' +
+                "<form onsubmit=\"event.preventDefault(); document.body.dataset.submitted='yes'\">" +
+                '<button id="remove" hidden onpointerdown="document.body.dataset.activated=\'yes\'">Delete order</button></form>',
+            ),
           );
 
-        const effects = yield* Effect.promise(() =>
-          page.playwright.evaluate(() => ({
-            firstPresent: document.getElementById("first") !== null,
-            submitted: document.body.dataset.submitted,
-            activated: document.body.dataset.activated,
-          })),
-        );
+          const result = yield* page
+            .click(refOf(yield* page.snapshot(), "button", "Continue"), { clickCount: 2 })
+            .pipe(
+              Effect.match({
+                onFailure: (error) => ({ tag: error.reason._tag, dispatched: error.dispatched }),
+                onSuccess: () => undefined,
+              }),
+            );
 
-        assert.deepStrictEqual(
-          { result, ...effects },
-          {
-            result: { tag: "NotActionable", dispatched: true },
-            firstPresent: false,
-            submitted: undefined,
-            activated: undefined,
-          },
-        );
-      }),
+          const effects = yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate(() => ({
+              firstPresent: document.getElementById("first") !== null,
+              submitted: document.body.dataset.submitted,
+              activated: document.body.dataset.activated,
+            })),
+          );
+
+          assert.deepStrictEqual(
+            { result, ...effects },
+            {
+              result: { tag: "NotActionable", dispatched: true },
+              firstPresent: false,
+              submitted: undefined,
+              activated: undefined,
+            },
+          );
+        }),
+      ),
     );
   }
 
   // #180 put a guarded 2,000-character paste at about 8 minutes: each key waited for the keys
   // before it and a focus check. The field is approved once, and the text goes in at once.
   it.effect("approves a field once, and puts a guarded paste in one insertion", () =>
-    Effect.gen(function* () {
-      let asked = 0;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        let asked = 0;
 
-      const { browser, page } = yield* setup({
-        guard: () =>
-          Effect.sync(() => {
-            asked += 1;
-          }),
-      });
+        const { browser, page } = yield* setup({
+          guard: () =>
+            Effect.sync(() => {
+              asked += 1;
+            }),
+        });
 
-      yield* Effect.promise(() =>
-        page.playwright.setContent('<textarea id="notes" aria-label="Notes"></textarea>'),
-      );
-      const into = refOf(yield* page.snapshot(), "textbox", "Notes");
-      const text = "a guarded paste ".repeat(125);
-      const started = performance.now();
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<textarea id="notes" aria-label="Notes"></textarea>',
+          ),
+        );
+        const into = refOf(yield* page.snapshot(), "textbox", "Notes");
+        const text = "a guarded paste ".repeat(125);
 
-      yield* page.type(text, { into });
-      const millis = performance.now() - started;
+        yield* page.type(text, { into });
 
-      const input = (yield* browser.recentEvents).filter(
-        (event) => event._tag === "TextInserted" || event._tag === "KeyChanged",
-      );
+        const input = (yield* browser.recentEvents).filter(
+          (event) => event._tag === "TextInserted" || event._tag === "KeyChanged",
+        );
 
-      assert.strictEqual(yield* valueOf(page, "#notes"), text);
-      assert.deepStrictEqual(
-        input.map((event) => event._tag),
-        ["TextInserted"],
-      );
-      assert.strictEqual(asked, 1);
-      assert.isBelow(millis, 2000);
-    }),
+        assert.strictEqual(yield* valueOf(page, "#notes"), text);
+        assert.deepStrictEqual(
+          input.map((event) => event._tag),
+          ["TextInserted"],
+        );
+        assert.strictEqual(asked, 1);
+      }),
+    ),
   );
 
   it.effect("consults one policy for every supported input and navigation", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
 
-      const { browser, page } = yield* setup({
-        guard: (request) =>
-          Effect.sync(() => {
-            requests.push(request);
-          }),
-      });
+        const { browser, page } = yield* setup({
+          guard: (request) =>
+            Effect.sync(() => {
+              requests.push(request);
+            }),
+        });
 
-      const site = yield* Site;
-      const snapshot = yield* page.snapshot();
-      const checkbox = refOf(snapshot, "checkbox", "I agree");
+        const site = yield* Site;
+        const snapshot = yield* page.snapshot();
+        const checkbox = refOf(snapshot, "checkbox", "I agree");
 
-      yield* page.hover(checkbox);
-      yield* page.scroll({ at: checkbox, dy: 0 });
-      yield* page.click(checkbox);
-      yield* page.type("25", { into: refOf(snapshot, "textbox", "Amount") });
-      yield* page.press("ArrowRight");
-      yield* page.select(refOf(snapshot, "combobox", "Coin"), ["eth"]);
-      const slider = yield* Effect.promise(() => page.playwright.locator("#slider").boundingBox());
+        yield* page.hover(checkbox);
+        yield* page.scroll({ at: checkbox, dy: 0 });
+        yield* page.click(checkbox);
+        yield* page.type("25", { into: refOf(snapshot, "textbox", "Amount") });
+        yield* page.press("ArrowRight");
+        yield* page.select(refOf(snapshot, "combobox", "Coin"), ["eth"]);
 
-      assert.isNotNull(slider);
-      if (slider === null) return;
-      yield* page.drag(
-        { x: slider.x + 4, y: slider.y + slider.height / 2 },
-        { x: slider.x + slider.width / 2, y: slider.y + slider.height / 2 },
-      );
-      yield* page.goto(site.url("/next"));
-      yield* page.back;
-      yield* page.reload;
-      yield* browser.newPage(site.url("/next"));
+        const slider = yield* Effect.promise(() =>
+          TestCdp.nativePage(page).locator("#slider").boundingBox(),
+        );
 
-      assert.deepStrictEqual(
-        requests.map((request) => request.action),
-        [
-          "hover",
-          "scroll",
-          "click",
-          "type",
-          "press",
-          "select",
-          "drag",
-          "navigate",
-          "back",
-          "reload",
-          "navigate",
-        ],
-      );
-      assert.deepStrictEqual(
-        requests.slice(-4).map((request) => request.destination),
-        [site.url("/next"), site.url("/form"), site.url("/form"), site.url("/next")],
-      );
-    }),
+        assert.isNotNull(slider);
+        if (slider === null) return;
+        yield* page.drag(
+          { x: slider.x + 4, y: slider.y + slider.height / 2 },
+          { x: slider.x + slider.width / 2, y: slider.y + slider.height / 2 },
+        );
+        yield* page.goto(site.url("/next"));
+        yield* page.back;
+        yield* page.reload;
+        yield* browser.newPage(site.url("/next"));
+
+        assert.deepStrictEqual(
+          requests.map((request) => nameOf(request.action)),
+          [
+            "hover",
+            "scroll",
+            "click",
+            "type",
+            "press",
+            "select",
+            "drag",
+            "navigate",
+            "back",
+            "reload",
+            "navigate",
+          ],
+        );
+        assert.deepStrictEqual(
+          requests.slice(-4).map((request) => request.destination),
+          [site.url("/next"), site.url("/form"), site.url("/form"), site.url("/next")],
+        );
+      }),
+    ),
   );
 
   it.effect("reports denial and records an undispatched action", () =>
-    Effect.gen(function* () {
-      const { browser, page } = yield* setup({
-        guard: () => Effect.fail(new PolicyDenied({ detail: "test policy refused" })),
-      });
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { browser, page } = yield* setup({
+          guard: () => Effect.fail(new PolicyDenied({ detail: "test policy refused" })),
+        });
 
-      const submit = refOf(yield* page.snapshot(), "button", "Submit");
-      const refused = yield* page.click(submit).pipe(Effect.flip);
+        const submit = refOf(yield* page.snapshot(), "button", "Submit");
+        const refused = yield* page.click(submit).pipe(Effect.flip);
 
-      assert.strictEqual(refused.reason._tag, "PolicyDenied");
-      assert.include(refused.message, "test policy refused");
-      assert.isFalse(refused.dispatched);
-      assert.strictEqual(yield* outcome(page), "Not ordered");
+        assert.strictEqual(refused.reason._tag, "PolicyDenied");
+        assert.include(refused.message, "test policy refused");
+        assert.isFalse(refused.dispatched);
+        assert.strictEqual(yield* outcome(page), "Not ordered");
 
-      const action = (yield* browser.recentEvents)
-        .filter((event) => event._tag === "Action")
-        .at(-1);
+        const action = (yield* browser.recentEvents)
+          .filter((event) => event._tag === "Action")
+          .at(-1);
 
-      assert.strictEqual(action?.name, "click");
-      assert.isFalse(action?.ok);
-      assert.isFalse(action?.dispatched);
-    }),
+        assert.strictEqual(action?.name, "click");
+        assert.isFalse(action?.ok);
+        assert.isFalse(action?.dispatched);
+      }),
+    ),
   );
 
   it.effect("denies navigation and closes a new tab whose navigation was refused", () =>
-    Effect.gen(function* () {
-      const { browser, page } = yield* setup({
-        guard: () => Effect.fail(new PolicyDenied({ detail: "navigation refused" })),
-      });
-
-      const site = yield* Site;
-      const before = (yield* browser.pages).length;
-
-      for (const navigate of [
-        page.goto(site.url("/next")),
-        page.back,
-        page.reload,
-        browser.newPage(site.url("/next")),
-      ]) {
-        assert.deepStrictEqual(yield* failure(navigate), {
-          tag: "PolicyDenied",
-          dispatched: false,
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { browser, page } = yield* setup({
+          guard: () => Effect.fail(new PolicyDenied({ detail: "navigation refused" })),
         });
-      }
-      assert.strictEqual(yield* page.url, site.url("/form"));
-      assert.strictEqual((yield* browser.pages).length, before);
-    }),
+
+        const site = yield* Site;
+        const before = (yield* browser.pages).length;
+
+        for (const navigate of [
+          page.goto(site.url("/next")),
+          page.back,
+          page.reload,
+          browser.newPage(site.url("/next")),
+        ]) {
+          assert.deepStrictEqual(yield* failure(navigate), {
+            tag: "PolicyDenied",
+            dispatched: false,
+          });
+        }
+        assert.strictEqual(yield* page.url, site.url("/form"));
+        assert.strictEqual((yield* browser.pages).length, before);
+      }),
+    ),
   );
 
   it.effect("closes a new tab when its held navigation is interrupted", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
 
-      const { browser } = yield* setup({
-        guard: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
-      });
+        const { browser } = yield* setup({
+          guard: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+        });
 
-      const before = (yield* browser.pages).length;
-      const held = yield* browser.newPage((yield* Site).url("/next")).pipe(Effect.forkChild);
+        const before = (yield* browser.pages).length;
+        const held = yield* browser.newPage((yield* Site).url("/next")).pipe(Effect.forkChild);
 
-      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-      assert.strictEqual((yield* browser.pages).length, before + 1);
-      yield* Fiber.interrupt(held);
-      assert.strictEqual((yield* browser.pages).length, before);
-    }),
+        yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+        assert.strictEqual((yield* browser.pages).length, before + 1);
+        yield* Fiber.interrupt(held);
+        assert.strictEqual((yield* browser.pages).length, before);
+      }),
+    ),
   );
 
   it.effect("holds outside the action timeout and leaves the page lock available", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
 
-      const { page } = yield* setup({
-        actionTimeout: Duration.millis(350),
-        policyTimeout: Duration.seconds(3),
-        guard: (request) =>
-          request.action === "click"
-            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released)))
-            : Effect.void,
-      });
+        const { page } = yield* setup({
+          actionTimeout: Duration.millis(350),
+          policyTimeout: Duration.seconds(3),
+          guard: (request) =>
+            request.action._tag === "Click"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released)))
+              : Effect.void,
+        });
 
-      const snapshot = yield* page.snapshot();
-      const held = yield* page.click(refOf(snapshot, "button", "Submit")).pipe(Effect.forkChild);
+        const snapshot = yield* page.snapshot();
+        const held = yield* page.click(refOf(snapshot, "button", "Submit")).pipe(Effect.forkChild);
 
-      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-      yield* page
-        .hover(refOf(snapshot, "checkbox", "I agree"))
-        .pipe(Effect.timeout(Duration.seconds(1)));
+        yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+        yield* page
+          .hover(refOf(snapshot, "checkbox", "I agree"))
+          .pipe(Effect.timeout(Duration.seconds(1)));
 
-      const elapsed = yield* Effect.promise(() =>
-        page.playwright.evaluate(
-          () =>
-            new Promise<number>((resolve) => {
-              const started = performance.now();
-
-              window.setTimeout(() => resolve(performance.now() - started), 500);
-            }),
-        ),
-      );
-
-      assert.isAtLeast(elapsed, 350);
-      assert.strictEqual(yield* outcome(page), "Not ordered");
-      yield* Deferred.succeed(released, undefined);
-      yield* Fiber.join(held);
-      assert.strictEqual(yield* outcome(page), "Ordered 10 btc");
-    }),
+        yield* TestClock.adjust("500 millis");
+        assert.isUndefined(held.pollUnsafe(), "policy holds outlast the action deadline");
+        assert.strictEqual(yield* outcome(page), "Not ordered");
+        yield* Deferred.succeed(released, undefined);
+        yield* Fiber.join(held);
+        assert.strictEqual(yield* outcome(page), "Ordered 10 btc");
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
   );
 
   it.effect("bounds a held policy separately and records a timeout before dispatch", () =>
-    Effect.gen(function* () {
-      const { browser, page } = yield* setup({
-        policyTimeout: Duration.millis(40),
-        guard: () => Effect.never,
-      });
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { browser, page } = yield* setup({
+          policyTimeout: Duration.millis(40),
+          guard: () => Effect.never,
+        });
 
-      const submit = refOf(yield* page.snapshot(), "button", "Submit");
+        const submit = refOf(yield* page.snapshot(), "button", "Submit");
 
-      assert.deepStrictEqual(yield* failure(page.click(submit)), {
-        tag: "PolicyTimeout",
-        dispatched: false,
-      });
-      assert.strictEqual(yield* outcome(page), "Not ordered");
+        assert.deepStrictEqual(yield* failure(page.click(submit)), {
+          tag: "PolicyTimeout",
+          dispatched: false,
+        });
+        assert.strictEqual(yield* outcome(page), "Not ordered");
 
-      const action = (yield* browser.recentEvents)
-        .filter((event) => event._tag === "Action")
-        .at(-1);
+        const action = (yield* browser.recentEvents)
+          .filter((event) => event._tag === "Action")
+          .at(-1);
 
-      assert.strictEqual(action?.name, "click");
-      assert.isFalse(action?.ok);
-      assert.isFalse(action?.dispatched);
-    }),
+        assert.strictEqual(action?.name, "click");
+        assert.isFalse(action?.ok);
+        assert.isFalse(action?.dispatched);
+      }),
+    ),
   );
 
   it.effect("refuses a target replaced while its click policy was held", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
 
-      const { page } = yield* setup({
-        guard: () =>
-          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
-      });
+        const { page } = yield* setup({
+          guard: () =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
+        });
 
-      const submit = refOf(yield* page.snapshot(), "button", "Submit");
-      const held = yield* failure(page.click(submit)).pipe(Effect.forkChild);
+        const submit = refOf(yield* page.snapshot(), "button", "Submit");
+        const held = yield* failure(page.click(submit)).pipe(Effect.forkChild);
 
-      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-      yield* Effect.promise(() =>
-        page.playwright.evaluate(() => {
-          const button = document.getElementById("submit");
+        yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).evaluate(() => {
+            const button = document.getElementById("submit");
 
-          if (button !== null) button.replaceWith(button.cloneNode(true));
-        }),
-      );
-      yield* Deferred.succeed(released, undefined);
+            if (button !== null) button.replaceWith(button.cloneNode(true));
+          }),
+        );
+        yield* Deferred.succeed(released, undefined);
 
-      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "StaleRef", dispatched: false });
-      assert.strictEqual(yield* outcome(page), "Not ordered");
-    }),
+        assert.deepStrictEqual(yield* Fiber.join(held), { tag: "StaleRef", dispatched: false });
+        assert.strictEqual(yield* outcome(page), "Not ordered");
+      }),
+    ),
   );
 
   // A control that appears under the pointer when it arrives, as a hover menu might, must not
@@ -895,30 +1013,32 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     ],
   ] as const) {
     it.effect("refuses " + label + " when the pointer's arrival covers the approved target", () =>
-      Effect.gen(function* () {
-        const requests: Array<InputRequest> = [];
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const requests: Array<InputRequest> = [];
 
-        const { page } = yield* setup({
-          performed,
-          guard: (request) => Effect.sync(() => requests.push(request)),
-        });
+          const { page } = yield* setup({
+            performed,
+            guard: (request) => Effect.sync(() => requests.push(request)),
+          });
 
-        yield* Effect.promise(() => page.playwright.setContent(hoverTrap));
+          yield* Effect.promise(() => TestCdp.nativePage(page).setContent(hoverTrap));
 
-        // The pointer travelled, but nothing was pressed: the action cannot have taken effect.
-        assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
-          tag: "NotActionable",
-          dispatched: false,
-        });
-        assert.lengthOf(requests, 1);
-        assert.deepStrictEqual(
-          yield* Effect.promise(() =>
-            page.playwright.evaluate(() => ({ ...document.body.dataset })),
-          ),
-          {},
-        );
-        assert.strictEqual(yield* valueOf(page, "#field"), "");
-      }),
+          // The pointer travelled, but nothing was pressed: the action cannot have taken effect.
+          assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
+            tag: "NotActionable",
+            dispatched: false,
+          });
+          assert.lengthOf(requests, 1);
+          assert.deepStrictEqual(
+            yield* Effect.promise(() =>
+              TestCdp.nativePage(page).evaluate(() => ({ ...document.body.dataset })),
+            ),
+            {},
+          );
+          assert.strictEqual(yield* valueOf(page, "#field"), "");
+        }),
+      ),
     );
   }
 
@@ -956,115 +1076,231 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     it.effect(
       "refuses " + label + " when the pointer's arrival nests a control in the target",
       () =>
-        Effect.gen(function* () {
-          const requests: Array<InputRequest> = [];
+        TestCdp.withCdp(
+          Effect.gen(function* () {
+            const requests: Array<InputRequest> = [];
 
-          const { page } = yield* setup({
-            performed,
-            guard: (request) => Effect.sync(() => requests.push(request)),
-          });
+            const { page } = yield* setup({
+              performed,
+              guard: (request) => Effect.sync(() => requests.push(request)),
+            });
 
-          yield* Effect.promise(() => page.playwright.setContent(nestedTrap));
+            yield* Effect.promise(() => TestCdp.nativePage(page).setContent(nestedTrap));
 
-          assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
-            tag: "NotActionable",
-            dispatched: false,
-          });
-          assert.lengthOf(requests, 1);
-          assert.deepStrictEqual(
-            yield* Effect.promise(() =>
-              page.playwright.evaluate(() => ({ ...document.body.dataset })),
-            ),
-            {},
-          );
-        }),
+            assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
+              tag: "NotActionable",
+              dispatched: false,
+            });
+            assert.lengthOf(requests, 1);
+            assert.deepStrictEqual(
+              yield* Effect.promise(() =>
+                TestCdp.nativePage(page).evaluate(() => ({ ...document.body.dataset })),
+              ),
+              {},
+            );
+          }),
+        ),
     );
   }
 
   it.effect("presses a target whose press lands on its containing option", () =>
-    Effect.gen(function* () {
-      const requests: Array<InputRequest> = [];
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
 
-      const { page } = yield* setup({
-        guard: (request) => Effect.sync(() => requests.push(request)),
-      });
+        const { page } = yield* setup({
+          guard: (request) => Effect.sync(() => requests.push(request)),
+        });
 
-      // The hit is the option around the button, a container the button's own approval covers;
-      // only controls nested inside the target are refused.
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<body style="margin:0"><div role="option" aria-label="Report" onclick="document.body.dataset.opened=\'yes\'"' +
-            ' style="position:absolute;left:100px;top:100px;width:300px;height:60px">' +
-            '<button style="pointer-events:none;width:100%;height:100%">Open</button></div></body>',
-        ),
-      );
+        // The hit is the option around the button, a container the button's own approval covers;
+        // only controls nested inside the target are refused.
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<body style="margin:0"><div role="option" aria-label="Report" onclick="document.body.dataset.opened=\'yes\'"' +
+              ' style="position:absolute;left:100px;top:100px;width:300px;height:60px">' +
+              '<button style="pointer-events:none;width:100%;height:100%">Open</button></div></body>',
+          ),
+        );
 
-      yield* page.click(refOf(yield* page.snapshot(), "button", "Open"));
+        yield* page.click(refOf(yield* page.snapshot(), "button", "Open"));
 
-      assert.lengthOf(requests, 1);
-      assert.strictEqual(
-        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.opened)),
-        "yes",
-      );
-    }),
+        assert.lengthOf(requests, 1);
+        assert.strictEqual(
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate(() => document.body.dataset.opened),
+          ),
+          "yes",
+        );
+      }),
+    ),
   );
 
   for (const change of ["label", "href", "pixel target"] as const) {
     it.effect("refuses a held click after its " + change + " changes", () =>
-      Effect.gen(function* () {
-        const entered = yield* Deferred.make<void>();
-        const released = yield* Deferred.make<void>();
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const released = yield* Deferred.make<void>();
 
-        const { page } = yield* setup({
-          guard: () =>
-            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
-        });
+          const { page } = yield* setup({
+            guard: () =>
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
+          });
 
-        yield* Effect.promise(() =>
-          page.playwright.setContent(
-            '<body><a id="target" href="#first" style="position:absolute;left:40px;top:40px;width:120px;height:50px" onclick="document.body.dataset.clicked=\'yes\'">Continue</a>' +
-              '<a id="other" href="#other" style="position:absolute;left:300px;top:40px;width:120px;height:50px" onclick="document.body.dataset.clicked=\'yes\'">Other</a>',
-          ),
-        );
-
-        const target =
-          change === "pixel target"
-            ? { x: 70, y: 60 }
-            : refOf(yield* page.snapshot(), "link", "Continue");
-
-        const held = yield* failure(page.click(target)).pipe(Effect.forkChild);
-
-        yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-        yield* Effect.promise(() =>
-          page.playwright.evaluate((change) => {
-            const target = document.getElementById("target")!;
-            const other = document.getElementById("other")!;
-
-            if (change === "label") target.textContent = "Buy now";
-            else if (change === "href") target.setAttribute("href", "/next");
-            else {
-              target.style.left = "300px";
-              other.style.left = "40px";
-            }
-          }, change),
-        );
-        yield* Deferred.succeed(released, undefined);
-
-        assert.deepStrictEqual(yield* Fiber.join(held), {
-          tag: "NotActionable",
-          dispatched: false,
-        });
-        assert.isUndefined(
           yield* Effect.promise(() =>
-            page.playwright.evaluate(() => document.body.dataset.clicked),
-          ),
-        );
-      }),
+            TestCdp.nativePage(page).setContent(
+              '<body><a id="target" href="#first" style="position:absolute;left:40px;top:40px;width:120px;height:50px" onclick="document.body.dataset.clicked=\'yes\'">Continue</a>' +
+                '<a id="other" href="#other" style="position:absolute;left:300px;top:40px;width:120px;height:50px" onclick="document.body.dataset.clicked=\'yes\'">Other</a>',
+            ),
+          );
+
+          const target =
+            change === "pixel target"
+              ? { x: 70, y: 60 }
+              : refOf(yield* page.snapshot(), "link", "Continue");
+
+          const held = yield* failure(page.click(target)).pipe(Effect.forkChild);
+
+          yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate((change) => {
+              const target = document.getElementById("target")!;
+              const other = document.getElementById("other")!;
+
+              if (change === "label") target.textContent = "Buy now";
+              else if (change === "href") target.setAttribute("href", "/next");
+              else {
+                target.style.left = "300px";
+                other.style.left = "40px";
+              }
+            }, change),
+          );
+          yield* Deferred.succeed(released, undefined);
+
+          assert.deepStrictEqual(yield* Fiber.join(held), {
+            tag: "NotActionable",
+            dispatched: false,
+          });
+          assert.isUndefined(
+            yield* Effect.promise(() =>
+              TestCdp.nativePage(page).evaluate(() => document.body.dataset.clicked),
+            ),
+          );
+        }),
+      ),
     );
   }
 
   for (const destinationOwner of ["form", "submitter"] as const) {
     it.effect("refuses a held submit after the " + destinationOwner + " destination changes", () =>
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const released = yield* Deferred.make<void>();
+
+          const { page } = yield* setup({
+            guard: () =>
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
+          });
+
+          const site = yield* Site;
+
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).setContent(
+              '<form id="form" action="/next"><input value="10"><button id="submit">Continue</button></form>',
+            ),
+          );
+          const target = refOf(yield* page.snapshot(), "button", "Continue");
+          const held = yield* failure(page.click(target)).pipe(Effect.forkChild);
+
+          yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate((owner) => {
+              if (owner === "form")
+                document.getElementById("form")?.setAttribute("action", "/chart");
+              else document.getElementById("submit")?.setAttribute("formaction", "/chart");
+            }, destinationOwner),
+          );
+          yield* Deferred.succeed(released, undefined);
+
+          assert.deepStrictEqual(yield* Fiber.join(held), {
+            tag: "NotActionable",
+            dispatched: false,
+          });
+          assert.strictEqual(yield* page.url, site.url("/form"));
+        }),
+      ),
+    );
+  }
+
+  it.effect("does not scroll an offscreen ref before a denied policy", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { page } = yield* setup({
+          guard: () => Effect.fail(new PolicyDenied({ detail: "refused before scrolling" })),
+        });
+
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).evaluate(() => {
+            const button = document.createElement("button");
+
+            button.textContent = "Delete below";
+            button.style.cssText = "position:absolute;left:20px;top:2500px";
+            document.body.append(button);
+          }),
+        );
+        const target = refOf(yield* page.snapshot({ full: true }), "button", "Delete below");
+
+        assert.deepStrictEqual(yield* failure(page.click(target)), {
+          tag: "PolicyDenied",
+          dispatched: false,
+        });
+        assert.strictEqual(
+          yield* Effect.promise(() => TestCdp.nativePage(page).evaluate(() => window.scrollY)),
+          0,
+        );
+      }),
+    ),
+  );
+
+  it.effect("refuses held back navigation after its previous history entry changes", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+
+        const { page } = yield* setup({
+          guard: (request) =>
+            request.action._tag === "Back"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released)))
+              : Effect.void,
+        });
+
+        const site = yield* Site;
+
+        yield* Effect.promise(() => TestCdp.nativePage(page).goto(site.url("/next")));
+        const held = yield* failure(page.back).pipe(Effect.forkChild);
+
+        yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).evaluate(() => {
+            history.replaceState({}, "", "/chart");
+            history.pushState({}, "", "/next");
+          }),
+        );
+        yield* Deferred.succeed(released, undefined);
+
+        assert.deepStrictEqual(yield* Fiber.join(held), {
+          tag: "NotActionable",
+          dispatched: false,
+        });
+        assert.strictEqual(yield* page.url, site.url("/next"));
+      }),
+    ),
+  );
+
+  it.effect("refuses a held ref after its iframe navigates to another document", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const released = yield* Deferred.make<void>();
@@ -1074,240 +1310,153 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
         });
 
-        const site = yield* Site;
-
         yield* Effect.promise(() =>
-          page.playwright.setContent(
-            '<form id="form" action="/next"><input value="10"><button id="submit">Continue</button></form>',
+          TestCdp.nativePage(page).setContent(
+            '<iframe name="child" srcdoc="<button>Frame action</button>"></iframe>',
           ),
         );
-        const target = refOf(yield* page.snapshot(), "button", "Continue");
+        const frame = TestCdp.nativePage(page).frame({ name: "child" });
+
+        assert.isNotNull(frame);
+        if (frame === null) return;
+        const target = refOf(yield* page.snapshot(), "button", "Frame action");
         const held = yield* failure(page.click(target)).pipe(Effect.forkChild);
 
         yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+        const destination = (yield* Site).url("/next");
+
+        yield* Effect.promise(() => frame.goto(destination));
         yield* Effect.promise(() =>
-          page.playwright.evaluate((owner) => {
-            if (owner === "form") document.getElementById("form")?.setAttribute("action", "/chart");
-            else document.getElementById("submit")?.setAttribute("formaction", "/chart");
-          }, destinationOwner),
+          frame.evaluate(() => {
+            document.body.dataset.clicked = "no";
+            document.addEventListener("click", () => {
+              document.body.dataset.clicked = "yes";
+            });
+          }),
         );
         yield* Deferred.succeed(released, undefined);
 
-        assert.deepStrictEqual(yield* Fiber.join(held), {
-          tag: "NotActionable",
-          dispatched: false,
-        });
-        assert.strictEqual(yield* page.url, site.url("/form"));
+        assert.deepStrictEqual(yield* Fiber.join(held), { tag: "StaleRef", dispatched: false });
+        assert.strictEqual(
+          yield* Effect.promise(() => frame.evaluate(() => document.body.dataset.clicked)),
+          "no",
+        );
       }),
-    );
-  }
-
-  it.effect("does not scroll an offscreen ref before a denied policy", () =>
-    Effect.gen(function* () {
-      const { page } = yield* setup({
-        guard: () => Effect.fail(new PolicyDenied({ detail: "refused before scrolling" })),
-      });
-
-      yield* Effect.promise(() =>
-        page.playwright.evaluate(() => {
-          const button = document.createElement("button");
-
-          button.textContent = "Delete below";
-          button.style.cssText = "position:absolute;left:20px;top:2500px";
-          document.body.append(button);
-        }),
-      );
-      const target = refOf(yield* page.snapshot({ full: true }), "button", "Delete below");
-
-      assert.deepStrictEqual(yield* failure(page.click(target)), {
-        tag: "PolicyDenied",
-        dispatched: false,
-      });
-      assert.strictEqual(
-        yield* Effect.promise(() => page.playwright.evaluate(() => window.scrollY)),
-        0,
-      );
-    }),
-  );
-
-  it.effect("refuses held back navigation after its previous history entry changes", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
-
-      const { page } = yield* setup({
-        guard: (request) =>
-          request.action === "back"
-            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released)))
-            : Effect.void,
-      });
-
-      const site = yield* Site;
-
-      yield* Effect.promise(() => page.playwright.goto(site.url("/next")));
-      const held = yield* failure(page.back).pipe(Effect.forkChild);
-
-      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-      yield* Effect.promise(() =>
-        page.playwright.evaluate(() => {
-          history.replaceState({}, "", "/chart");
-          history.pushState({}, "", "/next");
-        }),
-      );
-      yield* Deferred.succeed(released, undefined);
-
-      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "NotActionable", dispatched: false });
-      assert.strictEqual(yield* page.url, site.url("/next"));
-    }),
-  );
-
-  it.effect("refuses a held ref after its iframe navigates to another document", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
-
-      const { page } = yield* setup({
-        guard: () =>
-          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
-      });
-
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<iframe name="child" srcdoc="<button>Frame action</button>"></iframe>',
-        ),
-      );
-      const frame = page.playwright.frame({ name: "child" });
-
-      assert.isNotNull(frame);
-      if (frame === null) return;
-      const target = refOf(yield* page.snapshot(), "button", "Frame action");
-      const held = yield* failure(page.click(target)).pipe(Effect.forkChild);
-
-      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-      const destination = (yield* Site).url("/next");
-
-      yield* Effect.promise(() => frame.goto(destination));
-      yield* Effect.promise(() =>
-        frame.evaluate(() => {
-          document.body.dataset.clicked = "no";
-          document.addEventListener("click", () => {
-            document.body.dataset.clicked = "yes";
-          });
-        }),
-      );
-      yield* Deferred.succeed(released, undefined);
-
-      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "StaleRef", dispatched: false });
-      assert.strictEqual(
-        yield* Effect.promise(() => frame.evaluate(() => document.body.dataset.clicked)),
-        "no",
-      );
-    }),
+    ),
   );
 
   it.effect(
     "refuses back before asking when there is nothing behind, and leaves frame history",
     () =>
-      Effect.gen(function* () {
-        const requests: Array<InputRequest> = [];
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const requests: Array<InputRequest> = [];
 
-        const { browser, page } = yield* setup({
-          guard: (request) => Effect.sync(() => requests.push(request)),
-        });
+          const { browser, page } = yield* setup({
+            guard: (request) => Effect.sync(() => requests.push(request)),
+          });
 
-        const fresh = yield* browser.newPage();
+          const fresh = yield* browser.newPage();
 
-        requests.splice(0);
-        assert.deepStrictEqual(yield* failure(fresh.back), { tag: "NotFound", dispatched: false });
-        assert.isEmpty(requests);
+          requests.splice(0);
+          assert.deepStrictEqual(yield* failure(fresh.back), {
+            tag: "NotFound",
+            dispatched: false,
+          });
+          assert.isEmpty(requests);
 
-        const site = yield* Site;
+          const site = yield* Site;
 
-        yield* Effect.promise(() =>
-          page.playwright.setContent(`<iframe name="child" src="${site.url("/next")}"></iframe>`),
-        );
-        const child = page.playwright.frame({ name: "child" });
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).setContent(
+              `<iframe name="child" src="${site.url("/next")}"></iframe>`,
+            ),
+          );
+          const child = TestCdp.nativePage(page).frame({ name: "child" });
 
-        assert.isNotNull(child);
-        if (child === null) return;
-        yield* Effect.promise(() => child.waitForLoadState());
-        yield* Effect.promise(() => child.goto(site.url("/chart")));
-        yield* page.back.pipe(Effect.timeout(Duration.seconds(5)));
-        assert.strictEqual(child.url(), site.url("/next"));
-        assert.deepStrictEqual(
-          requests.map((request) => request.action),
-          ["back"],
-        );
-      }),
+          assert.isNotNull(child);
+          if (child === null) return;
+          yield* Effect.promise(() => child.waitForLoadState());
+          yield* Effect.promise(() => child.goto(site.url("/chart")));
+          yield* page.back.pipe(Effect.timeout(Duration.seconds(5)));
+          assert.strictEqual(child.url(), site.url("/next"));
+          assert.deepStrictEqual(
+            requests.map((request) => nameOf(request.action)),
+            ["back"],
+          );
+        }),
+      ),
   );
 
   it.effect("names the stale target, and refuses a selection undispatched, on every path", () =>
-    Effect.gen(function* () {
-      const staleness = (error: BrowserError) =>
-        error.reason._tag === "StaleRef"
-          ? { ref: error.reason.ref, dispatched: error.dispatched }
-          : { tag: error.reason._tag, dispatched: error.dispatched };
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const staleness = (error: BrowserError) =>
+          error.reason._tag === "StaleRef"
+            ? { ref: error.reason.ref, dispatched: error.dispatched }
+            : { tag: error.reason._tag, dispatched: error.dispatched };
 
-      for (const guarded of [false, true]) {
-        const entered = yield* Deferred.make<void>();
-        const released = yield* Deferred.make<void>();
+        for (const guarded of [false, true]) {
+          const entered = yield* Deferred.make<void>();
+          const released = yield* Deferred.make<void>();
 
-        const { page } = yield* setup(
-          guarded
-            ? {
-                guard: (request) =>
-                  request.action === "click"
-                    ? Deferred.succeed(entered, undefined).pipe(
-                        Effect.andThen(Deferred.await(released)),
-                      )
-                    : Effect.void,
-              }
-            : {},
-        );
-
-        yield* Effect.promise(() =>
-          page.playwright.setContent(
-            '<button id="first">First</button><button id="second">Second</button>' +
-              '<select id="coin" aria-label="Coin"><option>Bitcoin</option></select>',
-          ),
-        );
-        const snapshot = yield* page.snapshot();
-        const first = refOf(snapshot, "button", "First");
-        const second = refOf(snapshot, "button", "Second");
-        const coin = refOf(snapshot, "combobox", "Coin");
-
-        yield* Effect.promise(() =>
-          page.playwright.evaluate(() => document.getElementById("second")?.remove()),
-        );
-        assert.deepStrictEqual(staleness(yield* Effect.flip(page.drag(first, second))), {
-          ref: second,
-          dispatched: false,
-        });
-        assert.deepStrictEqual(yield* failure(page.select(coin, ["Dogecoin"])), {
-          tag: "NotActionable",
-          dispatched: false,
-        });
-        assert.deepStrictEqual(yield* failure(page.select(first, ["Bitcoin"])), {
-          tag: "NotActionable",
-          dispatched: false,
-        });
-
-        if (guarded) {
-          // A ref removed while its approval was held is stale, as it is without a guard.
-          const held = yield* Effect.flip(page.click(first)).pipe(Effect.forkChild);
-
-          yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-          yield* Effect.promise(() =>
-            page.playwright.evaluate(() => document.getElementById("first")?.remove()),
+          const { page } = yield* setup(
+            guarded
+              ? {
+                  guard: (request) =>
+                    request.action._tag === "Click"
+                      ? Deferred.succeed(entered, undefined).pipe(
+                          Effect.andThen(Deferred.await(released)),
+                        )
+                      : Effect.void,
+                }
+              : {},
           );
-          yield* Deferred.succeed(released, undefined);
-          assert.deepStrictEqual(staleness(yield* Fiber.join(held)), {
-            ref: first,
+
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).setContent(
+              '<button id="first">First</button><button id="second">Second</button>' +
+                '<select id="coin" aria-label="Coin"><option>Bitcoin</option></select>',
+            ),
+          );
+          const snapshot = yield* page.snapshot();
+          const first = refOf(snapshot, "button", "First");
+          const second = refOf(snapshot, "button", "Second");
+          const coin = refOf(snapshot, "combobox", "Coin");
+
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate(() => document.getElementById("second")?.remove()),
+          );
+          assert.deepStrictEqual(staleness(yield* Effect.flip(page.drag(first, second))), {
+            ref: second,
             dispatched: false,
           });
+          assert.deepStrictEqual(yield* failure(page.select(coin, ["Dogecoin"])), {
+            tag: "NotActionable",
+            dispatched: false,
+          });
+          assert.deepStrictEqual(yield* failure(page.select(first, ["Bitcoin"])), {
+            tag: "NotActionable",
+            dispatched: false,
+          });
+
+          if (guarded) {
+            // A ref removed while its approval was held is stale, as it is without a guard.
+            const held = yield* Effect.flip(page.click(first)).pipe(Effect.forkChild);
+
+            yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+            yield* Effect.promise(() =>
+              TestCdp.nativePage(page).evaluate(() => document.getElementById("first")?.remove()),
+            );
+            yield* Deferred.succeed(released, undefined);
+            assert.deepStrictEqual(staleness(yield* Fiber.join(held)), {
+              ref: first,
+              dispatched: false,
+            });
+          }
         }
-      }
-    }),
+      }),
+    ),
   );
 
   // Scroll-spy documentation and feeds record where the reader is in the URL fragment.
@@ -1324,234 +1473,256 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     ["guarded and performed", { guard: () => Effect.void, performed: true }],
   ] as const) {
     it.effect("follows a scroll-spy fragment to an off-screen control, " + label, () =>
-      Effect.gen(function* () {
-        const { page } = yield* setup(options);
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const { page } = yield* setup(options);
 
-        yield* Effect.promise(() => page.playwright.setContent(scrollSpy));
-        const snapshot = yield* page.snapshot({ full: true });
+          yield* Effect.promise(() => TestCdp.nativePage(page).setContent(scrollSpy));
+          const snapshot = yield* page.snapshot({ full: true });
 
-        yield* page.click(refOf(snapshot, "button", "Act"));
-        yield* page.click(refOf(snapshot, "button", "Send"));
-        assert.strictEqual(
-          yield* Effect.promise(() => page.playwright.locator("#act").textContent()),
-          "clicked",
-        );
-        assert.strictEqual(
-          yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.sent)),
-          "yes",
-        );
-      }),
+          yield* page.click(refOf(snapshot, "button", "Act"));
+          yield* page.click(refOf(snapshot, "button", "Send"));
+          assert.strictEqual(
+            yield* Effect.promise(() => TestCdp.nativePage(page).locator("#act").textContent()),
+            "clicked",
+          );
+          assert.strictEqual(
+            yield* Effect.promise(() =>
+              TestCdp.nativePage(page).evaluate(() => document.body.dataset.sent),
+            ),
+            "yes",
+          );
+        }),
+      ),
     );
   }
 
   it.effect("refuses a held click after its page's hash route changes", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
 
-      const { page } = yield* setup({
-        guard: () =>
-          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
-      });
+        const { page } = yield* setup({
+          guard: () =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
+        });
 
-      // A hash router's route selects what a persistent control acts on.
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<button onclick="document.body.dataset.removed = location.hash">Remove item</button>' +
-            '<script>history.replaceState(null, "", "#/items/1")</script>',
-        ),
-      );
+        // A hash router's route selects what a persistent control acts on.
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<button onclick="document.body.dataset.removed = location.hash">Remove item</button>' +
+              '<script>history.replaceState(null, "", "#/items/1")</script>',
+          ),
+        );
 
-      const held = yield* failure(
-        page.click(refOf(yield* page.snapshot(), "button", "Remove item")),
-      ).pipe(Effect.forkChild);
+        const held = yield* failure(
+          page.click(refOf(yield* page.snapshot(), "button", "Remove item")),
+        ).pipe(Effect.forkChild);
 
-      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-      yield* Effect.promise(() => page.playwright.evaluate(() => (location.hash = "#/items/2")));
-      yield* Deferred.succeed(released, undefined);
+        yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).evaluate(() => (location.hash = "#/items/2")),
+        );
+        yield* Deferred.succeed(released, undefined);
 
-      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "NotActionable", dispatched: false });
-      assert.isUndefined(
-        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.removed)),
-      );
-    }),
+        assert.deepStrictEqual(yield* Fiber.join(held), {
+          tag: "NotActionable",
+          dispatched: false,
+        });
+        assert.isUndefined(
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate(() => document.body.dataset.removed),
+          ),
+        );
+      }),
+    ),
   );
 
   it.effect("counts a selection dispatched only when its script may have run", () =>
-    Effect.gen(function* () {
-      const native = (yield* Browser).context.browser();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const native = TestCdp.nativeContext(yield* Browser).browser();
 
-      if (native === null) return yield* Effect.die("the fixture requires a launched Chromium");
+        if (native === null) return yield* Effect.die("the fixture requires a launched Chromium");
 
-      for (const guarded of [false, true])
-        for (const [failure, dispatched] of [
-          ["Cannot find context with specified id", false],
-          ["Execution context was destroyed.", true],
-        ] as const) {
-          const context = yield* Effect.acquireRelease(
-            Effect.promise(() => native.newContext()),
-            (context) => Effect.promise(() => context.close()),
-          );
+        for (const guarded of [false, true])
+          for (const [failure, dispatched] of [
+            ["Cannot find context with specified id", false],
+            ["Execution context was destroyed.", true],
+          ] as const) {
+            const context = yield* Effect.acquireRelease(
+              Effect.promise(() => native.newContext()),
+              (context) => Effect.promise(() => context.close()),
+            );
 
-          const createSession = context.newCDPSession.bind(context);
+            const faults = yield* TestCdp.make();
 
-          // The selection script's own evaluation fails as a vanished or destroyed context would.
-          context.newCDPSession = async (target) => {
-            const cdp = await createSession(target);
-            const send = cdp.send.bind(cdp);
+            faults.rule(
+              { method: "Runtime.evaluate", script: "select" },
+              { _tag: "Fail", error: new Error("Protocol error (Runtime.evaluate): " + failure) },
+            );
 
-            cdp.send = ((method, params) =>
-              method === "Runtime.evaluate" &&
-              (params as { readonly expression?: string } | undefined)?.expression?.includes(
-                "globalThis.__effectBrowser.select(",
-              ) === true
-                ? Promise.reject(new Error("Protocol error (Runtime.evaluate): " + failure))
-                : send(method, params)) as typeof cdp.send;
+            const browser = yield* faults.provide(
+              makeBrowser(
+                context,
+                { id: "select-test", provider: "test" },
+                guarded ? { guard: () => Effect.void } : {},
+              ),
+            );
 
-            return cdp;
-          };
+            const page = yield* browser.newPage();
 
-          const browser = yield* makeBrowser(
-            context,
-            { id: "select-test", provider: "test" },
-            guarded ? { guard: () => Effect.void } : {},
-          );
+            yield* Effect.promise(() =>
+              TestCdp.nativePage(page).setContent(
+                '<select aria-label="Coin"><option>Bitcoin</option><option>Ether</option></select>',
+              ),
+            );
 
-          const page = yield* browser.newPage();
+            const error = yield* Effect.flip(
+              page.select(refOf(yield* page.snapshot(), "combobox", "Coin"), ["Ether"]),
+            );
 
-          yield* Effect.promise(() =>
-            page.playwright.setContent(
-              '<select aria-label="Coin"><option>Bitcoin</option><option>Ether</option></select>',
-            ),
-          );
-
-          const error = yield* Effect.flip(
-            page.select(refOf(yield* page.snapshot(), "combobox", "Coin"), ["Ether"]),
-          );
-
-          assert.strictEqual(error.reason._tag, "NotActionable");
-          assert.strictEqual(error.dispatched, dispatched, failure);
-        }
-    }),
+            assert.strictEqual(error.reason._tag, "NotActionable");
+            assert.strictEqual(error.dispatched, dispatched, failure);
+          }
+      }),
+    ),
   );
 
   it.effect("finishes allowed back navigation between entries with the same URL", () =>
-    Effect.gen(function* () {
-      const { page } = yield* setup({ guard: () => Effect.void });
-      const url = yield* page.url;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { page } = yield* setup({ guard: () => Effect.void });
+        const url = yield* page.url;
 
-      yield* Effect.promise(() =>
-        page.playwright.evaluate(() => {
-          history.replaceState({ entry: "first" }, "", location.href);
-          history.pushState({ entry: "second" }, "", location.href);
-        }),
-      );
-      yield* page.back;
-
-      assert.strictEqual(
         yield* Effect.promise(() =>
-          page.playwright.evaluate(() => (history.state as { entry: string }).entry),
-        ),
-        "first",
-      );
-      assert.strictEqual(yield* page.url, url);
-    }),
+          TestCdp.nativePage(page).evaluate(() => {
+            history.replaceState({ entry: "first" }, "", location.href);
+            history.pushState({ entry: "second" }, "", location.href);
+          }),
+        );
+        yield* page.back;
+
+        assert.strictEqual(
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate(() => (history.state as { entry: string }).entry),
+          ),
+          "first",
+        );
+        assert.strictEqual(yield* page.url, url);
+      }),
+    ),
   );
 
   it.effect("refuses typing when focus changed while the policy was held", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
 
-      const { page } = yield* setup({
-        guard: () =>
-          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
-      });
+        const { page } = yield* setup({
+          guard: () =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
+        });
 
-      yield* Effect.promise(() =>
-        page.playwright.evaluate(() => {
-          const other = document.createElement("input");
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).evaluate(() => {
+            const other = document.createElement("input");
 
-          other.id = "other";
-          other.value = "unchanged";
-          document.body.append(other);
-        }),
-      );
-      yield* Effect.promise(() => page.playwright.locator("#amount").focus());
-      const held = yield* failure(page.type("changed")).pipe(Effect.forkChild);
+            other.id = "other";
+            other.value = "unchanged";
+            document.body.append(other);
+          }),
+        );
+        yield* Effect.promise(() => TestCdp.nativePage(page).locator("#amount").focus());
+        const held = yield* failure(page.type("changed")).pipe(Effect.forkChild);
 
-      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-      yield* Effect.promise(() => page.playwright.locator("#other").focus());
-      yield* Deferred.succeed(released, undefined);
+        yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+        yield* Effect.promise(() => TestCdp.nativePage(page).locator("#other").focus());
+        yield* Deferred.succeed(released, undefined);
 
-      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "NotActionable", dispatched: false });
-      assert.strictEqual(yield* valueOf(page, "#amount"), "10");
-      assert.strictEqual(yield* valueOf(page, "#other"), "unchanged");
-    }),
+        assert.deepStrictEqual(yield* Fiber.join(held), {
+          tag: "NotActionable",
+          dispatched: false,
+        });
+        assert.strictEqual(yield* valueOf(page, "#amount"), "10");
+        assert.strictEqual(yield* valueOf(page, "#other"), "unchanged");
+      }),
+    ),
   );
 
   // Unguarded, a view's keys follow a field of the same name the page focuses in its place.
   it.effect("types into no field a page put in place of the approved one as it was pressed", () =>
-    Effect.gen(function* () {
-      const { page } = yield* setup({ guard: () => Effect.void, performed: true });
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const { page } = yield* setup({ guard: () => Effect.void, performed: true });
 
-      yield* Effect.promise(() =>
-        page.playwright.setContent(
-          '<input type="search" aria-label="Search"><script>' +
-            'document.querySelector("input").addEventListener("focus", (event) => {' +
-            'const field = document.createElement("input"); field.id = "replacement";' +
-            'field.setAttribute("aria-label", "Search"); event.target.replaceWith(field); field.focus() })' +
-            "</script>",
-        ),
-      );
-      const field = refOf(yield* page.snapshot(), "searchbox", "Search");
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).setContent(
+            '<input type="search" aria-label="Search"><script>' +
+              'document.querySelector("input").addEventListener("focus", (event) => {' +
+              'const field = document.createElement("input"); field.id = "replacement";' +
+              'field.setAttribute("aria-label", "Search"); event.target.replaceWith(field); field.focus() })' +
+              "</script>",
+          ),
+        );
+        const field = refOf(yield* page.snapshot(), "searchbox", "Search");
 
-      assert.deepStrictEqual(yield* failure(page.type("proof of work", { into: field })), {
-        tag: "StaleRef",
-        dispatched: true,
-      });
-      assert.strictEqual(yield* valueOf(page, "#replacement"), "");
-    }),
+        assert.deepStrictEqual(yield* failure(page.type("proof of work", { into: field })), {
+          tag: "StaleRef",
+          dispatched: true,
+        });
+        assert.strictEqual(yield* valueOf(page, "#replacement"), "");
+      }),
+    ),
   );
 
   it.effect("refuses navigation when the page changed while the policy was held", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
 
-      const { page } = yield* setup({
-        guard: () =>
-          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
-      });
+        const { page } = yield* setup({
+          guard: () =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
+        });
 
-      const site = yield* Site;
-      const held = yield* failure(page.goto(site.url("/next"))).pipe(Effect.forkChild);
+        const site = yield* Site;
+        const held = yield* failure(page.goto(site.url("/next"))).pipe(Effect.forkChild);
 
-      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
-      yield* Effect.promise(() => page.playwright.goto(site.url("/chart")));
-      yield* Deferred.succeed(released, undefined);
+        yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+        yield* Effect.promise(() => TestCdp.nativePage(page).goto(site.url("/chart")));
+        yield* Deferred.succeed(released, undefined);
 
-      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "NotActionable", dispatched: false });
-      assert.strictEqual(yield* page.url, site.url("/chart"));
-    }),
+        assert.deepStrictEqual(yield* Fiber.join(held), {
+          tag: "NotActionable",
+          dispatched: false,
+        });
+        assert.strictEqual(yield* page.url, site.url("/chart"));
+      }),
+    ),
   );
 
   it.effect("requires a finite positive policy timeout", () =>
-    Effect.gen(function* () {
-      const browser = yield* Browser;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const browser = yield* Browser;
 
-      for (const policyTimeout of [Duration.zero, Duration.millis(-1), Duration.infinity]) {
-        assert.deepStrictEqual(
-          yield* failure(
-            makeBrowser(
-              browser.context,
-              { id: "invalid-policy", provider: "test" },
-              { policyTimeout },
+        for (const policyTimeout of [Duration.zero, Duration.millis(-1), Duration.infinity]) {
+          assert.deepStrictEqual(
+            yield* failure(
+              makeBrowser(
+                TestCdp.nativeContext(browser),
+                { id: "invalid-policy", provider: "test" },
+                { policyTimeout },
+              ),
             ),
-          ),
-          { tag: "InvalidRequest", dispatched: false },
-        );
-      }
-    }),
+            { tag: "InvalidRequest", dispatched: false },
+          );
+        }
+      }),
+    ),
   );
 });

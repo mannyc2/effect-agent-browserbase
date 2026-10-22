@@ -1,6 +1,7 @@
 /** A consumer's watched browsing: retained preparation, an event-driven reveal and clean step cuts. */
-import { Deferred, Effect, Exit, Option, Scope } from "effect";
+import { type Cause, Deferred, Effect, Exit, Option, Scope } from "effect";
 import type * as Browser from "effect-browser/Browser";
+import type { BrowserError } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
 import * as Plan from "effect-browser/Plan";
 import * as Stage from "effect-browser/Stage";
@@ -41,7 +42,9 @@ const ordered = () => {
 };
 
 /** The caller owns which plans are suitable preparation and which event deserves a reveal. */
-export const make = Effect.fn("Watched.make")(function* <A>(sessions: Supervisor.Supervisor<A>) {
+export const make = Effect.fn("Watched.make")(function* <A, E>(
+  sessions: Supervisor.Supervisor<{ readonly browser: Browser.Service; readonly value: A }, E>,
+) {
   const stage = yield* Stage.make();
   const reveals = ordered();
   let shown: Prepared<A> | undefined;
@@ -53,40 +56,52 @@ export const make = Effect.fn("Watched.make")(function* <A>(sessions: Supervisor
   ) {
     const owner = yield* Effect.scope;
 
-    return yield* sessions.use((lease) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const hold = yield* lease.retain;
+    const hold = yield* Scope.fork(owner);
+    const ended = yield* Deferred.make<void>();
 
-          // Register ownership before allowing interruption; `use` ending must not close this hold.
-          yield* Scope.addFinalizer(owner, Scope.close(hold, Exit.void));
+    const ready = yield* Deferred.make<
+      Prepared<A>,
+      | Plan.ReplayError
+      | BrowserError
+      | Supervisor.Unavailable<E>
+      | Supervisor.InvalidWait
+      | Supervisor.Superseded
+      | Cause.TimeoutError
+    >();
 
-          return yield* restore(
-            Effect.gen(function* () {
-              const page = yield* Effect.acquireRelease(lease.browser.newPage(), (page) =>
-                Effect.ignore(page.close),
-              );
+    yield* Scope.addFinalizer(hold, Deferred.succeed(ended, undefined));
+    // A prepared page is live work. Rotation revokes it; the consumer opens a new view.
+    yield* Effect.forkIn(
+      sessions
+        .use((lease) =>
+          Effect.gen(function* () {
+            const page = yield* Effect.acquireRelease(lease.value.browser.newPage(), (page) =>
+              Effect.ignore(page.close),
+            );
 
-              // Rebuilding a view may repeat safe navigation, never an unresolved commitment.
-              yield* Plan.restore(page, walk, options);
-
-              return {
-                id,
-                page,
-                hold,
-                browser: lease.browser,
-                value: lease.value,
-                generation: lease.generation,
-              } satisfies Prepared<A>;
-            }).pipe(
-              Scope.provide(hold),
-              Effect.raceFirst(lease.ending.pipe(Effect.flatMap(Effect.fail))),
-              Effect.onError(() => Scope.close(hold, Exit.void)),
-            ),
-          );
-        }),
-      ),
+            yield* Plan.restore(page, walk, options);
+            yield* Deferred.succeed(ready, {
+              id,
+              page,
+              hold,
+              browser: lease.value.browser,
+              value: lease.value.value,
+              generation: lease.generation,
+            });
+            yield* Deferred.await(ended);
+          }).pipe(Scope.provide(hold)),
+        )
+        .pipe(
+          Effect.ensuring(Scope.close(hold, Exit.void)),
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit) ? Deferred.failCause(ready, exit.cause) : Effect.void,
+          ),
+          Effect.exit,
+        ),
+      owner,
     );
+
+    return yield* Deferred.await(ready);
   });
 
   const reveal = Effect.fn("Watched.reveal")(

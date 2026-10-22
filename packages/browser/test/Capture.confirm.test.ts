@@ -2,15 +2,14 @@
 // Chromium separately proves the page's own session must answer, even when capture sync is empty.
 import { assert, it, layer } from "@effect/vitest";
 import { Clock, Deferred, Duration, Effect, Fiber, Option, Schedule, Stream } from "effect";
-import type { CDPSession } from "playwright-core";
 
-import { Browser, make as makeBrowser } from "../src/Browser.ts";
+import { Browser } from "../src/Browser.ts";
 import { BrowserError, Closed } from "../src/BrowserError.ts";
-import * as Chromium from "../src/Chromium.ts";
 import type { Frame } from "../src/Frame.ts";
-import { internalsOf } from "../src/internal/page/page.ts";
 import * as Capture from "../src/internal/pictures/capture.ts";
 import type { NativeFrame, Transport } from "../src/internal/pictures/transport.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const eventually = (check: Effect.Effect<boolean>) =>
   check.pipe(
@@ -107,6 +106,46 @@ const transport = Effect.fnUntraced(function* () {
 it.live(
   "refuses changed documents, newer frames, pending acknowledgements and stopped captures",
   () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const fixture = yield* transport();
+        const reader = yield* fixture.start;
+
+        yield* eventually(fixture.controller.active);
+        fixture.emit();
+        yield* Effect.promise(() => Promise.resolve());
+        const first = yield* fixture.current;
+
+        assert.isTrue(fixture.controller.current(first));
+        assert.isTrue(yield* fixture.controller.confirm(first));
+        fixture.onSync(() => {
+          fixture.commit();
+
+          return Promise.resolve();
+        });
+        assert.isFalse(yield* fixture.controller.confirm(first));
+        assert.isFalse(fixture.controller.current(first));
+        fixture.onSync(() => Promise.resolve());
+        const ack = Promise.withResolvers<void>();
+
+        fixture.holdAck(ack.promise);
+        fixture.emit();
+        const latest = yield* fixture.current;
+
+        assert.isTrue(fixture.controller.current(latest));
+        assert.isFalse(yield* fixture.controller.confirm(first));
+        assert.isFalse(yield* fixture.controller.confirm(latest));
+        ack.resolve();
+        yield* Effect.promise(() => Promise.resolve());
+        assert.isTrue(yield* fixture.controller.confirm(latest));
+        yield* Fiber.interrupt(reader);
+        assert.isFalse(yield* fixture.controller.confirm(latest));
+      }),
+    ),
+);
+
+it.live("refuses a capture replaced while its confirmation was in flight", () =>
+  TestCdp.withCdp(
     Effect.gen(function* () {
       const fixture = yield* transport();
       const reader = yield* fixture.start;
@@ -114,143 +153,57 @@ it.live(
       yield* eventually(fixture.controller.active);
       fixture.emit();
       yield* Effect.promise(() => Promise.resolve());
-      const first = yield* fixture.current;
+      const old = yield* fixture.current;
+      const sent = yield* Deferred.make<void>();
+      const reply = Promise.withResolvers<void>();
 
-      assert.isTrue(fixture.controller.current(first));
-      assert.isTrue(yield* fixture.controller.confirm(first));
       fixture.onSync(() => {
-        fixture.commit();
+        Deferred.doneUnsafe(sent, Effect.void);
 
-        return Promise.resolve();
+        return reply.promise;
       });
-      assert.isFalse(yield* fixture.controller.confirm(first));
-      assert.isFalse(fixture.controller.current(first));
-      fixture.onSync(() => Promise.resolve());
-      const ack = Promise.withResolvers<void>();
+      const confirming = yield* fixture.controller.confirm(old).pipe(Effect.forkChild);
 
-      fixture.holdAck(ack.promise);
-      fixture.emit();
-      const latest = yield* fixture.current;
-
-      assert.isTrue(fixture.controller.current(latest));
-      assert.isFalse(yield* fixture.controller.confirm(first));
-      assert.isFalse(yield* fixture.controller.confirm(latest));
-      ack.resolve();
-      yield* Effect.promise(() => Promise.resolve());
-      assert.isTrue(yield* fixture.controller.confirm(latest));
+      yield* Deferred.await(sent);
       yield* Fiber.interrupt(reader);
-      assert.isFalse(yield* fixture.controller.confirm(latest));
+      yield* fixture.start;
+      yield* eventually(fixture.controller.active);
+      fixture.emit();
+      reply.resolve();
+      assert.isFalse(yield* Fiber.join(confirming));
     }),
-);
-
-it.live("refuses a capture replaced while its confirmation was in flight", () =>
-  Effect.gen(function* () {
-    const fixture = yield* transport();
-    const reader = yield* fixture.start;
-
-    yield* eventually(fixture.controller.active);
-    fixture.emit();
-    yield* Effect.promise(() => Promise.resolve());
-    const old = yield* fixture.current;
-    const sent = yield* Deferred.make<void>();
-    const reply = Promise.withResolvers<void>();
-
-    fixture.onSync(() => {
-      Deferred.doneUnsafe(sent, Effect.void);
-
-      return reply.promise;
-    });
-    const confirming = yield* fixture.controller.confirm(old).pipe(Effect.forkChild);
-
-    yield* Deferred.await(sent);
-    yield* Fiber.interrupt(reader);
-    yield* fixture.start;
-    yield* eventually(fixture.controller.active);
-    fixture.emit();
-    reply.resolve();
-    assert.isFalse(yield* Fiber.join(confirming));
-  }),
+  ),
 );
 
 it.live("never confirms a capture that loses its transport during the round trip", () =>
-  Effect.gen(function* () {
-    const fixture = yield* transport();
+  TestCdp.withCdp(
+    Effect.gen(function* () {
+      const fixture = yield* transport();
 
-    yield* fixture.start;
-    yield* eventually(fixture.controller.active);
-    fixture.emit();
-    yield* Effect.promise(() => Promise.resolve());
-    const frame = yield* fixture.current;
+      yield* fixture.start;
+      yield* eventually(fixture.controller.active);
+      fixture.emit();
+      yield* Effect.promise(() => Promise.resolve());
+      const frame = yield* fixture.current;
 
-    fixture.onSync(() => {
-      fixture.lose();
+      fixture.onSync(() => {
+        fixture.lose();
 
-      assert.isFalse(fixture.controller.current(frame));
+        assert.isFalse(fixture.controller.current(frame));
 
-      return Promise.resolve();
-    });
-    assert.isFalse(yield* fixture.controller.confirm(frame));
-  }),
+        return Promise.resolve();
+      });
+      assert.isFalse(yield* fixture.controller.confirm(frame));
+    }),
+  ),
 );
 
 const nativeFixture = Effect.fnUntraced(function* () {
-  const native = (yield* Browser).context.browser();
-
-  if (native === null) return yield* Effect.die("local Chromium is required");
-
-  const context = yield* Effect.acquireRelease(
-    Effect.promise(() => native.newContext()),
-    (context) => Effect.promise(() => context.close()),
-  );
-
-  const create = context.newCDPSession.bind(context);
-  const calls: Array<string> = [];
-  let hold: Promise<void> | undefined;
-  let withholding = false;
+  const faults = yield* TestCdp.TestCdp;
+  const browser = yield* Browser;
+  const page = yield* faults.provide(browser.newPage("data:text/html,<h1>Quiet frame</h1>"));
+  const capture = yield* page.capture();
   let withheld: NativeFrame | undefined;
-  let inject: ((frame: NativeFrame) => void) | undefined;
-
-  context.newCDPSession = async (target) => {
-    const cdp = await create(target);
-    const send = cdp.send.bind(cdp);
-
-    const emitter = cdp as CDPSession & {
-      emit(event: string, ...args: ReadonlyArray<unknown>): boolean;
-    };
-
-    const emit = emitter.emit.bind(emitter);
-
-    emitter.emit = (event, ...args) => {
-      if (event === "Page.screencastFrame" && withholding) {
-        withheld = args[0] as NativeFrame;
-
-        return true;
-      }
-
-      return emit(event, ...args);
-    };
-    inject = (frame) => {
-      emit("Page.screencastFrame", frame);
-    };
-
-    const observed: CDPSession["send"] = (method, params) => {
-      calls.push(method);
-      const reply = send(method, params);
-
-      return method === "Page.getFrameTree" && hold !== undefined
-        ? reply.then((value) => hold!.then(() => value))
-        : reply;
-    };
-
-    cdp.send = observed;
-
-    return cdp;
-  };
-  const browser = yield* makeBrowser(context, { id: "shown", provider: "local" });
-  const page = yield* browser.newPage("data:text/html,<h1>Quiet frame</h1>");
-  const internals = internalsOf(page);
-
-  if (internals === undefined) return yield* Effect.die("missing page internals");
   let latest: Frame | undefined;
 
   yield* page.screencast().pipe(
@@ -266,91 +219,128 @@ const nativeFixture = Effect.fnUntraced(function* () {
 
   return {
     page,
-    internals,
-    calls,
+    capture,
+    calls: faults.calls,
     latest: () => latest!,
     withhold: () => {
-      withholding = true;
+      faults.rule(
+        { page: page.id, method: "Page.screencastFrame" },
+        {
+          _tag: "Transform",
+          reply: (frame) => {
+            withheld = frame as NativeFrame;
+
+            return frame;
+          },
+        },
+        { phase: "event" },
+      );
+      faults.rule(
+        { page: page.id, method: "Page.screencastFrame" },
+        { _tag: "Drop" },
+        { phase: "event" },
+      );
     },
     withheld: () => withheld,
-    inject: (frame: NativeFrame) => inject?.(frame),
-    hold: (reply: Promise<void>) => {
-      hold = reply;
-    },
+    inject: (frame: NativeFrame) =>
+      faults.inject({ page: page.id }, { method: "Page.screencastFrame", params: frame }),
+    hold: (gate: Deferred.Deferred<void>) =>
+      faults.rule(
+        { page: page.id, method: "Page.getFrameTree" },
+        { _tag: "Hold", gate },
+        { phase: "after" },
+      ),
   };
 });
 
-layer(Chromium.layer(), { excludeTestServices: true })("native shown-frame confirmation", (it) => {
-  it.effect("joins a quiet capture with its current image and no duplicate stream frame", () =>
-    Effect.gen(function* () {
-      const fixture = yield* nativeFixture();
-      const joined = yield* fixture.internals.capture();
+layer(TestCdp.provideLayer(Chromium.layer()), { excludeTestServices: true })(
+  "native shown-frame confirmation",
+  (it) => {
+    it.effect("joins a quiet capture with its current image and no duplicate stream frame", () =>
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const fixture = yield* nativeFixture();
+          const joined = yield* fixture.page.capture();
 
-      assert.isTrue(joined.current === fixture.latest());
-      const next = yield* joined.stream.pipe(Stream.runHead, Effect.forkChild);
+          assert.isTrue(joined.current === fixture.latest());
+          const next = yield* joined.stream.pipe(Stream.runHead, Effect.forkChild);
 
-      yield* Effect.promise(() =>
-        fixture.page.playwright.evaluate(() => {
-          document.body.style.background = "blue";
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(fixture.page).evaluate(() => {
+              document.body.style.background = "blue";
+            }),
+          );
+
+          const frame = Option.getOrThrow(
+            yield* Fiber.join(next).pipe(Effect.timeout("2 seconds")),
+          );
+
+          assert.notStrictEqual(frame, joined.current);
         }),
-      );
-      const frame = Option.getOrThrow(yield* Fiber.join(next).pipe(Effect.timeout("2 seconds")));
+      ),
+    );
+    it.effect("refuses delayed old paint even when its arrival carries the new document tag", () =>
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const fixture = yield* nativeFixture();
+          const before = fixture.latest().document;
 
-      assert.notStrictEqual(frame, joined.current);
-    }),
-  );
-  it.effect("refuses delayed old paint even when its arrival carries the new document tag", () =>
-    Effect.gen(function* () {
-      const fixture = yield* nativeFixture();
-      const before = fixture.latest().document;
+          fixture.withhold();
+          yield* Effect.promise(() =>
+            TestCdp.nativePage(fixture.page).evaluate(() => {
+              document.body.style.background = "red";
+            }),
+          );
+          yield* eventually(Effect.sync(() => fixture.withheld() !== undefined));
+          const oldPaint = fixture.withheld()!;
 
-      fixture.withhold();
-      yield* Effect.promise(() =>
-        fixture.page.playwright.evaluate(() => {
-          document.body.style.background = "red";
+          yield* fixture.page.goto("data:text/html,<h1>New document</h1>");
+          yield* fixture.inject(oldPaint);
+          yield* eventually(Effect.sync(() => fixture.latest().document > before));
+          assert.isFalse(fixture.capture.isCurrent(fixture.latest()));
+          assert.isFalse(yield* fixture.capture.confirm(fixture.latest()));
         }),
-      );
-      yield* eventually(Effect.sync(() => fixture.withheld() !== undefined));
-      const oldPaint = fixture.withheld()!;
+      ),
+    );
+    it.effect("asks the live page even when its capture transport sync is a no-op", () =>
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const fixture = yield* nativeFixture();
 
-      yield* fixture.page.goto("data:text/html,<h1>New document</h1>");
-      fixture.inject(oldPaint);
-      yield* eventually(Effect.sync(() => fixture.latest().document > before));
-      assert.isFalse(fixture.internals.current(fixture.latest()));
-      assert.isFalse(yield* fixture.internals.confirm(fixture.latest()));
-    }),
-  );
-  it.effect("asks the live page even when its capture transport sync is a no-op", () =>
-    Effect.gen(function* () {
-      const fixture = yield* nativeFixture();
-      const before = fixture.calls.filter((method) => method === "Page.getFrameTree").length;
+          const before = fixture.calls.filter(
+            ({ method }) => method === "Page.getFrameTree",
+          ).length;
 
-      assert.isTrue(yield* fixture.internals.confirm(fixture.latest()));
-      assert.strictEqual(
-        fixture.calls.filter((method) => method === "Page.getFrameTree").length,
-        before + 1,
-      );
-      const old = fixture.latest();
+          assert.isTrue(yield* fixture.capture.confirm(fixture.latest()));
+          assert.strictEqual(
+            fixture.calls.filter(({ method }) => method === "Page.getFrameTree").length,
+            before + 1,
+          );
+          const old = fixture.latest();
 
-      yield* fixture.page.goto("data:text/html,<h1>Another document</h1>");
-      assert.isFalse(yield* fixture.internals.confirm(old));
-    }),
-  );
-  it.effect("bounds missing live-page replies and fails after the page closes", () =>
-    Effect.gen(function* () {
-      const fixture = yield* nativeFixture();
-      const reply = Promise.withResolvers<void>();
+          yield* fixture.page.goto("data:text/html,<h1>Another document</h1>");
+          assert.isFalse(yield* fixture.capture.confirm(old));
+        }),
+      ),
+    );
+    it.effect("bounds missing live-page replies and fails after the page closes", () =>
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const fixture = yield* nativeFixture();
+          const reply = yield* Deferred.make<void>();
 
-      yield* Effect.addFinalizer(() => Effect.sync(() => reply.resolve()));
-      fixture.hold(reply.promise);
-      const error = yield* fixture.internals.confirm(fixture.latest()).pipe(Effect.flip);
+          yield* Effect.addFinalizer(() => Deferred.succeed(reply, undefined));
+          fixture.hold(reply);
+          const error = yield* fixture.capture.confirm(fixture.latest()).pipe(Effect.flip);
 
-      assert.strictEqual(error.reason._tag, "Timeout");
-      reply.resolve();
-      yield* fixture.page.close;
-      const closed = yield* fixture.internals.confirm(fixture.latest()).pipe(Effect.flip);
+          assert.strictEqual(error.reason._tag, "Timeout");
+          yield* Deferred.succeed(reply, undefined);
+          yield* fixture.page.close;
+          const closed = yield* fixture.capture.confirm(fixture.latest()).pipe(Effect.flip);
 
-      assert.strictEqual(closed.reason._tag, "Closed");
-    }),
-  );
-});
+          assert.strictEqual(closed.reason._tag, "Closed");
+        }),
+      ),
+    );
+  },
+);
