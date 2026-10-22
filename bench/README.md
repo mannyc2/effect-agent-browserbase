@@ -384,6 +384,32 @@ action acted on and leave the outline out by default, and arm 1 adds it. The gra
 - **Prompts:** the arms' system prompts differ beyond what they show: only arm 2 has the
   drop-down hint, only arm 5 the input-policy lines, and arm 1 no batching hint.
 
+The first run of arms 7 and 8, on 2026-10-22, used `openai/gpt-6-luna` with medium reasoning in
+local Chromium. Each arm ran 5 trials of each of six operate tasks on the `eval` split
+(`casino-play`, `chart-trade`, `checkout`, `board-move`, `policy-find` and `catalog-buy`) and 2 of
+each of the TradingView demo's six tasks. With a one-trial check before it, the run cost $0.59 in
+all.
+
+| Arm | Operate | On the page | Median s | $ per trial | TradingView demo |
+| --- | ------- | ----------- | -------- | ----------- | ---------------- |
+| 5   | 24/30   | 29/30       | 23.6     | 0.0017      | 9/12             |
+| 7   | 25/30   | 26/30       | 26.8     | 0.0021      | 10/12            |
+| 8   | 26/30   | 30/30       | 27.5     | 0.0022      | 8/12             |
+
+- **No winner:** no pair of arms differs beyond chance (stratified exact p 1, after Holm, for each
+  pair over all operate tasks). Every arm took a median of 4 turns, so a program had few turns to
+  save.
+- **Canvas:** arm 7 passed `casino-play` once in 5, and the other four ran out of turns. A program
+  gets no picture between its calls, only before the next turn. Arms 5 and 8 passed 5 of 5.
+- **Answers:** every `checkout` trial in every arm left the right order. The exact-match grader
+  failed those that gave the number inside a sentence: 5 in arm 5, 1 in arm 7 and 4 in arm 8. Arm
+  5's other miss bought the wrong tent in `catalog-buy`.
+- **Charts:** given both, arm 8 never called `browser_program` on TradingView and used arm 5's tools.
+  The operate run did not record which tools arm 8 called. The trend line missed in 5 of 6 trials
+  across arms: its low end landed 2.0 to 2.6 above the chart's low of 325.81. Zoom passed 2 of 6.
+- **Cost:** programs cost a fifth to a quarter more per trial than arm 5. Model requests took 98%
+  of every arm's mean trial time.
+
 ## Outcomes
 
 Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one

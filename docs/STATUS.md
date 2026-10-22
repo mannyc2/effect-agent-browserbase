@@ -31,8 +31,10 @@ parameters and descriptions models were given before. `PageControl.layer` and th
 `screenshot` and `respondDialog`, which served only Yielded's tools, are removed. A receipt's
 uncertain dispatch is now `possibly-dispatched`, Yielded's word, instead of `unknown`. Yielded now
 allows one completion tool, so the bench ends a trial when `give_up` succeeds. Bench arms 7 and 8
-put the same tools behind a Code Mode tool, `browser_program`, alone and beside the tools; scripted
-tests cover them, and no model has run them yet.
+put the same tools behind a Code Mode tool, `browser_program`, alone and beside the tools. Their
+first run, on `openai/gpt-6-luna`, found no difference from arm 5 beyond chance. Programs alone
+passed the canvas game once in five, where arms 5 and 8 passed all five. The bench README has the
+run.
 
 ## 0.3
 
