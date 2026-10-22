@@ -30,7 +30,9 @@ CDP, so `effect-agent-browser` now defines the ref and control tools itself, wit
 parameters and descriptions models were given before. `PageControl.layer` and the ports'
 `screenshot` and `respondDialog`, which served only Yielded's tools, are removed. A receipt's
 uncertain dispatch is now `possibly-dispatched`, Yielded's word, instead of `unknown`. Yielded now
-allows one completion tool, so the bench ends a trial when `give_up` succeeds.
+allows one completion tool, so the bench ends a trial when `give_up` succeeds. Bench arms 7 and 8
+put the same tools behind a Code Mode tool, `browser_program`, alone and beside the tools; scripted
+tests cover them, and no model has run them yet.
 
 ## 0.3
 

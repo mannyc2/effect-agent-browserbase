@@ -28,6 +28,7 @@
         "@effect/vitest": "4.0.3",
         "@types/node": "26.1.2",
         "@yielded/agent": "0.1.0-beta.189",
+        "@yielded/agent-testing": "0.1.0-beta.189",
         "effect": "4.0.3",
         "effect-agent-browser": "workspace:*",
         "effect-browser": "workspace:*",
@@ -783,6 +784,8 @@
     "@voidzero-dev/vite-plus-win32-x64-msvc": ["@voidzero-dev/vite-plus-win32-x64-msvc@1.1.0", "", { "os": "win32", "cpu": "x64" }, "sha512-K9k77Mj/TszFHKsZePKsyfsIPo8HbjKeJUxaSJ6YZKAmSh9QvDsMFe4i4/HALwyii/PR1EQ8N0iN1nf9cNimGQ=="],
 
     "@yielded/agent": ["@yielded/agent@0.1.0-beta.189", "", { "dependencies": { "image-dimensions": "2.6.0" }, "peerDependencies": { "effect": "^4.0.3" } }, "sha512-hpgYLDuFuJBk3UJcRKilnhVtRtmgJWadTAiiIFv8G/kMP2MD12tggfdv9mmngXzQxJ0j35E8CjPTbqG5zpfhWg=="],
+
+    "@yielded/agent-testing": ["@yielded/agent-testing@0.1.0-beta.189", "", { "dependencies": { "@yielded/agent": "0.1.0-beta.189" }, "peerDependencies": { "effect": "^4.0.0" } }, "sha512-2FszRtG0qVovi9RPui+zaCXV0yHO6BWWsTKNUnUX84d1RBpp+AoAI4a106DZrXmMDZ1xS2MOScmr7jaC7uAHdg=="],
 
     "@yuku-codegen/binding-android-arm64": ["@yuku-codegen/binding-android-arm64@0.9.5", "", { "os": "android", "cpu": "arm64" }, "sha512-jrOY5WM+AaAqkv51fHP1x28ifto4WgcZVzodLUyMU1jMWn5Sq+VciRdk/n8E0Ey5w4p4cWWE+m5GfXWOYh7Kzw=="],
 

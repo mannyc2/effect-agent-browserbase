@@ -163,6 +163,61 @@ describe("arm 2, vision first", () => {
   );
 });
 
+describe("arms 7 and 8, programs", () => {
+  // A program finds the first field in an observation and fills it, and returns only what it read.
+  const program = `async () => {
+    const seen = await browser.observe({});
+    const field = seen.controls.find((control) => control.kind === "textbox");
+    const filled = await browser.act({ actions: [{ kind: "fill", ref: field.ref, value: "Ada" }] });
+    return { field: field.name, dispatch: filled.dispatch, holds: filled.observation.text.includes("Ada") };
+  }`;
+
+  it.live("runs a program's browser calls on the page and shows the model what it returns", () =>
+    Effect.gen(function* () {
+      const result = yield* trial("checkout", 7, [
+        () => [call("browser_program", { code: program }), finish],
+        () => [call("give_up", { reason: "scripted" }), finish],
+      ]);
+
+      const [first, second] = result.seen;
+
+      assert.isDefined(first);
+      assert.isDefined(second);
+      if (first === undefined || second === undefined) return;
+
+      assert.sameMembers(names(first.tools), ["done", "give_up", "browser_program"]);
+      assert.sameMembers([...parameters(first.tools, "browser_program")], ["code"]);
+
+      // The program's result, not the outline it read, is what the model is shown.
+      const shown = textOf(second.prompt);
+
+      assert.include(shown, '"dispatch":"acknowledged"');
+      assert.include(shown, '"holds":true');
+      assert.notMatch(shown, /\[ref=e\d+\]/);
+      for (const { prompt } of result.seen) assert.strictEqual(pictures(prompt), 1);
+      assert.deepStrictEqual(
+        result.steps.map(({ calls }) => calls.map(({ name }) => name)),
+        [["browser_program"], ["give_up"]],
+      );
+    }),
+  );
+
+  it.live("offers the program beside the tools in arm 8", () =>
+    Effect.gen(function* () {
+      const result = yield* trial("checkout", 8, [
+        () => [call("give_up", { reason: "scripted" }), finish],
+      ]);
+
+      const [first] = result.seen;
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+
+      assert.includeMembers(names(first.tools), ["observe", "act", "click_at", "browser_program"]);
+    }),
+  );
+});
+
 describe("understand arms", () => {
   const quote = {
     ticker: "X",

@@ -3,16 +3,20 @@
 // tools and a screenshot before each turn. Arm 1 is the ref and control tools alone, as Yielded
 // once gave them: one action per `act`, an outline after each, and no pictures. Arm 2 sees a
 // screenshot before each turn and acts by pixels. Arm 6 is arm 5 with moments in its thread instead
-// of the screenshot: after each turn's results, what the page did since the turn before.
+// of the screenshot: after each turn's results, what the page did since the turn before. Arm 7 is
+// arm 5 with its tools behind one Code Mode tool, `browser_program`: the model writes a program
+// whose `browser.*` calls are those tools. Arm 8 has both: arm 5's tools and the program tool.
 // Understand tasks differ only in arm 1, whose moments add the outline.
-import { Agent, AgentRuntime, InMemory, type RunEvent } from "@yielded/agent";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Agent, AgentRuntime, CodeMode, InMemory, type RunEvent } from "@yielded/agent";
+import { inProcessCodeExecutorLayer } from "@yielded/agent-testing/code-executor-substitute";
+import { CodeExecutionLimits } from "@yielded/agent/code-executor";
+import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/BrowserTools";
 import type * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
-export const arms = [1, 2, 5, 6] as const;
+export const arms = [1, 2, 5, 6, 7, 8] as const;
 
 export type Arm = (typeof arms)[number];
 
@@ -21,6 +25,8 @@ export const armNames: { readonly [A in Arm]: string } = {
   2: "vision first",
   5: "default",
   6: "moments",
+  7: "programs",
+  8: "programs and tools",
 };
 
 /** Token counts, as the run or the model's response reported them. */
@@ -109,6 +115,23 @@ const instructions: { readonly [A in Arm]: string } = {
     "- Prefer refs where the outline has them.",
     ...closing,
   ].join("\n"),
+  7: [
+    "You operate a web browser to complete the user's task by writing programs for browser_program.",
+    "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates, which browser.click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+    "- browser.observe reads the viewport as an outline whose controls carry refs such as e12, with the controls as values; browser.act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+    "- A program can find a control in an observation, act on it, check what followed and go on. Its calls run one at a time, in order.",
+    "- Only what a program returns or logs reaches you, with the screenshot before your next turn: return what you need to decide what comes next.",
+    "- Prefer refs where the outline has them. done and give_up are tools of their own, not program calls.",
+    ...closing,
+  ].join("\n"),
+  8: [
+    "You operate a web browser through tools to complete the user's task.",
+    "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+    "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+    "- browser_program runs a program whose browser.* calls are these same tools, one at a time, in order: use it for several steps that depend on each other, such as finding a control in an observation and acting on it. Only what the program returns or logs reaches you.",
+    "- Prefer refs where the outline has them.",
+    ...closing,
+  ].join("\n"),
 };
 
 const finishing = <A, I>(answer: Schema.Codec<A, I>) =>
@@ -129,6 +152,29 @@ const { tools: control } = BrowserTools.Control;
 const { tools: pointer } = BrowserTools.Pointer;
 const single = BrowserTools.make({ mode: "single" });
 const batched = BrowserTools.make();
+
+// Arm 5's tools act on one page, so a program's calls run one at a time. The executor runs the
+// model's program in the bench's own process, isolated by nothing but shadowed globals: the bench's,
+// not a sandbox for untrusted hosts.
+const program = CodeMode.make("browser_program", {
+  description:
+    "Operate the browser by writing a program whose browser.* calls are the browser tools, run one at a time, in order, on the current tab.",
+  tools: { browser: batched.toolkit.tools },
+  limits: CodeExecutionLimits.make({
+    maxSourceBytes: 64 * 1024,
+    maxWallTime: Duration.seconds(90),
+    maxLogBytes: 64 * 1024,
+    maxResultBytes: 256 * 1024,
+    maxHostCalls: 64,
+    maxHostCallConcurrency: 1,
+    maxHostCallArgumentBytes: 64 * 1024,
+    maxHostCallResultBytes: 1024 * 1024,
+  }),
+});
+
+// Every arm serves the program tool over its tools, which it calls by name; only arms 7 and 8 show
+// it to the model.
+const programs = program.handlers.pipe(Layer.provide(inProcessCodeExecutorLayer));
 
 const VisionToolkit = Toolkit.make(
   control.navigate,
@@ -155,6 +201,12 @@ const tooling = {
   2: { toolkit: VisionToolkit, tools: batched, vision: true },
   5: { toolkit: batched.toolkit, tools: batched, vision: true },
   6: { toolkit: batched.toolkit, tools: batched, vision: "moments" },
+  7: { toolkit: Toolkit.make(program.tool), tools: batched, vision: true },
+  8: {
+    toolkit: Toolkit.merge(batched.toolkit, Toolkit.make(program.tool)),
+    tools: batched,
+    vision: true,
+  },
 } as const;
 
 /**
@@ -256,7 +308,10 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
       }),
       Effect.provide(
         Layer.mergeAll(
-          tools.layer({ page }, { task, vision, onMoment: options.onMoment }),
+          Layer.provideMerge(
+            programs,
+            tools.layer({ page }, { task, vision, onMoment: options.onMoment }),
+          ),
           finish.toLayer({
             done: () => Effect.void,
             give_up: ({ reason }) =>

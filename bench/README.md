@@ -337,6 +337,8 @@ answers are judged rather than matched.
 | 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                   | As arm 5                                       |
 | 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                            | `Moment.capture` as it is: frames and timeline |
 | 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                   | As arm 5                                       |
+| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                | As arm 5                                       |
+| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                           | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
@@ -344,6 +346,13 @@ tools and system prompt, `done` and `give_up` to end the run, and Yielded's poli
 the task's page, so none offers `select_tab`. A run's steps come from its events. A streamed model
 request is sent and charged as one completion, so the budget sees every call. Arms 3 (parsed
 frames) and 4 (a local grounder) are not built.
+
+A program in arms 7 and 8 is one tool call. Its calls to the tools run one at a time, in order, at
+most 64 of them in 90 seconds, and only what it returns or logs reaches the model, besides the
+screenshot before its next turn. Yielded's in-process executor (`@yielded/agent-testing`) runs it
+in the bench's own process with its globals shadowed: enough for the bench's pages, not a sandbox
+for untrusted code. Yielded Agent's own browser tool is a program too, over raw CDP; these arms
+keep effect-browser's tools, their input policy and their receipts under every call.
 
 ```sh
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
