@@ -10,15 +10,16 @@
  * With `vision`, the default, the model sees a screenshot of the current tab before each turn, and
  * the crops `zoom` took since its last, as context the run never keeps, so only the current picture
  * is ever in a request. Its pixel coordinates are viewport coordinates, which the pointer tools
- * take. The pictures are `RunContextPreparation`'s transient context, which a run's own
- * `transientContext` option replaces. With `vision: "ask"`, the screenshot comes only before a turn
- * after the model called `look`; with `vision: "page"`, also after pointer input and while the
- * viewport shows a canvas, a video or another site's frame. `Look` is that tool, for the agent's
- * toolkit beside `make`'s. With `vision: "moments"`, the model's thread holds, after
- * each turn's tool results, a moment of the current tab since the turn before: what happened, what
- * changed. These stable accounts can be compacted. The latest three moments' pictures follow as
- * reference messages labeled by turn, with their frame times. A run's own `context` option
- * replaces the accounts' hook; its `transientContext` replaces the pictures.
+ * take; with `pixels: "device"`, they are the screen's own, which the tools map back. The pictures
+ * are `RunContextPreparation`'s transient context, which a run's own `transientContext` option
+ * replaces. With `vision: "ask"`, the screenshot comes only before a turn after the model called
+ * `look`; with `vision: "page"`, also after pointer input and while the viewport shows a canvas, a
+ * video or another site's frame. `Look` is that tool, for the agent's toolkit beside `make`'s. With
+ * `vision: "moments"`, the model's thread holds, after each turn's tool results, a moment of the
+ * current tab since the turn before: what happened, what changed. These stable accounts can be
+ * compacted. The latest three moments' pictures follow as reference messages labeled by turn, with
+ * their frame times. A run's own `context` option replaces the accounts' hook; its
+ * `transientContext` replaces the pictures.
  *
  * `make` gives the toolkit to put in an agent, and `layer`, which provides every tool's handler
  * and the pictures for one run, on a page or a browser's tabs.
@@ -294,27 +295,38 @@ export interface LayerOptions extends PageControl.Options {
   readonly vision?: Vision | undefined;
   /** With moments, called with each moment as the model is first shown it, as for a recording. */
   readonly onMoment?: ((moment: Moment.Moment) => Effect.Effect<void>) | undefined;
+  /**
+   * The pixels of the screenshots and crops the model sees, and of the points it gives back:
+   * `"css"`, the default, or `"device"`, the screen's own, as many to a CSS pixel as the browser's
+   * device scale factor, so smaller below 1 and sharper above. Moments' frames are not changed.
+   */
+  readonly pixels?: "css" | "device" | undefined;
 }
 
 const text = (value: string) => ({ type: "text" as const, text: value });
 
 /**
  * What the model sees before a turn: the current tab's screenshot if `screen` says so, and the crops
- * since its last.
+ * since its last. A screenshot in device pixels sets `scale`, its pixels to a CSS pixel.
  */
 const pictures = (
   controller: PageControl.Controller,
   zooms: Ref.Ref<Array<Page.Zoom>>,
   screen: (page: Page.Page) => Effect.Effect<boolean, BrowserError>,
+  pixels: "css" | "device",
+  scale: Ref.Ref<number>,
 ) =>
   Effect.gen(function* () {
     // A look before a turn shows a tab an action opened, as `follow` says.
     const parts = yield* Effect.flatMap(controller.look, (page) =>
       Effect.gen(function* () {
-        const crops = Moments.cropped(yield* Ref.getAndSet(zooms, []), page.id);
+        const zoomed = yield* Ref.getAndSet(zooms, []);
 
-        if (!(yield* screen(page))) return crops;
-        const shot = yield* page.screenshot();
+        if (!(yield* screen(page))) return Moments.cropped(zoomed, page.id, yield* Ref.get(scale));
+        const shot = yield* page.screenshot(pixels === "device" ? { scale: "device" } : undefined);
+
+        if (pixels === "device") yield* Ref.set(scale, shot.width / (yield* page.viewport).width);
+        const crops = Moments.cropped(zoomed, page.id, yield* Ref.get(scale));
 
         return [
           text(
@@ -366,6 +378,23 @@ const target = (place: {
       ? Option.none()
       : Option.some(place.ref);
 
+// A target the model read from a picture of `scale` pixels to a CSS pixel, on the viewport.
+const viewportTarget = (to: Page.Target, scale: number): Page.Target =>
+  typeof to === "string" ? to : { x: to.x / scale, y: to.y / scale };
+
+// A region read from such a picture, in the whole CSS pixels that hold it within the viewport.
+const viewportRegion = (region: Page.Region, scale: number) => {
+  const x = Math.floor(region.x / scale);
+  const y = Math.floor(region.y / scale);
+
+  return new Page.Region({
+    x,
+    y,
+    width: Math.max(1, Math.floor((region.x + region.width) / scale) - x),
+    height: Math.max(1, Math.floor((region.y + region.height) / scale) - y),
+  });
+};
+
 const named = (to: Page.Target) => (typeof to === "string" ? to : `(${to.x}, ${to.y})`);
 
 const missing = (what: string) =>
@@ -378,13 +407,16 @@ const missing = (what: string) =>
 
 /**
  * The pointer tools' handlers over the controller's current tab. Each sets `pointed` once its input
- * reaches the page, but going back.
+ * reaches the page, but going back. Points and crops are in the pictures' pixels, `scale` to a
+ * CSS pixel.
  */
 const pointing = (
   controller: PageControl.Controller,
   zooms: Ref.Ref<Array<Page.Zoom>>,
   vision: Vision,
   pointed: Ref.Ref<boolean>,
+  pixels: "css" | "device",
+  scale: Ref.Ref<number>,
 ) => {
   const act = <A>(
     run: (page: Page.Page) => Effect.Effect<A, BrowserError>,
@@ -401,24 +433,29 @@ const pointing = (
 
   return Pointer.of({
     click_at: ({ x, y, double, button }) =>
-      act(
-        (page) => page.click({ x, y }, { button, clickCount: double === true ? 2 : 1 }),
-        ({ element, point }) => `Clicked ${element} at (${point.x}, ${point.y}).`,
-        {
-          _tag: "Click",
-          target: { x, y },
-          options: { button, clickCount: double === true ? 2 : 1 },
-        },
-      ),
+      Effect.flatMap(Ref.get(scale), (scale) => {
+        const options = { button, clickCount: double === true ? 2 : 1 };
+        const at = { x: x / scale, y: y / scale };
+
+        return act(
+          (page) => page.click(at, options),
+          ({ element }) => `Clicked ${element} at (${x}, ${y}).`,
+          { _tag: "Click", target: at, options },
+        );
+      }),
     hover: (place) =>
       Option.match(target(place), {
         onNone: () => missing("hover"),
         onSome: (to) =>
-          act(
-            (page) => page.hover(to),
-            () => `Hovered over ${named(to)}.`,
-            { _tag: "Hover", target: to },
-          ),
+          Effect.flatMap(Ref.get(scale), (scale) => {
+            const at = viewportTarget(to, scale);
+
+            return act(
+              (page) => page.hover(at),
+              () => `Hovered over ${named(to)}.`,
+              { _tag: "Hover", target: at },
+            );
+          }),
       }),
     drag: (drag) => {
       const from = target({ ref: drag.fromRef, x: drag.fromX, y: drag.fromY });
@@ -426,11 +463,16 @@ const pointing = (
 
       return Option.isNone(from) || Option.isNone(to)
         ? missing("each end of a drag")
-        : act(
-            (page) => page.drag(from.value, to.value),
-            () => `Dragged from ${named(from.value)} to ${named(to.value)}.`,
-            { _tag: "Drag", from: from.value, to: to.value },
-          );
+        : Effect.flatMap(Ref.get(scale), (scale) => {
+            const start = viewportTarget(from.value, scale);
+            const end = viewportTarget(to.value, scale);
+
+            return act(
+              (page) => page.drag(start, end),
+              () => `Dragged from ${named(from.value)} to ${named(to.value)}.`,
+              { _tag: "Drag", from: start, to: end },
+            );
+          });
     },
     type_text: ({ text: typed, submit }) =>
       act(
@@ -446,8 +488,13 @@ const pointing = (
       ),
     zoom: (region) =>
       vision !== false
-        ? controller.current.pipe(
-            Effect.flatMap((page) => page.zoom(new Page.Region(region))),
+        ? Effect.all([controller.current, Ref.get(scale)]).pipe(
+            Effect.flatMap(([page, scale]) =>
+              page.zoom(
+                viewportRegion(new Page.Region(region), scale),
+                pixels === "device" ? { scale: "device" } : undefined,
+              ),
+            ),
             Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
             Effect.map(() => ({
               did: `Cropped (${region.x}, ${region.y}), ${region.width}x${region.height}: it is shown before your next turn if this tab is still current.`,
@@ -500,6 +547,9 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
         const controller = yield* PageControl.make(target, options);
         const zooms = yield* Ref.make<Array<Page.Zoom>>([...(options.initialZooms ?? [])]);
         const vision = options.vision ?? true;
+        const pixels = options.pixels ?? "css";
+        // The pictures' pixels to a CSS pixel, as the latest screenshot showed them.
+        const scale = yield* Ref.make(1);
         const { control } = controller;
         // Since the last turn: whether the model called `look`, and whether pointer input ran.
         const asked = yield* Ref.make(false);
@@ -531,7 +581,7 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
             press: control.press,
             select_tab: control.selectTab,
           }),
-          Pointer.toLayer(pointing(controller, zooms, vision, pointed)),
+          Pointer.toLayer(pointing(controller, zooms, vision, pointed, pixels, scale)),
           Look.toLayer({
             look: () =>
               vision === false
@@ -569,7 +619,7 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
               ? Layer.empty
               : Layer.succeed(RunContextPreparation, {
                   transientContext: {
-                    load: () => pictures(controller, zooms, wanted),
+                    load: () => pictures(controller, zooms, wanted, pixels, scale),
                   },
                 });
 

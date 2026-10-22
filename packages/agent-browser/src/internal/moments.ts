@@ -27,18 +27,24 @@ const text = (value: string) => Prompt.makePart("text", { text: value });
 const file = (image: Image) =>
   Prompt.makePart("file", { mediaType: image.mediaType, data: image.data });
 
-/** The crops taken since the last turn as the model is shown them: the latest, each with its origin. */
+/**
+ * The crops taken since the last turn as the model is shown them: the latest, each with its origin,
+ * in pictures of `scale` pixels to a CSS pixel.
+ */
 export const cropped = (
   crops: ReadonlyArray<Page.Zoom>,
   page: string,
+  scale = 1,
 ): ReadonlyArray<Prompt.UserMessagePart> => {
   const current = crops.filter((crop) => crop.page === page);
   const kept = current.slice(-maxZooms);
+  const at = (value: number) => Math.round(value * scale);
+  const unit = scale === 1 ? "CSS pixels" : "screenshot pixels";
 
   return [
     ...kept.flatMap(({ region, image }) => [
       text(
-        `Zoom: viewport origin (${region.x}, ${region.y}), ${region.width}x${region.height} CSS pixels. Add this origin to a point in the crop for a viewport click.`,
+        `Zoom: viewport origin (${at(region.x)}, ${at(region.y)}), ${at(region.width)}x${at(region.height)} ${unit}. Add this origin to a point in the crop for a viewport click.`,
       ),
       file(image),
     ]),
