@@ -583,10 +583,45 @@ const asChunk = (completion: Completion): Chunk => ({
   ...(completion.usage === undefined ? {} : { usage: completion.usage }),
 });
 
+type ChatRequest = Parameters<OpenRouterClient.Service["createChatCompletion"]>[0];
+
+const ephemeral = { type: "ephemeral" } as const;
+
+/**
+ * Mark the end of a request's history for the prompt cache: the last tool result or, before any,
+ * the system message. The turn's picture follows it and is dropped on the next call, so the
+ * provider's own breakpoint at the end of the prompt matches no later call; without this mark
+ * every call writes the whole conversation to the cache again.
+ */
+export const markHistory = (messages: ChatRequest["messages"]): ChatRequest["messages"] => {
+  const at = messages.findLastIndex(
+    (message) => message.role === "tool" || message.role === "system",
+  );
+
+  const message = messages[at];
+
+  // The converter writes a tool result as a string and a system message as text parts.
+  if (message?.role === "tool" && typeof message.content === "string")
+    return messages.with(at, {
+      ...message,
+      content: [{ type: "text", text: message.content, cache_control: ephemeral }],
+    });
+  if (message?.role === "system" && typeof message.content !== "string")
+    return messages.with(at, {
+      ...message,
+      content: message.content.map((part, index, parts) =>
+        index === parts.length - 1 ? { ...part, cache_control: ephemeral } : part,
+      ),
+    });
+
+  return messages;
+};
+
 /**
  * Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding. A
  * stream is asked as one completion, charged alike; decisions and the raw generated client have
- * no admission, so they are refused.
+ * no admission, so they are refused. Each request marks the end of its history for the prompt
+ * cache (`markHistory`).
  */
 export const budgetedClient = (
   client: OpenRouterClient.Service,
@@ -600,8 +635,9 @@ export const budgetedClient = (
   },
 ): OpenRouterClient.Service => {
   const createChatCompletion: OpenRouterClient.Service["createChatCompletion"] = (request) => {
-    const configured: Parameters<OpenRouterClient.Service["createChatCompletion"]>[0] = {
+    const configured: ChatRequest = {
       ...request,
+      messages: markHistory(request.messages),
       ...(bounds.outputParameter === "max_completion_tokens"
         ? { max_completion_tokens: bounds.maxOutputTokens }
         : { max_tokens: bounds.maxOutputTokens }),
