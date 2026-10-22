@@ -194,6 +194,8 @@ export const command = Command.make(
       return yield* refuse("Browserbase sessions cost money: set EFFECT_BROWSER_BENCH_HOSTED=1");
     if (options.signedIn && options.browser !== "browserbase")
       return yield* refuse("--signed-in loads a Browserbase context: use --browser browserbase");
+    if (options.browser === "browserbase" && Arms.deviceScale(options.arm) !== 1)
+      return yield* refuse("arms 11 and 12 set the device scale of a local chromium");
 
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -205,7 +207,11 @@ export const command = Command.make(
 
     const browser = (metadata: Readonly<Record<string, string>>) =>
       options.browser === "chromium"
-        ? Chromium.layer({ frameHistory, requests: TradingView.readOnly })
+        ? Chromium.layer({
+            frameHistory,
+            requests: TradingView.readOnly,
+            deviceScaleFactor: Arms.deviceScale(options.arm),
+          })
         : Browserbase.layer({
             requests: TradingView.readOnly,
             frameHistory,

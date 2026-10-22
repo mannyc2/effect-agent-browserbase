@@ -5,7 +5,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
 import { type Prompt, Tool } from "effect/ai";
 
-import type { Arm, Step } from "../Arms.ts";
+import { type Arm, deviceScale, type Step } from "../Arms.ts";
 import { noCalls } from "../Budget.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
 import { classify, isolatedTrial } from "../Trial.ts";
@@ -21,7 +21,10 @@ const parameters = (tools: ReadonlyArray<Tool.Any>, name: string): ReadonlyArray
 
 const names = (tools: ReadonlyArray<Tool.Any>) => tools.map((tool) => tool.name);
 
-/** Run one task in one arm with a scripted model, and classify its outcome as the runner does. */
+/**
+ * Run one task in one arm with a scripted model, on a browser at the arm's device scale, and
+ * classify its outcome as the runner does.
+ */
 const trial = (name: string, arm: Arm, turns: ReadonlyArray<Turn>) =>
   Effect.gen(function* () {
     const task = tasks.find((candidate) => candidate.name === name);
@@ -42,7 +45,7 @@ const trial = (name: string, arm: Arm, turns: ReadonlyArray<Turn>) =>
               steps.push({ ...entry.step, results: [...entry.step.results] });
           }),
       }),
-      Chromium.layer({ frameHistory }),
+      Chromium.layer({ frameHistory, deviceScaleFactor: deviceScale(arm) }),
     ).pipe(Effect.provide(model.layer), Effect.exit);
 
     return {
@@ -194,6 +197,22 @@ describe("arms 9 and 10, fewer pictures", () => {
       assert.deepStrictEqual(counts(result.seen), [0, 0, 0, 1]);
     }),
   );
+});
+
+describe("arms 11 and 12, picture sizes", () => {
+  for (const [arm, size] of [
+    [11, "640x360"],
+    [12, "1920x1080"],
+  ] as const)
+    it.live(`arm ${arm} shows the 1280x720 viewport at ${size}`, () =>
+      Effect.gen(function* () {
+        const result = yield* trial("checkout", arm, [
+          () => [call("done", { answer: { confirmation: "CONF-0" } }), finish],
+        ]);
+
+        assert.include(textOf(result.seen[0]!.prompt), `The current tab's viewport, ${size}.`);
+      }),
+    );
 });
 
 describe("arms 7 and 8, programs", () => {

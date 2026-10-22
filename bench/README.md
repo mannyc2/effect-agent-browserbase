@@ -353,6 +353,8 @@ a code given inside a sentence.
 | 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                  | As arm 5                                       |
 | 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look` | As arm 5                                       |
 | 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                   | As arm 5                                       |
+| 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels            | As arm 5                                       |
+| 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels            | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has

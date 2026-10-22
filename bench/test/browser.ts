@@ -20,7 +20,10 @@ export const layer = (options: Chromium.Options = {}) =>
         );
 
         const context = yield* Effect.promise(() =>
-          browser.newContext({ viewport: options.viewport ?? { width: 1280, height: 720 } }),
+          browser.newContext({
+            viewport: options.viewport ?? { width: 1280, height: 720 },
+            deviceScaleFactor: options.deviceScaleFactor ?? 1,
+          }),
         );
 
         const service = yield* Browser.make(

@@ -8,7 +8,9 @@
 // whose `browser.*` calls are those tools. Arm 8 has both: arm 5's tools and the program tool. Arms
 // 9 and 10 are arm 5 with fewer screenshots and the `look` tool to ask for one: arm 9 shows one
 // after pointer input or while the viewport holds a canvas, a video or another site's frame, arm 10
-// only when asked. Understand tasks differ only in arm 1, whose moments add the outline.
+// only when asked. Arms 11 and 12 are arm 5 with the same 1280×720 layout pictured in device pixels
+// at device scale 0.5 and 1.5: half size, 640×360, and sharper, 1920×1080. Their pointer tools take
+// the picture's coordinates. Understand tasks differ only in arm 1, whose moments add the outline.
 import { Agent, AgentRuntime, CodeMode, InMemory, type RunEvent } from "@yielded/agent";
 import { inProcessCodeExecutorLayer } from "@yielded/agent-testing/code-executor-substitute";
 import { CodeExecutionLimits } from "@yielded/agent/code-executor";
@@ -18,7 +20,7 @@ import type * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
-export const arms = [1, 2, 5, 6, 7, 8, 9, 10] as const;
+export const arms = [1, 2, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 
 export type Arm = (typeof arms)[number];
 
@@ -31,7 +33,12 @@ export const armNames: { readonly [A in Arm]: string } = {
   8: "programs and tools",
   9: "pictures by page",
   10: "pictures on request",
+  11: "half-size pictures",
+  12: "sharper pictures",
 };
+
+/** The device scale factor of an arm's browser: its pictures' pixels to a CSS pixel. */
+export const deviceScale = (arm: Arm | null) => (arm === 11 ? 0.5 : arm === 12 ? 1.5 : 1);
 
 /** Token counts, as the run or the model's response reported them. */
 export interface Usage {
@@ -89,6 +96,14 @@ const closing = [
   "- When the task is done, call done with the answer. If it cannot be done, call give_up with the reason.",
 ];
 
+const arm5 = [
+  "You operate a web browser through tools to complete the user's task.",
+  "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+  "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+  "- Prefer refs where the outline has them.",
+  ...closing,
+].join("\n");
+
 const instructions: { readonly [A in Arm]: string } = {
   1: [
     "You operate a web browser through tools to complete the user's task.",
@@ -104,13 +119,7 @@ const instructions: { readonly [A in Arm]: string } = {
     "- Batch two or more predictable steps in one turn. Calls run in order and stop at the first failure.",
     ...closing,
   ].join("\n"),
-  5: [
-    "You operate a web browser through tools to complete the user's task.",
-    "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
-    "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
-    "- Prefer refs where the outline has them.",
-    ...closing,
-  ].join("\n"),
+  5: arm5,
   6: [
     "You operate a web browser through tools to complete the user's task.",
     "- After each turn you are shown what the page did since the turn before: what happened and changed, with screenshots and their times, the last one the page now. Older screenshots are dropped; what happened stays.",
@@ -152,6 +161,8 @@ const instructions: { readonly [A in Arm]: string } = {
     "- After each step, check that it did what you meant, with observe or, where the outline cannot show it, look, before you go on.",
     ...closing,
   ].join("\n"),
+  11: arm5,
+  12: arm5,
 };
 
 const finishing = <A, I>(answer: Schema.Codec<A, I>) =>
@@ -229,6 +240,8 @@ const tooling = {
   },
   9: { toolkit: Toolkit.merge(batched.toolkit, BrowserTools.Look), tools: batched, vision: "page" },
   10: { toolkit: Toolkit.merge(batched.toolkit, BrowserTools.Look), tools: batched, vision: "ask" },
+  11: { toolkit: batched.toolkit, tools: batched, vision: true },
+  12: { toolkit: batched.toolkit, tools: batched, vision: true },
 } as const;
 
 /**
@@ -287,6 +300,8 @@ const steps = (onStep: (step: Step) => Effect.Effect<void>) => {
 export const operate = <A, I>(arm: Arm, page: Page, task: string, options: OperateOptions<A, I>) =>
   Effect.gen(function* () {
     const { toolkit, tools, vision } = tooling[arm];
+    // An arm with a device scale of its own sees, and points in, the screen's pixels.
+    const pixels = deviceScale(arm) === 1 ? "css" : "device";
     const finish = finishing(options.answer);
 
     const agent = Agent.make(`bench-arm-${arm}`, {
@@ -332,7 +347,7 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
         Layer.mergeAll(
           Layer.provideMerge(
             programs,
-            tools.layer({ page }, { task, vision, onMoment: options.onMoment }),
+            tools.layer({ page }, { task, vision, pixels, onMoment: options.onMoment }),
           ),
           finish.toLayer({
             done: () => Effect.void,
