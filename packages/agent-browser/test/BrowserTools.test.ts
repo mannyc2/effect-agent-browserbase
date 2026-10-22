@@ -122,6 +122,40 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("reads null as left out in the control tools' parameters, as models send it", () =>
+    Effect.gen(function* () {
+      const { prompts } = yield* run("Look around", [
+        () =>
+          calling(
+            call("inspect", { selector: "form", frame: null, optionFilter: null }),
+            call("scroll", { ref: null, deltaX: 0, deltaY: 100 }),
+            call("wait", {
+              selector: "form",
+              frame: null,
+              state: "visible",
+              text: null,
+              timeoutMillis: 500,
+            }),
+          ),
+        () => answer("Looked around."),
+      ]);
+
+      const results = prompts[1]!.content.flatMap((message) =>
+        message.role === "tool"
+          ? message.content.flatMap((part) =>
+              part.type === "tool-result" ? [[part.name, part.isFailure]] : [],
+            )
+          : [],
+      );
+
+      assert.deepStrictEqual(results, [
+        ["inspect", false],
+        ["scroll", false],
+        ["wait", false],
+      ]);
+    }),
+  );
+
   it.effect("plays a canvas by point, and shows a crop before the next turn", () =>
     Effect.gen(function* () {
       const { page, prompts } = yield* run("Press spin once", [

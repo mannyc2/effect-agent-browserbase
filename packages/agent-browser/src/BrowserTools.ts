@@ -150,16 +150,48 @@ export const Pointer = Toolkit.make(
 );
 
 const { tools } = BrowserUse.browserTools;
+const { InspectRequest, ScrollRequest, WaitRequest } = BrowserUse;
+
+// Yielded's tool as it is, but for its parameters. Its own refuse null for a parameter left out,
+// and its runtime reports that refusal to the model as "Unknown error".
+const lenient = <
+  Name extends string,
+  Success extends Schema.Top,
+  Fields extends Schema.Struct.Fields,
+>(
+  tool: {
+    readonly name: Name;
+    readonly description?: string | undefined;
+    readonly successSchema: Success;
+  },
+  parameters: Fields,
+) =>
+  Tool.make(tool.name, {
+    description: tool.description,
+    parameters: Schema.Struct(parameters),
+    success: tool.successSchema,
+    failure: BrowserUse.BrowserUseError,
+    failureMode: "return",
+  });
 
 /**
  * Yielded's browser tools but two: `screenshot`, since the model sees the page before each turn
- * instead, and `respond_dialog`, since the browser answers dialogs itself.
+ * instead, and `respond_dialog`, since the browser answers dialogs itself. Their optional
+ * parameters read null as left out, as this package's own do.
  */
 export const Control = Toolkit.make(
-  tools.inspect,
+  lenient(tools.inspect, {
+    selector: absent(InspectRequest.fields.selector.schema),
+    frame: absent(InspectRequest.fields.frame.schema),
+    optionFilter: absent(InspectRequest.fields.optionFilter.schema),
+  }),
   tools.navigate,
-  tools.scroll,
-  tools.wait,
+  lenient(tools.scroll, { ...ScrollRequest.fields, ref: absent(ScrollRequest.fields.ref.schema) }),
+  lenient(tools.wait, {
+    ...WaitRequest.fields,
+    frame: absent(WaitRequest.fields.frame.schema),
+    text: absent(WaitRequest.fields.text.schema),
+  }),
   tools.press,
   tools.select_tab,
 );
