@@ -5,8 +5,10 @@
 // screenshot before each turn and acts by pixels. Arm 6 is arm 5 with moments in its thread instead
 // of the screenshot: after each turn's results, what the page did since the turn before. Arm 7 is
 // arm 5 with its tools behind one Code Mode tool, `browser_program`: the model writes a program
-// whose `browser.*` calls are those tools. Arm 8 has both: arm 5's tools and the program tool.
-// Understand tasks differ only in arm 1, whose moments add the outline.
+// whose `browser.*` calls are those tools. Arm 8 has both: arm 5's tools and the program tool. Arms
+// 9 and 10 are arm 5 with fewer screenshots and the `look` tool to ask for one: arm 9 shows one
+// after pointer input or while the viewport holds a canvas, a video or another site's frame, arm 10
+// only when asked. Understand tasks differ only in arm 1, whose moments add the outline.
 import { Agent, AgentRuntime, CodeMode, InMemory, type RunEvent } from "@yielded/agent";
 import { inProcessCodeExecutorLayer } from "@yielded/agent-testing/code-executor-substitute";
 import { CodeExecutionLimits } from "@yielded/agent/code-executor";
@@ -16,7 +18,7 @@ import type * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
-export const arms = [1, 2, 5, 6, 7, 8] as const;
+export const arms = [1, 2, 5, 6, 7, 8, 9, 10] as const;
 
 export type Arm = (typeof arms)[number];
 
@@ -27,6 +29,8 @@ export const armNames: { readonly [A in Arm]: string } = {
   6: "moments",
   7: "programs",
   8: "programs and tools",
+  9: "pictures by page",
+  10: "pictures on request",
 };
 
 /** Token counts, as the run or the model's response reported them. */
@@ -132,6 +136,22 @@ const instructions: { readonly [A in Arm]: string } = {
     "- Prefer refs where the outline has them.",
     ...closing,
   ].join("\n"),
+  9: [
+    "You operate a web browser through tools to complete the user's task.",
+    "- Before a turn you see a screenshot of the viewport after pointer input, or while it shows a canvas, a video or another site's frame. Otherwise call look to see one before your next turn, when how the page looks matters.",
+    "- Screenshot pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+    "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+    "- Prefer refs where the outline has them.",
+    ...closing,
+  ].join("\n"),
+  10: [
+    "You operate a web browser through tools to complete the user's task.",
+    "- You see a screenshot of the viewport only before a turn after you call look. Its pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+    "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+    "- Prefer refs where the outline has them.",
+    "- After each step, check that it did what you meant, with observe or, where the outline cannot show it, look, before you go on.",
+    ...closing,
+  ].join("\n"),
 };
 
 const finishing = <A, I>(answer: Schema.Codec<A, I>) =>
@@ -207,6 +227,8 @@ const tooling = {
     tools: batched,
     vision: true,
   },
+  9: { toolkit: Toolkit.merge(batched.toolkit, BrowserTools.Look), tools: batched, vision: "page" },
+  10: { toolkit: Toolkit.merge(batched.toolkit, BrowserTools.Look), tools: batched, vision: "ask" },
 } as const;
 
 /**

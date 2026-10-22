@@ -164,6 +164,38 @@ describe("arm 2, vision first", () => {
   );
 });
 
+describe("arms 9 and 10, fewer pictures", () => {
+  const counts = (seen: ReadonlyArray<{ readonly prompt: Prompt.Prompt }>) =>
+    seen.map(({ prompt }) => pictures(prompt));
+
+  it.live("arm 9 shows the screen after pointer input on a page its outline reads", () =>
+    Effect.gen(function* () {
+      const result = yield* trial("checkout", 9, [
+        () => [call("observe", {}), finish],
+        () => [call("click_at", { x: 5, y: 5 }), finish],
+        () => [call("observe", {}), finish],
+        () => [call("done", { answer: { confirmation: "CONF-0" } }), finish],
+      ]);
+
+      assert.deepStrictEqual(counts(result.seen), [0, 0, 1, 0]);
+      assert.include(names(result.seen[0]?.tools ?? []), "look");
+    }),
+  );
+
+  it.live("arm 10 shows the screen only after look", () =>
+    Effect.gen(function* () {
+      const result = yield* trial("checkout", 10, [
+        () => [call("observe", {}), finish],
+        () => [call("click_at", { x: 5, y: 5 }), finish],
+        () => [call("look", {}), finish],
+        () => [call("done", { answer: { confirmation: "CONF-0" } }), finish],
+      ]);
+
+      assert.deepStrictEqual(counts(result.seen), [0, 0, 0, 1]);
+    }),
+  );
+});
+
 describe("arms 7 and 8, programs", () => {
   // A program finds the first field in an observation and fills it, and returns only what it read.
   const program = `async () => {

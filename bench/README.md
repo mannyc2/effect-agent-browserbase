@@ -342,14 +342,16 @@ the answer said, so an order placed and then reported inside a sentence counts t
 grade. Each record keeps it as `onPage`, so a report counts format-only failures both ways until
 answers are judged rather than matched.
 
-| Arm | Operate tasks                                                                                                                                                  | Understand tasks                               |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools | The moment with its outline                    |
-| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                   | As arm 5                                       |
-| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                            | `Moment.capture` as it is: frames and timeline |
-| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                   | As arm 5                                       |
-| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                | As arm 5                                       |
-| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                           | As arm 5                                       |
+| Arm | Operate tasks                                                                                                                                                         | Understand tasks                               |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools        | The moment with its outline                    |
+| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                          | As arm 5                                       |
+| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                                   | `Moment.capture` as it is: frames and timeline |
+| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                          | As arm 5                                       |
+| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                       | As arm 5                                       |
+| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                  | As arm 5                                       |
+| 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look` | As arm 5                                       |
+| 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                   | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
