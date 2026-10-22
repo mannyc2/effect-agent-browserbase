@@ -13,6 +13,7 @@ import * as Operator from "./operator.ts";
 import * as Regrade from "./regrade.ts";
 import * as Report from "./Report.ts";
 import * as Run from "./run.ts";
+import * as TradingView from "./tradingview.ts";
 
 Command.make("bench").pipe(
   Command.withDescription(
@@ -27,6 +28,7 @@ Command.make("bench").pipe(
     Handover.command,
     Cue.command,
     Operator.command,
+    TradingView.command,
   ]),
   Command.run({ version: "0.3" }),
   // The command line explains its own usage errors. Anything else prints only what the bench

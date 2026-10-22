@@ -277,6 +277,36 @@ session log is no substitute: on 7 October 2026 its entries carried no timestamp
 reference lists them, it kept about every other DevTools message, it appeared 5 to 20 seconds
 after the session ended, and a session whose page never navigated had none.
 
+### TradingView
+
+`tradingview` gives an agent tasks on TradingView's charts: switching symbol and timeframe, adding
+an indicator with a changed setting, drawing a level and a trend line at prices read off the chart,
+zooming, and reading values from an indicator or a past candle. Each is graded on the chart's own
+state, read through the page's chart API, which the model never sees. Graders count only the
+indicators and drawings a run adds.
+
+```sh
+bun run bench tradingview                       # scripted solutions on the demo, at no cost
+bun run bench tradingview --mode untouched      # the chart left alone: every task should fail
+
+EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
+  bun run bench tradingview --mode model --task trend --trials 3
+
+EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... BROWSERBASE_CONTEXT_ID=... \
+  bun run bench tradingview --site tradingview --browser browserbase --signed-in
+```
+
+`--site demo` (the default) is TradingView's Advanced Charts demo, which needs no account.
+`--site tradingview` is tradingview.com, which signed out refuses its drawing tools and indicator
+search, so its drawing and indicator tasks need `--signed-in`. That loads the Browserbase stored
+context `BROWSERBASE_CONTEXT_ID` names, holding a signed-in TradingView, and saves nothing back to
+it. A session created with a stored context carries its id as `contextId` in Browserbase's session
+listing (`GET /v1/sessions`). Every trial refuses any request to tradingview.com but a `GET`, `HEAD`
+or `OPTIONS`, so no run saves a layout, alert or setting to the account.
+
+Results, each trial's steps and its first and last screenshots go to `.work/tradingview`. Both
+sites are live, so a result speaks to the day it was taken.
+
 ## Arms
 
 `--arm` sets how a model sees a page and acts on it, for the paired experiment. Repeated, it runs
