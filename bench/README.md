@@ -48,6 +48,9 @@ tools against `dev`, the default, and compare arms on `eval`.
 | `board-move`     | operate    | Drag a card to the top of a board's Done column and report how many cards Done holds            |
 | `policy-find`    | operate    | Find the returns policy behind header menus that open on hover and report its reference         |
 | `catalog-buy`    | operate    | Add the cheapest tent for two in stock, from a catalogue across three pages, to the cart        |
+| `note-format`    | operate    | Format a note as a comment asks, through a toolbar of icons no button names, and save it        |
+| `seat-book`      | operate    | Book two seats together nearest the stage, on a seat map that shows free seats by color alone   |
+| `payment-refund` | operate    | Refund the one payment a support ticket describes, among payments that look alike               |
 
 An operate task gives a Yielded agent the browser tools. An understand task brings the page to
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call:
@@ -553,5 +556,5 @@ with one answer on every seed, and a constant answer passes at most one of the t
 hosted browser is called.
 
 A new task is an `operate` or `understand` entry in `Tasks.ts`, or an errand in `Errands.ts`, an
-operate task on an everyday page of its own; `Catalog.ts` lists every task, and the tests pick it
-up.
+operate task on an everyday page of its own, or one in `Seeing.ts` if its page shows what matters
+in pixels more than in text; `Catalog.ts` lists every task, and the tests pick it up.

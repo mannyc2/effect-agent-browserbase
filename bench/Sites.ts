@@ -22,6 +22,11 @@ export const routes = {
 
 export const style = `body{margin:0;font-family:system-ui,sans-serif}button{font:inherit;cursor:pointer}`;
 
+/** Seeded helpers a task page's script starts with, over the stream `serve` injects. */
+export const draws = (salt: number) =>
+  `const random = __benchStream(${salt}), pick = (list) => list[Math.floor(random() * list.length)];
+  const shuffle = (list) => list.map((item) => [random(), item]).sort((a, b) => a[0] - b[0]).map(([, item]) => item);`;
+
 // A lobby behind a cookie wall and an age check, as real casino sites are.
 const lobby = `<!doctype html><html><head><title>Lucky Harbor Casino</title><style>${style}
 body{background:#0d1b2a;color:#eee}
