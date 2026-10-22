@@ -66,7 +66,10 @@ interface Chart {
   };
   readonly setSymbol: (symbol: string) => Promise<unknown>;
   readonly setResolution: (resolution: string) => Promise<unknown>;
-  readonly setVisibleRange: (range: { from: number; to: number }) => Promise<unknown>;
+  readonly getTimeScale: () => {
+    readonly width: () => number;
+    readonly setBarSpacing: (pixels: number) => void;
+  };
   readonly createStudy: (
     name: string,
     overlay: boolean,
@@ -371,16 +374,18 @@ const zoom: Task = {
       detail: `${shown} candles in view; latest ${latest ? "on" : "off"} screen`,
     };
   },
-  solve: (page, start) =>
+  // tradingview.com does not implement setVisibleRange. Spacing bars a fortieth of the width
+  // apart shows about thirty, past the ten bars' margin the chart keeps on the right.
+  solve: (page) =>
     apply(
       page,
-      (range: { from: number; to: number }) => {
+      () => {
         const charts = window as unknown as Charts;
-        const chart = (charts.tvWidget ?? charts.TradingViewApi)!.activeChart();
+        const scale = (charts.tvWidget ?? charts.TradingViewApi)!.activeChart().getTimeScale();
 
-        return chart.setVisibleRange(range);
+        scale.setBarSpacing(scale.width() / 40);
       },
-      { from: start.rows.at(-30)![0]!, to: start.rows.at(-1)![0]! },
+      undefined,
     ).pipe(Effect.as("zoomed")),
 };
 
