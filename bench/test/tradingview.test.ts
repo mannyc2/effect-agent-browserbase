@@ -59,6 +59,23 @@ describe("TradingView graders", () => {
     );
   });
 
+  it("rsi reads the Pine RSI's length from its first input", () => {
+    // The Pine RSI's fifth input is its smoothing average's length.
+    const pine = (length: number, smoothing: number) => ({
+      id: "a",
+      name: "Relative strength index",
+      inputs: [
+        { id: "pineId", value: "STD;RSI" },
+        { id: "in_0", value: length },
+        { id: "in_1", value: "close" },
+        { id: "in_4", value: smoothing },
+      ],
+    });
+
+    assert.isTrue(grade("rsi", { studies: [pine(21, 14)] }));
+    assert.isFalse(grade("rsi", { studies: [pine(14, 21)] }));
+  });
+
   it("level passes an added line within a quarter percent of the highest high in view", () => {
     assert.isTrue(grade("level", { shapes: [line("a", 300.5)] }));
     assert.isFalse(grade("level", { shapes: [line("a", 301)] }));

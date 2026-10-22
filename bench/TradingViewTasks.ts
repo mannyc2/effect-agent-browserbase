@@ -260,6 +260,11 @@ const switching = (ticker: string, symbol: string, name: string): Task => ({
     ).pipe(Effect.as("switched")),
 });
 
+// The API's RSI names its length `length`. tradingview.com's indicator search adds its Pine RSI
+// instead, whose length is its first input, `in_0`.
+const input = (study: State["studies"][number], id: string) =>
+  study.inputs.find((candidate) => candidate.id === id);
+
 const rsi: Task = {
   name: "rsi",
   prompt:
@@ -268,7 +273,7 @@ const rsi: Task = {
   grade: (start, end) => {
     const lengths = added(start.studies, end.studies)
       .filter((study) => /relative strength index/i.test(study.name))
-      .map((study) => study.inputs.find((input) => input.id === "length")?.value);
+      .map((study) => (input(study, "length") ?? input(study, "in_0"))?.value);
 
     return {
       pass: lengths.includes(21),
