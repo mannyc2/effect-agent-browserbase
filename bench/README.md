@@ -284,7 +284,10 @@ after the session ended, and a session whose page never navigated had none.
 
 `tradingview` gives an agent tasks on TradingView's charts: switching symbol and timeframe, adding
 an indicator with a changed setting, drawing a level and a trend line at prices read off the chart,
-zooming, and reading values from an indicator or a past candle. Each is graded on the chart's own
+zooming, and reading values from an indicator or a past candle. Four more need many candles' data
+at once: a line at the last 20 closes' average (`average`), a mark on the candle with the widest
+range in view (`range`), the change from the leftmost open to the latest close (`change`) and a
+line between the lowest lows of the view's two halves (`swing`). Each is graded on the chart's own
 state, read through the page's chart API, which the model never sees. Graders count only the
 indicators and drawings a run adds.
 

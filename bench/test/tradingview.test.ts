@@ -38,6 +38,14 @@ const line = (id: string, price: number) => ({
   points: [{ time: high.time, price }],
 });
 
+const trend = (points: ReadonlyArray<{ time: number; price: number }>) => ({
+  shapes: [{ id: "a", name: "trend_line", points }],
+});
+
+const vertical = (index: number) => ({
+  shapes: [{ id: "a", name: "vertical_line", points: [{ time: rows[index]![0]!, price: 150 }] }],
+});
+
 describe("TradingView graders", () => {
   it("switch passes Ethereum at four hours only", () => {
     assert.isTrue(grade("switch", { symbol: "BINANCE:ETHUSDT", resolution: "240" }));
@@ -87,10 +95,6 @@ describe("TradingView graders", () => {
   });
 
   it("trend passes an added line from the lowest low to the highest high, either way round", () => {
-    const trend = (points: ReadonlyArray<{ time: number; price: number }>) => ({
-      shapes: [{ id: "a", name: "trend_line", points }],
-    });
-
     assert.isTrue(grade("trend", trend([low, high])));
     assert.isTrue(grade("trend", trend([high, { time: rows[42]![0]!, price: 138.5 }])));
     assert.isFalse(grade("trend", trend([{ time: rows[43]![0]!, price: 138 }, high])));
@@ -114,6 +118,51 @@ describe("TradingView graders", () => {
     assert.isTrue(grade("bands", bands, "The upper band is at 202.03"));
     assert.isFalse(grade("bands", bands, "190.5"));
     assert.isFalse(grade("bands", {}, "202.03"));
+  });
+
+  it("average passes an added line within a quarter percent of the last twenty closes' mean", () => {
+    // The last twenty closes are 181 to 200, a mean of 190.5.
+    assert.isTrue(grade("average", { shapes: [line("a", 190.9)] }));
+    assert.isFalse(grade("average", { shapes: [line("a", 191.5)] }));
+    assert.isFalse(
+      grade("average", { shapes: [line("a", 190.5)] }, "", {
+        ...chart,
+        shapes: [line("a", 190.5)],
+      }),
+    );
+  });
+
+  it("range passes a vertical line on the widest candle in view", () => {
+    // The spike's candle spans 168 to 300; every other spans 4.
+    assert.isTrue(grade("range", vertical(70)));
+    assert.isFalse(grade("range", vertical(71)));
+    assert.isFalse(grade("range", {}));
+  });
+
+  it("change passes the change from the leftmost open to the latest close, signed", () => {
+    // From the open of 140 on the leftmost bar to the close of 200; its neighbours open at 139 and 141.
+    assert.isTrue(grade("change", {}, "It rose 42.86%"));
+    assert.isTrue(grade("change", {}, "+43.88"));
+    assert.isFalse(grade("change", {}, "45"));
+    assert.isFalse(grade("change", {}, "-42.86"));
+
+    const fell: State = {
+      ...chart,
+      rows: rows.map((row, index) => (index === 99 ? [...row.slice(0, 4), 133] : row)),
+    };
+
+    assert.isTrue(grade("change", {}, "−5.00%", fell));
+    assert.isFalse(grade("change", {}, "5.00%", fell));
+  });
+
+  it("swing passes an added line between the lowest lows of the view's halves", () => {
+    const left = low;
+    const right = { time: rows[70]![0]!, price: 168 };
+
+    assert.isTrue(grade("swing", trend([left, right])));
+    assert.isTrue(grade("swing", trend([right, left])));
+    // The lowest low to the latest bar's low is not the swing.
+    assert.isFalse(grade("swing", trend([left, { time: rows[99]![0]!, price: 197 }])));
   });
 
   it("read passes 1 October's close on a daily chart", () => {
