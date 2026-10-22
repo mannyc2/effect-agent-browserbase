@@ -1,9 +1,11 @@
 /**
- * Browser tools for a Yielded agent on effect-browser: Yielded's own over `PageControl`'s ports,
- * which are `observe` and `act` and the browser tools but `screenshot` and `respond_dialog`, and
- * this package's `Pointer` tools for what has no ref, such as a canvas game or a chart: clicking,
- * hovering and dragging at viewport points, typing and pressing keys into focus, zooming, waiting
- * for the screen to go still, and going back.
+ * Browser tools for a Yielded agent on effect-browser, over `PageControl`'s controller: `observe`
+ * and `act` on the refs of an observed page; the `Control` tools, which inspect, navigate, scroll,
+ * wait, press keys and select tabs; and the `Pointer` tools for what has no ref, such as a canvas
+ * game or a chart: clicking, hovering and dragging at viewport points, typing and pressing keys
+ * into focus, zooming, waiting for the screen to go still, and going back. The ref and `Control`
+ * tools keep the names, parameters and descriptions Yielded Agent gave them before 0.1.0-beta.174
+ * replaced them with Code Mode over CDP, but that their optional parameters read null as left out.
  *
  * With `vision`, the default, the model sees a screenshot of the current tab before each turn, and
  * the crops `zoom` took since its last, as context the run never keeps, so only the current picture
@@ -15,23 +17,14 @@
  * reference messages labeled by turn, with their frame times. A run's own `context` option
  * replaces the accounts' hook; its `transientContext` replaces the pictures.
  *
- * `make` gives the toolkit to put in an agent, and `layer`, which provides every tool's handler,
- * the ports and the pictures for one run, on a page or a browser's tabs.
+ * `make` gives the toolkit to put in an agent, and `layer`, which provides every tool's handler
+ * and the pictures for one run, on a page or a browser's tabs.
  *
  * @since 0.3.0
  */
 import { BrowserUse } from "@yielded/agent";
 import { RunContextPreparation } from "@yielded/agent/run-options";
-import {
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  Ref,
-  Schema,
-  SchemaTransformation,
-} from "effect";
+import { Effect, Layer, Option, Predicate, Ref, Schema, SchemaTransformation } from "effect";
 import { Action } from "effect-browser/Action";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type * as Moment from "effect-browser/Moment";
@@ -149,55 +142,124 @@ export const Pointer = Toolkit.make(
   }),
 );
 
-const { tools } = BrowserUse.browserTools;
-const { InspectRequest, ScrollRequest, WaitRequest } = BrowserUse;
+const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 
-// Yielded's tool as it is, but for its parameters. Its own refuse null for a parameter left out,
-// and its runtime reports that refusal to the model as "Unknown error".
-const lenient = <
-  Name extends string,
+const Delta = Schema.Int.check(Schema.isBetween({ minimum: -100_000, maximum: 100_000 }));
+
+const pageTool = <
+  const Name extends string,
+  Parameters extends Schema.Struct.Fields,
   Success extends Schema.Top,
-  Fields extends Schema.Struct.Fields,
 >(
-  tool: {
-    readonly name: Name;
-    readonly description?: string | undefined;
-    readonly successSchema: Success;
-  },
-  parameters: Fields,
+  name: Name,
+  description: string,
+  parameters: Parameters,
+  success: Success,
 ) =>
-  Tool.make(tool.name, {
-    description: tool.description,
+  Tool.make(name, {
+    description,
     parameters: Schema.Struct(parameters),
-    success: tool.successSchema,
+    success,
     failure: BrowserUse.BrowserUseError,
     failureMode: "return",
   });
 
-/**
- * Yielded's browser tools but two: `screenshot`, since the model sees the page before each turn
- * instead, and `respond_dialog`, since the browser answers dialogs itself. Their optional
- * parameters read null as left out, as this package's own do.
- */
+/** Tools that inspect, navigate, scroll, wait, press keys on refs and select tabs. */
 export const Control = Toolkit.make(
-  lenient(tools.inspect, {
-    selector: absent(InspectRequest.fields.selector.schema),
-    frame: absent(InspectRequest.fields.frame.schema),
-    optionFilter: absent(InspectRequest.fields.optionFilter.schema),
-  }),
-  tools.navigate,
-  lenient(tools.scroll, { ...ScrollRequest.fields, ref: absent(ScrollRequest.fields.ref.schema) }),
-  lenient(tools.wait, {
-    ...WaitRequest.fields,
-    frame: absent(WaitRequest.fields.frame.schema),
-    text: absent(WaitRequest.fields.text.schema),
-  }),
-  tools.press,
-  tools.select_tab,
+  pageTool(
+    "inspect",
+    "Inspect the main page or an observed frame and CSS scope, including open shadow roots. Other frames are listed with inspected=false; inspect one when it contains the missing controls. Narrow a truncated observation with selector, frame or optionFilter before acting.",
+    {
+      selector: absent(Selector),
+      frame: absent(PageControl.Ref),
+      optionFilter: absent(Schema.NonEmptyString.check(Schema.isMaxLength(300))),
+    },
+    PageControl.Observation,
+  ),
+  pageTool(
+    "navigate",
+    "Navigate the current browser to a host-authorized URL. Input receipt is independent of the returned observation; never replay uncertain navigation.",
+    { url: Schema.String.check(Schema.isMaxLength(8_192)) },
+    PageControl.ActionResult,
+  ),
+  pageTool(
+    "scroll",
+    "Scroll the viewport or an observed scroll container by CSS pixels and inspect the result.",
+    { ref: absent(PageControl.Ref), deltaX: Delta, deltaY: Delta },
+    PageControl.ActionResult,
+  ),
+  pageTool(
+    "wait",
+    "Wait for an asynchronous condition using standard CSS and observed DOM/attribute evidence in the current frame. Optional text qualifies every state, case-sensitively; hidden with text waits until no visible match contains that text. Control kinds are semantic roles, not necessarily HTML tags. Returns a fresh observation; do not wait for an already satisfied condition or use fixed sleeps.",
+    {
+      selector: Selector,
+      frame: absent(PageControl.Ref),
+      state: Schema.Literals(["visible", "hidden", "enabled", "text"]),
+      text: absent(Schema.String.check(Schema.isMaxLength(1_024))),
+      timeoutMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 15_000 })),
+    },
+    PageControl.Observation,
+  ),
+  pageTool(
+    "press",
+    "Press a bounded native keyboard key on an observed focusable control, including keyboard-only links with pointerEvents=none and tabindex=0. Revalidates identity, visible state and native focus; a pointer hit is not required. Never replay uncertain input.",
+    {
+      ref: PageControl.Ref,
+      key: Schema.Literals([
+        "Enter",
+        "Escape",
+        "Tab",
+        "ArrowDown",
+        "ArrowUp",
+        "ArrowLeft",
+        "ArrowRight",
+        "Home",
+        "End",
+        "Space",
+        "Backspace",
+        "Delete",
+      ]),
+    },
+    PageControl.ActionResult,
+  ),
+  pageTool(
+    "select_tab",
+    "Select an observed tab or popup in this browser context and inspect it. References from the previous page expire.",
+    { ref: PageControl.Ref },
+    PageControl.Observation,
+  ),
 );
 
-const single = BrowserUse.make({ mode: "single" });
-const batched = BrowserUse.make({ mode: "batched" });
+const observe = Tool.make("observe", {
+  description: "Read the visible page and controls. Only observed controls may receive actions.",
+  parameters: Tool.EmptyParams,
+  success: PageControl.Observation,
+  failure: BrowserUse.BrowserUseError,
+  failureMode: "return",
+});
+
+// `act` takes one action, or up to eight in order.
+const single = Toolkit.make(
+  observe,
+  pageTool(
+    "act",
+    "Perform one action on an observed ref and return the next observation. Never repeat an acknowledged action because its observation failed.",
+    { action: PageControl.Action },
+    PageControl.ActionResult,
+  ),
+);
+
+const batched = Toolkit.make(
+  observe,
+  pageTool(
+    "act",
+    "Perform 1–8 sequential actions on already observed controls. Stop at page/dialog transitions. completed counts acknowledged actions; never replay them.",
+    {
+      actions: Schema.Array(PageControl.Action).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+    },
+    PageControl.ActionResult,
+  ),
+);
 
 export interface LayerOptions extends PageControl.Options {
   readonly initialMoments?: AdapterState.Moments | undefined;
@@ -364,15 +426,15 @@ const pointing = (
 };
 
 /** One mode's tools and the layer that serves them for a run. */
-const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
-  readonly toolkit: Toolkit.Toolkit<Ports>;
-  readonly layer: () => Layer.Layer<Tool.HandlersFor<Ports>, never, BrowserUse.BrowserActions>;
-}) => {
-  const toolkit = Toolkit.merge(browserUse.toolkit, Control, Pointer);
+const tooling = <Refs extends Record<string, Tool.Any>>(
+  refs: Toolkit.Toolkit<Refs>,
+  serve: (actions: PageControl.Controller["actions"]) => Layer.Layer<Tool.HandlersFor<Refs>>,
+) => {
+  const toolkit = Toolkit.merge(refs, Control, Pointer);
 
   /**
-   * Every tool's handler, `PageControl`'s ports, and with `vision` the pictures before each turn
-   * or the moments in the thread, for one run on `target`.
+   * Every tool's handler, and with `vision` the pictures before each turn or the moments in the
+   * thread, for one run on `target`.
    */
   const layer = (target: PageControl.Target, options: LayerOptions = {}) =>
     Layer.unwrap(
@@ -382,14 +444,8 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
         const vision = options.vision ?? true;
         const { control } = controller;
 
-        const ports = Layer.succeedContext(
-          Context.make(BrowserUse.BrowserActions, controller.actions).pipe(
-            Context.add(BrowserUse.BrowserControl, control),
-          ),
-        );
-
         const handlers = Layer.mergeAll(
-          browserUse.layer(),
+          serve(controller.actions),
           Control.toLayer({
             inspect: control.inspect,
             navigate: control.navigate,
@@ -399,7 +455,7 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
             select_tab: control.selectTab,
           }),
           Pointer.toLayer(pointing(controller, zooms, vision)),
-        ).pipe(Layer.provide(ports));
+        );
 
         // Without pictures, an application's own context preparation stays as it is.
         const preparation =
@@ -419,15 +475,23 @@ const tooling = <Ports extends Record<string, Tool.Any>>(browserUse: {
                 })
               : Layer.empty;
 
-        return Layer.mergeAll(handlers, ports, preparation);
+        return Layer.mergeAll(handlers, preparation);
       }),
     );
 
   return { toolkit, layer };
 };
 
-const singleTools = tooling(single);
-const batchedTools = tooling(batched);
+const singleTools = tooling(single, (actions) =>
+  single.toLayer({ observe: () => actions.observe, act: ({ action }) => actions.act([action]) }),
+);
+
+const batchedTools = tooling(batched, (actions) =>
+  batched.toLayer({
+    observe: () => actions.observe,
+    act: ({ actions: steps }) => actions.act(steps),
+  }),
+);
 
 /**
  * The tools and their layer. `"batched"`, the default, lets `act` take up to eight actions; with

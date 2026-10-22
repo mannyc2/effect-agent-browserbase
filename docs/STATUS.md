@@ -24,6 +24,14 @@ per-finding results, current validation and remaining acceptance gates. The
 recommendations accepted or rejected after reproduction. The release history below
 records earlier APIs and evidence, rather than the current supervisor contract.
 
+On top of that branch, `@yielded/agent` moves from `0.1.0-beta.168` to `0.1.0-beta.189`. Yielded's
+`0.1.0-beta.174` replaced its ref-based browser ports and tools with one Code Mode tool over raw
+CDP, so `effect-agent-browser` now defines the ref and control tools itself, with the names,
+parameters and descriptions models were given before. `PageControl.layer` and the ports'
+`screenshot` and `respondDialog`, which served only Yielded's tools, are removed. A receipt's
+uncertain dispatch is now `possibly-dispatched`, Yielded's word, instead of `unknown`. Yielded now
+allows one completion tool, so the bench ends a trial when `give_up` succeeds.
+
 ## 0.3
 
 The `0.3.0-beta.21` release fixes page operations in consumer bundles with preserved function
@@ -211,10 +219,10 @@ with agents on Yielded Agent, the renamed Effect Agent:
   times. The core planner, `Motion.lognormal`, uses the tuned two-stroke sigma-lognormal model; a
   presenter takes either as a value. Complete bounded plans are validated and admitted before
   publication and input.
-- `effect-agent-browser`: pages as Yielded Agent's browser ports, `BrowserActions` and
-  `BrowserControl`, pinned to one page or following a browser's tabs without taking the screen,
-  and the tools an agent drives them by: Yielded's own, and pointer tools for what has no ref, such
-  as a canvas game or a chart. An observation is the page's outline with its controls as values,
+- `effect-agent-browser`: pages as a Yielded agent's browser tools, through a controller pinned to
+  one page or following a browser's tabs without taking the screen: the ref and control tools
+  Yielded Agent defined until `0.1.0-beta.174`, and pointer tools for what has no ref, such as a
+  canvas game or a chart. An observation is the page's outline with its controls as values,
   and one after an action begins with what followed it: a dialog and how the browser answered it, a
   navigation, a tab it opened and what its input visibly changed. Every action result says whether
   its input reached the browser, and nothing is retried. Before each turn the model sees a
@@ -224,11 +232,11 @@ with agents on Yielded Agent, the renamed Effect Agent:
   moments' frames remain as turn-labeled references outside compaction coverage, and older image
   bytes are released. Lost pages and moments without usable pictures stop preparation before
   another model call; queued zoom crops only accompany their original tab. Bounded model contexts
-  need a model-aware image-token estimator, composed
-  with the tools' preparation as the package README shows. `wait_still` waits for
+  can compose a model-aware image-token estimator with the tools' preparation, as the package
+  README shows. `wait_still` waits for
   foreground stillness. Yielded runs the agent: its loop,
   policy and budgets, approval, context and run events. The package pins the published npm
-  artifact of `@yielded/agent` `0.1.0-beta.168`, whose browser ports it implements. The packed
+  artifact of `@yielded/agent` `0.1.0-beta.189`. The packed
   check installs it from the registry with npm and with Bun's isolated linker, holding each to
   the registry integrity and to one copy of each runtime package. Earlier releases used a
   commit-pinned release-candidate archive from `vendor/yielded-agent`; it remains available for

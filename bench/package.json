@@ -14,7 +14,7 @@
     "@effect/platform-node": "4.0.3",
     "@effect/vitest": "4.0.3",
     "@types/node": "26.1.2",
-    "@yielded/agent": "0.1.0-beta.168",
+    "@yielded/agent": "0.1.0-beta.189",
     "effect": "4.0.3",
     "effect-agent-browser": "workspace:*",
     "effect-browser": "workspace:*",

@@ -1,12 +1,12 @@
 // The arms of the paired experiment: which tools a Yielded agent drives a task's page with, and
-// what it sees. Arm 5 is the library's default: `act` in batches, Yielded's control tools, the
-// pointer tools and a screenshot before each turn. Arm 1 is Yielded's own tools alone: one action
-// per `act`, an outline after each, and no pictures. Arm 2 sees a screenshot before each turn and
-// acts by pixels. Arm 6 is arm 5 with moments in its thread instead of the screenshot: after each
-// turn's results, what the page did since the turn before. Understand tasks differ only in arm 1,
-// whose moments add the outline.
-import { Agent, AgentRuntime, BrowserUse, InMemory, type RunEvent } from "@yielded/agent";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+// what it sees. Arm 5 is the library's default: `act` in batches, the control tools, the pointer
+// tools and a screenshot before each turn. Arm 1 is the ref and control tools alone, as Yielded
+// once gave them: one action per `act`, an outline after each, and no pictures. Arm 2 sees a
+// screenshot before each turn and acts by pixels. Arm 6 is arm 5 with moments in its thread instead
+// of the screenshot: after each turn's results, what the page did since the turn before.
+// Understand tasks differ only in arm 1, whose moments add the outline.
+import { Agent, AgentRuntime, InMemory, type RunEvent } from "@yielded/agent";
+import { Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/BrowserTools";
 import type * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
@@ -145,7 +145,10 @@ const VisionToolkit = Toolkit.make(
 /** Each arm's tools, the run's layer, and whether it shows pictures. */
 const tooling = {
   1: {
-    toolkit: Toolkit.merge(BrowserUse.make().toolkit, BrowserTools.Control),
+    toolkit: Toolkit.merge(
+      Toolkit.make(single.toolkit.tools.observe, single.toolkit.tools.act),
+      BrowserTools.Control,
+    ),
     tools: single,
     vision: false,
   },
@@ -153,10 +156,6 @@ const tooling = {
   5: { toolkit: batched.toolkit, tools: batched, vision: true },
   6: { toolkit: batched.toolkit, tools: batched, vision: "moments" },
 } as const;
-
-/** What the run hands back: the answer, or why there is none. */
-const Outcome = <A, I>(answer: Schema.Codec<A, I>) =>
-  Schema.Union([Schema.Struct({ answer }), Schema.Struct({ gaveUp: Schema.String })]);
 
 /**
  * A turn's steps from the run's events: its text, its calls and their results. A turn completes
@@ -215,11 +214,10 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
   Effect.gen(function* () {
     const { toolkit, tools, vision } = tooling[arm];
     const finish = finishing(options.answer);
-    const output = Outcome(options.answer);
 
     const agent = Agent.make(`bench-arm-${arm}`, {
       input: Schema.String,
-      output,
+      output: options.answer,
       instructions:
         options.persona === undefined
           ? instructions[arm]
@@ -231,23 +229,18 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
         maxDuration: "15 minutes",
         toolConcurrency: 1,
       },
-      completion: {
-        tool: "done",
-        required: true,
-        project: ({ parameters }) => ({ answer: parameters.answer }),
-      },
-      completionFromTools: [
-        {
-          tool: "give_up",
-          project: ({ parameters }) => Option.some({ gaveUp: parameters.reason }),
-        },
-      ],
+      completion: { tool: "done", project: ({ parameters }) => parameters.answer },
     });
 
     const { record, flush } = steps(options.onStep);
     let completed: RunEvent.RunCompleted | undefined;
+    let gaveUp: string | undefined;
 
     yield* AgentRuntime.stream(agent, task).pipe(
+      // Yielded completes a run by its one completion tool, `done`; giving up ends the trial here.
+      Stream.takeUntil(
+        (event) => event._tag === "ToolCallSucceeded" && event.toolName === "give_up",
+      ),
       Stream.runForEach((event) =>
         event._tag === "RunCompleted"
           ? Effect.sync(() => {
@@ -264,25 +257,31 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
       Effect.provide(
         Layer.mergeAll(
           tools.layer({ page }, { task, vision, onMoment: options.onMoment }),
-          finish.toLayer({ done: () => Effect.void, give_up: () => Effect.void }),
+          finish.toLayer({
+            done: () => Effect.void,
+            give_up: ({ reason }) =>
+              Effect.sync(() => {
+                gaveUp = reason;
+              }),
+          }),
           InMemory.layer,
         ),
       ),
       Effect.ensuring(flush),
     );
 
+    if (gaveUp !== undefined) return yield* new GaveUp({ reason: gaveUp });
     if (completed === undefined)
       return yield* new Unanswered({ detail: "the run ended without completing" });
 
-    const outcome = yield* Schema.decodeUnknownEffect(output)(completed.output).pipe(
+    const answer = yield* Schema.decodeUnknownEffect(options.answer)(completed.output).pipe(
       Effect.mapError((error) => new Unanswered({ detail: error.message })),
     );
 
-    if ("gaveUp" in outcome) return yield* new GaveUp({ reason: outcome.gaveUp });
     const usage = completed.usage;
 
     return {
-      answer: outcome.answer,
+      answer,
       steps: completed.turns,
       usage: { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 },
     };

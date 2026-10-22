@@ -331,18 +331,19 @@ the answer said, so an order placed and then reported inside a sentence counts t
 grade. Each record keeps it as `onPage`, so a report counts format-only failures both ways until
 answers are judged rather than matched.
 
-| Arm | Operate tasks                                                                                                                                | Understand tasks                               |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 1   | Yielded's tools alone: `observe`, one action per `act` with the next outline, and its control tools; no pictures and no pointer tools        | The moment with its outline                    |
-| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits | As arm 5                                       |
-| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                          | `Moment.capture` as it is: frames and timeline |
+| Arm | Operate tasks                                                                                                                                                  | Understand tasks                               |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools | The moment with its outline                    |
+| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                   | As arm 5                                       |
+| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                            | `Moment.capture` as it is: frames and timeline |
+| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                   | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
 `maxSteps` turns and eight tool calls a turn, and calls run one at a time. The tools are pinned to
 the task's page, so none offers `select_tab`. A run's steps come from its events. A streamed model
 request is sent and charged as one completion, so the budget sees every call. Arms 3 (parsed
-frames), 4 (a local grounder) and 6 (vision-native computer use) are not built.
+frames) and 4 (a local grounder) are not built.
 
 ```sh
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \

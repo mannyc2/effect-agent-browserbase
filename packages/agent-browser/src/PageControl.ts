@@ -1,13 +1,13 @@
 /**
- * effect-browser pages as Yielded Agent's browser ports: `BrowserActions`, which observes a page and
- * acts on the refs it observed, and `BrowserControl`, which inspects, navigates, scrolls, waits,
- * takes screenshots, presses keys and selects tabs. `BrowserUse.make()` and
- * `BrowserUse.browserTools` give a model tools over them, and so does `BrowserTools`, with this
- * package's own.
+ * effect-browser pages as the controller `BrowserTools` serves: `actions`, which observe a page and
+ * act on the refs it observed, and `control`, which inspects, navigates, scrolls, waits, presses
+ * keys and selects tabs. Their observations and results are this module's schemas. Yielded Agent
+ * defined them as its `BrowserActions` and `BrowserControl` ports until 0.1.0-beta.174 replaced
+ * those with Code Mode over CDP; they keep the shapes and failures they had there.
  *
- * Over a `page`, the ports are pinned to it: they list no tabs, and a tab the page opens stays where
- * it is. Over a `browser`, they act on the tab the model last saw and list the others as tabs it may
- * select. A tab an action opens is shown at the next look as `follow` says: `"select"`, the
+ * Over a `page`, the controller is pinned to it: it lists no tabs, and a tab the page opens stays
+ * where it is. Over a `browser`, it acts on the tab the model last saw and lists the others as tabs
+ * it may select. A tab an action opens is shown at the next look as `follow` says: `"select"`, the
  * default, makes it current without bringing it to front, so the page on air and an operator's
  * view stay where they are; `"front"` also brings it to front; `"never"` keeps the current tab.
  *
@@ -15,13 +15,13 @@
  * after an action begins with what followed it: a dialog and how the browser answered it, a
  * navigation, a tab it opened and what its input visibly changed. Every action goes through the
  * page's own input policy, with `task` as the user's task its judge reads, and the browser answers
- * dialogs itself, so `respondDialog` refuses. An action that failed before its input reached the
- * browser is `not-dispatched`, one that failed after is `unknown`, and nothing is ever retried.
+ * dialogs itself. An action that failed before its input reached the browser is `not-dispatched`,
+ * one that failed after is `possibly-dispatched`, and nothing is ever retried.
  *
  * @since 0.3.0
  */
 import { BrowserUse } from "@yielded/agent";
-import { Context, Effect, Layer, Option, Result } from "effect";
+import { Effect, Option, Result, Schema } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type * as Page from "effect-browser/Page";
@@ -31,16 +31,88 @@ import type { Snapshot } from "effect-browser/Snapshot";
 import * as AdapterState from "./AdapterState.ts";
 import { destination, followed, told } from "./internal/receipts.ts";
 
-type Observation = typeof BrowserUse.Observation.Type;
+/** A control's ref in an observation, such as `e12`. */
+export const Ref = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,50}$/));
 
-type ActionResult = typeof BrowserUse.ActionResult.Type;
+/** An action on an observed control. */
+export const Action = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("click"), ref: Ref }),
+  Schema.Struct({
+    kind: Schema.Literal("fill"),
+    ref: Ref,
+    value: Schema.String.check(Schema.isMaxLength(64 * 1024)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("select"),
+    ref: Ref,
+    value: Schema.String.check(Schema.isMaxLength(4_096)),
+  }),
+]);
 
-type Dispatch = "not-dispatched" | "acknowledged" | "unknown";
+export type Action = typeof Action.Type;
 
-/** What the ports do when a tab opens: see the module's comment. */
+/** A control as an observation lists it. */
+const Control = Schema.Struct({
+  ref: Ref,
+  kind: Schema.String,
+  name: Schema.String,
+  value: Schema.String,
+  options: Schema.Array(Schema.String),
+  optionCount: Schema.optionalKey(Schema.Natural),
+  disabled: Schema.optionalKey(Schema.Boolean),
+  checked: Schema.optionalKey(Schema.Boolean),
+  editable: Schema.optionalKey(Schema.Boolean),
+});
+
+/** The page's outline and its controls, where the page is scrolled, and a browser's tabs. */
+export const Observation = Schema.Struct({
+  text: Schema.String,
+  controls: Schema.Array(Control),
+  page: Schema.Struct({
+    title: Schema.String,
+    scrollY: Schema.Finite,
+    viewportHeight: Schema.Finite,
+    documentHeight: Schema.Finite,
+  }),
+  truncated: Schema.Boolean,
+  tabs: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ ref: Ref, url: Schema.String, active: Schema.Boolean })),
+  ),
+});
+
+export type Observation = typeof Observation.Type;
+
+const Dispatch = Schema.Literals(["not-dispatched", "acknowledged", "possibly-dispatched"]);
+
+type Dispatch = typeof Dispatch.Type;
+
+/**
+ * What actions did: how many completed, the first one's failure, the page after them unless the
+ * caller asked not to look, and whether the input reached the browser. Never replay an input
+ * whose dispatch is not `not-dispatched`.
+ */
+export const ActionResult = Schema.Struct({
+  completed: Schema.Natural,
+  error: Schema.NullOr(Schema.String),
+  observation: Schema.NullOr(Observation),
+  dispatch: Dispatch,
+});
+
+export type ActionResult = typeof ActionResult.Type;
+
+/** What `control.wait` waits for, as the `wait` tool takes it. */
+interface WaitRequest {
+  readonly selector: string;
+  readonly frame?: string | undefined;
+  readonly state: "visible" | "hidden" | "enabled" | "text";
+  readonly text?: string | undefined;
+  readonly timeoutMillis: number;
+}
+
+/** What the controller does when a tab opens: see the module's comment. */
 export type Follow = "select" | "front" | "never";
 
-/** What the ports act on: one page, or a browser's tabs. */
+/** What the controller acts on: one page, or a browser's tabs. */
 export type Target =
   | { readonly page: Page.Page }
   | { readonly browser: Browser.Service; readonly follow?: Follow | undefined };
@@ -56,10 +128,37 @@ export interface Options {
   readonly maxWaitMillis?: number | undefined;
 }
 
-/** The ports, and the tab they act on, which `BrowserTools` shares. */
+type Failing<A> = Effect.Effect<A, BrowserUse.BrowserUseError>;
+
+/** The controller, and the tab it acts on, which `BrowserTools` shares. */
 export interface Controller {
-  readonly actions: BrowserUse.BrowserActions["Service"];
-  readonly control: BrowserUse.BrowserControl["Service"];
+  readonly actions: {
+    readonly observe: Failing<Observation>;
+    /** Act in order, stopping at the first failure; `observe: false` skips the look after. */
+    readonly act: (
+      actions: ReadonlyArray<Action>,
+      options?: { readonly observe?: boolean | undefined },
+    ) => Failing<ActionResult>;
+  };
+  readonly control: {
+    readonly inspect: (request: {
+      readonly selector?: string | undefined;
+      readonly frame?: string | undefined;
+      readonly optionFilter?: string | undefined;
+    }) => Failing<Observation>;
+    readonly navigate: (request: { readonly url: string }) => Failing<ActionResult>;
+    readonly scroll: (request: {
+      readonly ref?: string | undefined;
+      readonly deltaX: number;
+      readonly deltaY: number;
+    }) => Failing<ActionResult>;
+    readonly wait: (request: WaitRequest) => Failing<Observation>;
+    readonly press: (request: {
+      readonly ref: string;
+      readonly key: string;
+    }) => Failing<ActionResult>;
+    readonly selectTab: (request: { readonly ref: string }) => Failing<Observation>;
+  };
   /** The tab calls act on now: the pinned page, or the one the model last saw. */
   readonly current: Effect.Effect<Page.Page, BrowserError>;
   /** The current tab as a look finds it, following a tab an action opened. */
@@ -72,7 +171,7 @@ export interface Controller {
   readonly withTask: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
-/** A failure as the ports report it: what happened and what it leaves, and whether input went. */
+/** A failure as the tools report it: what happened and what it leaves, and whether input went. */
 export const useError = (error: BrowserError) =>
   new BrowserUse.BrowserUseError({
     code: error.reason._tag === "InvalidRequest" ? "invalid" : "browser",
@@ -80,19 +179,19 @@ export const useError = (error: BrowserError) =>
     dispatch: dispatchOf(error),
   });
 
-const dispatchOf = (error: BrowserError): Dispatch =>
-  error.dispatched ? "unknown" : "not-dispatched";
+const dispatchOf = (error: BrowserError) =>
+  error.dispatched ? ("possibly-dispatched" as const) : ("not-dispatched" as const);
 
 const invalid = (message: string) =>
   Effect.fail(new BrowserUse.BrowserUseError({ code: "invalid", message }));
 
-/** A snapshot as the ports' observation: the outline, the controls and where the page is. */
+/** A snapshot as an observation: the outline, the controls and where the page is. */
 const observation = (
   snapshot: Snapshot,
   extra: { readonly followed?: ReadonlyArray<string>; readonly tabs?: Observation["tabs"] },
 ): Observation => ({
   text: [...(extra.followed ?? []), snapshot.rendered].join("\n"),
-  // The ports' controls leave out what a control does not have, rather than state it undefined.
+  // An observation's controls leave out what a control does not have, rather than state it undefined.
   controls: snapshot.controls.map((control) => ({
     ref: control.ref,
     kind: control.kind,
@@ -114,7 +213,7 @@ const observation = (
   ...(extra.tabs === undefined ? {} : { tabs: extra.tabs }),
 });
 
-/** The tabs a browser's ports follow: which one is current, and a stable ref for each. */
+/** The tabs the controller follows in a browser: which one is current, and a stable ref for each. */
 const following = (browser: Browser.Service, follow: Follow, initial?: AdapterState.Tabs) =>
   Effect.gen(function* () {
     let state = initial ?? AdapterState.tabs((yield* browser.pages).map((tab) => tab.id));
@@ -203,7 +302,7 @@ const following = (browser: Browser.Service, follow: Follow, initial?: AdapterSt
     };
   });
 
-/** What the ports share: the tab they act on, how they read it, and the run's task. */
+/** What the controller's parts share: the tab they act on, how they read it, and the run's task. */
 interface Session {
   readonly current: Effect.Effect<Page.Page, BrowserError>;
   /** The current tab, following a tab an action opened; the pinned page is always the one. */
@@ -322,7 +421,7 @@ const acting =
       };
     }).pipe(Effect.mapError(useError), withTask);
 
-const action = (step: BrowserUse.Action) => (page: Page.Page) => {
+const action = (step: Action) => (page: Page.Page) => {
   switch (step.kind) {
     case "click":
       return page.perform({ _tag: "Click", target: step.ref });
@@ -339,7 +438,7 @@ const frameless = (operation: string) =>
 /** A condition wait, ending at the run's bound with the page as it is. */
 const waiting =
   ({ current, read, withTask, maxWait }: Session) =>
-  (request: typeof BrowserUse.WaitRequest.Type) => {
+  (request: WaitRequest) => {
     if (request.frame !== undefined) return frameless("wait");
     if (request.state === "text" && request.text === undefined)
       return invalid("A wait for text needs the text.");
@@ -363,12 +462,12 @@ const waiting =
     }).pipe(Effect.mapError(useError), withTask);
   };
 
-/** `BrowserControl` over the session's current tab. */
-const controlling = (context: Session) => {
-  const { current, look, read, tabs, withTask } = context;
+/** The controller's `control` over the session's current tab. */
+const controlling = (context: Session): Controller["control"] => {
+  const { look, read, tabs, withTask } = context;
   const act = acting(context);
 
-  return BrowserUse.BrowserControl.of({
+  return {
     inspect: ({ selector, frame, optionFilter }) =>
       frame !== undefined
         ? frameless("inspect")
@@ -387,13 +486,6 @@ const controlling = (context: Session) => {
     scroll: ({ ref, deltaX, deltaY }) =>
       act([(page) => page.scroll({ at: ref, dx: deltaX, dy: deltaY })], true),
     wait: waiting(context),
-    screenshot: Effect.flatMap(current, (page) => page.screenshot({ format: "png" })).pipe(
-      Effect.map((image) => ({
-        mediaType: "image/png" as const,
-        base64: Buffer.from(image.data).toString("base64"),
-      })),
-      Effect.mapError(useError),
-    ),
     press: ({ ref, key }) => act([(page) => page.press(key, { on: ref })], true),
     selectTab: ({ ref }) =>
       tabs === undefined
@@ -408,23 +500,19 @@ const controlling = (context: Session) => {
             ),
             withTask,
           ),
-    respondDialog: () =>
-      invalid(
-        "No dialog is open: the browser answers dialogs itself, and the observation after an action says how it answered each.",
-      ),
-  });
+  };
 };
 
-/** The ports over `target`, and the tab they act on. */
+/** The controller over `target`, and the tab it acts on. */
 export const make = Effect.fnUntraced(function* (target: Target, options: Options = {}) {
   const context = yield* session(target, options);
   const { current, look, read, withTask } = context;
   const act = acting(context);
 
-  const actions = BrowserUse.BrowserActions.of({
+  const actions: Controller["actions"] = {
     observe: Effect.flatMap(look, (page) => read(page)).pipe(Effect.mapError(useError), withTask),
     act: (steps, actOptions = {}) => act(steps.map(action), actOptions.observe ?? true),
-  });
+  };
 
   const perform = <A>(run: (page: Page.Page) => Effect.Effect<A, BrowserError>) =>
     Effect.gen(function* () {
@@ -463,16 +551,3 @@ const filterOptions = (seen: Observation, filter: string): Observation => {
     ),
   };
 };
-
-/** `BrowserActions` and `BrowserControl` over `target`, for `BrowserUse`'s own tools. */
-export const layer = (
-  target: Target,
-  options: Options = {},
-): Layer.Layer<BrowserUse.BrowserActions | BrowserUse.BrowserControl> =>
-  Layer.effectContext(
-    Effect.map(make(target, options), ({ actions, control }) =>
-      Context.make(BrowserUse.BrowserActions, actions).pipe(
-        Context.add(BrowserUse.BrowserControl, control),
-      ),
-    ),
-  );

@@ -3,8 +3,8 @@
 Browser automation for [Effect](https://effect.website) agents: page control, a compact page
 outline for models, screencast frames, a record of what visibly changed on a page, and moments:
 what a page showed, and what changed on it, over a window of time, ready for a model. Agents run on
-[Yielded Agent](https://github.com/yielded-dev/agent), whose browser ports `effect-agent-browser`
-implements over these pages.
+[Yielded Agent](https://github.com/yielded-dev/agent), whose browser tools `effect-agent-browser`
+gives over these pages.
 
 Sessions, scoped input authority, resumable action receipts and cued presentation compose into
 watched browsing and operator-assisted workflows. The library owns browser lifetimes and failure
@@ -13,13 +13,13 @@ evidence; applications own their decisions and durable business records.
 | Package                                                  | What it is                                                         |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
 | [`effect-browser`](packages/browser)                     | The browser, its pages and moments, over Playwright                |
-| [`effect-agent-browser`](packages/agent-browser)         | Its pages as Yielded Agent's browser ports, with the agent's tools |
+| [`effect-agent-browser`](packages/agent-browser)         | Its pages as a Yielded agent's browser tools                       |
 | [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
 | [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
 | [`site`](site) (private)                                 | The docs site, its narrated demo and a player for recorded runs    |
 
-`effect-agent-browser` needs the npm release of `@yielded/agent` `0.1.0-beta.168` and Effect
+`effect-agent-browser` needs the npm release of `@yielded/agent` `0.1.0-beta.189` and Effect
 `4.0.3`. Its [README](packages/agent-browser/README.md) gives the install command.
 
 The browser core also owns [leased generations](packages/browser/README.md#supervising-browser-generations):
@@ -178,13 +178,12 @@ prompt.
 
 ## How the tools work
 
-`BrowserTools.make()` gives an agent Yielded's browser tools over `PageControl`'s ports, and this
-package's pointer tools: `observe`, `act`, `inspect`, `navigate`, `scroll`, `wait`, `press` and
+`BrowserTools.make()` gives an agent the ref and control tools over `PageControl`'s controller,
+and the pointer tools: `observe`, `act`, `inspect`, `navigate`, `scroll`, `wait`, `press` and
 `select_tab`, then `click_at`, `hover`, `drag`, `type_text`, `press_keys`, `zoom`, `wait_still` and
 `back`. `BrowserTools.Control` and `BrowserTools.Pointer` are the two groups, for an agent that
 wants fewer. `tools.layer({ page })` serves them on one page; `tools.layer({ browser, follow })`
-on a browser's tabs. `PageControl.layer` serves the ports alone, for Yielded's own `BrowserUse`
-tools.
+on a browser's tabs. `PageControl.make` gives the controller alone, for a host without a model.
 
 - An observation is a compact outline of the viewport whose controls carry refs such as `e12`, and
   the controls as values. A ref from an old observation fails as stale rather than naming another
@@ -194,7 +193,7 @@ tools.
   begins with what followed the actions on the page: a dialog and how the browser answered it,
   where the page went, a tab they opened and what their input visibly changed. Every result says
   whether input reached the browser: `acknowledged`, `not-dispatched` for a refusal before any, or
-  `unknown` for a failure after it; nothing is ever retried.
+  `possibly-dispatched` for a failure after it; nothing is ever retried.
 - Anything an outline cannot show, such as a canvas game, a chart or a video, takes x and y in
   viewport CSS pixels with the pointer tools. Before each turn the model sees a screenshot of the
   current tab, and the crops `zoom` took since its last turn, as context the run never keeps: only

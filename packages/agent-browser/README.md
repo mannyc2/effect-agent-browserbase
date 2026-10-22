@@ -1,22 +1,22 @@
 # effect-agent-browser
 
-[`effect-browser`](../browser) pages as [Yielded Agent](https://github.com/yielded-dev/agent)'s
-browser ports, with the tools an agent drives them by. Yielded runs the agent: its loop, policy,
-budgets, approval, context and run events. This package gives that agent a browser.
+[`effect-browser`](../browser) pages as the browser tools of a
+[Yielded Agent](https://github.com/yielded-dev/agent) agent. Yielded runs the agent: its loop,
+policy, budgets, approval, context and run events. This package gives that agent a browser.
 
 ```sh
-npm install effect-agent-browser@beta effect-browser@beta @yielded/agent@0.1.0-beta.168 effect@4.0.3 playwright-core@1.63.0
+npm install effect-agent-browser@beta effect-browser@beta @yielded/agent@0.1.0-beta.189 effect@4.0.3 playwright-core@1.63.0
 ```
 
-The package peers on the published npm release of `@yielded/agent` `0.1.0-beta.168` exactly and
+The package peers on the published npm release of `@yielded/agent` `0.1.0-beta.189` exactly and
 on Effect `~4.0.3`. Remove any `@yielded/agent` archive override from an earlier release before
 installing, then refresh your lockfile so it records the registry artifact. The previous archive
 was an upstream release candidate with the same version, not the npm artifact.
 
-| Module         | What it holds                                                                  |
-| -------------- | ------------------------------------------------------------------------------ |
-| `BrowserTools` | An agent's browser tools, and the layer that serves them on a page or its tabs |
-| `PageControl`  | Yielded's `BrowserActions` and `BrowserControl` ports over a page or a browser |
+| Module         | What it holds                                                                   |
+| -------------- | ------------------------------------------------------------------------------- |
+| `BrowserTools` | An agent's browser tools, and the layer that serves them on a page or its tabs  |
+| `PageControl`  | The controller the tools act through, and its observations and results' schemas |
 
 ## An agent on a page
 
@@ -53,7 +53,8 @@ Provide a `Browser`, such as `Chromium.layer()` or a Browserbase session, and a 
 
 ## The tools
 
-`BrowserTools.make()` gives Yielded's own tools over `PageControl`'s ports:
+`BrowserTools.make()` gives the ref and control tools, with the names, parameters and descriptions
+Yielded Agent gave them until `0.1.0-beta.174` moved its browser tools to Code Mode over CDP:
 
 | Tool         | What it does                                                                             |
 | ------------ | ---------------------------------------------------------------------------------------- |
@@ -91,13 +92,13 @@ the layer serves every tool either way. `make({ mode: "single" })` lets `act` ta
   answered it, where the page went, a tab it opened and up to three changes its input caused,
   such as `"Full" became "Kept"`. A pointer tool's result says the same in `followed`.
 - Every action result says whether input reached the browser: `acknowledged`; `not-dispatched`,
-  when it was refused first, by a stale ref or the input policy; or `unknown`, when it failed after.
+  when it was refused first, by a stale ref or the input policy; or `possibly-dispatched`, when it failed after.
   An observation after an action that fails is still returned, and nothing is ever retried.
 - The input policy's judge reads `task`, the run's task, as what authorizes a risky input.
-- The browser answers dialogs itself, as `effect-browser` does, so `respond_dialog` is left out and
-  the port refuses it. Yielded's `screenshot` tool is left out too; the port answers with a PNG for
-  a host that asks.
-- Frames from the same origin are read inline, and none is listed, so the ports refuse a `frame`.
+- The browser answers dialogs itself, as `effect-browser` does, so no tool answers one. The model
+  sees a screenshot before each turn rather than calling for one.
+- Frames from the same origin are read inline, and none is listed, so `inspect` and `wait` refuse
+  a `frame`.
 
 ## Moments and long runs
 
@@ -116,10 +117,12 @@ The accounts belong to the prepared model context for this run; they are not dur
 Keep a recording with `onMoment` if they must outlive the run.
 
 For a bounded model context, the consumer supplies the selected model's `ResolvedModelCall`,
-including `estimateMessageTokens`. Yielded's default structural JSON estimate counts image bytes
-as text, so it can greatly overestimate a screenshot. Use the selected provider's image-token
-reservation plus the text estimate from `@yielded/agent/compaction`; image costs differ by model,
-resolution and detail. Neither the tools nor the bench infer a universal image-token budget.
+including `estimateMessageTokens`. Yielded's default estimate reserves each picture's tokens from
+its dimensions, 1.5 per 32-pixel patch and at least 1,024, without counting its encoding as text:
+a generic reservation, not any provider's price. Image costs differ by model, resolution and
+detail; where they matter, add the selected provider's image-token reservation to the text
+estimate from `@yielded/agent/compaction`. Neither the tools nor the bench infer a universal
+image-token budget.
 
 Compose the model selection with the installed preparation instead of replacing its accounts.
 Inside the effect provided by `tools.layer`, with `resolvedModel` supplied by the consumer:
@@ -155,7 +158,9 @@ action opens is shown at the next look as `follow` says: `"select"`, the default
 without bringing it to front, so the page on air and an operator's view stay where they are;
 `"front"` also brings it to front; `"never"` keeps the current tab.
 
-## The ports alone
+## The controller alone
 
-`PageControl.layer(target, options)` provides `BrowserActions` and `BrowserControl` alone, for
-Yielded's own `BrowserUse.make()` tools or Code Mode.
+`PageControl.make(target, options)` gives the controller the tools act through, for a host that
+drives a page without a model: `actions.observe` and `actions.act`, and `control.inspect`,
+`navigate`, `scroll`, `wait`, `press` and `selectTab`. Their results are `PageControl.Observation`
+and `PageControl.ActionResult`.
