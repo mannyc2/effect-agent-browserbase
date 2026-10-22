@@ -158,30 +158,56 @@ const tooling = {
 const Outcome = <A, I>(answer: Schema.Codec<A, I>) =>
   Schema.Union([Schema.Struct({ answer }), Schema.Struct({ gaveUp: Schema.String })]);
 
-/** A turn's steps from the run's events: its text, its calls and their results. */
+/**
+ * A turn's steps from the run's events: its text, its calls and their results. A turn completes
+ * when the model finishes it, before its tools run, so a step is reported at the next turn's
+ * start or when the run ends.
+ */
 const steps = (onStep: (step: Step) => Effect.Effect<void>) => {
-  let turn = 0;
-  let text = "";
-  let calls: Array<{ name: string; params: unknown }> = [];
-  let results: Array<{ name: string; result: unknown; isFailure: boolean }> = [];
+  let pending:
+    | {
+        step: number;
+        text: string;
+        calls: Array<Step["calls"][number]>;
+        results: Array<Step["results"][number]>;
+      }
+    | undefined;
 
-  return (event: RunEvent.RunEvent) => {
+  const flush = Effect.suspend(() => {
+    const step = pending;
+
+    pending = undefined;
+
+    return step === undefined ? Effect.void : onStep(step);
+  });
+
+  const record = (event: RunEvent.RunEvent) => {
     if (event._tag === "TurnStarted") {
-      turn = event.turn;
-      text = "";
-      calls = [];
-      results = [];
-    } else if (event._tag === "TextDelta") text += event.text;
+      return flush.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            pending = { step: event.turn, text: "", calls: [], results: [] };
+          }),
+        ),
+      );
+    }
+
+    const step = pending;
+
+    if (step === undefined) return Effect.void;
+
+    if (event._tag === "TextDelta") step.text += event.text;
     else if (event._tag === "ToolCallDeclared")
-      calls.push({ name: event.toolName, params: event.parameters });
+      step.calls.push({ name: event.toolName, params: event.parameters });
     else if (event._tag === "ToolCallSucceeded")
-      results.push({ name: event.toolName, result: event.result, isFailure: false });
+      step.results.push({ name: event.toolName, result: event.result, isFailure: false });
     else if (event._tag === "ToolCallFailed")
-      results.push({ name: event.toolName, result: event.message, isFailure: true });
-    else if (event._tag === "TurnCompleted") return onStep({ step: turn, text, calls, results });
+      step.results.push({ name: event.toolName, result: event.message, isFailure: true });
 
     return Effect.void;
   };
+
+  return { record, flush };
 };
 
 /** Run an operate task on its page in one arm, to its answer, `GaveUp` or `Unanswered`. */
@@ -218,7 +244,7 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
       ],
     });
 
-    const record = steps(options.onStep);
+    const { record, flush } = steps(options.onStep);
     let completed: RunEvent.RunCompleted | undefined;
 
     yield* AgentRuntime.stream(agent, task).pipe(
@@ -242,6 +268,7 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
           InMemory.layer,
         ),
       ),
+      Effect.ensuring(flush),
     );
 
     if (completed === undefined)
