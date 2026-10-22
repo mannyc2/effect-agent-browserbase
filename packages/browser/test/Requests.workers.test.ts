@@ -1,4 +1,4 @@
-// Existing worker targets escape browser Fetch; installation must refuse that unsupported state.
+// Refresh existing workers under browser interception before granting request authority.
 import { createServer } from "node:http";
 
 import { assert, it } from "@effect/vitest";
@@ -14,117 +14,168 @@ for (const [kind, timing] of [
   ["service_worker", "before"],
   ["worker", "during"],
 ] as const) {
-  it.live(`refuses request authority when ${kind} starts ${timing} installation`, () =>
-    Effect.gen(function* () {
-      const server = yield* Effect.acquireRelease(
-        Effect.callback<ReturnType<typeof createServer>>((resume) => {
-          const instance = createServer((request, response) => {
-            response.setHeader(
-              "content-type",
-              request.url?.endsWith(".js") ? "text/javascript" : "text/html",
-            );
-            response.end(
-              request.url === "/dedicated.js"
-                ? 'self.postMessage("ready")'
-                : request.url === "/shared.js"
-                  ? 'self.onconnect = event => event.ports[0].postMessage("ready")'
-                  : request.url === "/service.js"
-                    ? 'self.addEventListener("install", event => event.waitUntil(self.skipWaiting()))'
-                    : "<body>Existing worker fixture</body>",
-            );
-          });
+  it.live(
+    kind === "shared_worker"
+      ? "refuses request authority over an existing shared worker"
+      : `refuses POSTs from a ${kind} started ${timing} installation without sending them`,
+    () =>
+      Effect.gen(function* () {
+        const hits: string[] = [];
 
-          instance.listen(0, "127.0.0.1", () => resume(Effect.succeed(instance)));
-        }),
-        (server) =>
-          Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                server.close(() => resolve());
-              }),
-          ),
-      );
+        const server = yield* Effect.acquireRelease(
+          Effect.callback<ReturnType<typeof createServer>>((resume) => {
+            const instance = createServer((request, response) => {
+              hits.push(request.url ?? "");
+              response.setHeader(
+                "content-type",
+                request.url?.endsWith(".js") ? "text/javascript" : "text/html",
+              );
+              response.end(
+                request.url === "/dedicated.js"
+                  ? `self.onmessage = () => { void fetch("/owned-worker", { method: "POST", body: "worker-body" })
+                    .then(() => self.postMessage("went"), () => self.postMessage("refused")) }; self.postMessage("ready")`
+                  : request.url === "/shared.js"
+                    ? 'self.onconnect = event => event.ports[0].postMessage("ready")'
+                    : request.url === "/service.js"
+                      ? `self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
+                       self.addEventListener("message", event => event.waitUntil(
+                         fetch("/owned-service_worker", { method: "POST", body: "worker-body" })
+                           .then(() => event.ports[0].postMessage("went"), () => event.ports[0].postMessage("refused"))))`
+                      : "<body>Existing worker fixture</body>",
+              );
+            });
 
-      const address = server.address();
+            instance.listen(0, "127.0.0.1", () => resume(Effect.succeed(instance)));
+          }),
+          (server) =>
+            Effect.promise(
+              () =>
+                new Promise<void>((resolve) => {
+                  server.close(() => resolve());
+                }),
+            ),
+        );
 
-      assert.isTrue(typeof address === "object" && address !== null);
-      const origin = `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`;
+        const address = server.address();
 
-      const native = yield* Effect.acquireRelease(
-        Effect.promise(() => chromium.launch()),
-        (browser) => Effect.promise(() => browser.close()),
-      );
+        assert.isTrue(typeof address === "object" && address !== null);
+        const origin = `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`;
 
-      const context = yield* Effect.promise(() => native.newContext());
-      const page = yield* Effect.promise(() => context.newPage());
+        const native = yield* Effect.acquireRelease(
+          Effect.promise(() => chromium.launch()),
+          (browser) => Effect.promise(() => browser.close()),
+        );
 
-      yield* Effect.promise(() => page.goto(origin));
+        const context = yield* Effect.promise(() => native.newContext());
+        const page = yield* Effect.promise(() => context.newPage());
 
-      const start = Effect.promise(() =>
-        page.evaluate(async (kind) => {
-          if (kind === "service_worker") {
-            await navigator.serviceWorker.register("/service.js");
-            await navigator.serviceWorker.ready;
+        yield* Effect.promise(() => page.goto(origin));
 
-            return;
-          }
+        const start = Effect.promise(() =>
+          page.evaluate(async (kind) => {
+            if (kind === "service_worker") {
+              await navigator.serviceWorker.register("/service.js");
+              await navigator.serviceWorker.ready;
 
-          await new Promise<void>((resolve) => {
-            const worker =
-              kind === "worker" ? new Worker("/dedicated.js") : new SharedWorker("/shared.js");
+              return;
+            }
 
-            Object.assign(window, { heldWorker: worker });
-            if (worker instanceof SharedWorker) worker.port.onmessage = () => resolve();
-            else worker.onmessage = () => resolve();
-          });
-        }, kind),
-      );
+            await new Promise<void>((resolve) => {
+              const worker =
+                kind === "worker" ? new Worker("/dedicated.js") : new SharedWorker("/shared.js");
 
-      let decisions = 0;
-      const faults = yield* TestCdp.make();
-      const enable = yield* Deferred.make<void>();
+              Object.assign(window, { heldWorker: worker });
+              if (worker instanceof SharedWorker) worker.port.onmessage = () => resolve();
+              else worker.onmessage = () => resolve();
+            });
+          }, kind),
+        );
 
-      if (timing === "during")
-        faults.rule({ channel: "browser", method: "Fetch.enable" }, { _tag: "Hold", gate: enable });
-      else yield* start;
+        const decisions: Array<{
+          readonly url: string;
+          readonly method: string;
+          readonly body: string | null;
+        }> = [];
 
-      const opening = yield* faults
-        .provide(
-          Browser.make(
-            context,
-            { provider: "existing-worker-fixture" },
-            {
-              requests: {
-                patterns: [`${origin}/*`],
-                decide: () =>
-                  Effect.sync(() => {
-                    decisions++;
+        const faults = yield* TestCdp.make();
+        const enable = yield* Deferred.make<void>();
 
-                    return { _tag: "Allowed" as const };
-                  }),
+        if (timing === "during")
+          faults.rule(
+            { channel: "browser", method: "Fetch.enable" },
+            { _tag: "Hold", gate: enable },
+          );
+        else yield* start;
+
+        const opening = yield* faults
+          .provide(
+            Browser.make(
+              context,
+              { provider: "existing-worker-fixture" },
+              {
+                requests: {
+                  patterns: [`${origin}/owned*`],
+                  decide: (request) =>
+                    Effect.sync(() => {
+                      decisions.push(request);
+
+                      return { _tag: "Refused" as const, reason: "worker POST refused" };
+                    }),
+                },
               },
-            },
-          ),
-        )
-        .pipe(Effect.result, Effect.forkScoped);
+            ),
+          )
+          .pipe(Effect.result, Effect.forkScoped);
 
-      if (timing === "during") {
-        yield* faults.waitUntil((calls) => calls.some(({ method }) => method === "Fetch.enable"));
-        yield* start;
-        yield* Deferred.succeed(enable, undefined);
-      }
+        if (timing === "during") {
+          yield* faults.waitUntil((calls) => calls.some(({ method }) => method === "Fetch.enable"));
+          yield* start;
+          yield* Deferred.succeed(enable, undefined);
+        }
 
-      const opened = yield* Fiber.join(opening);
+        const opened = yield* Fiber.join(opening);
 
-      assert.strictEqual(
-        opened._tag,
-        "Failure",
-        "request authority must refuse an unobserved active worker",
-      );
-      if (opened._tag === "Failure")
-        assert.strictEqual(opened.failure.reason._tag, "InvalidRequest");
-      assert.strictEqual(decisions, 0);
-      assert.isTrue(native.isConnected());
-    }).pipe(Effect.scoped),
+        if (kind === "shared_worker") {
+          assert.strictEqual(opened._tag, "Failure");
+          if (opened._tag === "Failure")
+            assert.strictEqual(opened.failure.reason._tag, "InvalidRequest");
+          assert.deepStrictEqual(decisions, []);
+        } else {
+          if (opened._tag === "Failure") return yield* opened.failure;
+
+          const outcome = yield* Effect.promise(() =>
+            page.evaluate(async (kind) => {
+              if (kind === "service_worker") {
+                const registration = await navigator.serviceWorker.ready;
+                const channel = new MessageChannel();
+
+                return new Promise<string>((resolve) => {
+                  channel.port1.onmessage = (event) => resolve(event.data);
+                  registration.active?.postMessage("go", [channel.port2]);
+                });
+              }
+              const worker = Reflect.get(window, "heldWorker") as Worker;
+
+              return new Promise<string>((resolve) => {
+                worker.onmessage = (event) => resolve(event.data);
+                worker.postMessage("go");
+              });
+            }, kind),
+          ).pipe(Effect.timeout("3 seconds"));
+
+          assert.strictEqual(outcome, "refused");
+          assert.deepStrictEqual(decisions, [
+            { url: `${origin}/owned-${kind}`, method: "POST", body: "worker-body" },
+          ]);
+          assert.deepStrictEqual(
+            hits.filter((url) => url.startsWith("/owned")),
+            [],
+          );
+          assert.isFalse(
+            (yield* opened.success.recentEvents).some((event) => event._tag === "Disconnected"),
+          );
+        }
+        assert.isTrue(native.isConnected());
+      }).pipe(Effect.scoped),
   );
 }

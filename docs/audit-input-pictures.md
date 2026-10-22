@@ -1,5 +1,9 @@
 # Input and pictures implementation ledger
 
+This ledger preserves the initial audit implementation and its historical evidence through
+`1d6d7c7`. Subsequent Claude findings, changed request/registration contracts and current
+acceptance are recorded in [the follow-through ledger](CLAUDE-FOLLOWTHROUGH.md).
+
 Scope: PLAN bugs 2, 6, 7, 8, 9 and 11; input/pictures minor findings; testing track T3. This records implementation and current-run evidence. Audit source/probes are design evidence, not browser runtime reproduction. The parent implementation ledger owns the complete 16-bug, architecture and T1–T7 acceptance status.
 
 ## Results
@@ -51,7 +55,7 @@ Run from `packages/browser` with pinned Node 24.14.1 and Bun 1.4.2:
 
 Planted-bug logs, all restored: `.work/recovery/{focus,settle,capture-state,mapping,presentation-cap,capture-acquisition,capture-joined-reader,style-validation,foreground-input-boundary,stage-clock,form-redaction,capture-ids,capture-owner-identity,recorder-lifetime,hand-failfast,hand-bound}-mutant.log`. Each records a failed assertion or model property. `.work/recovery/owning-clock-mutant.log` is deliberately retained as a surviving mutation: the kernel's outer ownership made Presentation's additional clock provider redundant, and that provider was removed. No false mutation-proof claim is made for it.
 
-The parent owns the whole-repository `bun run ready`, packaged consumption, actual isolated consumer/Workers/CDP and the 12,000-code-line gate. This ledger does not claim those acceptance gates passed. Source size and overall timing must be measured after all workers finish; projected reduction is not measured success.
+The parent owned the whole-repository `bun run ready`, packaged consumption, actual isolated consumer/Workers/CDP and the then-required 12,000-code-line gate. This ledger does not claim those acceptance gates passed. Source size and overall timing must be measured after all workers finish; projected reduction is not measured success.
 
 Final owned verification (21 October 2026, 21:09 UTC): browser source/test `bun run check` exited 0. The eleven-file native/model command in `input-pictures-final-native.log` passed 117/117 tests in 48.22 s, including 5,000 capture histories, native growth/packet failures, cancellation, public Stage/Presentation, recorder expiry, ready and page contracts. Owned `oxlint --deny-warnings` exited 0. These are focused checks; the parent gate remains separate.
 

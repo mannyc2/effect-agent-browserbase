@@ -1,7 +1,7 @@
 // The 21 October supervisor audit reproduced lost outcomes when retirement's waiter left.
 // Suspended public resource ports make cancellation and cleanup ordering deterministic.
 import { assert, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Schedule, Scope, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Option, Schedule, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import * as Released from "../src/providers/Released.ts";
@@ -402,5 +402,151 @@ it.effect.each([-1, Number.POSITIVE_INFINITY])(
       assert.strictEqual(result._tag, "Failure");
       if (result._tag === "Failure") assert.strictEqual(result.failure._tag, "InvalidWait");
       assert.isFalse(ran);
+    }),
+);
+
+// Regression in 1d6d7c7: captured constructor context replaced generation span ownership.
+it.effect("keeps generation work out of the ended constructor span", () =>
+  Effect.gen(function* () {
+    const seen: Array<{ phase: string; parent: string | undefined; status: string | undefined }> =
+      [];
+
+    const record = (phase: string) =>
+      Effect.map(Effect.currentSpan, (span) => {
+        const parent = Option.getOrUndefined(span.parent);
+
+        seen.push({
+          phase,
+          parent: parent?._tag === "Span" ? parent.name : undefined,
+          status: parent?._tag === "Span" ? parent.status._tag : undefined,
+        });
+      }).pipe(Effect.withSpan(`resource.${phase}`), Effect.orDie);
+
+    const lost = yield* Deferred.make<string>();
+
+    const supervisor = yield* Supervisor.make({
+      open: (number) =>
+        record("open").pipe(
+          Effect.as({
+            value: number,
+            lost:
+              number === 1
+                ? Deferred.await(lost).pipe(Effect.tap(() => record("lost")))
+                : undefined,
+            release: () => record("release").pipe(Effect.as(new Released.Settled())),
+          }),
+        ),
+    }).pipe(Effect.withSpan("caller"));
+
+    yield* supervisor.use(() => Effect.void);
+    yield* Deferred.succeed(lost, "connection ended");
+    yield* supervisor.states.pipe(
+      Stream.filter(({ number, state }) => number === 2 && state._tag === "Open"),
+      Stream.runHead,
+    );
+    yield* supervisor.retire;
+    assert.deepStrictEqual(
+      seen.filter(({ phase }) => phase === "open").map(({ parent }) => parent),
+      ["Supervisor.open", "Supervisor.open"],
+    );
+    assert.deepStrictEqual(
+      seen.filter(({ phase }) => phase === "release").map(({ parent }) => parent),
+      ["Supervisor.release", "Supervisor.release"],
+    );
+    assert.lengthOf(
+      seen.filter(({ phase }) => phase === "lost"),
+      1,
+    );
+    assert.isEmpty(seen.filter(({ status }) => status === "Ended"));
+  }),
+);
+
+// Regression in 1d6d7c7: parallel caller finalizers closed the worker set before release completed.
+it.effect("finishes retirement before closing workers in a parallel caller scope", () =>
+  Effect.gen(function* () {
+    const owner = yield* Scope.make("parallel");
+    const entered = yield* Deferred.make<void>();
+    const cleaning = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    const order: Array<string> = [];
+
+    const supervisor = yield* Supervisor.make({
+      open: () =>
+        Effect.succeed({
+          value: "resource",
+          release: () =>
+            Effect.sync(() => order.push("provider")).pipe(Effect.as(new Released.Settled())),
+        }),
+    }).pipe(Scope.provide(owner));
+
+    yield* Effect.addFinalizer(() => Deferred.succeed(finish, undefined));
+    const states = yield* supervisor.states.pipe(Stream.runCollect, Effect.forkChild);
+
+    const work = yield* supervisor
+      .use(() =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(
+            Deferred.succeed(cleaning, undefined).pipe(
+              Effect.andThen(Deferred.await(finish)),
+              Effect.andThen(Effect.sync(() => order.push("work"))),
+            ),
+          ),
+        ),
+      )
+      .pipe(Effect.exit, Effect.forkChild);
+
+    yield* Deferred.await(entered);
+    const closing = yield* Scope.close(owner, Exit.void).pipe(Effect.forkChild);
+
+    yield* Deferred.await(cleaning);
+    yield* Deferred.succeed(finish, undefined);
+    yield* Fiber.join(closing);
+    yield* TestClock.adjust(1);
+    assert.isTrue(Exit.isFailure(yield* Fiber.join(work)));
+    assert.deepStrictEqual(order, ["work", "provider"]);
+    assert.isDefined(states.pollUnsafe(), "retirement must terminate the state stream");
+    assert.strictEqual((yield* Fiber.join(states)).at(-1)?.state._tag, "Closed");
+  }),
+);
+
+// Regression in 1d6d7c7: selecting the typed error erased sibling acquisition cleanup defects.
+it.effect.each(["effect", "scope"] as const)(
+  "preserves an open refusal and its %s cleanup defect without retrying",
+  (cleanup) =>
+    Effect.gen(function* () {
+      let attempts = 0;
+
+      const supervisor = yield* Supervisor.make({
+        open: () =>
+          Effect.gen(function* () {
+            attempts += 1;
+            const defect = Effect.die(new Error("cleanup boom"));
+
+            if (cleanup === "scope") yield* Effect.addFinalizer(() => defect);
+
+            return yield* cleanup === "effect"
+              ? Effect.fail("typed refusal").pipe(Effect.ensuring(defect))
+              : Effect.fail("typed refusal");
+          }),
+        reopen: Schedule.recurs(1),
+      });
+
+      const unavailable = yield* Effect.flip(supervisor.use(() => Effect.void));
+
+      assert.strictEqual(unavailable._tag, "Unavailable");
+      if (unavailable._tag !== "Unavailable") return;
+      assert.strictEqual(unavailable.reason, "down");
+      assert.strictEqual(unavailable.error, "typed refusal");
+      assert.include(unavailable.detail, "typed refusal");
+      assert.include(unavailable.detail, "cleanup boom");
+      assert.strictEqual(attempts, 1);
+      yield* supervisor.retire;
+      const events = yield* supervisor.states.pipe(Stream.runCollect);
+
+      assert.deepStrictEqual(
+        events.filter(({ state }) => state._tag === "Failed").map(({ state }) => state),
+        [{ _tag: "Failed", attempt: 1, error: "typed refusal" }],
+      );
     }),
 );

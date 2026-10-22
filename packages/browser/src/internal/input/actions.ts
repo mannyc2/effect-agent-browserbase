@@ -8,6 +8,7 @@ import { Duration, Effect } from "effect";
 
 import { NotActionable, StaleRef } from "../../BrowserError.ts";
 import type { ClickOptions, PressOptions, ScrollOptions, Target, TypeOptions } from "../../Page.ts";
+import { maximumDurationMillis } from "../../Style.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
@@ -64,12 +65,12 @@ const click = (input: Parts) => {
 
   return (target: Target, clickOptions: ClickOptions = {}) =>
     perform(
-      "click",
+      { _tag: "Click", target, options: clickOptions },
       {
         target: named(target),
       },
       settings.actionTimeout,
-      preparePolicy("click", { target: refOf(target) }, [target]),
+      (action) => preparePolicy(action, { target: refOf(target) }, [target]),
       (marks, approval) =>
         Effect.gen(function* () {
           const resolved = yield* targetFor("click", target, approval, marks);
@@ -128,10 +129,10 @@ const hover = (input: Parts) => {
 
   return (target: Target) =>
     perform(
-      "hover",
+      { _tag: "Hover", target },
       { target: named(target) },
       settings.actionTimeout,
-      preparePolicy("hover", { target: refOf(target) }, [target]),
+      (action) => preparePolicy(action, { target: refOf(target) }, [target]),
       (marks, approval) =>
         Effect.gen(function* () {
           const resolved = yield* targetFor("hover", target, approval, marks);
@@ -151,10 +152,10 @@ const drag = (input: Parts) => {
 
   return (from: Target, to: Target) =>
     perform(
-      "drag",
+      { _tag: "Drag", from, to },
       { target: `${JSON.stringify(from)} -> ${JSON.stringify(to)}` },
       settings.actionTimeout,
-      preparePolicy("drag", {}, [from, to]),
+      (action) => preparePolicy(action, {}, [from, to]),
       (marks, approval) =>
         Effect.gen(function* () {
           yield* targetFor("drag", from, approval, marks);
@@ -191,16 +192,16 @@ const typeText = (input: Parts) => {
 
   return (text: string, typeOptions: TypeOptions = {}) =>
     perform(
-      "type",
+      { _tag: "Type", text, options: typeOptions },
       {
         target: typeOptions.into,
         text,
-        secret: true,
       },
       settings.actionTimeout,
-      preparePolicy("type", { target: typeOptions.into, text }, [typeOptions.into ?? null], {
-        submit: typeOptions.submit ?? false,
-      }),
+      (action) =>
+        preparePolicy(action, { target: typeOptions.into, text }, [typeOptions.into ?? null], {
+          submit: typeOptions.submit ?? false,
+        }),
       (marks, approval) =>
         Effect.gen(function* () {
           const events = yield* marks.style.typing(text, approval !== undefined);
@@ -320,24 +321,35 @@ const press = (input: Parts) => {
 
   return (keys: string, pressOptions: PressOptions = {}) =>
     perform(
-      "press",
+      { _tag: "Press", keys, options: pressOptions },
       { target: keys },
       settings.actionTimeout,
-      Effect.suspend(() => pressed(keys)).pipe(
-        Effect.flatMap((parts) =>
-          preparePolicy(
-            "press",
-            { target: pressOptions.on, text: parts.join("+") },
-            [pressOptions.on ?? null],
-            { keys: parts.join("+") },
+      (action) =>
+        Effect.suspend(() => pressed(keys)).pipe(
+          Effect.flatMap((parts) =>
+            preparePolicy(
+              action,
+              { target: pressOptions.on, text: parts.join("+") },
+              [pressOptions.on ?? null],
+              { keys: parts.join("+") },
+            ),
           ),
         ),
-      ),
       (marks, approval) =>
         Effect.gen(function* () {
           const parts = yield* pressed(keys);
           const times = Math.max(1, Math.min(50, pressOptions.times ?? 1));
-          const hold = pressOptions.holdMillis ?? 0;
+          const hold = Math.max(0, pressOptions.holdMillis ?? 0);
+
+          const gaps = yield* Effect.all(
+            Array.from({ length: times - 1 }, () => marks.style.keyGap),
+          );
+
+          const pacing = gaps.reduce((sum, gap) => sum + gap, 0);
+
+          if (times * hold + pacing > maximumDurationMillis)
+            return yield* refuse("press", "the key sequence exceeds the maximum duration");
+          yield* marks.present(pacing);
           const activates = parts.at(-1) === "Enter" || parts.at(-1) === "Space";
           const since = yield* currentDocument("press");
           const on = pressOptions.on;
@@ -368,10 +380,7 @@ const press = (input: Parts) => {
             yield* sameDocument("press", since);
             yield* keyStroke("press", marks.input, parts, hold);
             if (index + 1 < times) {
-              const gap = yield* marks.style.keyGap;
-
-              yield* marks.present(gap);
-              due += hold + gap;
+              due += hold + (gaps[index] ?? 0);
               if (due > now()) yield* Effect.sleep(Duration.millis(due - now()));
             }
           }
@@ -390,12 +399,13 @@ const scroll = (input: Parts) => {
     const target = scrollOptions.at;
 
     return perform(
-      "scroll",
+      { _tag: "Scroll", options: scrollOptions },
       {
         target: target === undefined ? undefined : named(target),
       },
       settings.actionTimeout,
-      preparePolicy("scroll", { target: refOf(target) }, target === undefined ? [] : [target]),
+      (action) =>
+        preparePolicy(action, { target: refOf(target) }, target === undefined ? [] : [target]),
       (marks, approval) =>
         Effect.gen(function* () {
           // Over CDP the page reports its own viewport, so the read shares the action's deadline.
@@ -446,10 +456,10 @@ const select = (input: Parts) => {
 
   return (ref: string, values: ReadonlyArray<string>) =>
     perform(
-      "select",
+      { _tag: "Select", ref, values },
       { target: ref, text: values.join(", ") },
       settings.actionTimeout,
-      preparePolicy("select", { target: ref, text: values.join(", ") }, [ref]),
+      (action) => preparePolicy(action, { target: ref, text: values.join(", ") }, [ref]),
       (marks, approval) =>
         Effect.gen(function* () {
           yield* marks.on(yield* targetFor("select", ref, approval, marks));

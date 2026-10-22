@@ -146,14 +146,12 @@ for (const variant of [
         assert.strictEqual(result, "blocked");
         assert.deepStrictEqual(seen, []);
         assert.deepStrictEqual(hits, []);
-        assert.strictEqual(
-          yield* browser.disconnected.pipe(Effect.timeout("300 millis")),
-          "connection",
-        );
+        yield* browser.newPage("about:blank");
         assert.isTrue(
           (yield* browser.recentEvents).some(
             (event) =>
-              event._tag === "RequestRefused" && event.reason === "request decision failed",
+              event._tag === "RequestRefused" &&
+              event.reason === "request body was not fully observable as UTF-8 text",
           ),
         );
       }

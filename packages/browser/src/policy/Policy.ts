@@ -241,7 +241,7 @@ export interface Options {
   readonly deny?: ReadonlyArray<Fact> | undefined;
   /** Origins input may act on and go to, such as `"https://shop.example"`. Defaults to any. */
   readonly origins?: ReadonlyArray<string> | undefined;
-  /** The probability from which a judge's reading counts. Defaults to 0.5. */
+  /** The probability from which a judge's reading counts: finite, greater than 0, at most 1. Defaults to 0.5. */
   readonly threshold?: number | undefined;
   /** How long the judge may take before the input counts as unjudged. Defaults to 30 seconds. */
   readonly timeout?: Duration.Input | undefined;
@@ -263,6 +263,7 @@ const originOf = (url: string) => {
  */
 export const make = (options: Options = {}): InputGuard => {
   const threshold = options.threshold ?? 0.5;
+  const validThreshold = Schema.is(Probability.check(Schema.isGreaterThan(0)))(threshold);
   const watched = options.risks ?? Risk.literals;
   const timeout = options.timeout ?? Duration.seconds(30);
   const origins = options.origins?.map(originOf);
@@ -270,6 +271,10 @@ export const make = (options: Options = {}): InputGuard => {
   return (request) =>
     Effect.gen(function* () {
       if (request.action._tag === "Hover" || request.action._tag === "Scroll") return;
+      if (!validThreshold)
+        return yield* new PolicyDenied({
+          detail: "policy threshold must be finite, greater than 0, and at most 1",
+        });
 
       for (const url of [request.url, request.destination]) {
         // A blank or inline page has no origin to keep to; where it sends input still does.

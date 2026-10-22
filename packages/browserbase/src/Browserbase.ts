@@ -541,7 +541,7 @@ export class OpenFailed<E> extends Data.TaggedError("OpenFailed")<{
 }
 
 export interface GenerationOptions<A, E, R> extends Options {
-  /** Resources acquired by this builder belong to the generation, including on failure. */
+  /** Resources belong to the generation and close before its browser, including on failure. */
   readonly build: (hosted: Hosted) => Effect.Effect<A, E, R>;
 }
 
@@ -579,9 +579,14 @@ export const generations = <A, E, R>(
           }),
         );
 
-        const value = yield* options.build(hosted);
+        const resources = yield* Scope.fork(scope);
+        const value = yield* options.build(hosted).pipe(Scope.provide(resources));
 
-        return { value, lost: hosted.browser.disconnected, release: () => hosted.release };
+        return {
+          value,
+          lost: hosted.browser.disconnected,
+          release: () => releasing(resources, hosted.release),
+        };
       }).pipe(Scope.provide(scope)),
     );
 

@@ -79,6 +79,13 @@ const identity = (request: HttpClientRequest.HttpClientRequest, url: URL) =>
     );
   });
 
+// Fetch forbids even an empty-string body for these status codes.
+const responseOf = (request: HttpClientRequest.HttpClientRequest, response: Exchange["response"]) =>
+  HttpClientResponse.fromWeb(
+    request,
+    new Response([204, 205, 304].includes(response.status) ? null : response.body, response),
+  );
+
 /** Construct the same HTTP seam for replay, recording, or explicitly admitted live runs. */
 export const make = (options: Options) =>
   Effect.gen(function* () {
@@ -117,10 +124,7 @@ export const make = (options: Options) =>
               `cassette request changed or ran out; re-record with ${options.recordCommand ?? "the scenario's record command"}`,
             );
 
-          return HttpClientResponse.fromWeb(
-            request,
-            new Response(exchange.response.body, exchange.response),
-          );
+          return responseOf(request, exchange.response);
         }
         const bound = yield* options.reserve(request);
 
@@ -147,7 +151,7 @@ export const make = (options: Options) =>
 
         yield* options.append(exchange);
 
-        return HttpClientResponse.fromWeb(request, new Response(body, exchange.response));
+        return responseOf(request, exchange.response);
       }).pipe(
         Effect.mapError((error) =>
           Schema.is(ScriptError)(error) ? transport(request, error) : error,

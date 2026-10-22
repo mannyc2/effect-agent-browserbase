@@ -1434,6 +1434,52 @@ describe("Browserbase.generations", () => {
     }),
   );
 
+  // 1d6d7c7: successful generation cleanup disconnected before build resources finalized.
+  for (const broken of [false, true])
+    it.live(
+      broken
+        ? "releases the provider with Unconfirmed evidence when build cleanup defects"
+        : "finalizes build resources while their browser and provider are still available",
+      () =>
+        Effect.gen(function* () {
+          const connectUrl = yield* chromiumEndpoint;
+
+          yield* Effect.gen(function* () {
+            const atCleanup: Array<readonly [string, string]> = [];
+
+            const sessions = yield* Supervisor.make(
+              Browserbase.generations({
+                build: (hosted) =>
+                  Effect.acquireRelease(Effect.succeed(hosted), () =>
+                    Effect.gen(function* () {
+                      const rows = yield* kept;
+                      const browser = yield* Effect.exit(hosted.browser.newPage("about:blank"));
+
+                      atCleanup.push([rows[0]?.status ?? "missing", browser._tag]);
+                      if (broken) return yield* Effect.die("build cleanup defect");
+                    }),
+                  ),
+              }),
+            );
+
+            yield* sessions.use(() => Effect.void);
+            yield* sessions.retire;
+            const events = yield* sessions.states.pipe(Stream.runCollect);
+
+            const closed = events.flatMap(({ state }) =>
+              state._tag === "Closed" ? [state.released?._tag] : [],
+            );
+
+            assert.deepStrictEqual(atCleanup, [["RUNNING", "Success"]]);
+            assert.deepStrictEqual(closed, [broken ? "Unconfirmed" : "Settled"]);
+            assert.deepStrictEqual(
+              (yield* kept).map(({ status, releases }) => [status, releases]),
+              [["COMPLETED", 1]],
+            );
+          }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
+        }),
+    );
+
   it.live("closes failed builder resources before releasing its acquired session", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;

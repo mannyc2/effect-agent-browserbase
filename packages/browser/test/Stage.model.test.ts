@@ -1,6 +1,6 @@
 /** Prefix laws for feed histories, then real public Page evidence through Stage. */
 import { assert, it } from "@effect/vitest";
-import { Arbitrary, Deferred, Effect, Option, Schema, Stream } from "effect";
+import { Arbitrary, Deferred, Effect, Fiber, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import { monotonicMillis } from "../src/Clock.ts";
@@ -118,5 +118,28 @@ it.effect("publishes only current-document paint and stops retired feeds after a
     assert.lengthOf(frames, switched);
     assert.strictEqual(frames.at(-1)?.page, "second");
     assert.deepStrictEqual(yield* stage.current, Option.some(second.page));
+  }),
+);
+
+it.effect("same-page requests take their FIFO turn after an already queued switch", () =>
+  Effect.gen(function* () {
+    const first = yield* TestPage.make({ frames: [frame("first")] }, { id: "first" });
+    const second = yield* TestPage.make({}, { id: "second" });
+    const stage = yield* Stage.make();
+
+    yield* stage.present(first.page);
+    const next = yield* stage.present(second.page).pipe(Effect.forkScoped);
+
+    yield* TestClock.adjust(0);
+    const again = yield* stage.present(first.page).pipe(Effect.forkScoped);
+
+    yield* TestClock.adjust(0);
+    const overtook = again.pollUnsafe() !== undefined;
+
+    yield* second.emitFrame(frame("second"));
+    yield* Fiber.join(next);
+    yield* Fiber.join(again);
+    assert.isFalse(overtook, "the same-page shortcut must not overtake a queued switch");
+    assert.deepStrictEqual(yield* stage.current, Option.some(first.page));
   }),
 );

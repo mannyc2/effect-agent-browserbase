@@ -28,13 +28,3 @@ export class Window extends Schema.Class<Window>("effect-browser/Window")({
    */
   missing: Schema.Array(BrowserError),
 }) {}
-
-/** A small continuation value; changes keep their source cursor separately from event time. */
-export class Cursor extends Schema.Class<Cursor>("effect-browser/Window/Cursor")({
-  until: Schema.Finite,
-  changes: Schema.optional(Changes),
-}) {}
-
-/** Continue an adjacent window without retaining its pictures or events. */
-export const cursor = (window: Window): Cursor =>
-  new Cursor({ until: window.until, changes: window.changes });

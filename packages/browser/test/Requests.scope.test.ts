@@ -2,11 +2,12 @@
 import { createServer } from "node:http";
 
 import { assert, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
 import { chromium } from "playwright-core";
 
 import * as Browser from "../src/Browser.ts";
 import { refuse } from "../src/BrowserError.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const site = Effect.acquireRelease(
   Effect.callback<{ server: ReturnType<typeof createServer>; hits: string[] }>((resume) => {
@@ -226,7 +227,7 @@ it.live("guards popup first requests, nested frames, worker egress and each redi
   }).pipe(Effect.scoped),
 );
 
-it.live.each(["typed", "defect", "timeout"] as const)(
+it.live.each(["typed", "defect", "timeout", "reply"] as const)(
   "refuses and loses authority when its policy ends in %s",
   (failure) =>
     Effect.gen(function* () {
@@ -234,21 +235,33 @@ it.live.each(["typed", "defect", "timeout"] as const)(
       const native = yield* nativeBrowser;
       const context = yield* Effect.promise(() => native.newContext());
 
-      const browser = yield* Browser.make(
-        context,
-        { provider: "policy-failure-fixture" },
-        {
-          requests: {
-            patterns: [`${origin}/*`],
-            timeout: "1 second",
-            decide: () =>
-              failure === "timeout"
-                ? Effect.never
-                : failure === "defect"
-                  ? Effect.die("private defect")
-                  : refuse("requests", "private failure"),
+      const faults = yield* TestCdp.make();
+
+      if (failure === "reply")
+        faults.rule(
+          { channel: "browser", method: "Fetch.continueRequest" },
+          { _tag: "Fail", error: new Error("private protocol failure") },
+        );
+
+      const browser = yield* faults.provide(
+        Browser.make(
+          context,
+          { provider: "policy-failure-fixture" },
+          {
+            requests: {
+              patterns: [`${origin}/*`],
+              timeout: "1 second",
+              decide: () =>
+                failure === "reply"
+                  ? Effect.succeed({ _tag: "Allowed" as const })
+                  : failure === "timeout"
+                    ? Effect.never
+                    : failure === "defect"
+                      ? Effect.die("private defect")
+                      : refuse("requests", "private failure"),
+            },
           },
-        },
+        ),
       );
 
       const error = yield* browser.newPage(`${origin}/blocked`).pipe(Effect.flip);
@@ -278,6 +291,15 @@ it.live.each(["typed", "defect", "timeout"] as const)(
       );
 
       assert.strictEqual(refused.length, 1);
+      assert.deepStrictEqual(
+        refused[0]?.failure,
+        failure === "timeout"
+          ? { reason: "Timeout", timeoutMillis: 1000 }
+          : {
+              reason:
+                failure === "defect" ? "Threw" : failure === "reply" ? "Failed" : "InvalidRequest",
+            },
+      );
       assert.include(refused[0]?.reason, failure === "timeout" ? "timed out" : "failed");
       assert.notInclude(JSON.stringify(refused), "private");
       assert.deepStrictEqual(hits, []);
@@ -361,4 +383,391 @@ it.live("guards a cross-site out-of-process iframe without inventing a parent pa
       "Success",
     );
   }).pipe(Effect.scoped),
+);
+
+it.live("keeps pending and post-loss requests blocked when retiring a timed-out policy", () =>
+  Effect.gen(function* () {
+    const { origin, hits } = yield* site;
+    const native = yield* nativeBrowser;
+    const context = yield* Effect.promise(() => native.newContext());
+    const page = yield* Effect.promise(() => context.newPage());
+    const foreign = yield* Effect.promise(() => native.newContext());
+    const untouched = yield* Effect.promise(() => foreign.newPage());
+    const owner = yield* Scope.make();
+
+    yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
+    const faults = yield* TestCdp.make();
+
+    const browser = yield* faults.provide(
+      Browser.make(
+        context,
+        { provider: "timed-out-retirement-fixture" },
+        {
+          requests: {
+            patterns: [`${origin}/owned*`],
+            timeout: "1 second",
+            decide: () => Effect.never,
+          },
+        },
+      ).pipe(Scope.provide(owner)),
+    );
+
+    yield* Effect.promise(() => page.goto(origin));
+    yield* Effect.promise(() =>
+      page.evaluate(() => {
+        for (let index = 0; index < 4; index++)
+          void fetch(`/owned-held-${index}`, { method: "POST", body: "private" }).catch(
+            () => undefined,
+          );
+      }),
+    );
+    yield* browser.disconnected.pipe(Effect.timeout("3 seconds"));
+    yield* Effect.promise(() =>
+      page.evaluate(() => {
+        void fetch("/owned-after-loss", { method: "POST", body: "private" }).catch(() => undefined);
+      }),
+    );
+    yield* faults.waitUntil(
+      (calls) => calls.filter(({ method }) => method === "Fetch.requestPaused").length === 5,
+    );
+    yield* Effect.yieldNow;
+    yield* Scope.close(owner, Exit.void);
+    yield* Effect.promise(() => untouched.goto(`${origin}/foreign`));
+
+    assert.isTrue(native.isConnected(), "retirement must preserve the borrowed browser");
+    assert.deepStrictEqual(
+      hits.filter((url) => url.startsWith("/owned")),
+      [],
+      "retirement must not release a request the policy never allowed",
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.live("guards existing pages, out-of-process iframes and their nested frames", () =>
+  Effect.gen(function* () {
+    const { origin, hits } = yield* site;
+
+    const native = yield* Effect.acquireRelease(
+      Effect.promise(() => chromium.launch({ args: ["--site-per-process"] })),
+      (browser) => Effect.promise(() => browser.close()),
+    );
+
+    const context = yield* Effect.promise(() => native.newContext());
+    const page = yield* Effect.promise(() => context.newPage());
+    const foreignOrigin = origin.replace("127.0.0.1", "localhost");
+
+    yield* Effect.promise(() => page.goto(origin));
+    yield* Effect.promise(() =>
+      page.evaluate(
+        (url) =>
+          new Promise<void>((resolve) => {
+            const frame = document.createElement("iframe");
+
+            frame.onload = () => resolve();
+            frame.src = `${url}/old-frame`;
+            document.body.append(frame);
+          }),
+        foreignOrigin,
+      ),
+    );
+    const frame = page.frame({ url: `${foreignOrigin}/old-frame` });
+
+    assert.isNotNull(frame);
+    if (frame === null) return;
+    yield* Effect.promise(() =>
+      frame.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            const nested = document.createElement("iframe");
+
+            nested.onload = () => resolve();
+            nested.src = "/old-nested";
+            document.body.append(nested);
+          }),
+      ),
+    );
+    const nested = page.frame({ url: `${foreignOrigin}/old-nested` });
+
+    assert.isNotNull(nested);
+    if (nested === null) return;
+    const seen: string[] = [];
+
+    const browser = yield* Browser.make(
+      context,
+      { provider: "existing-frame-fixture" },
+      {
+        requests: {
+          patterns: [`${origin}/owned*`, `${foreignOrigin}/owned*`],
+          decide: ({ url }) =>
+            Effect.sync(() => {
+              seen.push(new URL(url).pathname);
+
+              return { _tag: "Refused" as const, reason: "owned request blocked" };
+            }),
+        },
+      },
+    );
+
+    for (const [target, name] of [
+      [page, "page"],
+      [frame, "frame"],
+      [nested, "nested"],
+    ] as const) {
+      const result = yield* Effect.promise(() =>
+        target.evaluate(
+          (name) =>
+            fetch(`/owned-${name}`, { method: "POST", body: "private" }).then(
+              () => "went",
+              () => "blocked",
+            ),
+          name,
+        ),
+      );
+
+      assert.strictEqual(result, "blocked");
+    }
+    assert.deepStrictEqual(seen, ["/owned-page", "/owned-frame", "/owned-nested"]);
+    assert.deepStrictEqual(
+      hits.filter((url) => url.startsWith("/owned")),
+      [],
+    );
+    yield* browser.newPage("about:blank");
+  }).pipe(Effect.scoped),
+);
+
+for (const foreign of [false, true])
+  it.live(
+    `settles a 150-request ${foreign ? "foreign" : "owned"} burst without losing authority`,
+    () =>
+      Effect.gen(function* () {
+        const { origin, hits } = yield* site;
+        const native = yield* nativeBrowser;
+        const context = yield* Effect.promise(() => native.newContext());
+        let decisions = 0;
+
+        const browser = yield* Browser.make(
+          context,
+          { provider: "request-burst-fixture" },
+          {
+            requests: {
+              patterns: [`${origin}/burst*`],
+              decide: () =>
+                Effect.sync(() => {
+                  decisions++;
+
+                  return { _tag: "Allowed" as const };
+                }),
+            },
+          },
+        );
+
+        const source = foreign ? yield* Effect.promise(() => native.newContext()) : context;
+        const page = yield* Effect.promise(() => source.newPage());
+
+        yield* Effect.promise(() => page.goto(origin));
+
+        const results = yield* Effect.promise(() =>
+          page.evaluate(() =>
+            Promise.all(
+              Array.from({ length: 150 }, (_, index) =>
+                fetch(`/burst-${index}`).then(
+                  (response) => response.ok,
+                  () => false,
+                ),
+              ),
+            ),
+          ),
+        ).pipe(Effect.timeout("5 seconds"));
+
+        assert.isTrue(results.every(Boolean));
+        assert.strictEqual(hits.filter((url) => url.startsWith("/burst")).length, 150);
+        assert.strictEqual(decisions, foreign ? 0 : 150);
+        yield* browser.newPage("about:blank");
+      }).pipe(Effect.scoped),
+  );
+
+it.live.each(["abort", "navigate", "close"] as const)(
+  "keeps browser authority when a paused request ends through %s",
+  (ending) =>
+    Effect.gen(function* () {
+      const { origin } = yield* site;
+      const native = yield* nativeBrowser;
+      const context = yield* Effect.promise(() => native.newContext());
+      const page = yield* Effect.promise(() => context.newPage());
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const answered = yield* Deferred.make<void>();
+      const faults = yield* TestCdp.make();
+
+      faults.observe((call, phase) => {
+        if (call.method === "Fetch.continueRequest" && phase === "settled")
+          Deferred.doneUnsafe(answered, Effect.void);
+      });
+
+      const browser = yield* faults.provide(
+        Browser.make(
+          context,
+          { provider: "cancelled-request-fixture" },
+          {
+            requests: {
+              patterns: [`${origin}/held*`],
+              decide: () =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as({ _tag: "Allowed" as const }),
+                ),
+            },
+          },
+        ),
+      );
+
+      yield* Effect.promise(() => page.goto(origin));
+      yield* Effect.promise(() =>
+        page.evaluate(() => {
+          const controller = new AbortController();
+
+          Object.assign(window, { abortRequest: () => controller.abort() });
+          void fetch("/held", { signal: controller.signal }).catch(() => undefined);
+        }),
+      );
+      yield* Deferred.await(entered);
+      yield* Effect.promise(() =>
+        ending === "abort"
+          ? page.evaluate(() => Reflect.get(window, "abortRequest")())
+          : ending === "navigate"
+            ? page.goto(`${origin}/next`)
+            : page.close(),
+      );
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.await(answered);
+      yield* browser.newPage("about:blank");
+    }).pipe(Effect.scoped),
+);
+
+it.live("retirement awaits an in-flight reply without answering it twice or closing its page", () =>
+  Effect.gen(function* () {
+    const { origin } = yield* site;
+    const native = yield* nativeBrowser;
+    const context = yield* Effect.promise(() => native.newContext());
+    const page = yield* Effect.promise(() => context.newPage());
+    const owner = yield* Scope.make();
+
+    yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
+    const faults = yield* TestCdp.make();
+    const received = yield* Deferred.make<void>();
+
+    faults.rule(
+      { channel: "browser", method: "Fetch.continueRequest" },
+      { _tag: "Delay", duration: "500 millis" },
+      { phase: "after", times: 1 },
+    );
+    faults.observe((call, phase) => {
+      if (call.method === "Fetch.continueRequest" && phase === "received")
+        Deferred.doneUnsafe(received, Effect.void);
+    });
+    yield* faults.provide(
+      Browser.make(
+        context,
+        { provider: "reply-retirement-fixture" },
+        {
+          requests: {
+            patterns: [`${origin}/held*`],
+            decide: () => Effect.succeed({ _tag: "Allowed" }),
+          },
+        },
+      ).pipe(Scope.provide(owner)),
+    );
+    yield* Effect.promise(() => page.goto(origin));
+    yield* Effect.promise(() =>
+      page.evaluate(() => {
+        void fetch("/held").catch(() => undefined);
+      }),
+    );
+    yield* Deferred.await(received);
+    const retiring = yield* Scope.close(owner, Exit.void).pipe(Effect.forkScoped);
+
+    yield* Fiber.join(retiring);
+    assert.isFalse(page.isClosed());
+    assert.strictEqual(
+      faults.calls.filter(({ method }) => method === "Fetch.continueRequest").length,
+      1,
+    );
+    assert.strictEqual(
+      faults.calls.filter(({ method }) => method === "Fetch.failRequest").length,
+      0,
+    );
+    yield* Effect.promise(() => page.goto(`${origin}/after-retirement`));
+  }).pipe(Effect.scoped),
+);
+
+it.live.each(["Allowed", "Fulfilled"] as const)(
+  "refuses a pending %s decision after another request revokes authority",
+  (decision) =>
+    Effect.gen(function* () {
+      const { origin, hits } = yield* site;
+      const native = yield* nativeBrowser;
+      const context = yield* Effect.promise(() => native.newContext());
+      const page = yield* Effect.promise(() => context.newPage());
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+
+      const browser = yield* Browser.make(
+        context,
+        { provider: "pending-decision-fixture" },
+        {
+          requests: {
+            patterns: [`${origin}/owned*`],
+            decide: ({ url }) =>
+              url.endsWith("/owned-revoke")
+                ? refuse("requests", "policy failure")
+                : Deferred.succeed(entered, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.as(
+                      decision === "Allowed"
+                        ? { _tag: "Allowed" as const }
+                        : {
+                            _tag: "Fulfilled" as const,
+                            status: 200,
+                            contentType: "text/plain",
+                            body: "too late",
+                          },
+                    ),
+                  ),
+          },
+        },
+      );
+
+      const request = (path: string) =>
+        Effect.promise(() =>
+          page.evaluate(
+            (path) =>
+              fetch(path, { method: "POST", body: "private" }).then(
+                () => "went",
+                () => "blocked",
+              ),
+            path,
+          ),
+        );
+
+      yield* Effect.promise(() => page.goto(origin));
+      const held = yield* request("/owned-held").pipe(Effect.forkScoped);
+
+      yield* Deferred.await(entered);
+      assert.strictEqual(yield* request("/owned-revoke"), "blocked");
+      yield* browser.disconnected;
+      yield* Deferred.succeed(release, undefined);
+      assert.strictEqual(yield* Fiber.join(held), "blocked");
+      assert.deepStrictEqual(
+        hits.filter((url) => url.startsWith("/owned")),
+        [],
+      );
+      assert.isTrue(
+        (yield* browser.recentEvents).some(
+          (event) =>
+            event._tag === "RequestRefused" &&
+            event.url.endsWith("/owned-held") &&
+            event.reason === "request authority has ended",
+        ),
+      );
+    }).pipe(Effect.scoped),
 );

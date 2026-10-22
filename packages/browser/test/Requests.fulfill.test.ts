@@ -37,52 +37,6 @@ it.live("fulfills Unicode documents before opening pages and refuses invalid res
   }).pipe(Effect.scoped),
 );
 
-it.live("loses the connection when refusal replies saturate its bounded overflow window", () =>
-  Effect.gen(function* () {
-    const native = yield* Effect.acquireRelease(
-      Effect.promise(() => chromium.launch()),
-      (browser) => Effect.promise(() => browser.close()),
-    );
-
-    const context = yield* Effect.promise(() => native.newContext());
-    const faults = yield* TestCdp.make();
-
-    faults.rule(
-      { channel: "browser", method: "Fetch.failRequest" },
-      { _tag: "Hold", gate: Effect.never },
-    );
-
-    const browser = yield* faults.provide(
-      Browser.make(
-        context,
-        { provider: "owned-overflow-fixture" },
-        {
-          requests: {
-            patterns: ["https://synthetic.test/*"],
-            timeout: "5 seconds",
-            decide: () => Effect.never,
-          },
-        },
-      ),
-    );
-
-    const page = yield* browser.newPage("data:text/html,<body>Request burst</body>");
-    const fixture = yield* faults.native(page.id);
-
-    yield* Effect.promise(() =>
-      fixture.evaluate(() => {
-        for (let index = 0; index < 100; index++)
-          void fetch(`https://synthetic.test/${index}`).catch(() => undefined);
-      }),
-    );
-    assert.strictEqual(
-      yield* browser.disconnected.pipe(Effect.timeout("300 millis")),
-      "connection",
-    );
-    assert.isAtMost(faults.calls.filter(({ method }) => method === "Fetch.failRequest").length, 32);
-  }).pipe(Effect.scoped),
-);
-
 it.live("bounds a provider that never answers request interception setup", () =>
   Effect.gen(function* () {
     const native = yield* Effect.acquireRelease(
@@ -130,7 +84,7 @@ it.live("owns faults and temporary-page cleanup during request context discovery
     const faults = yield* TestCdp.make();
 
     faults.rule(
-      { channel: "browser", method: "Target.getTargetInfo" },
+      { channel: "page", method: "Target.getTargetInfo" },
       { _tag: "Fail", error: new Error("request context discovery failed") },
     );
 
@@ -160,7 +114,7 @@ it.live("owns faults and temporary-page cleanup during request context discovery
   }).pipe(Effect.scoped),
 );
 
-it.effect("loses authority and detaches a child query that cannot prove request ownership", () =>
+it.effect("refuses an unprovable request and detaches its child ownership query", () =>
   Effect.gen(function* () {
     const native = yield* Effect.acquireRelease(
       Effect.promise(() => chromium.launch()),
@@ -206,7 +160,8 @@ it.effect("loses authority and detaches a child query that cannot prove request 
     yield* page.goto("https://synthetic.test/unknown").pipe(Effect.result, Effect.forkScoped);
     yield* faults.waitUntil((calls) => calls.some(({ method }) => method === "Page.getFrameTree"));
     yield* TestClock.adjust("1 second");
-    assert.strictEqual(yield* browser.disconnected, "connection");
+    yield* faults.waitUntil((calls) => calls.some(({ method }) => method === "Fetch.failRequest"));
+    yield* browser.newPage("about:blank");
     assert.strictEqual(decisions, 0);
 
     const detached = yield* faults

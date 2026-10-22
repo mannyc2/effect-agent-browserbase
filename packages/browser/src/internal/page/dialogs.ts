@@ -1,4 +1,4 @@
-/** Scoped dialog responses publish their actual outcome and propagate lost authority. */
+/** Scoped dialog responses publish their actual outcome and invalidate their page after failed answers. */
 import { Effect, Queue } from "effect";
 import type { Dialog, Page as PlaywrightPage } from "playwright-core";
 

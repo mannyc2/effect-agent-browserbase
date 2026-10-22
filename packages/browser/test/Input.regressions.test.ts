@@ -248,3 +248,57 @@ it.live("presentation and future cuts run on the page clock under a suspended ca
     assert.deepStrictEqual(yield* stage.current, Option.some(view));
   }).pipe(Effect.scoped),
 );
+
+it.effect("interrupts a waiting presenter before the occupied hand is released", () =>
+  Effect.gen(function* () {
+    const judged = yield* Deferred.make<void>();
+    let waitingPage = "";
+
+    const browser = yield* Chromium.open({
+      actionTimeout: "30 seconds",
+      guard: (request) =>
+        request.page === waitingPage ? Deferred.succeed(judged, undefined) : Effect.void,
+    });
+
+    const first = yield* browser.newPage(html("<button>First</button>"));
+    const next = yield* browser.newPage(html("<button>Next</button>"));
+
+    const presenter = yield* Presentation.make({
+      pacing: unpaused,
+      motion: { plan: (_from, to) => Effect.succeed([{ ...to, afterMillis: 700 }]) },
+    });
+
+    const plans = yield* Queue.unbounded<void>();
+
+    yield* browser.events().pipe(
+      Stream.filter(({ event }) => event._tag === "TrackPlanned"),
+      Stream.runForEach(() => Queue.offer(plans, undefined)),
+      Effect.forkScoped,
+    );
+    const holder = yield* presenter.view(first).hover({ x: 30, y: 20 }).pipe(Effect.forkScoped);
+
+    yield* Queue.take(plans);
+    waitingPage = next.id;
+    const waiter = yield* presenter.view(next).hover({ x: 20, y: 20 }).pipe(Effect.forkScoped);
+
+    yield* Deferred.await(judged);
+    yield* TestClock.adjust(0);
+    const interrupting = yield* Fiber.interrupt(waiter).pipe(Effect.forkScoped);
+
+    yield* TestClock.adjust(0);
+    const cancelledBeforeRelease = interrupting.pollUnsafe() !== undefined;
+
+    assert.isUndefined(holder.pollUnsafe(), "the first page still owns the hand");
+    yield* TestClock.adjust("700 millis");
+    yield* Fiber.join(holder);
+    yield* Fiber.join(interrupting);
+    assert.isTrue(cancelledBeforeRelease, "waiting for another page must remain interruptible");
+    assert.isFalse((yield* next.recentEvents).some((event) => event._tag === "TrackPlanned"));
+
+    const following = yield* presenter.view(next).hover({ x: 40, y: 20 }).pipe(Effect.forkScoped);
+
+    yield* Queue.take(plans);
+    yield* TestClock.adjust("700 millis");
+    yield* Fiber.join(following);
+  }).pipe(Effect.scoped),
+);

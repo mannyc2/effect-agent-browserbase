@@ -34,7 +34,7 @@ import * as Guard from "./internal/input/guard.inpage.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 import * as Url from "./Url.ts";
-import type { Cursor, Window } from "./Window.ts";
+import type { Window } from "./Window.ts";
 
 export type Point = Motion.Point;
 
@@ -210,7 +210,7 @@ export interface WindowOptions {
    * paint; host monotonic milliseconds; or a `Duration` back from `until`. A start after `until`
    * leaves the window empty there.
    */
-  readonly since: Window | Cursor | Frame | Duration.Duration | number;
+  readonly since: Window | Frame | Duration.Duration | number;
   /**
    * Where it ends: a frame, at its paint, such as one a delayed consumer airs now; or host
    * monotonic milliseconds. Defaults to now, and is never later.
@@ -386,7 +386,11 @@ export interface Page {
     { readonly value: A; readonly document: number; readonly connection: string },
     BrowserError
   >;
-  /** Run code as a guarded, recorded action bound to the caller's document. */
+  /**
+   * Run code as a guarded, recorded action bound to the caller's document.
+   * A timeout or cancellation cannot stop JavaScript already running: later input waits for its
+   * actual reply. Close the page and open a replacement if the script never settles.
+   */
   readonly act: <A, Arg>(
     script: (arg: Arg) => unknown,
     options: ActOptions<A, Arg>,

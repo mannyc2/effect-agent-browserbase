@@ -140,7 +140,10 @@ that value as `InputRequest.action`; event records and plans preserve it with se
 `page.act(fn, { arg, result, document, connection })` validates the document and optional connection,
 passes the input guard as an opaque scripted action, and records dispatch before evaluation.
 Scripts run in the main world; keep them self-contained because bundlers can rewrite functions.
-Neither source nor arguments are recorded. `Browser.Options.viewport` is fixed at registration;
+Neither source nor arguments are recorded. A timed-out or cancelled `act` may still execute;
+later input retains its ordering by waiting for that script's actual reply. If it never settles,
+use `page.close` and open a replacement page. A caller timeout is not script cancellation.
+`Browser.Options.viewport` is fixed at registration;
 `requests` installs bounded allow/refuse/fulfill decisions for its context before pages open,
 including each redirect hop. A decision sees the exact UTF-8 request body, or `null` when absent;
 incomplete or binary body evidence refuses the request and ends the connection's authority.

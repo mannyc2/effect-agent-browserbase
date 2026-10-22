@@ -1,5 +1,5 @@
 /** Proves a paused request's context before the connection's policy may see it. */
-import { Clock, Effect, Option, Schema } from "effect";
+import { Cache, Clock, Duration, Effect, Exit, Option, Schema } from "effect";
 import type { BrowserContext, CDPSession } from "playwright-core";
 
 import { type BrowserError, InvalidRequest, undispatched } from "../../BrowserError.ts";
@@ -33,9 +33,11 @@ const Reply = Schema.fromJsonString(
 const contains = (tree: Tree, frame: string): boolean =>
   tree.frame.id === frame || tree.childFrames?.some((child) => contains(child, frame)) === true;
 
-const queryTree = async (
+const queryTarget = async (
   chrome: CDPSession,
   target: string,
+  method: string,
+  params: object,
   signal: AbortSignal,
   session: Port.Session,
   hooks: Port.Hooks,
@@ -83,7 +85,7 @@ const queryTree = async (
       void chrome
         .send("Target.sendMessageToTarget", {
           sessionId,
-          message: JSON.stringify({ id: 1, method: "Page.getFrameTree" }),
+          message: JSON.stringify({ id: 1, method, params }),
         })
         .catch(response.reject);
 
@@ -94,7 +96,7 @@ const queryTree = async (
     const query = hooks.query;
 
     return await Promise.race([
-      query === undefined ? send() : query(session, "Page.getFrameTree", send),
+      query === undefined ? send() : query(session, method, send),
       interruption.promise,
     ]);
   } finally {
@@ -109,6 +111,7 @@ export const make = Effect.fnUntraced(function* (
   context: BrowserContext,
   chrome: CDPSession,
   native: Native,
+  closing: () => boolean,
 ) {
   const clock = yield* Clock.Clock;
   const hooks = yield* Port.Current;
@@ -137,7 +140,7 @@ export const make = Effect.fnUntraced(function* (
             return created;
           },
           page,
-          "browser",
+          "page",
         ),
         { signal },
       );
@@ -157,88 +160,110 @@ export const make = Effect.fnUntraced(function* (
     }
   });
 
-  const assertSupported = native(() => chrome.send("Target.getTargets")).pipe(
-    Effect.flatMap(({ targetInfos }) =>
-      targetInfos.some(
-        (target) =>
-          target.browserContextId === owned &&
-          ["worker", "shared_worker", "service_worker"].includes(target.type),
-      )
-        ? undispatched(
-            "requests",
-            new InvalidRequest({
-              detail: "request policies cannot protect preexisting workers in this context",
-            }),
-          )
-        : Effect.void,
-    ),
-  );
-
-  const owns = (frame: string | undefined, closing = false) =>
-    native(async (signal) => {
-      if (frame === undefined) throw new Error("request has no frame ownership evidence");
-
-      const direct = await chrome
-        .send("Target.getTargetInfo", { targetId: frame })
-        .catch((cause: unknown) => {
-          if (cause instanceof Error && /No target with given id found/.test(cause.message))
-            return undefined;
-
-          throw cause;
-        });
-
-      if (signal.aborted) throw new Error("request ownership query was interrupted");
-
-      if (direct?.targetInfo.browserContextId !== undefined)
-        return direct.targetInfo.browserContextId === owned
-          ? { page: direct.targetInfo.type === "page" ? direct.targetInfo.targetId : undefined }
-          : false;
-      const { targetInfos } = await chrome.send("Target.getTargets");
-
-      for (const target of targetInfos) {
-        if (signal.aborted) throw new Error("request ownership query was interrupted");
-        if (target.type !== "page") continue;
-
-        const result = await queryTree(
-          chrome,
-          target.targetId,
-          signal,
-          {
-            channel: "browser",
-            page: target.targetId,
-            clock,
-          },
-          hooks,
-        );
-
-        const { frameTree } = Schema.decodeUnknownSync(FrameTree)(result);
-
-        if (contains(frameTree, frame)) {
-          if (target.browserContextId === undefined)
-            throw new Error("request frame has no browser context evidence");
-
-          return target.browserContextId === owned ? { page: frameTree.frame.id } : false;
-        }
-      }
-
-      throw new Error("request frame ownership could not be established");
-    }, closing);
-
-  const closeOwned = native(async (signal) => {
-    while (true) {
-      if (signal.aborted) throw new Error("request owner closure was interrupted");
-      const { targetInfos } = await chrome.send("Target.getTargets");
+  const refresh = native(() => chrome.send("Target.getTargets")).pipe(
+    Effect.flatMap(({ targetInfos }) => {
       const targets = targetInfos.filter((target) => target.browserContextId === owned);
 
-      if (targets.length === 0) return;
-      for (const target of targets) {
-        if (signal.aborted) throw new Error("request owner closure was interrupted");
-        const { success } = await chrome.send("Target.closeTarget", { targetId: target.targetId });
+      if (targets.some((target) => target.type === "shared_worker"))
+        return undispatched(
+          "requests",
+          new InvalidRequest({
+            detail: "request policies cannot protect preexisting shared workers",
+          }),
+        );
 
-        if (!success) throw new Error("request owner target did not confirm closure");
-      }
-    }
-  }, true);
+      // Empty target patterns refresh existing documents under the browser interceptor.
+      return Effect.forEach(
+        targets.filter((target) => ["page", "iframe", "service_worker"].includes(target.type)),
+        (target) =>
+          native((signal) =>
+            queryTarget(
+              chrome,
+              target.targetId,
+              "Fetch.enable",
+              { patterns: [] },
+              signal,
+              { channel: "browser", page: target.targetId, clock },
+              hooks,
+            ),
+          ),
+        { concurrency: 8, discard: true },
+      );
+    }),
+  );
 
-  return { owns, closeOwned, assertSupported };
+  const ownership = yield* Cache.makeWith(
+    (frame: string) =>
+      native(async (signal) => {
+        const direct = await chrome
+          .send("Target.getTargetInfo", { targetId: frame })
+          .catch((cause: unknown) => {
+            if (cause instanceof Error && /No target with given id found/.test(cause.message))
+              return undefined;
+
+            throw cause;
+          });
+
+        if (signal.aborted) throw new Error("request ownership query was interrupted");
+
+        if (direct?.targetInfo.browserContextId !== undefined)
+          return direct.targetInfo.browserContextId === owned
+            ? { page: direct.targetInfo.type === "page" ? direct.targetInfo.targetId : undefined }
+            : false;
+        const { targetInfos } = await chrome.send("Target.getTargets");
+
+        for (const target of targetInfos) {
+          if (signal.aborted) throw new Error("request ownership query was interrupted");
+          if (target.type !== "page" && target.type !== "iframe") continue;
+
+          const result = await queryTarget(
+            chrome,
+            target.targetId,
+            "Page.getFrameTree",
+            {},
+            signal,
+            {
+              channel: "browser",
+              page: target.targetId,
+              clock,
+            },
+            hooks,
+          );
+
+          const { frameTree } = Schema.decodeUnknownSync(FrameTree)(result);
+
+          if (contains(frameTree, frame)) {
+            if (target.browserContextId === undefined)
+              throw new Error("request frame has no browser context evidence");
+
+            return target.browserContextId === owned
+              ? { page: target.type === "page" ? frameTree.frame.id : undefined }
+              : false;
+          }
+        }
+
+        throw new Error("request frame ownership could not be established");
+      }, closing()),
+    {
+      capacity: 1024,
+      // A child frame may move into its own OOPIF target; do not cache its parent-page label.
+      timeToLive: (exit, frame) =>
+        Exit.isSuccess(exit) &&
+        (exit.value === false || exit.value.page === undefined || exit.value.page === frame)
+          ? Duration.infinity
+          : Duration.zero,
+    },
+  );
+
+  const owns = (frame: string | undefined) =>
+    frame === undefined
+      ? Effect.fail(
+          undispatched(
+            "requests",
+            new InvalidRequest({ detail: "request has no frame ownership evidence" }),
+          ),
+        )
+      : Cache.get(ownership, frame);
+
+  return { owns, refresh };
 });

@@ -36,96 +36,102 @@ const execution = (
       operation,
       Duration.seconds(10),
     )(
-      Effect.gen(function* () {
-        yield* model.check(operation);
-        const outcome = outcomes.shift();
-
-        if (
-          action._tag === "Act" ||
-          ((action._tag === "Back" || action._tag === "Select") && outcome === undefined)
-        )
-          return yield* unsupported(operation);
-
-        const target = targetOf(action);
-        const resolved = target === undefined ? undefined : yield* model.resolve(target);
-
-        if (
-          resolved?.element.state?.disabled ||
-          resolved?.element.visible === false ||
-          (action._tag === "Type" &&
-            resolved !== undefined &&
-            (!resolved.element.editable || (action.options?.secret && !resolved.element.secret)))
-        )
-          return yield* undispatched(
-            operation,
-            new NotActionable({ detail: "the seeded element cannot take this input" }),
-          );
-        if (action._tag === "Drag") yield* model.resolve(action.to);
-        const leave = gate === undefined ? () => {} : yield* gate.enter(operation);
+      Effect.suspend(() => {
         const startedAt = now();
         let dispatched = false;
+        let subject: Events.Subject | undefined;
+        let safe = recorded(action, action._tag !== "Type");
 
-        const safe = recorded(
-          action,
-          !(action._tag === "Type" && (action.options?.secret || resolved?.element.secret)),
-        );
+        return Effect.gen(function* () {
+          yield* model.check(operation);
+          if (
+            action._tag === "Act" ||
+            ((action._tag === "Back" || action._tag === "Select") && outcomes[0] === undefined)
+          )
+            return yield* unsupported(operation);
 
-        const work = Effect.gen(function* () {
-          actions.push(safe);
-          dispatched = true;
+          const target = targetOf(action);
+          const resolved = target === undefined ? undefined : yield* model.resolve(target);
 
-          const value =
-            outcome === undefined
-              ? undefined
-              : yield* outcome.pipe(
-                  Effect.tapError((error) =>
-                    Effect.sync(() => {
-                      dispatched = error.dispatched;
-                    }),
-                  ),
-                );
+          subject = resolved?.subject;
+          safe = recorded(
+            action,
+            !(action._tag === "Type" && (action.options?.secret || resolved?.element.secret)),
+          );
 
-          if (action._tag === "Goto" || action._tag === "Reload") {
-            model.update(
-              {
-                ...model.get(),
-                url: action._tag === "Goto" ? Url.redact(action.url) : model.get().url,
-              },
-              true,
+          if (
+            resolved?.element.state?.disabled ||
+            resolved?.element.visible === false ||
+            (action._tag === "Type" &&
+              resolved !== undefined &&
+              (!resolved.element.editable || (action.options?.secret && !resolved.element.secret)))
+          )
+            return yield* undispatched(
+              operation,
+              new NotActionable({ detail: "the seeded element cannot take this input" }),
             );
-            timeline.publish(
-              new Events.Navigated({
-                at: now(),
-                page: id,
-                url: model.get().url ?? "about:blank",
-                document: model.document(),
-                sameDocument: false,
-              }),
-            );
-          }
-          if (action._tag === "Click" && resolved !== undefined)
-            return new ResolvedTarget({
-              ...resolved.subject,
-              element: resolved.ref,
-              point:
-                typeof target === "object"
-                  ? target
-                  : {
-                      x: resolved.element.box.x + resolved.element.box.width / 2,
-                      y: resolved.element.box.y + resolved.element.box.height / 2,
+          if (action._tag === "Drag") yield* model.resolve(action.to);
+
+          return yield* Effect.acquireUseRelease(
+            gate === undefined ? Effect.succeed(() => {}) : gate.enter(operation),
+            () =>
+              Effect.gen(function* () {
+                const outcome = outcomes.shift();
+
+                dispatched = true;
+
+                const value =
+                  outcome === undefined
+                    ? undefined
+                    : yield* outcome.pipe(
+                        Effect.tapError((error) =>
+                          Effect.sync(() => {
+                            dispatched = error.dispatched;
+                          }),
+                        ),
+                      );
+
+                if (action._tag === "Goto" || action._tag === "Reload") {
+                  model.update(
+                    {
+                      ...model.get(),
+                      url: action._tag === "Goto" ? Url.redact(action.url) : model.get().url,
                     },
-              cursor: "pointer",
-              box: resolved.element.box,
-            });
+                    true,
+                  );
+                  timeline.publish(
+                    new Events.Navigated({
+                      at: now(),
+                      page: id,
+                      url: model.get().url ?? "about:blank",
+                      document: model.document(),
+                      sameDocument: false,
+                    }),
+                  );
+                }
+                if (action._tag === "Click" && resolved !== undefined)
+                  return new ResolvedTarget({
+                    ...resolved.subject,
+                    element: resolved.ref,
+                    point:
+                      typeof target === "object"
+                        ? target
+                        : {
+                            x: resolved.element.box.x + resolved.element.box.width / 2,
+                            y: resolved.element.box.y + resolved.element.box.height / 2,
+                          },
+                    cursor: "pointer",
+                    box: resolved.element.box,
+                  });
 
-          return value;
-        });
-
-        return yield* work.pipe(
+                return value;
+              }),
+            (leave) => Effect.sync(leave),
+          );
+        }).pipe(
           Effect.onExit((exit) =>
             Effect.sync(() => {
-              const failure = Exit.isFailure(exit) ? exit.cause : undefined;
-
+              if (dispatched) actions.push(safe);
               timeline.publish(
                 new Events.Action({
                   at: now(),
@@ -134,13 +140,12 @@ const execution = (
                   name: operation,
                   value: safe,
                   url: Url.redact(model.get().url ?? "about:blank"),
-                  subject: resolved?.subject,
+                  subject,
                   ok: Exit.isSuccess(exit),
                   dispatched,
-                  error: failure === undefined ? undefined : "failed",
+                  error: Exit.isFailure(exit) ? "failed" : undefined,
                 }),
               );
-              leave();
             }),
           ),
         );
@@ -214,6 +219,7 @@ export const makeIn = Effect.fnUntraced(function* (
     readonly session?: string;
     readonly gate?: Gate;
     readonly closedBy?: () => Events.DisconnectCause | undefined;
+    readonly disconnected?: Effect.Effect<Events.DisconnectCause>;
     readonly timeline?: ReturnType<typeof Timeline.make>;
   } = {},
 ) {
@@ -243,6 +249,9 @@ export const makeIn = Effect.fnUntraced(function* (
     model,
   });
 
+  if (options.disconnected !== undefined)
+    yield* options.disconnected.pipe(Effect.andThen(evidence.close), Effect.forkIn(scope));
+
   const run = execution(model, lane, now, id, timeline, options.gate);
 
   const own = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -264,7 +273,7 @@ export const makeIn = Effect.fnUntraced(function* (
     act: () => unsupported("act"),
     url: Effect.sync(() => Url.redact(model.get().url ?? "about:blank")),
     title: read("title", () => model.get().title ?? ""),
-    bringToFront: Effect.void,
+    bringToFront: model.check("bringToFront"),
     close: Effect.andThen(
       Effect.sync(() => {
         if (model.close())

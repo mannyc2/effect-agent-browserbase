@@ -52,6 +52,7 @@ export const make = (
           if (page.now() < readAt + idleMillis) return Effect.void;
 
           return bridge.unregisterRecorder("changes").pipe(
+            page.within("changes"),
             Effect.ensuring(
               Effect.sync(() => {
                 lifetime = undefined;
@@ -61,8 +62,8 @@ export const make = (
         }),
       )
       .pipe(
-        page.lane.read("changes"),
-        page.within("changes"),
+        // Idle cleanup can wait for the page; its native work is bounded once admitted.
+        page.lane.read("changes", Duration.infinity),
         Effect.andThen(Effect.suspend(() => (lifetime === undefined ? Effect.void : expiry))),
       );
   });

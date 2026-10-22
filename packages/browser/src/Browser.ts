@@ -16,6 +16,7 @@ import {
   Duration,
   Effect,
   Exit,
+  FiberSet,
   Option,
   Queue,
   Schema,
@@ -25,7 +26,14 @@ import {
 } from "effect";
 import type { BrowserContext, Page as PlaywrightPage } from "playwright-core";
 
-import { type BrowserError, Closed, Failed, InvalidRequest, Limit } from "./BrowserError.ts";
+import {
+  type BrowserError,
+  Closed,
+  Failed,
+  InvalidRequest,
+  Limit,
+  Timeout,
+} from "./BrowserError.ts";
 import * as Events from "./BrowserEvent.ts";
 import * as BrowserClock from "./Clock.ts";
 import * as Gate from "./internal/input/gate.ts";
@@ -69,7 +77,7 @@ export interface RequestPolicy {
   /**
    * Receives sensitive data for this context only; keep it out of model inputs and logs.
    * Body is exact UTF-8 text, or null when absent. Incomplete/binary body evidence refuses
-   * the request and ends authority. Preexisting workers make installation fail InvalidRequest.
+   * that request. Preexisting shared workers make installation fail InvalidRequest.
    * Enforcement belongs to this connection's scope; it is not a firewall after CDP disconnects.
    */
   readonly decide: (request: {
@@ -324,56 +332,49 @@ const watchLoss = Effect.fnUntraced(function* (
  */
 const followOpened = Effect.fnUntraced(function* (
   context: BrowserContext,
-  register: (playwright: PlaywrightPage) => Effect.Effect<Page.Page, BrowserError>,
+  registrations: Openings.Registrations,
+  registerPage: (playwright: PlaywrightPage) => Effect.Effect<Page.Page, BrowserError>,
   publish: (event: Events.BrowserEvent) => number,
   now: () => number,
-  registrations: Openings.Registrations,
-  overflow: () => void,
 ) {
-  const opened = yield* Queue.bounded<PlaywrightPage>(32);
+  const registrationSlots = Semaphore.makeUnsafe(8);
+  const runRegistration = yield* FiberSet.makeRuntime();
 
-  const onPage = (playwright: PlaywrightPage) => {
-    const done = Deferred.makeUnsafe<void, BrowserError>();
+  const register = (playwright: PlaywrightPage) => {
+    const known = registrations.get(playwright);
 
+    if (known !== undefined) return Deferred.await(known);
+    const done = Deferred.makeUnsafe<Page.Page, BrowserError>();
+
+    // Publish the cell synchronously: the context's page event precedes its opener's popup event.
     registrations.set(playwright, done);
-    if (!Queue.offerUnsafe(opened, playwright)) {
-      Deferred.doneUnsafe(
-        done,
-        failWith("newPage", new Failed({ detail: "page registration overflow" })),
-      );
-      overflow();
-    }
+    runRegistration(
+      registrationSlots
+        .withPermits(1)(registerPage(playwright))
+        .pipe(
+          Effect.onExit((exit) => Deferred.done(done, exit)),
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              if (!playwright.isClosed())
+                publish(
+                  new Events.PageUntracked({
+                    at: now(),
+                    url: Url.redact(playwright.url()),
+                    detail: error.message,
+                  }),
+                );
+            }),
+          ),
+        ),
+    );
+
+    return Deferred.await(done);
   };
 
-  const untracked = (playwright: PlaywrightPage) => (error: BrowserError) =>
-    Effect.sync(() => {
-      const url = Url.redact(playwright.url());
+  context.on("page", register);
+  yield* Effect.addFinalizer(() => Effect.sync(() => context.off("page", register)));
 
-      if (!playwright.isClosed())
-        publish(new Events.PageUntracked({ at: now(), url, detail: error.message }));
-    });
-
-  context.on("page", onPage);
-  yield* Effect.addFinalizer(() => Effect.sync(() => context.off("page", onPage)));
-
-  const registerNext = Queue.take(opened).pipe(
-    Effect.flatMap((playwright) =>
-      register(playwright).pipe(
-        Effect.asVoid,
-        Effect.onExit((exit) =>
-          Effect.sync(() => {
-            const done = registrations.get(playwright);
-
-            if (done !== undefined) Deferred.doneUnsafe(done, exit);
-          }),
-        ),
-        Effect.catch(untracked(playwright)),
-      ),
-    ),
-    Effect.forever,
-  );
-
-  for (let worker = 0; worker < 8; worker++) yield* Effect.forkScoped(registerNext);
+  return register;
 });
 
 /** Release something native, on the owner's clock, giving up after a second: cleanup only. */
@@ -504,8 +505,7 @@ const cookieQuery =
       Effect.map((cookies) => cookies.some((cookie) => cookie.name === name)),
       Effect.timeoutOrElse({
         duration: timeout,
-        orElse: () =>
-          Effect.fail(undispatched("hasCookie", new Failed({ detail: "cookie query timed out" }))),
+        orElse: () => failWith("hasCookie", new Timeout({ millis: Duration.toMillis(timeout) })),
       }),
       Effect.provideService(Clock.Clock, clock),
     );
@@ -585,8 +585,14 @@ const runtime = Effect.fnUntraced(function* (
   );
 
   if (options.requests !== undefined)
-    yield* Requests.install(context, options.requests, clock, publish, now, () =>
-      lose("connection"),
+    yield* Requests.install(
+      context,
+      options.requests,
+      clock,
+      publish,
+      now,
+      () => lose("connection"),
+      () => lostBy() !== undefined,
     );
 
   const inputGate = Gate.make({
@@ -656,7 +662,6 @@ export const make = Effect.fn("Browser.make")(function* (
 
   const registry = new Map<PlaywrightPage, Page.Page>();
   const registrations: Openings.Registrations = new WeakMap();
-  const registering = new WeakMap<PlaywrightPage, Semaphore.Semaphore>();
   // The pages' scopes close after the browser is marked released, so what fails as they close
   // says why.
   const pagesScope = yield* Scope.fork(yield* Scope.Scope);
@@ -669,121 +674,119 @@ export const make = Effect.fn("Browser.make")(function* (
   // fiber in a later turn, once Playwright has reported the context's.
   const closing = yield* closures(lostBy, publish, now);
 
-  const register = (playwright: PlaywrightPage) => {
-    const lock = registering.get(playwright) ?? Semaphore.makeUnsafe(1);
+  const registerPage = (playwright: PlaywrightPage) =>
+    Effect.gen(function* () {
+      if (playwright.isClosed())
+        return yield* failWith("newPage", new Failed({ detail: "the page closed as it opened" }));
+      const viewport = options.viewport;
 
-    registering.set(playwright, lock);
+      if (viewport !== undefined)
+        yield* native("viewport", () => playwright.setViewportSize(viewport));
+      const scope = yield* Scope.fork(pagesScope);
 
-    return lock.withPermits(1)(
-      Effect.gen(function* () {
-        const known = registry.get(playwright);
+      return yield* Effect.gen(function* () {
+        let crashed = false;
+        const closedBy = () => lostBy() ?? (crashed ? "crashed" : "page");
 
-        if (known !== undefined) return known;
-        if (playwright.isClosed())
-          return yield* failWith("newPage", new Failed({ detail: "the page closed as it opened" }));
-        const viewport = options.viewport;
+        const cdp = yield* Port.openSession(
+          () => context.newCDPSession(playwright),
+          playwright,
+        ).pipe(Effect.provideService(Port.Current, protocol));
 
-        if (viewport !== undefined)
-          yield* native("viewport", () => playwright.setViewportSize(viewport));
-        const scope = yield* Scope.fork(pagesScope);
+        yield* Effect.addFinalizer(() => release(() => cdp.detach()));
+        // The page's name, its target id, costs one round trip, which the calls that keep it
+        // painting behind other tabs and report its documents share. A renderer busy with its
+        // first script answers those two late, so what needs them waits, and registering does not.
+        const send: typeof cdp.send = (method, params) => untilLost(cdp.send(method, params));
+        const focusing = sentNow(send("Emulation.setFocusEmulationEnabled", { enabled: true }));
+        const paging = sentNow(send("Page.enable"));
+        const { targetInfo } = yield* native("newPage", () => send("Target.getTargetInfo"));
+        const id = targetInfo.targetId;
 
-        return yield* Effect.gen(function* () {
-          let crashed = false;
-          const closedBy = () => lostBy() ?? (crashed ? "crashed" : "page");
+        const page = yield* PageImpl.make({
+          id,
+          session,
+          connection,
+          url: targetInfo.url,
+          playwright,
+          cdp,
+          nativePort: protocol.native,
+          untilLost,
+          settings,
+          inputGate,
+          clock,
+          mapping,
+          publish,
+          recentEvents: eventsOf(timeline.recent, id),
+          openings: yield* Openings.make(playwright, cdp, registrations, closedBy),
+          focused: call("focus", () => focusing, closedBy).pipe(Effect.asVoid),
+          paging: (operation) => call(operation, () => paging, closedBy).pipe(Effect.asVoid),
+          closedBy,
+          capture: info.capture,
+        }).pipe(Effect.provideService(Port.Current, protocol));
 
-          const cdp = yield* Port.openSession(
-            () => context.newCDPSession(playwright),
-            playwright,
-          ).pipe(Effect.provideService(Port.Current, protocol));
+        const close = () => {
+          if (registry.get(playwright) !== page) return;
+          registry.delete(playwright);
+          registrations.delete(playwright);
+          budget.makeRoom();
+          Queue.offerUnsafe(closing, { scope, page: id, cause: crashed ? "crashed" : "page" });
+        };
 
-          yield* Effect.addFinalizer(() => release(() => cdp.detach()));
-          // The page's name, its target id, costs one round trip, which the calls that keep it
-          // painting behind other tabs and report its documents share. A renderer busy with its
-          // first script answers those two late, so what needs them waits, and registering does not.
-          const send: typeof cdp.send = (method, params) => untilLost(cdp.send(method, params));
-          const focusing = sentNow(send("Emulation.setFocusEmulationEnabled", { enabled: true }));
-          const paging = sentNow(send("Page.enable"));
-          const { targetInfo } = yield* native("newPage", () => send("Target.getTargetInfo"));
-          const id = targetInfo.targetId;
+        // Playwright drives a crashed page no more and its calls never return, so it is closed:
+        // they fail at once, `Closed` because it crashed.
+        const crash = () => {
+          crashed = true;
+          void playwright.close().catch(() => undefined);
+        };
 
-          const page = yield* PageImpl.make({
-            id,
-            session,
-            connection,
-            url: targetInfo.url,
-            playwright,
-            cdp,
-            nativePort: protocol.native,
-            untilLost,
-            settings,
-            inputGate,
-            clock,
-            mapping,
-            publish,
-            recentEvents: eventsOf(timeline.recent, id),
-            openings: yield* Openings.make(playwright, cdp, registrations, closedBy),
-            focused: call("focus", () => focusing, closedBy).pipe(Effect.asVoid),
-            paging: (operation) => call(operation, () => paging, closedBy).pipe(Effect.asVoid),
-            closedBy,
-            capture: info.capture,
-          }).pipe(Effect.provideService(Port.Current, protocol));
-
-          const close = () => {
-            if (registry.get(playwright) !== page) return;
-            registry.delete(playwright);
-            budget.makeRoom();
-            Queue.offerUnsafe(closing, { scope, page: id, cause: crashed ? "crashed" : "page" });
-          };
-
-          // Playwright drives a crashed page no more and its calls never return, so it is closed:
-          // they fail at once, `Closed` because it crashed.
-          const crash = () => {
-            crashed = true;
-            void playwright.close().catch(() => undefined);
-          };
-
-          registry.set(playwright, page);
-          publish(
-            new Events.PageOpened({
-              at: now(),
-              page: id,
-              url: Url.redact(targetInfo.url),
-              opener: targetInfo.openerId,
-            }),
-          );
-          yield* listen(
-            playwright,
-            id,
-            publish,
-            now,
-            (accept) =>
-              native("dialog", () => send("Page.handleJavaScriptDialog", { accept })).pipe(
-                Effect.asVoid,
-                Effect.timeoutOrElse({
-                  duration: settings.actionTimeout,
-                  orElse: () =>
-                    failWith("dialog", new Failed({ detail: "dialog answer timed out" })),
-                }),
-                Effect.provideService(Clock.Clock, clock),
-              ),
-            { close, crash, failed: () => lose("connection") },
-          );
-          if (playwright.isClosed()) close();
-
-          return page;
-        }).pipe(
-          Scope.provide(scope),
-          Effect.onError(() => Scope.close(scope, Exit.void)),
+        registry.set(playwright, page);
+        publish(
+          new Events.PageOpened({
+            at: now(),
+            page: id,
+            url: Url.redact(targetInfo.url),
+            opener: targetInfo.openerId,
+          }),
         );
-      }),
-    );
-  };
+        yield* listen(
+          playwright,
+          id,
+          publish,
+          now,
+          (accept) =>
+            native("dialog", () => send("Page.handleJavaScriptDialog", { accept })).pipe(
+              Effect.asVoid,
+              Effect.timeoutOrElse({
+                duration: settings.actionTimeout,
+                orElse: () => failWith("dialog", new Failed({ detail: "dialog answer timed out" })),
+              }),
+              Effect.provideService(Clock.Clock, clock),
+            ),
+          {
+            close,
+            crash,
+            failed: () => {
+              // An unanswered dialog invalidates this page, not sibling pages or the connection.
+              void playwright.close().catch(() => undefined);
+            },
+          },
+        );
+        if (playwright.isClosed()) close();
+
+        return page;
+      }).pipe(
+        Scope.provide(scope),
+        Effect.onError(() => Scope.close(scope, Exit.void)),
+      );
+    });
 
   // Playwright registers its init scripts as it sets up each page, before a popup's first document
   // runs, and they cost no call per document.
   for (const script of options.initScripts ?? [])
     yield* native("initScripts", () => context.addInitScript({ content: scoped(script) }));
-  yield* followOpened(context, register, publish, now, registrations, () => lose("connection"));
+  const register = yield* followOpened(context, registrations, registerPage, publish, now);
+
   for (const existing of context.pages()) yield* register(existing);
 
   // Added last, so it runs first as the owner's scope closes.

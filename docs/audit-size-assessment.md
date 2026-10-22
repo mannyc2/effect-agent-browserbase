@@ -1,5 +1,17 @@
 # Source size assessment
 
+**Superseded by the Claude review follow-through.** The user authorized removing the aggregate
+source-line gate when safe, substantive simplifications could not recover the gap without
+regressions. The Action and Window cleanups remove unnecessary machinery, but the inspected
+opportunities do not justify deleting required behavior to reach 12,000 lines. The aggregate
+script and its `ready` entry are removed; module/function limits and their downward-only
+exceptions remain. Follow-through validation is pending.
+
+## Historical assessment through `1d6d7c7`
+
+The measurements, commands and failed gate below describe the original implementation, not
+the acceptance status of the follow-through.
+
 This is a read-only architecture assessment, not an implemented reduction or an approval request. The 12,000-code-line ceiling remains unchanged. At 21:41 UTC on 21 October 2026, `bash tools/check-size.sh` exited 1 with **13,828** code lines, a gap of **1,828** (`.work/evidence/input-size-assessment.log`). This uses lint's source count, including published testing code and excluding blank/comment-only lines. Earlier inspection before request ownership added 13,636; neither number is a projected reduction.
 
 The final package source, after request retirement/body/worker hardening and the recorder ordering repair, measures **14,024** code lines. Pinned `bun run size` exits 1 with a **2,024**-line gap (`.work/evidence/size-final.log`). The ceiling and counting rule are unchanged. The assessments below describe inspected opportunities, not a demonstrated path to recover that final gap.

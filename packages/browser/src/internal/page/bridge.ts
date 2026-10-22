@@ -7,7 +7,7 @@
  * read of a page's changes, its session registers the recorder too, so every later document
  * records from its start.
  */
-import { Effect, Schema, SynchronizedRef } from "effect";
+import { Deferred, Effect, Schema, SynchronizedRef } from "effect";
 
 import { type BrowserError, Failed } from "../../BrowserError.ts";
 import { Navigated, PageLoaded } from "../../BrowserEvent.ts";
@@ -315,6 +315,7 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
   // the current document has loaded.
   let world: number | undefined;
   let documents = 0;
+  let nextDocument = Deferred.makeUnsafe<void>();
   let url = Url.redact(page.url);
   let loaded: PageLoaded | undefined;
   // Every script call can allocate refs (including guards and point input), so the bridge,
@@ -338,6 +339,8 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
       page.activity.documentAt = now();
       world = undefined;
       loaded = undefined;
+      Deferred.doneUnsafe(nextDocument, Effect.void);
+      nextDocument = Deferred.makeUnsafe<void>();
     }
     url = seen.url;
     const sameDocument = seen.loader === undefined;
@@ -466,6 +469,9 @@ export const make = Effect.fnUntraced(function* (page: PageContext) {
     evaluateIn,
     evaluateWithContext,
     currentDocument,
+    /** Wait for the owning protocol session to observe a replacement before retrying its read. */
+    waitForDocument: (before: number) =>
+      Effect.suspend(() => (documents === before ? Deferred.await(nextDocument) : Effect.void)),
     frameTag,
     documentOf,
     /** How far the current document has loaded, as this session heard; nothing until parsed. */

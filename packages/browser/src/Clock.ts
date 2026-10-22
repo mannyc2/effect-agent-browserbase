@@ -129,8 +129,14 @@ export const mapping = (now: () => number): Mapping => {
   return {
     latest: () => latest,
     current: (measure) =>
-      lock.withPermits(1)(
-        Effect.suspend(() => (latest === undefined ? adopt(measure) : Effect.succeed(latest))),
+      Effect.suspend(() =>
+        latest === undefined
+          ? lock.withPermits(1)(
+              Effect.suspend(() =>
+                latest === undefined ? adopt(measure) : Effect.succeed(latest),
+              ),
+            )
+          : Effect.succeed(latest),
       ),
     renew: (measure) =>
       lock.withPermits(1)(

@@ -1,5 +1,9 @@
 # Supervisor audit implementation — 21 October 2026
 
+This ledger preserves the initial audit implementation and its historical evidence through
+`1d6d7c7`. Subsequent Claude findings, changed request/registration contracts and current
+acceptance are recorded in [the follow-through ledger](CLAUDE-FOLLOWTHROUGH.md).
+
 ## Scope and decisions
 
 Recover the existing prototype selectively. Ship the generic core alone (PLAN decision 20); no keep, grace, admission, meter, or timed-rotation extensions have a non-test caller that requires them. Browserbase owns provider cleanup evidence in `OpenFailed`; the core neither caches nor folds provider outcomes across tries. Every started try finishes before retirement completes (decision 34).
@@ -43,8 +47,9 @@ Public additions: generic `Supervisor<A,E>`, `Opened<A>`, independent `Released`
 adapter seeds, normalized HTTP cassettes and suspended-port stories. The five bench scripted-model
 copies use the public model kit. Tab following and moment placement are pure transformations;
 seeded refs remain unique, pictures stay bounded, and JSON continuation restores frame bytes.
-Model scripts retain per-layer requests and reject exhaustion, unused turns and changed tool
-schemas. Story end checks reject active ports, unused replies, unexpected calls and unasserted
+Model scripts retain per-layer requests and tool-schema fingerprints and reject exhaustion and
+unused turns. HTTP cassette identity rejects changed tool schemas; TestModel records fingerprints
+for scenario assertions and does not enforce an expected schema on its own. Story end checks reject active ports, unused replies, unexpected calls and unasserted
 error logs; an actual Yielded run suspends at a public TestPage port and resumes on its owning clock.
 
 The agent package's final seven-file suite passed 33 tests in 9.07 s after public raw access removal, including picture-byte seed restoration; its typecheck exited 0. Ten original model,
@@ -117,7 +122,7 @@ Owned code counts use the gate's exact Oxlint rule (blank/comment-only lines exc
 from test counts: supervisor 642 code lines; agent source 1,385 and tests 1,200; Browserbase source
 1,780 and tests 2,341; bench source 7,356 and tests 4,038. Measurements are saved in
 `.work/evidence/owned-size-final.json`; none reclassifies shipped test-kit source to bypass the
-browser's 12,000-line gate. The root integration ledger owns that currently failing gate.
+browser's 12,000-line gate. That aggregate gate failed at the time; the authorized follow-through removes it.
 
 
 ## Final request ownership review

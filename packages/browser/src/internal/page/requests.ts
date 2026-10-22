@@ -1,13 +1,11 @@
 /** Context-owned request decisions over bounded CDP interception, including every redirect hop. */
-import { Cause, Clock, Duration, Effect, FiberSet, Option, Queue, Result } from "effect";
+import { Cause, Clock, Duration, Effect, Exit, Option, Queue, Result, Scope } from "effect";
 import { Base64 } from "effect/encoding";
 import type { BrowserContext } from "playwright-core";
 
 import type { RequestDecision, RequestPolicy } from "../../Browser.ts";
 import {
   type BrowserError,
-  Closed,
-  InvalidRequest,
   refuse,
   reasonOf,
   Threw,
@@ -53,38 +51,28 @@ const responseOf = (decision: Extract<RequestDecision, { readonly _tag: "Fulfill
     : undefined;
 
 const bounded =
-  (
-    clock: Clock.Clock,
-    duration: Duration.Duration,
-    failed: () => boolean,
-    fail: () => void,
-  ): Owner.Native =>
-  <A>(run: (signal: AbortSignal) => Promise<A>, closing = false) =>
-    Effect.suspend(() => {
-      if (failed() && !closing)
-        return Effect.fail(undispatched("requests", new Closed({ cause: "connection" })));
+  (clock: Clock.Clock, duration: Duration.Duration): Owner.Native =>
+  <A>(run: (signal: AbortSignal) => Promise<A>, closing = false) => {
+    const bound = closing ? Duration.min(duration, Duration.seconds(1)) : duration;
 
-      return Effect.tryPromise({
-        try: run,
-        catch: (cause) => undispatched("requests", reasonOf(cause, undefined, "connection")),
-      }).pipe(
-        Effect.timeoutOrElse({
-          duration: closing ? Duration.min(duration, Duration.seconds(1)) : duration,
-          orElse: () =>
-            Effect.fail(
-              undispatched("requests", new Timeout({ millis: Duration.toMillis(duration) })),
-            ),
-        }),
-        Effect.tapError(() => Effect.sync(fail)),
-        Effect.provideService(Clock.Clock, clock),
-      );
-    });
+    return Effect.tryPromise({
+      try: run,
+      catch: (cause) => undispatched("requests", reasonOf(cause, undefined, "connection")),
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: bound,
+        orElse: () =>
+          Effect.fail(undispatched("requests", new Timeout({ millis: Duration.toMillis(bound) }))),
+      }),
+      Effect.provideService(Clock.Clock, clock),
+    );
+  };
 
 type Reply = (
   paused: Paused,
   method: "Fetch.continueRequest" | "Fetch.failRequest" | "Fetch.fulfillRequest",
   params?: object,
-  closing?: boolean,
+  authorize?: boolean,
 ) => Effect.Effect<void, BrowserError>;
 
 const bodyOf = (request: Paused["request"]): string | null | undefined => {
@@ -131,7 +119,12 @@ const deciding =
     clock: Clock.Clock,
     duration: Duration.Duration,
     closing: () => boolean,
-    deny: (paused: Paused, reason: string) => Effect.Effect<void, BrowserError>,
+    lost: () => void,
+    deny: (
+      paused: Paused,
+      reason: string,
+      failure?: BrowserError,
+    ) => Effect.Effect<void, BrowserError>,
     reply: Reply,
   ) =>
   (paused: Paused) =>
@@ -139,12 +132,10 @@ const deciding =
       const body = bodyOf(paused.request);
 
       if (body === undefined)
-        return Effect.fail(
-          undispatched(
-            "requests",
-            new InvalidRequest({ detail: "request body was not fully observable as UTF-8 text" }),
-          ),
-        );
+        return Effect.succeed({
+          _tag: "Refused" as const,
+          reason: "request body was not fully observable as UTF-8 text",
+        });
 
       return policy.decide({
         url: paused.request.url,
@@ -166,60 +157,48 @@ const deciding =
           undispatched("requests", new Threw({})),
         );
 
+        lost();
+
         return deny(
           paused,
           error.reason._tag === "Timeout"
             ? "request decision timed out"
-            : "request decision failed",
+            : `request decision failed: ${error.reason._tag}`,
+          error,
         ).pipe(Effect.andThen(Effect.fail(error)));
       }),
       Effect.flatMap((decision) => {
-        if (decision._tag === "Allowed") return reply(paused, "Fetch.continueRequest");
+        if (decision._tag === "Allowed") return reply(paused, "Fetch.continueRequest", {}, true);
         if (decision._tag === "Refused") return deny(paused, decision.reason);
         const response = responseOf(decision);
 
         return response === undefined
           ? deny(paused, "request fulfillment is invalid or exceeds 8MB")
-          : reply(paused, "Fetch.fulfillRequest", response);
+          : reply(paused, "Fetch.fulfillRequest", response, true);
       }),
       Effect.provideService(Clock.Clock, clock),
     );
 
-const identifying = (
-  owner: Effect.Success<ReturnType<typeof Owner.make>>,
-  fail: (untracked: boolean) => void,
-  frame: string | undefined,
-) => owner.owns(frame).pipe(Effect.tapCause(() => Effect.sync(() => fail(true))));
-
-const retiring = (
+const retire = (
   owner: Effect.Success<ReturnType<typeof Owner.make>>,
   held: ReadonlyMap<string, Paused>,
   reply: Reply,
-  uncertain: () => boolean,
 ) =>
-  Effect.suspend(() =>
-    uncertain()
-      ? owner.closeOwned
-      : Effect.forEach(
-          held.values(),
-          (paused) =>
-            owner
-              .owns(paused.frameId, true)
-              .pipe(
-                Effect.flatMap((owned) =>
-                  reply(
-                    paused,
-                    owned ? "Fetch.failRequest" : "Fetch.continueRequest",
-                    owned ? { errorReason: "BlockedByClient" } : {},
-                    true,
-                  ),
-                ),
-              ),
-          { concurrency: 8, discard: true },
-        ).pipe(
-          Effect.andThen(Effect.suspend(() => (uncertain() ? owner.closeOwned : Effect.void))),
-          Effect.catchCause(() => owner.closeOwned),
-        ),
+  Effect.forEach(
+    held.values(),
+    (paused) =>
+      owner.owns(paused.frameId).pipe(
+        Effect.matchEffect({
+          onFailure: () => reply(paused, "Fetch.failRequest", { errorReason: "BlockedByClient" }),
+          onSuccess: (owned) =>
+            reply(
+              paused,
+              owned ? "Fetch.failRequest" : "Fetch.continueRequest",
+              owned ? { errorReason: "BlockedByClient" } : {},
+            ),
+        }),
+      ),
+    { concurrency: 8, discard: true },
   );
 
 export const install = Effect.fnUntraced(function* (
@@ -229,6 +208,7 @@ export const install = Effect.fnUntraced(function* (
   publish: (event: BrowserEvent) => number,
   now: () => number,
   lost: () => void,
+  unavailable: () => boolean,
 ) {
   const browser = context.browser();
 
@@ -244,23 +224,7 @@ export const install = Effect.fnUntraced(function* (
   )
     return yield* refuse("requests", "request patterns and a finite positive timeout are required");
 
-  let state:
-    | { readonly _tag: "Active" }
-    | { readonly _tag: "Lost"; readonly untracked: boolean }
-    | { readonly _tag: "Closing"; readonly uncertain: boolean } = { _tag: "Active" };
-
-  const fail = (untracked = false) => {
-    state =
-      state._tag === "Closing"
-        ? { _tag: "Closing", uncertain: state.uncertain || untracked }
-        : { _tag: "Lost", untracked: untracked || (state._tag === "Lost" && state.untracked) };
-    lost();
-  };
-
-  const native = bounded(clock, bound.value, () => state._tag !== "Active", fail);
-  let retire: Effect.Effect<void, BrowserError> = Effect.void;
-  let stopListening: (() => void) | undefined;
-
+  const native = bounded(clock, bound.value);
   const protocol = yield* Effect.context<never>();
 
   const chrome = yield* Effect.acquireRelease(
@@ -274,123 +238,120 @@ export const install = Effect.fnUntraced(function* (
         return session;
       }),
     ),
-    (chrome) =>
-      retire.pipe(
-        Effect.orDie,
-        Effect.ensuring(
-          Effect.sync(() => stopListening?.()).pipe(
-            Effect.andThen(native(() => chrome.detach(), true)),
-            Effect.orDie,
-          ),
-        ),
-      ),
+    (chrome) => native(() => chrome.detach(), true).pipe(Effect.orDie),
   );
 
-  const owner = yield* Owner.make(context, chrome, native);
+  let closing = false;
+  const owner = yield* Owner.make(context, chrome, native, () => closing);
   const held = new Map<string, Paused>();
-  const pending = yield* Queue.bounded<Paused>(32);
+  const pending = yield* Queue.unbounded<Paused>();
+  const workers = yield* Scope.make();
 
-  const reply = (
-    paused: Paused,
-    method: "Fetch.continueRequest" | "Fetch.failRequest" | "Fetch.fulfillRequest",
-    params: object = {},
-    closing = false,
-  ) =>
-    native(
-      () =>
-        chrome.send(method, { requestId: paused.requestId, ...params }).then((value) => {
-          held.delete(paused.requestId);
+  const record = (paused: Paused, reason: string, failure?: BrowserError) =>
+    publish(
+      new RequestRefused({
+        at: now(),
+        page: paused.page,
+        method: paused.request.method,
+        url: Url.redact(paused.request.url),
+        reason: Url.redactWithin(reason).slice(0, 2000),
+        ...(failure === undefined
+          ? {}
+          : {
+              failure: {
+                reason: failure.reason._tag,
+                ...(failure.reason._tag === "Timeout"
+                  ? { timeoutMillis: failure.reason.millis }
+                  : {}),
+              },
+            }),
+      }),
+    );
 
-          return value;
-        }),
-      closing,
-    ).pipe(Effect.asVoid);
+  const reply: Reply = (paused, method, params = {}, authorize = false) =>
+    native(async () => {
+      // Check at dispatch: a policy may finish after a sibling failed or retirement began.
+      const ended = authorize && (closing || unavailable());
 
-  const deny = (paused: Paused, reason: string) =>
-    Effect.sync(() => {
-      publish(
-        new RequestRefused({
-          at: now(),
-          page: paused.page,
-          method: paused.request.method,
-          url: Url.redact(paused.request.url),
-          reason: Url.redactWithin(reason).slice(0, 2000),
-        }),
-      );
-    }).pipe(Effect.andThen(reply(paused, "Fetch.failRequest", { errorReason: "BlockedByClient" })));
+      if (ended) record(paused, "request authority has ended");
+      try {
+        await chrome.send(ended ? "Fetch.failRequest" : method, {
+          requestId: paused.requestId,
+          ...(ended ? { errorReason: "BlockedByClient" } : params),
+        });
+      } catch (cause) {
+        // A cancelled request is already settled; it does not revoke the browser's authority.
+        if (!(cause instanceof Error && /Invalid InterceptionId\.?$/.test(cause.message)))
+          throw cause;
+      }
+      held.delete(paused.requestId);
+    }, closing).pipe(Effect.uninterruptible);
 
-  const decide = deciding(policy, clock, bound.value, () => state._tag === "Closing", deny, reply);
+  const deny = (paused: Paused, reason: string, failure?: BrowserError) =>
+    Effect.sync(() => record(paused, reason, failure)).pipe(
+      Effect.andThen(reply(paused, "Fetch.failRequest", { errorReason: "BlockedByClient" })),
+    );
+
+  const decide = deciding(policy, clock, bound.value, () => closing, lost, deny, reply);
 
   const handle = (paused: Paused) =>
-    identifying(owner, fail, paused.frameId).pipe(
-      Effect.flatMap((owned) =>
-        owned ? decide({ ...paused, page: owned.page }) : reply(paused, "Fetch.continueRequest"),
-      ),
-      Effect.tapCause((cause) =>
-        state._tag === "Closing" && Cause.hasInterrupts(cause) ? Effect.void : Effect.sync(fail),
+    owner.owns(paused.frameId).pipe(
+      Effect.matchEffect({
+        onFailure: () => deny(paused, "request ownership could not be established"),
+        onSuccess: (owned) =>
+          !owned
+            ? reply(paused, "Fetch.continueRequest")
+            : closing || unavailable()
+              ? deny({ ...paused, page: owned.page }, "request authority has ended")
+              : decide({ ...paused, page: owned.page }),
+      }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        (cause) => {
+          const error = Option.getOrElse(Cause.findErrorOption(cause), () =>
+            undispatched("requests", new Threw({})),
+          );
+
+          return (
+            unavailable()
+              ? Effect.void
+              : Effect.sync(() => record(paused, "request control failed", error))
+          ).pipe(Effect.andThen(Effect.sync(lost)));
+        },
       ),
     );
-
-  for (let index = 0; index < 8; index++)
-    yield* Queue.take(pending).pipe(Effect.flatMap(handle), Effect.forever, Effect.forkScoped);
-
-  const refusing = new Set<string>();
-  const overflow = yield* FiberSet.make();
-  const runOverflow = yield* FiberSet.runtime(overflow)<never>();
 
   const onRequest = (paused: Paused) => {
-    if (state._tag !== "Active") {
-      fail(true);
-
-      return;
-    }
-    if (held.size === 72) {
-      fail(true);
-
-      return;
-    }
     held.set(paused.requestId, paused);
-    if (Queue.offerUnsafe(pending, paused)) return;
-    if (refusing.size === 32) {
-      fail();
-
-      return;
-    }
-    refusing.add(paused.requestId);
-    runOverflow(
-      identifying(owner, fail, paused.frameId).pipe(
-        Effect.flatMap((owned) =>
-          owned
-            ? deny({ ...paused, page: owned.page }, "request decision queue is full")
-            : reply(paused, "Fetch.continueRequest"),
-        ),
-        Effect.tapCause((cause) =>
-          state._tag === "Closing" && Cause.hasInterrupts(cause) ? Effect.void : Effect.sync(fail),
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            refusing.delete(paused.requestId);
-          }),
-        ),
-      ),
-    );
+    Queue.offerUnsafe(pending, paused);
   };
 
   chrome.on("Fetch.requestPaused", onRequest);
-  stopListening = () => {
-    chrome.off("Fetch.requestPaused", onRequest);
-  };
-  retire = retiring(owner, held, reply, () => state._tag === "Closing" && state.uncertain);
-
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
-      state = { _tag: "Closing", uncertain: state._tag === "Lost" && state.untracked };
-    }),
+      closing = true;
+    }).pipe(
+      // This stops new pauses without releasing the existing ones, unlike detach or disable.
+      Effect.andThen(native(() => chrome.send("Fetch.enable", { patterns: [] }), true)),
+      Effect.ensuring(Scope.close(workers, Exit.void)),
+      Effect.andThen(Effect.suspend(() => retire(owner, held, reply))),
+      Effect.ensuring(Effect.sync(() => chrome.off("Fetch.requestPaused", onRequest))),
+      Effect.orDie,
+    ),
   );
+
+  for (let index = 0; index < 8; index++)
+    yield* Queue.take(pending).pipe(
+      Effect.flatMap(handle),
+      Effect.forever,
+      Effect.forkScoped,
+      Scope.provide(workers),
+    );
+
   yield* native(() =>
     chrome.send("Fetch.enable", {
       patterns: policy.patterns.map((urlPattern) => ({ urlPattern })),
     }),
   );
-  yield* owner.assertSupported;
+  yield* owner.refresh;
 });

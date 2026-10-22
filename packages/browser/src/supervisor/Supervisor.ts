@@ -6,6 +6,7 @@
  */
 import {
   Clock,
+  Context,
   Deferred,
   Effect,
   Exit,
@@ -42,19 +43,24 @@ export const make = Effect.fn("Supervisor.make")(function* <A, E, R>(
   options: Options<A, E, R>,
 ): Effect.fn.Return<Supervisor<A, E>, never, Scope.Scope | Exclude<R, Scope.Scope>> {
   const clock = yield* Clock.Clock;
-  const context = yield* Effect.context<Exclude<R, Scope.Scope>>();
+  // The caller span survives as a link, never as the parent of a later generation.
+  const context = Context.omit(Tracer.ParentSpan)(yield* Effect.context<Exclude<R, Scope.Scope>>());
   const parent = yield* Effect.serviceOption(Tracer.ParentSpan);
   const links = Option.isSome(parent) ? [{ span: parent.value, attributes: {} }] : [];
-  const own = yield* Scope.fork(yield* Effect.scope);
+  // A parallel caller scope must not close workers alongside retirement.
+  const own = yield* Scope.make();
   const started = Lifecycle.start<Runtime<A>, Hold, E>();
   const state = yield* SubscriptionRef.make(started.state);
   const permit = yield* Semaphore.make(1);
   const events = yield* PubSub.unbounded<Take.Take<Generation<E>>>({ replay: 64 });
   const fibers = yield* FiberSet.make().pipe(Scope.provide(own));
-  const run = yield* FiberSet.runtime(fibers)<never>();
+
+  const run = yield* FiberSet.runtime(fibers)<never>().pipe(
+    Effect.updateContext<never, never>(() => context),
+  );
+
   const retiring = Deferred.makeUnsafe<void>();
   const stopped = Deferred.makeUnsafe<void>();
-  let stopping = false;
 
   const apply: Apply<A, E> = (input) =>
     permit.withPermit(
@@ -80,7 +86,7 @@ export const make = Effect.fn("Supervisor.make")(function* <A, E, R>(
       ),
     );
 
-  const openGeneration = opening(options, context, own, retiring, apply, links);
+  const openGeneration = opening<A, E, R>(options, context, own, retiring, apply, links);
   const releaseGeneration = releasing(apply, links);
 
   const perform = (command: Lifecycle.Command<Runtime<A>, Hold>): Effect.Effect<void> => {
@@ -105,7 +111,9 @@ export const make = Effect.fn("Supervisor.make")(function* <A, E, R>(
       case "Release":
         return Effect.sync(() => void run(releaseGeneration(command.live, command.why)));
       case "Stop":
-        return Effect.asVoid(Deferred.succeed(retiring, undefined));
+        return Deferred.succeed(retiring, undefined).pipe(
+          Effect.andThen(Effect.sync(() => void run(stop))),
+        );
     }
   };
 
@@ -135,7 +143,6 @@ export const make = Effect.fn("Supervisor.make")(function* <A, E, R>(
   });
 
   const stop = Effect.gen(function* () {
-    yield* apply({ _tag: "Retire" });
     yield* Stream.runHead(
       Stream.filter(
         SubscriptionRef.changes(state),
@@ -145,16 +152,13 @@ export const make = Effect.fn("Supervisor.make")(function* <A, E, R>(
     yield* PubSub.publish(events, Exit.void);
   }).pipe(Effect.ensuring(Deferred.succeed(stopped, undefined)));
 
-  const retire = Effect.suspend(() => {
-    if (!stopping) {
-      stopping = true;
-      run(stop);
-    }
+  // Commit the transition even if its caller is interrupted while waiting for the state lock.
+  const retire = apply({ _tag: "Retire" }).pipe(
+    Effect.uninterruptible,
+    Effect.andThen(Deferred.await(stopped)),
+  );
 
-    return Deferred.await(stopped);
-  });
-
-  yield* Effect.addFinalizer(() => retire);
+  yield* Effect.addFinalizer((exit) => retire.pipe(Effect.ensuring(Scope.close(own, exit))));
   yield* Effect.forEach(started.commands, perform, { discard: true });
 
   return {

@@ -108,7 +108,7 @@ const pageAdapter = (session: Port.Session, native: CDPSession, hooks: Port.Hook
   const send: CDPSession["send"] = async (method, params) => {
     const result = await sending(method, params);
 
-    if (method === "Target.getTargetInfo")
+    if (method === "Target.getTargetInfo" && session.channel === "page")
       Option.match(Schema.decodeUnknownOption(Target)(result), {
         onNone: () => {},
         onSome: ({ targetInfo }) => {

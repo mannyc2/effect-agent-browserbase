@@ -426,54 +426,46 @@ export const make = Effect.fn("Stage.make")(function* (
       return PubSub.publish(output, { feed, frame, at: painted });
     });
 
-  const commit = (feed: Feed, options: { readonly at?: number | undefined } = {}) =>
-    Effect.suspend(() => {
-      const asked = options.at ?? now();
+  // Both public entry points reserve a FIFO turn before reading the current feed.
+  const commit = (feed: Feed, asked: number) =>
+    Effect.gen(function* () {
+      if (!Number.isFinite(asked))
+        return yield* refuse("cue", "at must be finite host milliseconds");
+      yield* firstOf(feed, firstFrame);
+      const old = showing;
 
-      return switching(
-        Effect.gen(function* () {
-          if (!Number.isFinite(asked))
-            return yield* refuse("cue", "at must be finite host milliseconds");
-          yield* firstOf(feed, firstFrame);
-          const old = showing;
+      if (old?.feed === feed) return old.presented;
 
-          if (old?.feed === feed) return old.presented;
+      yield* Effect.raceFirst(until(asked, now), ended(feed));
 
-          yield* Effect.raceFirst(until(asked, now), ended(feed));
+      const switchTo = Effect.suspend(() => {
+        const frame = frameOf(feed);
 
-          const switchTo = Effect.suspend(() => {
-            const frame = frameOf(feed);
+        if (frame === undefined) return Effect.fail(unavailable());
+        const at = Math.max(now(), asked, frame.hostTime, painted);
 
-            if (frame === undefined) return Effect.fail(unavailable());
-            const at = Math.max(now(), asked, frame.hostTime, painted);
+        showing = {
+          feed,
+          frame,
+          presented: new Presented({ page: feed.page.id, at, latency: at - asked }),
+          changedAt: at,
+        };
 
-            showing = {
-              feed,
-              frame,
-              presented: new Presented({ page: feed.page.id, at, latency: at - asked }),
-              changedAt: at,
-            };
+        return publish(feed, frame, at).pipe(Effect.as(showing.presented));
+      }).pipe(Effect.uninterruptible);
 
-            return publish(feed, frame, at).pipe(Effect.as(showing.presented));
-          }).pipe(Effect.uninterruptible);
+      const readyToSwitch = firstOf(feed, firstFrame).pipe(Effect.andThen(switchTo));
 
-          const readyToSwitch = firstOf(feed, firstFrame).pipe(
-            Effect.andThen(switchTo),
-            Effect.provideService(Clock.Clock, feed.page.clock),
-          );
-
-          return yield* (
-            old === undefined ? readyToSwitch : old.feed.page.afterInput(readyToSwitch)
-          ).pipe(
-            // The cut owns old-page input through publication. Capture cleanup has its own bound
-            // and must finish even if the caller leaves, without turning a completed cut into Timeout.
-            Effect.ensuring(
-              Effect.suspend(() =>
-                showing?.feed === feed && old !== undefined ? stop(old.feed) : Effect.void,
-              ),
-            ),
-          );
-        }).pipe(Effect.provideService(Clock.Clock, feed.page.clock)),
+      return yield* (
+        old === undefined ? readyToSwitch : old.feed.page.afterInput(readyToSwitch)
+      ).pipe(
+        // The cut owns old-page input through publication. Capture cleanup has its own bound
+        // and must finish even if the caller leaves, without turning a completed cut into Timeout.
+        Effect.ensuring(
+          Effect.suspend(() =>
+            showing?.feed === feed && old !== undefined ? stop(old.feed) : Effect.void,
+          ),
+        ),
       );
     });
 
@@ -487,7 +479,10 @@ export const make = Effect.fn("Stage.make")(function* (
             ready: firstOf(feed, firstFrame).pipe(
               Effect.provideService(Clock.Clock, feed.page.clock),
             ),
-            commit: (options?: { readonly at?: number | undefined }) => commit(feed, options),
+            commit: (options?: { readonly at?: number | undefined }) =>
+              Effect.suspend(() => switching(commit(feed, options?.at ?? now()))).pipe(
+                Effect.provideService(Clock.Clock, feed.page.clock),
+              ),
           }),
         ),
       ),
@@ -501,13 +496,21 @@ export const make = Effect.fn("Stage.make")(function* (
           Effect.suspend(() => {
             const asked = options?.at ?? now();
 
-            return showing?.feed.page === page
-              ? Effect.as(firstOf(showing.feed, firstFrame), showing.presented)
-              : Effect.scoped(
-                  Effect.flatMap(cue(page), (prepared) => prepared.commit({ at: asked })),
-                );
+            return switching(
+              Effect.suspend(() =>
+                showing?.feed.page === page
+                  ? commit(showing.feed, asked)
+                  : Effect.scoped(
+                      Effect.flatMap(
+                        openFeed(page, owner, settings, () => showing?.feed, publish),
+                        (feed) => commit(feed, asked),
+                      ),
+                    ),
+              ),
+            );
           }),
         ),
+        Effect.provideService(Clock.Clock, page.clock),
       ),
     shown: ({ hold }) => {
       const parsed = Duration.fromInput(hold);

@@ -1,13 +1,16 @@
 import { assert, it, layer } from "@effect/vitest";
-import { Clock, Deferred, Duration, Effect, Fiber, Schedule, Stream } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Fiber, Option, Schedule, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
+import { Closed, Failed, undispatched } from "../src/BrowserError.ts";
 import type { Page } from "../src/Page.ts";
 import * as Cdp from "../src/providers/Cdp.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
 import * as Stillness from "../src/stillness/Stillness.ts";
+import * as TestPage from "../src/testing/TestPage.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const blank = Effect.gen(function* () {
@@ -711,4 +714,164 @@ it.live(
         assert.isAtLeast((yield* browser.now) - started, 1200);
       }).pipe(Effect.scoped),
     ),
+);
+
+for (const failure of [
+  undispatched("capture", new Failed({ detail: "acknowledgement capacity exhausted" })),
+  undispatched("capture", new Closed({ cause: "connection" })),
+]) {
+  it.live("stillness retains a capture " + failure.reason._tag + " before its deadline", () =>
+    Effect.gen(function* () {
+      const browser = yield* Chromium.open();
+      const original = yield* browser.newPage("data:text/html,<h1>Ready</h1>");
+      let finalized = false;
+
+      const page: Page = {
+        ...original,
+        capture: (options) =>
+          original.capture(options).pipe(
+            Effect.map((capture) => ({
+              ...capture,
+              stream: Stream.fail(failure).pipe(
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    finalized = true;
+                  }),
+                ),
+              ),
+            })),
+          ),
+      };
+
+      const result = yield* Stillness.wait(page, {
+        quietMillis: 10,
+        timeout: "2 seconds",
+      }).pipe(Effect.exit, Effect.timeout("1 second"));
+
+      assert.strictEqual(Option.getOrThrow(Exit.findErrorOption(result)), failure);
+      assert.isTrue(finalized);
+    }).pipe(Effect.scoped),
+  );
+}
+
+for (const [name, options] of [
+  ["negative quiet", { quietMillis: -1 }],
+  ["NaN quiet", { quietMillis: Number.NaN }],
+  ["infinite quiet", { quietMillis: Infinity }],
+  ["negative timeout", { quietMillis: 100, timeout: -1 }],
+  ["NaN timeout", { quietMillis: 100, timeout: Number.NaN }],
+  ["infinite timeout", { quietMillis: 100, timeout: Infinity }],
+  ["NaN tuple timeout", { quietMillis: 100, timeout: [0, Number.NaN] }],
+  ["NaN component timeout", { quietMillis: 100, timeout: { seconds: Number.NaN } }],
+] as const) {
+  it.effect("stillness refuses " + name + " before observing the page", () =>
+    Effect.gen(function* () {
+      const seeded = yield* TestPage.make({ ready: true });
+      let observed = false;
+
+      const page: Page = {
+        ...seeded.page,
+        afterInput: (effect) =>
+          Effect.sync(() => {
+            observed = true;
+          }).pipe(Effect.andThen(effect)),
+      };
+
+      const waiting = yield* Stillness.wait(page, options).pipe(Effect.exit, Effect.forkScoped);
+
+      yield* TestClock.adjust("16 seconds");
+      assert.isDefined(waiting.pollUnsafe(), "invalid budgets must refuse without waiting");
+      const result = yield* Fiber.join(waiting);
+      const error = Exit.findErrorOption(result);
+
+      assert.isTrue(Option.isSome(error), "invalid options must retain a typed failure");
+      assert.strictEqual(Option.getOrThrow(error).reason._tag, "InvalidRequest");
+      assert.isFalse(observed, "invalid options must refuse before page work");
+    }),
+  );
+}
+
+it.live("page.ready refuses invalid quiet intervals", () =>
+  Effect.gen(function* () {
+    const browser = yield* Chromium.open();
+    const page = yield* browser.newPage("data:text/html,<h1>Ready</h1>");
+
+    for (const quietMillis of [-1, Number.NaN, Infinity]) {
+      const result = yield* page.ready({ quietMillis, timeout: "100 millis" }).pipe(Effect.exit);
+      const failure = Exit.findErrorOption(result);
+
+      assert.isTrue(Option.isSome(failure), "invalid quiet interval must refuse");
+      assert.strictEqual(Option.getOrThrow(failure).reason._tag, "InvalidRequest");
+      assert.isFalse(Option.getOrThrow(failure).dispatched);
+    }
+  }).pipe(Effect.scoped),
+);
+
+it.live("foreground motion after navigation cannot inherit the previous document's mask", () =>
+  Effect.gen(function* () {
+    const faults = yield* TestCdp.make();
+    const browser = yield* faults.provide(Chromium.open());
+    const page = yield* browser.newPage();
+
+    const native = yield* faults.native(page.id);
+
+    yield* Effect.promise(() =>
+      native.route("https://foreground.test/**", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body:
+            "<body style='margin:0'><canvas id=c width=160 height=160></canvas><a href='/next'>Next</a>" +
+            "<script>const g=c.getContext('2d');function draw(t){g.fillStyle=Math.floor(t/60)%2?'white':'black';" +
+            "g.fillRect(0,0,160,160);requestAnimationFrame(draw)}requestAnimationFrame(draw)</script>",
+        }),
+      ),
+    );
+    yield* page.goto("https://foreground.test/first");
+    yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+    yield* page.captureStats().pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced("10 millis"),
+        until: ({ accepted }) => accepted >= 8,
+      }),
+      Effect.timeout("5 seconds"),
+    );
+
+    const resume = faults.rule(
+      { page: page.id, method: "Page.screencastFrame" },
+      { _tag: "Drop", acknowledge: true },
+      { phase: "event" },
+    );
+
+    yield* Effect.addFinalizer(() => Effect.sync(resume));
+    const [link] = yield* page.find({ role: "link", name: "Next" });
+
+    yield* page.click(link!.ref);
+    const state = yield* page.state;
+
+    assert.notStrictEqual(state.frame?.document, state.document, "new document paint is withheld");
+    assert.isDefined(state.frame, "the previous capture remains visible in history");
+    const sampled = yield* Deferred.make<void>();
+
+    const observed: Page = {
+      ...page,
+      state: page.state.pipe(Effect.tap(() => Deferred.succeed(sampled, undefined))),
+    };
+
+    const waiting = yield* Stillness.wait(observed, {
+      still: "foreground",
+      quietMillis: 200,
+      timeout: "1 second",
+    }).pipe(Effect.exit, Effect.forkScoped);
+
+    yield* Deferred.await(sampled).pipe(Effect.timeout("2 seconds"));
+    resume();
+    const result = yield* Fiber.join(waiting);
+    const failure = Exit.findErrorOption(result);
+
+    assert.isTrue(
+      Option.isSome(failure),
+      "continuing motion in the new document must not report stillness",
+    );
+    assert.strictEqual(Option.getOrThrow(failure).reason._tag, "Timeout");
+  }).pipe(Effect.scoped),
 );

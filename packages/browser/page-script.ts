@@ -77,7 +77,7 @@ export const pageScript = (): Plugin => ({
           transform: (source, name) =>
             name === bridge ||
             name.endsWith(".inpage.ts") ||
-            name.endsWith("/page/url.ts") ||
+            name.endsWith("/Url.ts") ||
             name.endsWith("/Matching.ts")
               ? pageDefinitions(source, name)
               : undefined,

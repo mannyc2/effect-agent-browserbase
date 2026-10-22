@@ -1,7 +1,7 @@
 /** Document readiness and content quiet, independent of screen-capture features. */
 import { Duration, Effect, Schedule } from "effect";
 
-import { Timeout, failWith } from "../../BrowserError.ts";
+import { Timeout, failWith, refuse } from "../../BrowserError.ts";
 import type { ReadyOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, type PageContext } from "../page/context.ts";
@@ -10,6 +10,10 @@ import { ReadinessSchema } from "./ready.inpage.ts";
 export const make =
   (page: PageContext, bridge: Bridge) =>
   (options: ReadyOptions = {}) => {
+    const quietMillis = options.quietMillis ?? 0;
+
+    if (!Number.isFinite(quietMillis) || quietMillis < 0)
+      return refuse("ready", "quietMillis must be finite and nonnegative");
     const timeout = options.timeout ?? Duration.seconds(15);
 
     // The page's own evidence, checked in the page until nothing is left or `until` has come.
@@ -17,11 +21,7 @@ export const make =
       Effect.suspend(() =>
         bridge.evaluate(
           "ready",
-          scriptCall(
-            "ready",
-            Math.max(0, Math.round(until - page.now())),
-            options.quietMillis ?? 0,
-          ),
+          scriptCall("ready", Math.max(0, Math.round(until - page.now())), quietMillis),
         ),
       ).pipe(
         Effect.retry({ while: contextGone, schedule: Schedule.spaced(Duration.millis(10)) }),

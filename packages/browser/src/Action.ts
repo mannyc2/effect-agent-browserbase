@@ -1,5 +1,5 @@
 /** Typed browser actions, shared by execution, policy, recordings and replay. */
-import { Context, Schema } from "effect";
+import { Schema } from "effect";
 
 import { Point } from "./Geometry.ts";
 import * as Url from "./Url.ts";
@@ -84,11 +84,6 @@ export const recorded = (value: Action, revealed: boolean): Action => {
 
   return value._tag === "Goto" ? { ...value, url: Url.redact(value.url) } : value;
 };
-
-/** The decoded request currently executing; inherited by the internal dispatch phases. */
-export const Current = Context.Reference<Action | undefined>("effect-browser/Action/Current", {
-  defaultValue: () => undefined,
-});
 
 /** The stable event vocabulary for an action. */
 const names: Record<Action["_tag"], Name> = {

@@ -1,7 +1,7 @@
 /** Assemble named Page methods and canonical action execution over one concrete input port. */
-import { Effect, Schema } from "effect";
+import { Effect, Schema, type SchemaIssue } from "effect";
 
-import { Action, Current } from "./Action.ts";
+import { Action, nameOf } from "./Action.ts";
 import { InvalidRequest, undispatched } from "./BrowserError.ts";
 import { type Page, ResolvedTarget } from "./Page.ts";
 
@@ -9,7 +9,48 @@ type Port = Pick<
   Page,
   "click" | "hover" | "drag" | "type" | "press" | "scroll" | "select" | "goto" | "back" | "reload"
 >;
-const invalid = (detail: string) => undispatched("perform", new InvalidRequest({ detail }));
+
+const invalid = (detail: string, operation = "perform") =>
+  undispatched(operation, new InvalidRequest({ detail }));
+
+const expectedTypes: Readonly<Record<string, string>> = {
+  String: "a string",
+  Number: "a finite number",
+  Boolean: "a boolean",
+  Objects: "an object",
+  Arrays: "an array",
+};
+
+// Action has fixed fields and array indices. Paths come from that schema; rejected values,
+// formatter messages and annotations are never rendered. Prefer the most specific union branch.
+const diagnostic = (
+  issue: SchemaIssue.Issue,
+  path: ReadonlyArray<PropertyKey> = [],
+): { readonly path: ReadonlyArray<PropertyKey>; readonly expected: string } => {
+  if (issue._tag === "Pointer") return diagnostic(issue.issue, [...path, ...issue.path]);
+  if (issue._tag === "Encoding") return diagnostic(issue.issue, path);
+  if (issue._tag === "Composite" || issue._tag === "AnyOf")
+    return (
+      issue.issues
+        .map((child) => diagnostic(child, path))
+        .sort((a, b) => b.path.length - a.path.length)[0] ?? { path, expected: "a supported value" }
+    );
+
+  const expected =
+    issue._tag === "Filter"
+      ? issue.filter === Action.cases.Select.fields.ref.ast.checks?.[0]
+        ? "an element ref such as e12"
+        : issue.filter === Schema.Finite.ast.checks?.[0]
+          ? "a finite number"
+          : "a value satisfying the action's constraints"
+      : issue._tag === "InvalidType"
+        ? (expectedTypes[issue.ast._tag] ?? "a supported value")
+        : issue._tag === "MissingKey"
+          ? "a required value"
+          : "a valid value";
+
+  return { path, expected };
+};
 
 /** Dispatch a decoded request to a concrete input port. */
 export const execute = (port: Port, action: Action): ReturnType<Page["perform"]> => {
@@ -41,13 +82,24 @@ export const execute = (port: Port, action: Action): ReturnType<Page["perform"]>
   }
 };
 
-/** Decode once and make the request available to dispatch phases. */
+/** Decode once before dispatching the canonical request. */
 export const checked =
   (perform: Page["perform"]): Page["perform"] =>
   (asked) =>
     Schema.decodeEffect(Action)(asked).pipe(
-      Effect.mapError(() => invalid("invalid action")),
-      Effect.flatMap((action) => Effect.provideService(perform(action), Current, action)),
+      Effect.mapError(({ issue }) => {
+        if (
+          typeof asked !== "object" ||
+          asked === null ||
+          typeof asked._tag !== "string" ||
+          !Object.hasOwn(Action.cases, asked._tag)
+        )
+          return invalid("_tag: expected a supported action tag");
+        const { path, expected } = diagnostic(issue);
+
+        return invalid((path.join(".") || "action") + ": expected " + expected, nameOf(asked));
+      }),
+      Effect.flatMap(perform),
     );
 
 /** Named entry points are the same typed action path used by replay and tools. */

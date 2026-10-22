@@ -1,7 +1,7 @@
 /** Screen and foreground stillness over the public page capture and owning clock. */
-import { Clock, Duration, Effect, Schedule, Stream } from "effect";
+import { Clock, Duration, Effect, Option, Schedule, Stream } from "effect";
 
-import { Failed, Timeout, undispatched } from "../BrowserError.ts";
+import { Failed, refuse, Timeout, undispatched } from "../BrowserError.ts";
 import { monotonicMillis } from "../Clock.ts";
 import type { Frame } from "../Frame.ts";
 import type { Page } from "../Page.ts";
@@ -13,9 +13,8 @@ export interface Options {
   readonly timeout?: Duration.Input | undefined;
 }
 
-export const wait = (page: Page, options: Options) =>
+const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
   Effect.gen(function* () {
-    const timeout = options.timeout ?? Duration.seconds(15);
     const now = () => monotonicMillis(page.clock);
     const deadline = now() + Duration.toMillis(timeout);
 
@@ -32,7 +31,6 @@ export const wait = (page: Page, options: Options) =>
       Effect.gen(function* () {
         const capture = yield* page.capture();
 
-        yield* capture.stream.pipe(Stream.runDrain, Effect.forkScoped);
         const foreground = options.still === "foreground";
         let counts = yield* capture.stats();
         let stirred = now();
@@ -51,7 +49,7 @@ export const wait = (page: Page, options: Options) =>
           (yield* page.recentEvents).findLast((event) => event._tag === "Action")?.startedAt ??
           Number.NEGATIVE_INFINITY;
 
-        const document = (yield* page.state).frame?.document;
+        const document = (yield* page.state).document;
 
         const before = (foreground ? yield* page.recentFrames : []).filter(
           (frame) =>
@@ -111,7 +109,10 @@ export const wait = (page: Page, options: Options) =>
           }
         });
 
-        return yield* still;
+        return yield* Effect.raceFirst(
+          capture.stream.pipe(Stream.runDrain, Effect.andThen(Effect.never)),
+          still,
+        );
       });
 
     yield* page.afterInput(Effect.void);
@@ -123,18 +124,43 @@ export const wait = (page: Page, options: Options) =>
     }
     yield* settled();
     yield* quiet(options.quietMillis);
+  });
+
+export const wait = (page: Page, options: Options) =>
+  Effect.gen(function* () {
+    if (!Number.isFinite(options.quietMillis) || options.quietMillis < 0)
+      return yield* refuse("stillness", "quietMillis must be finite and nonnegative");
+    const input = options.timeout ?? Duration.seconds(15);
+
+    const components =
+      typeof input === "number"
+        ? [input]
+        : typeof input === "object" && !Duration.isDuration(input)
+          ? Object.values(input)
+          : [];
+
+    const timeout = Duration.fromInput(input);
+
+    if (
+      components.some((value) => typeof value === "number" && !Number.isFinite(value)) ||
+      Option.isNone(timeout) ||
+      !Duration.isFinite(timeout.value) ||
+      Duration.isNegative(timeout.value)
+    )
+      return yield* refuse("stillness", "timeout must be a finite nonnegative duration");
+    const duration = timeout.value;
+
+    return yield* observe(page, options, duration).pipe(
+      Effect.timeoutOrElse({
+        duration,
+        orElse: () =>
+          Effect.fail(
+            undispatched("stillness", new Timeout({ millis: Duration.toMillis(duration) })),
+          ),
+      }),
+    );
   }).pipe(
     Effect.scoped,
-    Effect.timeoutOrElse({
-      duration: options.timeout ?? Duration.seconds(15),
-      orElse: () =>
-        Effect.fail(
-          undispatched(
-            "stillness",
-            new Timeout({ millis: Duration.toMillis(options.timeout ?? Duration.seconds(15)) }),
-          ),
-        ),
-    }),
     Effect.provideService(Clock.Clock, page.clock),
     Effect.withSpan("Stillness.wait"),
   );

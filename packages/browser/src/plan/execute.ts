@@ -15,6 +15,7 @@ const dispatch = (
   page: Page,
   step: Step,
   text: string,
+  before: Effect.Effect<void, BrowserError>,
 ): Effect.Effect<void, Missing | Ambiguous | Drifted | BrowserError> => {
   const action = step.action;
   const point = (target: Target) => (typeof target === "object" ? target : undefined);
@@ -84,7 +85,11 @@ const dispatch = (
     },
   );
 
-  return Effect.flatMap(resolved, page.perform).pipe(Effect.asVoid);
+  return resolved.pipe(
+    Effect.tap(() => before),
+    Effect.flatMap(page.perform),
+    Effect.asVoid,
+  );
 };
 
 export interface TakeOptions {
@@ -285,11 +290,17 @@ export const take = Effect.fn("Plan.take")(function* (
     const text = step.input === undefined ? "" : options.inputs?.[step.input];
 
     if (text === undefined) return yield* invalid(`no text for the input "${step.input ?? ""}"`);
-    const baseline = yield* page.state;
+    let baseline: Effect.Success<Page["state"]> | undefined;
 
-    const verify = within(checkEffect(page, step, baseline, millis), millis);
+    const beforeDispatch = Effect.tap(page.state, (state) =>
+      Effect.sync(() => {
+        baseline = state;
+      }),
+    ).pipe(Effect.asVoid);
 
-    const acted = yield* Effect.exit(dispatch(page, step, text));
+    const verify = Effect.suspend(() => within(checkEffect(page, step, baseline, millis), millis));
+
+    const acted = yield* Effect.exit(dispatch(page, step, text, beforeDispatch));
 
     if (Exit.isFailure(acted)) {
       const error = Exit.findErrorOption(acted);

@@ -129,3 +129,30 @@ it.effect("events can be transformed, delayed, dropped and injected by session",
     assert.deepStrictEqual(seen.at(-1), { frame: { id: "injected" } });
   }),
 );
+
+it.effect("browser ownership queries never acquire page-scoped fault rules", () =>
+  Effect.gen(function* () {
+    const faults = yield* TestCdp.make();
+
+    const session = yield* faults.provide(
+      Port.openSession(
+        () => Promise.resolve(nativeSession() as unknown as CDPSession),
+        undefined,
+        "browser",
+      ),
+    );
+
+    yield* Effect.promise(() => session.send("Target.getTargetInfo", { targetId: "target" }));
+    faults.rule(
+      { channel: "browser", page: "target", method: "Browser.getVersion" },
+      { _tag: "Reply", value: { product: "wrong page rule" } },
+    );
+    assert.strictEqual(
+      (yield* Effect.promise(() => session.send("Browser.getVersion"))).product,
+      "native",
+    );
+    const browserCalls = faults.calls.filter((call) => call.session.channel === "browser");
+
+    assert.isTrue(browserCalls.every((call) => call.session.page === undefined));
+  }),
+);

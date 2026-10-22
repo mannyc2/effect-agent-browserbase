@@ -4,7 +4,7 @@
  * by the page's action wait and honours failFast; reactions and input use the page owner's clock.
  * @since 0.3.0
  */
-import { type Clock, Duration, Effect, MutableRef, Option, Semaphore } from "effect";
+import { type Clock, Deferred, Duration, Effect, MutableRef, Option, Semaphore } from "effect";
 
 import { methods } from "../ActionPort.ts";
 import { Busy, refuse, undispatched } from "../BrowserError.ts";
@@ -97,56 +97,62 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
       withInput:
         ({ operation, wait, failFast }) =>
         (effect) =>
-          Effect.acquireUseRelease(
-            Effect.gen(function* () {
-              const asked = now();
+          Effect.gen(function* () {
+            const asked = now();
+            const entered = yield* Deferred.make<void>();
 
-              const busy = () =>
-                undispatched(
-                  operation,
-                  new Busy({ waitedMillis: Math.round(now() - asked), ahead: 1 }),
+            const busy = () =>
+              undispatched(
+                operation,
+                new Busy({ waitedMillis: Math.round(now() - asked), ahead: 1 }),
+              );
+
+            const use = Effect.gen(function* () {
+              yield* Deferred.succeed(entered, undefined);
+              const document = (yield* page.state).document;
+
+              const kind =
+                last === undefined || last.page !== page.id || last.clock !== page.clock
+                  ? "unrelated"
+                  : last.document === document
+                    ? "expected"
+                    : "surprise";
+
+              const left =
+                (last?.clock === page.clock ? last.at : now()) +
+                (yield* Style.pause(medians[kind], spread[kind])) -
+                now();
+
+              if (left > 0)
+                yield* Effect.sleep(Duration.millis(left)).pipe(
+                  Effect.withSpan("Presentation.react"),
                 );
 
-              if (failFast) {
-                if (!(yield* hand.takeIfAvailable(1))) return yield* busy();
-              } else
-                yield* hand
-                  .take(1)
-                  .pipe(
-                    Effect.timeoutOrElse({ duration: wait, orElse: () => Effect.fail(busy()) }),
-                  );
-            }).pipe(Effect.withSpan("Presentation.hand")),
-            () =>
-              Effect.gen(function* () {
-                const document = (yield* page.state).document;
+              return yield* effect.pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    last = { page: page.id, document, clock: page.clock, at: now() };
+                  }),
+                ),
+              );
+            });
 
-                const kind =
-                  last === undefined || last.page !== page.id || last.clock !== page.clock
-                    ? "unrelated"
-                    : last.document === document
-                      ? "expected"
-                      : "surprise";
-
-                const left =
-                  (last?.clock === page.clock ? last.at : now()) +
-                  (yield* Style.pause(medians[kind], spread[kind])) -
-                  now();
-
-                if (left > 0)
-                  yield* Effect.sleep(Duration.millis(left)).pipe(
-                    Effect.withSpan("Presentation.react"),
-                  );
-
-                return yield* effect.pipe(
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      last = { page: page.id, document, clock: page.clock, at: now() };
-                    }),
-                  ),
+            if (failFast)
+              return yield* hand
+                .withPermitsIfAvailable(1)(use)
+                .pipe(
+                  Effect.flatMap((result) => Effect.fromOption(result).pipe(Effect.mapError(busy))),
                 );
-              }),
-            () => hand.release(1),
-          ),
+
+            // Only admission has a wait budget. Once admitted, the page owns input's deadline.
+            return yield* Effect.raceFirst(
+              hand.withPermits(1)(use),
+              Deferred.await(entered).pipe(
+                Effect.timeoutOrElse({ duration: wait, orElse: () => Effect.fail(busy()) }),
+                Effect.andThen(Effect.never),
+              ),
+            );
+          }).pipe(Effect.withSpan("Presentation.hand")),
     };
 
     const styled = Style.provide(style);

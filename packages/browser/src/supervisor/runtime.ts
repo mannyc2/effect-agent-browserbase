@@ -8,7 +8,6 @@ import {
   Effect,
   Exit,
   Option,
-  Predicate,
   Schedule,
   Scope,
   Stream,
@@ -42,16 +41,15 @@ export type Apply<A, E> = (
   input: Lifecycle.Input<Runtime<A>, Hold, E>,
 ) => Effect.Effect<Lifecycle.Step<Runtime<A>, Hold, E>>;
 
-export const describe = (cause: Cause.Cause<unknown>) => {
-  const error = Cause.squash(cause);
-
-  return Predicate.isError(error) ? error.message : String(error);
-};
+export const describe = (cause: Cause.Cause<unknown>) =>
+  Cause.prettyErrors(cause)
+    .map((error) => error.message)
+    .join("; ");
 
 export const opening =
   <A, E, R>(
     options: Options<A, E, R>,
-    context: Context.Context<Exclude<R, Scope.Scope>>,
+    context: Context.Context<Exclude<Exclude<R, Scope.Scope>, Tracer.ParentSpan>>,
     own: Scope.Closeable,
     retiring: Deferred.Deferred<void>,
     apply: Apply<A, E>,
@@ -73,12 +71,12 @@ export const opening =
         const exit = yield* Effect.exit(
           options.open(number).pipe(
             Scope.provide(scope),
-            Effect.provideContext(context),
             Effect.withSpan("Supervisor.open", {
               root: true,
               links,
               attributes: { generation: number, attempt },
             }),
+            Effect.provideContext(context),
           ),
         );
 
@@ -91,14 +89,13 @@ export const opening =
         }
         const closed = yield* Effect.exit(Scope.close(scope, exit));
 
-        if (Exit.isFailure(closed))
-          return yield* Effect.failCause(Cause.combine(exit.cause, closed.cause));
-        const error = Cause.findErrorOption(exit.cause);
+        const cause = Exit.isFailure(closed) ? Cause.combine(exit.cause, closed.cause) : exit.cause;
+        const error = Cause.findErrorOption(cause);
 
-        if (Option.isNone(error)) return yield* Effect.failCause(exit.cause);
-        yield* apply({ _tag: "Failed", number, attempt, error: error.value });
+        if (Option.isSome(error))
+          yield* apply({ _tag: "Failed", number, attempt, error: error.value });
 
-        return yield* Effect.fail(error.value);
+        return yield* Effect.failCause(cause);
       }),
     );
 

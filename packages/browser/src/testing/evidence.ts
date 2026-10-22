@@ -1,7 +1,7 @@
 /** Explicit picture and change evidence; bounded delivery and the production change fold. */
-import { Duration, Effect, Option, PubSub, Stream } from "effect";
+import { Duration, Effect, Option, PubSub, Stream, type Take } from "effect";
 
-import { InvalidRequest, NotFound, undispatched } from "../BrowserError.ts";
+import { type BrowserError, InvalidRequest, NotFound, undispatched } from "../BrowserError.ts";
 import { Change, Changes } from "../Change.ts";
 import { type Frame, sameCapture } from "../Frame.ts";
 import { fold } from "../internal/timeline/fold.inpage.ts";
@@ -17,7 +17,7 @@ export const make = Effect.fnUntraced(function* (options: {
 }) {
   const { model, now } = options;
   const { unsupported } = Model;
-  const feed = yield* PubSub.sliding<Frame>(64);
+  const feed = yield* PubSub.sliding<Take.Take<Frame, BrowserError>>(64);
   let frames: ReadonlyArray<Frame> = [];
   const folding = fold();
 
@@ -43,7 +43,7 @@ export const make = Effect.fnUntraced(function* (options: {
           }),
         );
       frames = [...frames.slice(-255), frame];
-      yield* PubSub.publish(feed, frame);
+      yield* PubSub.publish(feed, [frame]);
     });
 
   const frame: Page["frame"] = (asked) =>
@@ -125,7 +125,7 @@ export const make = Effect.fnUntraced(function* (options: {
           const subscription = yield* PubSub.subscribe(feed);
 
           return {
-            stream: Stream.fromEffectRepeat(PubSub.take(subscription)),
+            stream: Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(Stream.flattenTake),
             get current() {
               return frames.findLast(inDocument);
             },
@@ -146,6 +146,9 @@ export const make = Effect.fnUntraced(function* (options: {
     capture,
     emitFrame,
     recentFrames: Effect.sync(() => frames),
-    close: PubSub.shutdown(feed),
+    // Keep the terminal available to captures acquired before their reader starts.
+    close: Effect.flatMap(Effect.exit(model.check("capture")), (end) =>
+      PubSub.publish(feed, end),
+    ).pipe(Effect.asVoid),
   };
 });

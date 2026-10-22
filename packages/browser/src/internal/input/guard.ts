@@ -5,12 +5,12 @@
  */
 import { Effect } from "effect";
 
-import { Current, recorded, type Name } from "../../Action.ts";
+import { recorded, nameOf, type Action } from "../../Action.ts";
 import { type BrowserError, InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
 import { InputRequest } from "../../Page.ts";
 import * as Url from "../../Url.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
+import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import * as Script from "./guard.inpage.ts";
 
 export interface Approval {
@@ -63,7 +63,7 @@ export const make = (page: PageContext, bridge: Bridge) => {
   const { current, evaluateIn, evaluateWithContext } = bridge;
 
   const preparePolicy = (
-    action: Name,
+    asked: Action,
     info: { readonly target?: string | undefined; readonly text?: string | undefined },
     targets: Script.InputPlan["targets"],
     flags: {
@@ -73,6 +73,8 @@ export const make = (page: PageContext, bridge: Bridge) => {
     } = {},
   ): Effect.Effect<PolicyPlan, BrowserError> =>
     Effect.gen(function* () {
+      const action = nameOf(asked);
+
       const input: Script.InputPlan = {
         action,
         targets,
@@ -92,10 +94,6 @@ export const make = (page: PageContext, bridge: Bridge) => {
       const first = prepared.targets[0];
       const target = targets[0];
       const { title, description, dialog, heading, nearby, form } = prepared.evidence;
-
-      const asked = yield* Current;
-
-      if (asked === undefined) return yield* refuse(action, "input requires a decoded action");
 
       const safe = recorded(asked, first?.secret !== true);
 

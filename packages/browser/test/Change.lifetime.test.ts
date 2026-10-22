@@ -95,3 +95,75 @@ for (const overlap of ["none", "navigate", "cancel", "close"] as const)
         assert.isTrue(fresh.changes.some((change) => change.after === "After new read"));
       }).pipe(Effect.scoped),
   );
+
+// 1d6d7c7: an idle expiry waiting behind navigation permanently poisoned later reads.
+it.effect("idle expiry waits for navigation and later changes renew the recorder", () =>
+  Effect.gen(function* () {
+    const faults = yield* TestCdp.make();
+
+    const browser = yield* faults.provide(
+      Chromium.open({ actionTimeout: "500 millis", navigationTimeout: "20 seconds" }),
+    );
+
+    const page = yield* faults.provide(browser.newPage(html("<title>First</title>")));
+
+    yield* page.changes();
+    yield* TestClock.adjust("119 seconds");
+    const release = yield* Deferred.make<void>();
+
+    faults.rule({ page: page.id, method: "goto" }, { _tag: "Hold", gate: release }, { times: 1 });
+    const moving = yield* page.goto(html("<title>Second</title>")).pipe(Effect.forkScoped);
+
+    yield* faults.waitUntil((calls) =>
+      calls.some(
+        ({ method, params }) =>
+          method === "goto" &&
+          typeof params === "object" &&
+          params !== null &&
+          Reflect.get(params, "url") === html("<title>Second</title>"),
+      ),
+    );
+    yield* TestClock.adjust("2 seconds");
+    assert.isFalse(
+      faults.calls.some(({ method }) => method === "Page.removeScriptToEvaluateOnNewDocument"),
+      "cleanup must not cross navigation's lane ownership",
+    );
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(moving);
+    yield* page.changes();
+
+    const removed = faults.calls.filter(
+      ({ method }) => method === "Page.removeScriptToEvaluateOnNewDocument",
+    ).length;
+
+    yield* TestClock.adjust("120 seconds");
+    assert.strictEqual(
+      faults.calls.filter(({ method }) => method === "Page.removeScriptToEvaluateOnNewDocument")
+        .length,
+      removed + 1,
+      "a successful read must renew expiry even after the first idle deadline met navigation",
+    );
+    yield* page.changes();
+  }).pipe(Effect.scoped),
+);
+
+// Preserve real cleanup failure evidence while fixing admission-only expiry failure.
+it.effect("native recorder cleanup failure remains visible to later changes", () =>
+  Effect.gen(function* () {
+    const faults = yield* TestCdp.make();
+    const browser = yield* faults.provide(Chromium.open());
+    const page = yield* faults.provide(browser.newPage(html("<title>First</title>")));
+
+    yield* page.changes();
+    faults.rule(
+      { page: page.id, method: "Page.removeScriptToEvaluateOnNewDocument" },
+      { _tag: "Fail", error: new Error("recorder removal rejected") },
+      { times: 1 },
+    );
+    yield* TestClock.adjust("121 seconds");
+    const failure = yield* Effect.flip(page.changes());
+
+    assert.strictEqual(failure.reason._tag, "Failed");
+    assert.include(failure.message, "recorder removal rejected");
+  }).pipe(Effect.scoped),
+);

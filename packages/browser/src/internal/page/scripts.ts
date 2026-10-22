@@ -1,8 +1,8 @@
 /** Main-world scripts with the page lane, document binding, policy and dispatch accounting. */
 import { Effect, Schema } from "effect";
 
-import { Current } from "../../Action.ts";
 import {
+  type BrowserError,
   undispatched,
   Failed,
   NotActionable,
@@ -14,7 +14,7 @@ import { InputRequest, type Page } from "../../Page.ts";
 import * as Url from "../../Url.ts";
 import type { Input } from "../input/actions.ts";
 import type { Bridge } from "./bridge.ts";
-import type { PageContext } from "./context.ts";
+import { contextGone, type PageContext } from "./context.ts";
 
 export const make = (page: PageContext, bridge: Bridge, input: Input) => {
   const document = () => bridge.frameTag().document;
@@ -23,17 +23,21 @@ export const make = (page: PageContext, bridge: Bridge, input: Input) => {
     failWith(operation, new NotActionable({ detail: "the script's document changed" }));
 
   const evaluate = <Arg>(operation: string, script: (arg: Arg) => unknown, arg: Arg) =>
-    page
-      .native(operation, () =>
-        Promise.resolve<unknown>(
-          Reflect.apply(page.playwright.evaluate.bind(page.playwright), undefined, [script, arg]),
-        ),
-      )
-      .pipe(
-        Effect.mapError((error) =>
-          error.reason._tag === "Failed" ? undispatched(operation, new Threw({})) : error,
-        ),
-      );
+    page.native(operation, () =>
+      Promise.resolve<unknown>(
+        Reflect.apply(page.playwright.evaluate.bind(page.playwright), undefined, [script, arg]),
+      ),
+    );
+
+  const scriptFailure = (error: BrowserError) =>
+    contextGone(error)
+      ? undispatched(
+          error.operation,
+          new NotActionable({ detail: "the script's document changed" }),
+        )
+      : error.reason._tag === "Failed"
+        ? undispatched(error.operation, new Threw({}))
+        : error;
 
   const decode = <A>(operation: string, result: Schema.Codec<A, unknown>, value: unknown) =>
     Schema.decodeUnknownEffect(result)(value).pipe(
@@ -50,8 +54,13 @@ export const make = (page: PageContext, bridge: Bridge, input: Input) => {
             const before = document();
             const value = yield* Effect.result(evaluate("read", script, options.arg));
 
+            if (value._tag === "Failure" && contextGone(value.failure)) {
+              if (attempt === 1) return yield* changed("read");
+              yield* bridge.waitForDocument(before);
+              continue;
+            }
             if (document() !== before) continue;
-            if (value._tag === "Failure") return yield* value.failure;
+            if (value._tag === "Failure") return yield* scriptFailure(value.failure);
 
             return {
               value: yield* decode("read", options.result, value.success),
@@ -93,17 +102,22 @@ export const make = (page: PageContext, bridge: Bridge, input: Input) => {
         }),
       );
 
-      return input
-        .perform("act", {}, page.settings.actionTimeout, prepare, (marks) =>
+      return input.perform(
+        { _tag: "Act", document: options.document },
+        {},
+        page.settings.actionTimeout,
+        () => prepare,
+        (marks) =>
           same.pipe(
             Effect.andThen(marks.sent),
-            Effect.andThen(evaluate("act", script, options.arg)),
+            Effect.andThen(
+              evaluate("act", script, options.arg).pipe(Effect.mapError(scriptFailure)),
+            ),
             Effect.flatMap((value) =>
               same.pipe(Effect.andThen(decode("act", options.result, value))),
             ),
           ),
-        )
-        .pipe(Effect.provideService(Current, { _tag: "Act", document: options.document }));
+      );
     });
 
   return { read, act };

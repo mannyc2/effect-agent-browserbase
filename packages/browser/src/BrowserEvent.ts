@@ -260,6 +260,13 @@ export class RequestRefused extends Schema.TaggedClass<RequestRefused>()("Reques
   method: Schema.String,
   url: Schema.String,
   reason: Schema.String,
+  /** Safe structured diagnosis; arbitrary policy error details and causes stay private. */
+  failure: Schema.optional(
+    Schema.Struct({
+      reason: Schema.String,
+      timeoutMillis: Schema.optional(Schema.Finite),
+    }),
+  ),
 }) {}
 
 export const BrowserEvent = Schema.Union([

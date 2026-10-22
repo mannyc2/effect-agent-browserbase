@@ -83,7 +83,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
   excludeTestServices: true,
   timeout: Duration.seconds(30),
 })("Plan relative navigation", (it) => {
-  for (const phase of ["ready", "arrival"] as const)
+  for (const phase of ["ready", "arrival", "resolution"] as const)
     it.effect(`does not skip input because an earlier redirect completed during ${phase}`, () =>
       TestCdp.withCdp(
         Effect.gen(function* () {
@@ -112,6 +112,15 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
               phase === "arrival"
                 ? Deferred.succeed(preparing, undefined).pipe(Effect.andThen(page.url))
                 : page.url,
+            find: (query) =>
+              phase === "resolution"
+                ? Deferred.succeed(preparing, undefined).pipe(
+                    Effect.andThen(
+                      Effect.promise(() => TestCdp.nativePage(page).waitForURL(site.destination)),
+                    ),
+                    Effect.andThen(page.find(query)),
+                  )
+                : page.find(query),
           };
 
           const plan = Plan.Plan.new([

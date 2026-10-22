@@ -1,5 +1,5 @@
 // The proposed core's rules, checked over random runs of its transition, as the library's model
-// test checks today's (packages/browser/test/Supervisor.test.ts). Pure: no Effect runtime.
+// test checks today's (packages/browser/test/Supervisor.runtime.test.ts). Pure: no Effect runtime.
 import { assert, it } from "@effect/vitest";
 import { Arbitrary, Schema } from "effect";
 

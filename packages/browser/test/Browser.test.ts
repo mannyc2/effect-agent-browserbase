@@ -169,7 +169,7 @@ describe("a tab opened by input", () => {
     ),
   );
 
-  it.live("bounds pending popup registration and revokes authority on overflow", () =>
+  it.live("registers every opening in a burst without revoking authority", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
         const browser = yield* Chromium.open();
@@ -182,15 +182,37 @@ describe("a tab opened by input", () => {
 
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
         faults.rule({ method: "$open" }, { _tag: "Hold", gate });
-        // Eight active registrations and 32 queued are the complete owned capacity.
+        // Hold native registration so a burst exceeds the previous eight active + 32 queued cap.
         for (let index = 0; index < 41; index++) yield* Effect.promise(() => context.newPage());
-        assert.strictEqual(
-          yield* browser.disconnected.pipe(Effect.timeout("2 seconds")),
-          "connection",
+        assert.isFalse(
+          (yield* browser.recentEvents).some((event) => event._tag === "Disconnected"),
         );
         assert.strictEqual(
           faults.calls.filter((call) => call.method === "$open").length - baseline,
           8,
+        );
+        yield* Deferred.succeed(gate, undefined);
+
+        const opened = yield* browser.events({ after: 0 }).pipe(
+          Stream.filter(({ event }) => event._tag === "PageOpened"),
+          Stream.take(42),
+          Stream.runCollect,
+          Effect.timeout("10 seconds"),
+        );
+
+        assert.strictEqual((yield* browser.pages).length, 42);
+        assert.strictEqual(
+          new Set(opened.map(({ event }) => (event._tag === "PageOpened" ? event.page : ""))).size,
+          42,
+        );
+        assert.strictEqual(
+          faults.calls.filter((call) => call.method === "$open").length - baseline,
+          41,
+        );
+        assert.isFalse(
+          (yield* browser.recentEvents).some(
+            (event) => event._tag === "PageUntracked" || event._tag === "Disconnected",
+          ),
         );
       }).pipe(Effect.scoped),
     ),
@@ -756,47 +778,52 @@ it.live("concurrent firstPage calls open exactly one initial page", () =>
   ),
 );
 
-it.live(
-  "publishes a failed dialog answer and loses the browser instead of reporting acceptance",
-  () =>
-    TestCdp.isolated((faults) =>
-      Effect.gen(function* () {
-        const browser = yield* Chromium.open();
-        const page = yield* browser.newPage();
+it.live("publishes a failed dialog answer and closes only the affected page", () =>
+  TestCdp.isolated((faults) =>
+    Effect.gen(function* () {
+      const browser = yield* Chromium.open();
+      const page = yield* browser.newPage();
 
-        faults.rule(
-          { method: "Page.handleJavaScriptDialog" },
-          { _tag: "Fail", error: new Error("answer lost") },
-          { times: 1 },
-        );
+      faults.rule(
+        { method: "Page.handleJavaScriptDialog" },
+        { _tag: "Fail", error: new Error("answer lost") },
+        { times: 1 },
+      );
 
-        const action = yield* page
-          .act(() => alert("confirm response"), {
-            document: (yield* page.state).document,
-            arg: undefined,
-            result: Schema.Void,
-          })
-          .pipe(Effect.forkChild);
+      const action = yield* page
+        .act(() => alert("confirm response"), {
+          document: (yield* page.state).document,
+          arg: undefined,
+          result: Schema.Void,
+        })
+        .pipe(Effect.forkChild);
 
-        assert.strictEqual(
-          yield* browser.disconnected.pipe(Effect.timeout("1 second")),
-          "connection",
-        );
-        const events = yield* browser.recentEvents;
+      yield* browser.events({ after: 0 }).pipe(
+        Stream.filter(({ event }) => event._tag === "PageClosed" && event.page === page.id),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.timeout("1 second"),
+      );
+      const survivor = yield* browser.newPage(still("survivor"));
 
-        assert.deepStrictEqual(
-          events.flatMap((event) => (event._tag === "DialogShown" ? [event.answer] : [])),
-          ["failed"],
-        );
-        const exit = yield* Fiber.await(action);
+      assert.strictEqual(yield* survivor.title, "survivor");
+      const events = yield* browser.recentEvents;
 
-        assert.isTrue(Exit.isFailure(exit));
-        if (Exit.isFailure(exit)) {
-          const error = Cause.findErrorOption(exit.cause);
+      assert.isFalse(events.some((event) => event._tag === "Disconnected"));
 
-          assert.isTrue(Option.isSome(error));
-          if (Option.isSome(error)) assert.strictEqual(error.value.reason._tag, "Closed");
-        }
-      }),
-    ),
+      assert.deepStrictEqual(
+        events.flatMap((event) => (event._tag === "DialogShown" ? [event.answer] : [])),
+        ["failed"],
+      );
+      const exit = yield* Fiber.await(action);
+
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        const error = Cause.findErrorOption(exit.cause);
+
+        assert.isTrue(Option.isSome(error));
+        if (Option.isSome(error)) assert.strictEqual(error.value.reason._tag, "Closed");
+      }
+    }),
+  ),
 );

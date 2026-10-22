@@ -4,8 +4,8 @@
  */
 import { Deferred, Duration, Effect, Exit, Option, Ref } from "effect";
 
-import { Current as CurrentAction, recorded, type Name } from "../../Action.ts";
-import { BrowserError, PolicyTimeout, Timeout, InvalidRequest } from "../../BrowserError.ts";
+import { recorded, nameOf, type Action as ActionValue } from "../../Action.ts";
+import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
 import { Action, Subject } from "../../BrowserEvent.ts";
 import type * as BrowserClock from "../../Clock.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
@@ -64,10 +64,6 @@ const subjectAttributes = (prefix: string, subject: Subject | undefined) =>
 export interface Call {
   readonly target?: string | undefined;
   readonly text?: string | undefined;
-  /** The text may be a secret: it is recorded only once the action reveals that it is not. */
-  readonly secret?: boolean | undefined;
-  /** False for navigation, which sends no input. */
-  readonly input?: boolean | undefined;
 }
 
 const timedOut = (operation: string, timeout: Duration.Duration) =>
@@ -180,17 +176,16 @@ export const make = (page: PageContext, sender: Dispatch) => {
   // Record the whole operation, but never hold the page's turn or spend its action timeout while
   // a policy is waiting. Validation binds approval to the document and targets it saw.
   const perform = <A>(
-    name: Name,
+    value: ActionValue,
     info: Call,
     timeout: Duration.Duration,
-    prepare: Effect.Effect<PolicyPlan, BrowserError>,
+    prepare: (action: ActionValue) => Effect.Effect<PolicyPlan, BrowserError>,
     body: (marks: InputMarks, approval: Approval | undefined) => Effect.Effect<A, BrowserError>,
-  ): Effect.Effect<A, BrowserError> =>
-    Effect.gen(function* () {
-      const value = yield* CurrentAction;
+  ): Effect.Effect<A, BrowserError> => {
+    const name = nameOf(value);
+    const sendsInput = value._tag !== "Goto" && value._tag !== "Back" && value._tag !== "Reload";
 
-      if (value === undefined)
-        return yield* failWith(name, new InvalidRequest({ detail: "an action value is required" }));
+    return Effect.gen(function* () {
       const style = validated(yield* Current);
       const failFast = yield* FailFast;
 
@@ -209,7 +204,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
       const touch = Effect.sync(noteInput);
 
       // A failure before the action checks its field, a denial included, records no text.
-      let revealed = info.secret !== true;
+      let revealed = value._tag !== "Type";
       // The time the style has planned to show the input, which the deadline leaves out.
       let presented = 0;
       const ticket = admission(page, admitted, name);
@@ -237,7 +232,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
       const admit = input.idle.pipe(
         Effect.tap(() =>
           Effect.sync(() => {
-            estimate = (info.input ?? true) ? mapping.latest() : undefined;
+            estimate = sendsInput ? mapping.latest() : undefined;
           }),
         ),
       );
@@ -259,7 +254,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
               name,
               run,
               action(run),
-              info.input === false ? Effect.succeed(false) : Ref.get(sent),
+              sendsInput ? Ref.get(sent) : Effect.succeed(false),
             ),
           ),
         );
@@ -312,7 +307,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
               const plan = yield* lane
-                .read(name)(deadline(name, settings.actionTimeout, now, () => 0)(prepare))
+                .read(name)(deadline(name, settings.actionTimeout, now, () => 0)(prepare(value)))
                 .pipe(span("Page.prepare", {}, "Debug"));
 
               // A hold lasts as long as this span; a judge's model call is its child.
@@ -393,6 +388,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
         }),
       ).pipe(Effect.ensuring(ticket.end));
     }).pipe(span(`Page.${name}`, info.target === undefined ? {} : { target: info.target }), owned);
+  };
 
   return Object.assign(perform, {
     idle: Effect.suspend(() => Effect.forEach(admitted, Deferred.await, { discard: true })),

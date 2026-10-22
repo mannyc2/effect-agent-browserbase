@@ -1,6 +1,6 @@
 /** The simulator earns only the reading, action and lifecycle contracts exercised here. */
 import { assert, it } from "@effect/vitest";
-import { Clock, Effect, Fiber, Stream, Schema } from "effect";
+import { Arbitrary, Cause, Clock, Effect, Exit, Fiber, Option, Stream, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 import { BrowserError, Timeout } from "../src/BrowserError.ts";
@@ -257,5 +257,145 @@ it.effect("streams only owned frames and folds explicitly seeded change historie
     assert.isFalse(capture.isCurrent(frame));
     assert.isUndefined(capture.current);
     assert.strictEqual((yield* Effect.flip(test.page.frame())).reason._tag, "NotFound");
+  }),
+);
+
+// 1d6d7c7: refused input consumed the next scripted dispatch outcome.
+it.effect.prop(
+  "refusal histories preserve the next scripted dispatch failure",
+  {
+    refusals: Arbitrary.array(
+      Arbitrary.schema(Schema.Literals(["disabled", "stale", "readonly"])),
+      {
+        minLength: 1,
+        maxLength: 8,
+      },
+    ),
+  },
+  ({ refusals }) =>
+    Effect.gen(function* () {
+      const test = yield* TestPage.make({
+        elements: [button, { ...button, key: "locked", state: { disabled: true } }],
+      });
+
+      const [ready, locked] = yield* test.page.find();
+
+      const scripted = new BrowserError({
+        operation: "click",
+        reason: new Timeout({ millis: 10 }),
+        dispatched: true,
+      });
+
+      yield* test.failNext(scripted);
+      for (const refusal of refusals) {
+        const error = yield* Effect.flip(
+          refusal === "stale"
+            ? test.page.click("e9999")
+            : refusal === "disabled"
+              ? test.page.click(locked!.ref)
+              : test.page.type("value", { into: ready!.ref }),
+        );
+
+        assert.isFalse(error.dispatched);
+      }
+      assert.strictEqual(yield* Effect.flip(test.page.click(ready!.ref)), scripted);
+    }),
+);
+
+it.effect("a stale refusal leaves the next scripted hold on dispatched input", () =>
+  Effect.gen(function* () {
+    const test = yield* TestPage.make({ elements: [button] });
+    const ref = (yield* test.page.find())[0]!.ref;
+    const hold = yield* test.holdNext();
+
+    yield* Effect.flip(test.page.click("e9999"));
+    const action = yield* test.page.click(ref).pipe(Effect.forkScoped);
+
+    yield* TestClock.adjust("1 milli");
+    assert.isUndefined(action.pollUnsafe(), "the next dispatched action must still be held");
+    yield* hold.entered;
+    yield* hold.release;
+    yield* Fiber.join(action);
+  }),
+);
+
+// Seeded capture must expose the same typed closure as the native capture boundary.
+for (const cause of ["page", "session"] as const)
+  it.effect(`seeded capture reports ${cause} closure to active and buffered readers`, () =>
+    Effect.gen(function* () {
+      const test = yield* TestBrowser.make([{}]);
+      const page = yield* test.browser.firstPage;
+      const active = yield* page.capture();
+      const buffered = yield* page.capture();
+      const canceled = yield* active.stream.pipe(Stream.runDrain, Effect.forkScoped);
+
+      yield* Fiber.interrupt(canceled);
+      assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(canceled)));
+      const reader = yield* active.stream.pipe(Stream.runDrain, Effect.forkScoped);
+
+      yield* Effect.yieldNow;
+      if (cause === "page") yield* page.close;
+      else yield* test.disconnect(cause);
+      const late = yield* buffered.stream.pipe(Stream.runDrain, Effect.forkScoped);
+
+      yield* TestClock.adjust("1 milli");
+      for (const fiber of [reader, late]) {
+        const exit = fiber.pollUnsafe();
+
+        assert.isDefined(exit, "closure must wake a capture without waiting for another frame");
+
+        const failure =
+          exit !== undefined && Exit.isFailure(exit)
+            ? Cause.findErrorOption(exit.cause)
+            : Option.none<BrowserError>();
+
+        assert.isTrue(Option.isSome(failure), "closure is a typed error, not interruption");
+        if (Option.isSome(failure)) {
+          assert.strictEqual(failure.value.reason._tag, "Closed");
+          if (failure.value.reason._tag === "Closed")
+            assert.strictEqual(failure.value.reason.cause, cause);
+        }
+      }
+    }),
+  );
+
+it.effect(
+  "refused seeded input records failure evidence without recording dispatched actions",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestPage.make({ elements: [button] });
+      const ref = (yield* test.page.find())[0]!.ref;
+
+      yield* Effect.flip(test.page.click("e9999"));
+      yield* test.failNext(
+        new BrowserError({
+          operation: "click",
+          reason: new Timeout({ millis: 10 }),
+          dispatched: false,
+        }),
+      );
+      yield* Effect.flip(test.page.click(ref));
+      assert.deepStrictEqual(yield* test.actions, []);
+
+      const events = (yield* test.page.recentEvents).flatMap((event) =>
+        event._tag === "Action" ? [[event.ok, event.dispatched]] : [],
+      );
+
+      assert.deepStrictEqual(events, [
+        [false, false],
+        [false, false],
+      ]);
+    }),
+);
+
+it.effect("bringing a seeded page to front refuses a disconnected browser", () =>
+  Effect.gen(function* () {
+    const test = yield* TestBrowser.make([{}]);
+    const page = yield* test.browser.firstPage;
+
+    yield* test.disconnect("session");
+    const error = yield* Effect.flip(page.bringToFront);
+
+    assert.strictEqual(error.reason._tag, "Closed");
   }),
 );

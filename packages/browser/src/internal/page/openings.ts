@@ -9,9 +9,10 @@ import {
   Failed,
   type Reason,
 } from "../../BrowserError.ts";
+import type * as Page from "../../Page.ts";
 
 /** How the browser's registration of each tab it was told of ended, once it has. */
-export type Registrations = WeakMap<PlaywrightPage, Deferred.Deferred<void, BrowserError>>;
+export type Registrations = WeakMap<PlaywrightPage, Deferred.Deferred<Page.Page, BrowserError>>;
 
 export interface Mark {
   windows: number;
@@ -43,7 +44,7 @@ export const make = Effect.fnUntraced(function* (
     active.registrations.push(
       registered === undefined
         ? failed(new Failed({ detail: "the popup has no registration" }))
-        : Deferred.await(registered),
+        : Deferred.await(registered).pipe(Effect.asVoid),
     );
     Deferred.doneUnsafe(active.changed, Exit.void);
     active.changed = Deferred.makeUnsafe<void>();

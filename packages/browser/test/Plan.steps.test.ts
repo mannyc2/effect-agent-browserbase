@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Arbitrary, Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
+import { Arbitrary, Clock, Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 import { nameOf } from "../src/Action.ts";
@@ -943,3 +943,23 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
     ),
   );
 });
+
+// 1d6d7c7: public locate inherited a caller clock instead of the page's retry clock.
+it.effect("locate retries on the page clock even when its caller clock is suspended", () =>
+  Effect.gen(function* () {
+    const test = yield* TestPage.make();
+    const clock = yield* Clock.Clock;
+
+    const locating = yield* Plan.locate(test.page, subject).pipe(
+      Effect.provideService(Clock.Clock, { ...clock, sleep: () => Effect.never }),
+      Effect.flip,
+      Effect.forkChild,
+    );
+
+    yield* TestClock.adjust("3 seconds");
+    const done = locating.pollUnsafe();
+
+    assert.isDefined(done, "a suspended caller clock must not stall page-owned retries");
+    assert.strictEqual((yield* Fiber.join(locating))._tag, "Missing");
+  }),
+);

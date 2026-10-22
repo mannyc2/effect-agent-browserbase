@@ -4,6 +4,7 @@ import { Deferred, Effect, Fiber, Schema } from "effect";
 
 import { consequence, PolicyDenied } from "../src/BrowserError.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("main-world scripts bind an act to the read document and invalidate earlier reads", () =>
   Effect.gen(function* () {
@@ -132,4 +133,67 @@ it.live("a cancelled act retains its native reply before the next writer enters"
     yield* page.goto("data:text/html,<title>after</title>");
     assert.strictEqual(yield* page.title, "after");
   }).pipe(Effect.scoped),
+);
+
+// 1d6d7c7: replacing a document during an asynchronous read was misreported as script Threw.
+it.live("read retries its script after the site replaces the execution context", () =>
+  Effect.gen(function* () {
+    const browser = yield* Chromium.open();
+    const page = yield* browser.newPage("data:text/html,<title>before</title>");
+    const native = yield* TestCdp.nativeOf(page);
+    const entered = Promise.withResolvers<void>();
+
+    yield* Effect.promise(() => native.exposeFunction("__readEntered", () => entered.resolve()));
+
+    const reading = yield* page
+      .read(
+        () => {
+          if (document.title !== "before") return Promise.resolve(document.title);
+          void Reflect.get(window, "__readEntered")();
+
+          return new Promise<string>(() => {});
+        },
+        { arg: undefined, result: Schema.String },
+      )
+      .pipe(Effect.forkScoped);
+
+    yield* Effect.promise(() => entered.promise);
+    yield* Effect.promise(() => native.goto("data:text/html,<title>after</title>"));
+    const read = yield* Fiber.join(reading);
+
+    assert.strictEqual(read.value, "after");
+    assert.strictEqual(read.document, (yield* page.state).document);
+  }).pipe(TestCdp.withCdp),
+);
+
+it.live("act reports a replaced context as uncertain input, not a script throw", () =>
+  Effect.gen(function* () {
+    const browser = yield* Chromium.open();
+    const page = yield* browser.newPage("data:text/html,<title>before</title>");
+    const native = yield* TestCdp.nativeOf(page);
+    const entered = Promise.withResolvers<void>();
+
+    yield* Effect.promise(() => native.exposeFunction("__actEntered", () => entered.resolve()));
+
+    const acting = yield* page
+      .act(
+        () => {
+          void Reflect.get(window, "__actEntered")();
+
+          return new Promise<string>(() => {});
+        },
+        { arg: undefined, result: Schema.String, document: (yield* page.state).document },
+      )
+      .pipe(Effect.flip, Effect.forkScoped);
+
+    yield* Effect.promise(() => entered.promise);
+    yield* Effect.promise(() =>
+      native.goto("data:text/html,<title>after</title>", { waitUntil: "commit" }),
+    );
+    const failure = yield* Fiber.join(acting);
+
+    assert.strictEqual(failure.reason._tag, "NotActionable");
+    assert.isTrue(failure.dispatched);
+    assert.strictEqual(consequence(failure).repeat, "check");
+  }).pipe(TestCdp.withCdp),
 );

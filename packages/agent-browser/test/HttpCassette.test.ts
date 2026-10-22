@@ -106,3 +106,41 @@ it.effect("requires exact opt-in and reserves the full cap before dispatch", () 
     ),
   ),
 );
+
+// 1d6d7c7: reconstructing Fetch null-body responses with an empty string caused a defect.
+it.effect("records and replays responses whose status forbids a body", () =>
+  Effect.gen(function* () {
+    const written: Array<HttpCassette.Exchange> = [];
+    let status = 204;
+
+    const recording = yield* HttpCassette.make({
+      mode: "record",
+      http: HttpClient.make((request) =>
+        Effect.sync(() => HttpClientResponse.fromWeb(request, new Response(null, { status }))),
+      ),
+      cap: 3,
+      reserve: () => Effect.succeed(1),
+      append: (exchange) => Effect.sync(() => void written.push(exchange)),
+    });
+
+    for (status of [204, 205, 304]) {
+      const response = yield* recording.http.get("https://model.test");
+
+      assert.strictEqual(response.status, status);
+      assert.strictEqual(yield* response.text, "");
+    }
+    const replay = yield* HttpCassette.make({ mode: "replay", exchanges: written });
+
+    for (const expected of [204, 205, 304]) {
+      const response = yield* replay.http.get("https://model.test");
+
+      assert.strictEqual(response.status, expected);
+      assert.strictEqual(yield* response.text, "");
+    }
+    yield* replay.assertExhausted;
+  }).pipe(
+    Effect.provide(
+      ConfigProvider.layer(ConfigProvider.fromUnknown({ EFFECT_BROWSER_BENCH_LIVE: "1" })),
+    ),
+  ),
+);

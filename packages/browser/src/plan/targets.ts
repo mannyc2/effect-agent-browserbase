@@ -1,5 +1,5 @@
 /** Find a recorded subject and verify where its point still lands before replay input. */
-import { Duration, Effect, Schedule } from "effect";
+import { Clock, Duration, Effect, Schedule } from "effect";
 
 import { InvalidRequest, undispatched } from "../BrowserError.ts";
 import { type Box, type Subject } from "../BrowserEvent.ts";
@@ -26,6 +26,7 @@ export const locate = (page: Page, subject: Subject) =>
         times: 8,
         while: (error) => error._tag !== "BrowserError",
       }),
+      Effect.provideService(Clock.Clock, page.clock),
       Effect.withSpan("Plan.locate", { attributes: { role: subject.role ?? "" } }),
     );
 

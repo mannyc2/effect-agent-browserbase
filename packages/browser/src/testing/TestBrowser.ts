@@ -58,6 +58,7 @@ export const make = Effect.fnUntraced(function* (
       gate,
       timeline,
       closedBy: () => closedBy,
+      disconnected: Deferred.await(lost),
     }).pipe(Effect.provideService(Scope.Scope, scope));
 
     tracked.push(test);

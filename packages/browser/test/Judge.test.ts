@@ -142,6 +142,40 @@ it.effect("denies a risk the task does not ask for, and says why", () =>
   }),
 );
 
+it.effect("rejects invalid thresholds before judging consequential input", () =>
+  Effect.gen(function* () {
+    let judged = 0;
+
+    const judge: Policy.Judge = () =>
+      Effect.sync(() => {
+        judged += 1;
+
+        return reading({}, 0);
+      });
+
+    const input = request({ facts: ["secret"] });
+
+    for (const threshold of [Number.NaN, Infinity, -Infinity, -0.5, 0, 1.1, 50])
+      assert.strictEqual(
+        yield* decide(Policy.make({ threshold, judge }), input, "Look up the weather"),
+        "policy threshold must be finite, greater than 0, and at most 1",
+      );
+    assert.strictEqual(judged, 0);
+    assert.strictEqual(
+      yield* decide(Policy.make({ threshold: 1, judge: judging(reading({}, 0)) }), input),
+      "secret (1.00) needs a task that asks for it",
+    );
+    assert.strictEqual(
+      yield* decide(
+        Policy.make({ threshold: 1, judge: judging(reading({}, 1)) }),
+        input,
+        "Enter the requested password",
+      ),
+      "allowed",
+    );
+  }),
+);
+
 it.effect("never lets a judgement lower what structure establishes", () =>
   Effect.gen(function* () {
     const fooled = Policy.make({

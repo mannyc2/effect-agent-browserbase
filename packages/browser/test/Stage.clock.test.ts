@@ -1,7 +1,9 @@
 // A stage has one timestamp domain, even when a caller supplies another page owner.
 import { assert, it } from "@effect/vitest";
-import { Clock, Effect, Exit, Option } from "effect";
+import { Clock, Effect, Exit, Fiber, Option } from "effect";
+import { TestClock } from "effect/testing";
 
+import { BrowserPaint, Frame } from "../src/Frame.ts";
 import * as Stage from "../src/presentation/Stage.ts";
 import * as TestPage from "../src/testing/TestPage.ts";
 
@@ -38,5 +40,46 @@ it.effect("refuses unrelated owning clocks before starting capture or waiting fo
         }
       }
     }
+  }),
+);
+
+it.effect("same-page frame waits use the page clock even under a suspended caller clock", () =>
+  Effect.gen(function* () {
+    const page = yield* TestPage.make(
+      {
+        frames: [
+          new Frame({
+            page: "same",
+            document: 0,
+            session: "test-browser",
+            connection: "test-connection",
+            url: "about:blank",
+            data: new Uint8Array([1]),
+            width: 10,
+            height: 10,
+            receivedAt: 0,
+            timing: new BrowserPaint({ timestamp: 0, hostTime: 0, uncertaintyMillis: 0 }),
+          }),
+        ],
+      },
+      { id: "same" },
+    );
+
+    const stage = yield* Stage.make({ firstFrame: "1 second" });
+
+    yield* stage.present(page.page);
+    yield* page.document({});
+    const owner = yield* Clock.Clock;
+    const caller: Clock.Clock = { ...owner, sleep: () => Effect.never };
+
+    const waiting = yield* stage
+      .present(page.page)
+      .pipe(Effect.provideService(Clock.Clock, caller), Effect.exit, Effect.forkScoped);
+
+    yield* TestClock.adjust("2 seconds");
+    assert.isDefined(waiting.pollUnsafe(), "the owning clock must expire the first-frame wait");
+    const result = yield* Fiber.join(waiting);
+
+    assert.strictEqual(Option.getOrThrow(Exit.findErrorOption(result)).reason._tag, "Timeout");
   }),
 );

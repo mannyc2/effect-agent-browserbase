@@ -8,9 +8,13 @@ No hosted sessions, paid model calls, tags, publishing, deployment or merging we
 
 Requirements come from the combined 21 October report, sections 6 and 9. Source inspection and
 old probes are historical evidence. Current test and mutation evidence is recorded separately.
-Results use **fixed**, **already-fixed**, **rejected-with-evidence**, or **pending-decision**.
+Results use **fixed**, **already-fixed**, **rejected-with-evidence**, **superseded**, or **pending-decision**.
 A fixed row records implemented behavior with focused proof; it does not imply the final
-repository gate passed. Outstanding integration gates are listed at the end.
+repository gate passed. The initial result tables and measurements record the implementation
+through `1d6d7c7`, except entries explicitly marked superseded. Claude follow-through validation
+passes; its current acceptance status and the retained historical checks are listed below.
+The [Claude follow-through ledger](CLAUDE-FOLLOWTHROUGH.md) records the new defects, stronger
+primitives, rejected suggestions and regression evidence.
 
 ## Correctness ledger
 
@@ -42,7 +46,7 @@ execution evidence, not shipped fixtures or source-runtime proof by themselves.
 
 | Work | Result | Implementation and proof |
 | --- | --- | --- |
-| Stage 1 Vocabulary/errors | fixed | Public BrowserError constructors/translation, Window/cursor, Geometry, Clock and Style. Reply ownership belongs to page; lane receives effects rather than a gate implementation. |
+| Stage 1 Vocabulary/errors | fixed | Public BrowserError constructors/translation, Window, Geometry, Clock and Style. The unused cursor contract is superseded below. Reply ownership belongs to page; lane receives effects rather than a gate implementation. |
 | Stage 2 Folders/boundaries | fixed | Root exports kernel only. Feature/provider folders use public contracts. Runtime and package-test imports plus physical feature deletion/typecheck run in `ready`; planted forbidden root and sibling-private test imports are rejected. |
 | Stage 3 Public kernel parity | fixed | Public clock/capture/afterInput/until/style/matching. Deleted internalsOf, Built, viewOf, Internals, waitFor and aim. |
 | Stage 4 Minor correctness | fixed | Inventory below. Current source-derived script version and real browser regressions replace source-only probes. |
@@ -93,9 +97,9 @@ retained for deleted raw access or internal feature back doors.
 | Finding | Result | Evidence or rationale |
 | --- | --- | --- |
 | firstPage check/open race | fixed | Twelve concurrent calls open one tab; removing the lock fails. |
-| Global registration lock | fixed | Per-native-page locks plus eight registration workers; held native session creation no longer stalls other tabs. Queue capacity is 32; overflow revokes authority. Both serial-worker and unbounded-queue mutants fail. |
+| Global registration lock | superseded | The original per-page locks and bounded overflow queue were replaced during Claude follow-through by one Deferred registration cell per native page, browser-owned fibers and eight permits. Forty-one held tabs drain without loss; canceled callers do not cancel shared registration. |
 | Same Chromium version gives same id | fixed | Two real launches have distinct identities; substituting the same version string fails the regression. |
-| Dialog success published before answer; failed answer dropped | fixed | Scoped bounded response worker publishes actual answer. Native failed response yields `failed`, loses authority and makes the action fail Closed. False-answer mutant fails. |
+| Dialog success published before answer; failed answer dropped | superseded | Actual answers remain published. A failed answer now closes only its page and fails its pending action Closed; a sibling page and connection remain usable. Native regression and restored browser-loss mutant prove the narrower consequence. |
 | Event history array copy per event | fixed | Fixed capacity circular storage, ordered replay/recent projection and expired-cursor failure; 100 seeded repeated-wrap histories and original laws. Head-advance mutant fails. |
 | Concurrent first clock probes | fixed | Shared measurement lock rechecks the current estimate; two simultaneous first callers cause one probe. Mutant fails. |
 | Workers Buffer assumption | rejected-with-evidence | Portable encoding replaces Buffer in neutral code. Actual local Worker/CDP succeeds both with and without nodejs_compat. Consumer dependencies retain their own runtime requirements. |
@@ -130,19 +134,19 @@ Additional implementation-time findings have independent regressions:
 | --- | --- | --- |
 | Explicit secret text reaches policy before an unmarked field is refused | fixed | Action.recorded honors Type.secret regardless of structural disclosure; policy text derives that same safe Action. Native guard/events/field regression passes; omitted-flag mutant fails. |
 | Foreign-page frame with matching counters is accepted | fixed | Currency includes page and session, as well as connection/document/generation/sequence. Foreign-page mutant fails; copied evidence keeps its lineage. |
-| Browser-global request policy intercepts sibling contexts | fixed | Context ownership is proved before policy invocation, fulfillment, refusal or overflow handling. Native tests cover both simultaneous-controller orders, delayed owners, foreign contexts, first popup requests, nested frames, service workers and redirect hops. Bypassing ownership fails both order regressions. |
-| Policy failures become successful refusals | fixed | Explicit Refused remains a decision; typed failure, defect and timeout retain a failed worker and revoke authority after refusing the request. All three old failure-fold mutants fail. |
-| Retiring a borrowed connection releases pending requests | fixed | Native page and service-worker regressions hold decisions or ownership queries while closing the tracking scope. Successful cleanup settles tracked requests before detaching; uncertain ownership closes only owned targets. A sibling context and the external browser survive. Failed cleanup remains observable, but detachment can release unresolved traffic; connection loss removes enforcement. Omitting retirement makes all four requests reach HTTP. |
-| Existing workers bypass newly installed request controls | fixed | Installation rejects preexisting dedicated/shared/service workers with typed InvalidRequest after enabling interception. Native tests include a worker created during held installation; omitted and early checks fail. No worker is silently restarted. |
-| Missing or partial upload evidence is presented as a complete body | fixed | Policy receives only complete lossless UTF-8 evidence. Five malformed/incomplete variants fail before policy; native text and multipart remain supported. The old null/text projection fails all five regressions. |
-| Logical connection loss still permits browser operations | fixed | Browser native operations check and race the shared loss signal. Typed policy failure, defect and timeout now prevent cookie queries and new-page allocation; the old native wrapper fails all three assertions. |
+| Browser-global request policy intercepts sibling contexts | superseded | **Historical record at `1d6d7c7`:** Context ownership is proved before policy invocation, fulfillment, refusal or overflow handling. Native tests cover both simultaneous-controller orders, delayed owners, foreign contexts, first popup requests, nested frames, service workers and redirect hops. Bypassing ownership fails both order regressions. **Current:** Ownership remains required; the overflow machinery was removed and stable context proofs are cached. See [Claude follow-through R1, R5–R7](CLAUDE-FOLLOWTHROUGH.md#accepted-changes). |
+| Policy failures become successful refusals | superseded | **Historical record at `1d6d7c7`:** Explicit Refused remains a decision; typed failure, defect and timeout retain a failed worker and revoke authority after refusing the request. All three old failure-fold mutants fail. **Current:** Policy failure revokes shared authority and preserves a structured, private failure diagnostic; worker termination is no longer the ownership mechanism. See [Claude follow-through R5, R23](CLAUDE-FOLLOWTHROUGH.md#accepted-changes). |
+| Retiring a borrowed connection releases pending requests | superseded | **Historical record at `1d6d7c7`:** Native page and service-worker regressions hold decisions or ownership queries while closing the tracking scope. Successful cleanup settles tracked requests before detaching; uncertain ownership closes only owned targets. A sibling context and the external browser survive. Failed cleanup remains observable, but detachment can release unresolved traffic; connection loss removes enforcement. Omitting retirement makes all four requests reach HTTP. **Current:** The empty-pattern Fetch cut and held-request drain replace uncertain-target closure, preserving borrowed pages. See [Claude follow-through R2, R9](CLAUDE-FOLLOWTHROUGH.md#accepted-changes). |
+| Existing workers bypass newly installed request controls | superseded | **Historical record at `1d6d7c7`:** Installation rejects preexisting dedicated/shared/service workers with typed InvalidRequest after enabling interception. Native tests include a worker created during held installation; omitted and early checks fail. No worker is silently restarted. **Current:** Existing dedicated/service workers are refreshed under interception; only preexisting shared workers remain unsupported. See [Claude follow-through R1](CLAUDE-FOLLOWTHROUGH.md#accepted-changes). |
+| Missing or partial upload evidence is presented as a complete body | superseded | **Historical record at `1d6d7c7`:** Policy receives only complete lossless UTF-8 evidence. Five malformed/incomplete variants fail before policy; native text and multipart remain supported. The old null/text projection fails all five regressions. **Current:** Incomplete or binary evidence refuses that request without revoking the whole connection. See [Claude follow-through R8](CLAUDE-FOLLOWTHROUGH.md#accepted-changes). |
+| Logical connection loss still permits browser operations | superseded | **Historical record at `1d6d7c7`:** Browser native operations check and race the shared loss signal. Typed policy failure, defect and timeout now prevent cookie queries and new-page allocation; the old native wrapper fails all three assertions. **Current:** Shared authority and typed failure/timeout diagnostics now cover the request lifecycle as well as browser calls. See [Claude follow-through R5, R23, R34](CLAUDE-FOLLOWTHROUGH.md#accepted-changes). |
 | Workers root omits a portable public contract | fixed | Both root export conditions resolve the same portable module. Explicit kernel export-key and entry-map assertions pass; a mismatched Workers export target fails. No facade or duplicated export list remains. |
 | Type-only imports and the Workers facade bypass dependency enforcement | fixed | Twenty-seven adversarial fixtures include TSImportType, Workers feature reexports and sibling-private test imports. Feature deletion now typechecks both portable roots. Package tests share one repository-only CDP proxy; its own imports and normalized shared-helper paths are checked. Omitted checker branches and a naive shared-path prefix fail their fixtures. |
 | Seeded firstPage hides the native allocation race | fixed | Shared native/CDP/seeded contract forces cooperative scheduling across twelve callers. The simulator uses the same first-page lock; omitting it creates twelve pages and fails the contract. |
 | Recorder expiry crosses navigation | fixed | A bounded page read turn precedes the recorder lock, preserving the existing lane-to-recorder lock order. Held native removal blocks navigation; cancellation and page closure release correctly. Omitting the turn fails both ordering assertions. The earlier rare Chromium Script-not-found failure was not reproduced independently, so this does not claim its cause was established. |
 | A random over-budget typing plan strands a concurrency test | fixed | Seventy-eight of 256 default 58-key plans exceeded the duration cap. A fixed public 9.42-second schedule retains the cross-page concurrency assertions; the first-key rendezvous also observes child failure. The original full-run sample did not capture the child failure. |
-| Local relay Chromium starts incidental extension workers | fixed | The local launcher disables extensions, matching the ordinary Playwright fixture. Native worker discovery confirms their absence; removing those flags reproduces typed request-capability refusal. No request-control bypass was added. |
-| Remote iframe ownership is lost despite a known context | fixed | Out-of-process iframe targets use their proved browserContextId even when the parent frame tree omits them. Native site-isolated denial retains authority and emits no invented parent page; restoring the iframe exclusion fails. Final packed consumer and Workers checks exercise the same path. |
+| Local relay Chromium starts incidental extension workers | superseded | **Historical record at `1d6d7c7`:** The local launcher disables extensions, matching the ordinary Playwright fixture. Native worker discovery confirms their absence; removing those flags reproduces typed request-capability refusal. No request-control bypass was added. **Current:** This remains historical launcher evidence; dedicated/service-worker presence is no longer itself a request-capability refusal. See [Claude follow-through R1](CLAUDE-FOLLOWTHROUGH.md#accepted-changes). |
+| Remote iframe ownership is lost despite a known context | superseded | **Historical record at `1d6d7c7`:** Out-of-process iframe targets use their proved browserContextId even when the parent frame tree omits them. Native site-isolated denial retains authority and emits no invented parent page; restoring the iframe exclusion fails. Final packed consumer and Workers checks exercise the same path. **Current:** Owned page/iframe refresh and cached frame-tree proof now also cover existing and nested OOPIF documents. See [Claude follow-through R1, R7](CLAUDE-FOLLOWTHROUGH.md#accepted-changes). |
 | Mapped protocol input time can follow its synchronous mutation | fixed | The recorder stamps trusted inputs when observed, on the same clock as mutations. A native asymmetric calibration-delay regression preserves menu/dialog causes; restoring event.timeStamp loses the cause and fails. |
 | Relay handover hides a failed acquisition behind an entry signal | fixed | The rendezvous races entry against the child result, preserving the typed provider failure immediately. Restoring the unobserved wait fails the focused refusal regression. |
 | Context.route skips a redirect destination | rejected-with-evidence | Free native redirect probe proved this replacement unsafe. Per-hop Fetch with context ownership remains required. |
@@ -172,7 +176,7 @@ They were not converted into approval prompts.
 | 16 | fixed | Acquire presenter hand after policy approval, bounded with failFast. No speculative approval/display hook. |
 | 17 | fixed | Ten-second planned typing/wheel cap; malformed custom schedules fail before dispatch. |
 | 18 | fixed | Two-minute host idle lifetime across documents with registration removal. |
-| 19 | fixed | Small Window.cursor continuation avoids retaining pictures/events. |
+| 19 | superseded | The unused Window.Cursor/Window.cursor contract was removed during Claude follow-through. Existing changes/moment continuation retains its own evidence; no caller required a separate window cursor. |
 | 20 | fixed | Ship supervisor core alone; no unused keep/grace/meter/admission/rotation extensions. |
 | 21 | fixed | Policy judges remain optional policy feature, using public kernel contracts. |
 | 22 | fixed | Fail closed even without structural facts; no unsafe bypass retained. |
@@ -189,19 +193,39 @@ They were not converted into approval prompts.
 | 33 | fixed | Browser owns narrow request interception with bounded decisions and redacted refusal events. |
 | 34 | fixed | Retirement awaits every started acquisition and release; abandoned waiter does not abandon ownership. |
 
-## Acceptance and remaining gates
+## Claude follow-through acceptance
+
+The follow-through passes `bun run ready`: 956 workspace tests, formatting, lint, boundaries,
+typechecks and build. Local latency is 14/14; the exact packed archives pass all 40 entrypoints
+in npm and Bun, 941 isolated-consumer tests, 55 scripted browser cases, and both local Workers
+modes. See [the final evidence table](CLAUDE-FOLLOWTHROUGH.md#acceptance) for fingerprints,
+receipts, fixture corrections and the upstream declaration-filtering limit. Hosted behavior is
+not qualified.
+
+The original aggregate source-size failure below is historical. As authorized, `tools/check-size.sh`,
+the `size` script and its `ready` step are removed. The 600-line module limit, function limits and
+downward-only lint exceptions remain; no exception was raised. The review found useful
+simplifications, but no safe deletion of the remaining 2,024 lines while retaining required behavior.
+
+The initial Action.Current approach is **superseded**: canonical Action data now travels explicitly
+through input and policy, and the unused context service is removed. Decision 19's unused Window
+cursor is removed. The current fingerprint is
+`de5e1a5fe464dfc9c5b0f1d04c71adb24481cd3af680499d5997cf7f626c562a`;
+the following old fingerprints and checks do not validate these new changes.
+
+## Historical acceptance at `1d6d7c7`
 
 Pinned runtimes are Node 24.14.1 and Bun 1.4.2. Installation used
 `bun install --frozen-lockfile --ignore-scripts` and `bun run patch:tsgo`.
 Origin/main was reobserved at the original `473222529715f67709493def4c30d2419e1f4742`.
 The dirty primary checkout and detached survey probes remain unchanged.
 
-The final production source fingerprint is
+The original implementation production source fingerprint was
 `29e01f309f38dee998fe206f73fea45dce148c8b83fc25248aa5ff51593df126`.
 The manifest hashes each package source/manifest and all four archives. The browser archive is
 `c2f3940234c17c74f6b0163e8acd43019394258df11ee551c2da276e4287b8ea`.
-Rechecking those hashes found no changed production source. Test-only follow-ups do not alter
-those archives. Detailed local commands, exit codes and timing live under `.work/evidence/`.
+Rechecking those hashes at that revision found no changed production source. Its test-only
+follow-ups did not alter those archives. Detailed local commands, exit codes and timing live under `.work/evidence/`.
 
 | Check | Result |
 | --- | --- |
@@ -221,8 +245,8 @@ exposed the remote-iframe ownership defect; it is not dismissed as an environmen
 No hosted-browser or paid-model verification is claimed.
 
 Before changes the same Oxlint rule measured exactly **12,000 browser code lines**. It excludes
-blank/comment-only lines and includes declarations and published testing services. Current
-measurements cover all four packages without path exclusions:
+blank/comment-only lines and includes declarations and published testing services. These
+historical measurements cover all four packages without path exclusions:
 
 | Package | Source before → after | Tests before → after |
 | --- | --- | --- |
@@ -235,11 +259,11 @@ The final pinned `bun run ready` exited **1** in **4.812 seconds**: formatting a
 then the unchanged source gate failed. Its later steps were each run independently as recorded
 above; this is not a green aggregate gate.
 
-**Pending-decision — not acceptance-complete:** the unchanged source gate is exceeded by
+**Historical acceptance failure:** at `1d6d7c7`, the unchanged source gate was exceeded by
 **2,024 code lines**. The inspected consolidations in [the size assessment](audit-size-assessment.md)
-do not demonstrate recovery of that gap while retaining all required capabilities. No measured
-size reduction or green `bun run ready` is claimed. The work remains a draft; the current
-implementation is reviewable but cannot pass the repository's required gate.
+did not demonstrate recovery of that gap while retaining all required capabilities. That revision
+did not pass `bun run ready`. The user-authorized follow-through removes the aggregate gate;
+its remaining checks are pending and no green follow-through acceptance is claimed here.
 
 Test-only follow-ups passed 162 affected native tests, six frame/input cases and all fourteen
 serial opt-in latency cases (33.73 seconds). The reviewed timing inventory and retained limits
