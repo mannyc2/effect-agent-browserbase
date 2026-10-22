@@ -26,7 +26,14 @@ import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
 import * as Arms from "./Arms.ts";
-import { efforts, type ModelRunner, modelRunner, optedIn, refuse } from "./Budget.ts";
+import {
+  efforts,
+  type ModelCall,
+  type ModelRunner,
+  modelRunner,
+  optedIn,
+  refuse,
+} from "./Budget.ts";
 import { errorText, hostedSessionSeconds } from "./run.ts";
 import { frameHistory } from "./Tasks.ts";
 import * as TradingView from "./TradingViewTasks.ts";
@@ -129,6 +136,7 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
     let answer = "";
     let ended = "done";
     let usd = 0;
+    let modelCalls: ReadonlyArray<ModelCall> = [];
 
     if (run.mode === "scripted") answer = yield* task.solve(page, start);
     if (run.runner !== undefined) {
@@ -147,6 +155,7 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
       if (Exit.isSuccess(exit)) answer = exit.value.answer;
       else ended = ending(exit.cause);
       usd = (yield* account.snapshot).knownUsd;
+      modelCalls = (yield* account.calls).log;
     }
 
     const end = yield* TradingView.state(page);
@@ -158,7 +167,21 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
         steps.map((step) => `${JSON.stringify(step)}\n`).join(""),
       );
 
-    return { ...task.grade(start, end, answer), answer, ended, turns: steps.length, usd };
+    const tools: Record<string, number> = {};
+
+    for (const { name } of steps.flatMap((step) => step.calls))
+      tools[name] = (tools[name] ?? 0) + 1;
+
+    return {
+      ...task.grade(start, end, answer),
+      answer,
+      ended,
+      arm: run.runner === undefined ? null : run.arm,
+      turns: steps.length,
+      tools,
+      modelCalls,
+      usd,
+    };
   });
 
 export const command = Command.make(

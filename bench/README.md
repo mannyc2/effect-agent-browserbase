@@ -167,13 +167,15 @@ all further admission. Only non-streaming chat completions are budgeted: the cli
 streaming, decisions and raw generated requests before sending them.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git),
-a `TrialRecord` (`Results.ts`, `version` 1) that `report` decodes again: the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
+a `TrialRecord` (`Results.ts`, `version` 3) that `report` decodes again: the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
 model, pinned endpoint with its rates and per-call reservation, browser, added latency, humanize,
 output-token limit, budget, concurrency, recording and narration), effective reasoning, status and
 reason, the answer, model turns
-(`steps`) and tool calls (`actions`) once a trial has an outcome, any
+(`steps`) and tool calls (`actions`, and by tool name `tools`) once a trial has an outcome, any
 error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
-reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
+reservations and uncertain calls), each call with a receipt in `modelCalls` (the pictures its
+request carried, its input, cached input and output tokens, and its seconds in the provider
+request), `timing` (seconds queued for budget admission and seconds in
 provider requests), `phases` (seconds opening the browser, in the model's tool calls, and looking
 at the page outside them: the agent's observations, an arm's own pictures and outlines, a moment's
 capture), a latency or hosted run's `protocol` (see below), the fastest round trip to the browser
@@ -322,6 +324,9 @@ passes more often than another on these tasks' pages. The tasks are fixed, not s
 difference speaks to these pages only. It then gives:
 
 - each arm's tallies, and its median seconds, model turns and tool calls per graded trial;
+- each arm's model calls: how many sent pictures, their uncached and cached input tokens, their
+  median seconds with pictures and without, and how often the model called `look`, a pointer tool
+  or `act`;
 - per task and arm, the pass rate with Wilson's 95% interval; pass^3, the chance that three
   trials all pass, estimated as τ-bench does; the dollars and seconds per pass; and, for an
   operate task, how many graded trials left the work on the page;

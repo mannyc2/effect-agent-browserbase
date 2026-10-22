@@ -153,6 +153,20 @@ export const emptyAccounting: Accounting = {
   uncertainCalls: 0,
 };
 
+/**
+ * One model call with a receipt: the pictures its request carried, its tokens, and its seconds in
+ * the provider request.
+ */
+export const ModelCall = Schema.Struct({
+  pictures: Count,
+  inputTokens: Count,
+  cachedInputTokens: Count,
+  outputTokens: Count,
+  seconds: Schema.Finite,
+});
+
+export type ModelCall = typeof ModelCall.Type;
+
 /** Wall time an account's calls spent queued for admission and in their provider requests. */
 export const Timing = Schema.Struct({ queueSeconds: Schema.Finite, requestSeconds: Schema.Finite });
 
@@ -185,6 +199,8 @@ export interface Calls {
   readonly refusal: Refusal | null;
   /** The ledger's halt when it refused this unit's admission; null for a capacity denial. */
   readonly halt: Halt | null;
+  /** Each call that returned a receipt, in order. */
+  readonly log: ReadonlyArray<ModelCall>;
 }
 
 export const noCalls: Calls = {
@@ -192,6 +208,7 @@ export const noCalls: Calls = {
   lastResponse: null,
   refusal: null,
   halt: null,
+  log: [],
 };
 
 // Integer nanodollars round reservations up and the limit down. Floating subtraction must never
@@ -277,6 +294,7 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
         // Why the ledger had stopped when it refused this account, if it had.
         const haltedBy = yield* Ref.make<Halt | null>(null);
         const timing = yield* Ref.make(noTiming);
+        const log = yield* Ref.make<ReadonlyArray<ModelCall>>([]);
         // When the call now waiting for admission started waiting, if one is.
         const waiting = yield* Ref.make<bigint | null>(null);
 
@@ -311,11 +329,13 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
             lastResponse: Ref.get(lastResponse),
             refusal: Ref.get(refusal),
             halt: Ref.get(haltedBy),
+            log: Ref.get(log),
           }),
           run: <A, E, R>(
             request: Effect.Effect<A, E, R>,
             usageOf: (response: A) => RawUsage | undefined,
             receiptOf?: (response: A) => Diagnostics.Receipt,
+            pictures = 0,
           ): Effect.Effect<A, E | BenchError, R> =>
             Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
@@ -409,6 +429,7 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                 );
 
                 const usage = usageOf(response);
+                const answered = yield* Clock.monotonicTimeNanos;
 
                 const remember = () =>
                   receiptOf === undefined
@@ -432,6 +453,16 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                       (usage.prompt_tokens_details?.cached_tokens ?? 0),
                   },
                 }));
+                yield* Ref.update(log, (calls) => [
+                  ...calls,
+                  {
+                    pictures,
+                    inputTokens: usage.prompt_tokens,
+                    cachedInputTokens: usage.prompt_tokens_details?.cached_tokens ?? 0,
+                    outputTokens: usage.completion_tokens,
+                    seconds: Number(answered - admitted) / 1e9,
+                  },
+                ]);
 
                 const billed = chargeOf(usage);
 
@@ -597,6 +628,14 @@ export const budgetedClient = (
         client.createChatCompletion(configured),
         ([response]) => response.usage,
         Diagnostics.receipt,
+        configured.messages.reduce(
+          (count, message) =>
+            count +
+            (Array.isArray(message.content)
+              ? message.content.filter((part) => part.type === "image_url").length
+              : 0),
+          0,
+        ),
       )
       .pipe(
         Effect.tap(([response]) => bounds.record?.(configured, response) ?? Effect.void),

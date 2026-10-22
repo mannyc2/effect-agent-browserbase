@@ -54,6 +54,8 @@ export interface Outcome extends Grade {
   readonly steps: number;
   /** Tool calls the model made, `done` and `give_up` included; 0 for an understand task. */
   readonly actions: number;
+  /** Those tool calls by tool name. */
+  readonly tools: Readonly<Record<string, number>>;
   readonly usage: Usage;
 }
 
@@ -340,6 +342,7 @@ export const operate = <A, I>(spec: {
     Effect.gen(function* () {
       const page = yield* open(spec.start, options, spec.pages);
       let actions = 0;
+      const tools: Record<string, number> = {};
 
       const stopNarrating = yield* Deferred.make<void>();
 
@@ -355,6 +358,7 @@ export const operate = <A, I>(spec: {
         maxSteps: spec.maxSteps,
         onStep: (step) => {
           actions += step.calls.length;
+          for (const { name } of step.calls) tools[name] = (tools[name] ?? 0) + 1;
 
           return options.trace?.({ _tag: "Step", step }) ?? Effect.void;
         },
@@ -379,6 +383,7 @@ export const operate = <A, I>(spec: {
         answer: result.answer,
         steps: result.steps,
         actions,
+        tools,
         usage: result.usage,
       };
     }).pipe(Effect.scoped),
@@ -391,7 +396,7 @@ export const operate = <A, I>(spec: {
         .grade(answer, recordingTruth(page, options.trace))
         .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
-      return { ...grade, answer, steps: 0, actions: 0, usage: noUsage };
+      return { ...grade, answer, steps: 0, actions: 0, tools: {}, usage: noUsage };
     }).pipe(Effect.scoped),
 });
 
@@ -559,6 +564,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
           answer: value,
           steps: 1,
           actions: 0,
+          tools: {},
           usage,
         };
       }),
@@ -573,6 +579,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
           answer: answer ?? expected,
           steps: 0,
           actions: 0,
+          tools: {},
           usage: noUsage,
         };
       }),

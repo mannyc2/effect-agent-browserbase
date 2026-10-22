@@ -158,6 +158,7 @@ describe("arm 2, vision first", () => {
       assert.sameMembers([...parameters(first.tools, "type_text")], ["text", "submit"]);
       assert.deepStrictEqual(result.outcome, { status: "graded", reason: "answered", pass: false });
       assert.strictEqual(result.outcomeValue?.actions, 3);
+      assert.deepStrictEqual(result.outcomeValue?.tools, { click_at: 1, zoom: 1, done: 1 });
       assert.strictEqual(result.outcomeValue?.steps, 2);
     }),
   );

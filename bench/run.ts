@@ -329,7 +329,7 @@ export const command = Command.make(
         yield* Results.append(
           file,
           new Results.TrialRecord({
-            version: 2,
+            version: 3,
             task: job.task.name,
             kind: job.task.kind,
             arm: job.arm,
@@ -350,7 +350,9 @@ export const command = Command.make(
             answer: null,
             steps: null,
             actions: null,
+            tools: null,
             accounting: calls.accounting,
+            modelCalls: calls.log,
             timing,
             phases: Trace.noPhases,
             protocol: null,
@@ -511,7 +513,7 @@ export const command = Command.make(
           const value = exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
 
           const record = new Results.TrialRecord({
-            version: 2,
+            version: 3,
             task: task.name,
             kind: task.kind,
             arm,
@@ -538,7 +540,9 @@ export const command = Command.make(
             answer: value?.answer ?? null,
             steps: value?.steps ?? null,
             actions: value?.actions ?? null,
+            tools: value?.tools ?? null,
             accounting: calls.accounting,
+            modelCalls: calls.log,
             timing: account === undefined ? noTiming : yield* account.timing,
             phases: exit === undefined ? Trace.noPhases : Trace.phases(traced.spans),
             protocol,
