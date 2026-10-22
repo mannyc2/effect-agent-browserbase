@@ -202,6 +202,17 @@ export const command = Command.make(
       (task) => options.task.length === 0 || options.task.includes(task.name),
     );
 
+    const runner =
+      options.mode === "model"
+        ? yield* modelRunner({
+            model: options.model,
+            rates: undefined,
+            maxUsd: options.maxUsd,
+            maxOutputTokens: 4096,
+            needs: { tools: true, structuredOutput: false },
+          })
+        : undefined;
+
     const stamp = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-");
 
     const directory = Option.getOrElse(options.out, () =>
@@ -221,16 +232,7 @@ export const command = Command.make(
       arm: options.arm,
       reasoning: options.reasoning,
       directory,
-      runner:
-        options.mode === "model"
-          ? yield* modelRunner({
-              model: options.model,
-              rates: undefined,
-              maxUsd: options.maxUsd,
-              maxOutputTokens: 4096,
-              needs: { tools: true, structuredOutput: false },
-            })
-          : undefined,
+      runner,
     };
 
     let passed = 0;
