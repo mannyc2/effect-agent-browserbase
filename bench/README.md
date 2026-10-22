@@ -423,6 +423,43 @@ all.
 - **Cost:** programs cost a fifth to a quarter more per trial than arm 5. Model requests took 98%
   of every arm's mean trial time.
 
+The first run of arms 9 and 10, on 2026-10-22, used `openai/gpt-6-luna` with medium reasoning in
+local Chromium. Each of arms 5, 9 and 10 ran 5 trials of each of nine operate tasks on the `eval`
+split (the six above, `note-format`, `seat-book` and `payment-refund`) and 2 of each of the
+TradingView demo's first six tasks. With a one-trial check and an aborted first try, the run cost
+$0.54 in all.
+
+| Arm | Operate | On the page | Calls per trial | With a picture | Uncached input tokens per trial | $ per trial | Median s | TradingView demo |
+| --- | ------- | ----------- | --------------- | -------------- | ------------------------------- | ----------- | -------- | ---------------- |
+| 5   | 40/45   | 44/45       | 5.5             | 100%           | 16,014                          | 0.0023      | 12.3     | 9/12             |
+| 9   | 35/45   | 42/45       | 6.3             | 35%            | 7,179                           | 0.0014      | 10.6     | 9/12             |
+| 10  | 36/45   | 43/45       | 7.8             | 17%            | 6,209                           | 0.0013      | 9.6      | 7/12             |
+
+- **No winner on the page:** no pair of arms differs beyond chance (stratified exact p, after
+  Holm, 0.905, 0.905 and 1 over all operate tasks). Answer format drives most of the difference in
+  passes. Arms 9 and 10 gave the seat reference inside a sentence in all ten `seat-book` trials, and
+  arm 5 gave the order number inside one in four `checkout` trials. Format alone failed 4, 7 and 7
+  trials.
+- **Cost:** arms 9 and 10 cost 42% and 46% less per operate trial than arm 5, despite making more
+  calls. A call that carried a picture did not extend the provider's prompt cache. Across both
+  runs, the calls that followed 557 calls with a picture found a median 0% of those calls' new
+  input cached, against 78% after 507 calls without one. Arm 5, which sends a picture with every
+  call, therefore pays for most of its conversation again on each one.
+- **Turns:** on the canvas game, arm 10 took 21 calls where arm 5 took 10 to 14, clicking, waiting
+  and looking for each spin. Arm 9 was shown the game on every call, as arm 5 was, and took 10.
+- **Where pictures mattered:** on `note-format`, whose toolbar names no button, arms 9 and 10
+  averaged 15.8 and 14.2 calls against arm 5's 10.0. Two trials of each ran out of turns before
+  saving, against one of arm 5's. On `seat-book`, both looked once per trial and booked the right
+  pair every time. On `payment-refund`, neither looked, and both refunded the right payment every
+  time, because its twins differ in text that the outline carries.
+- **Latency:** a call with a picture took a median 2.8 to 3.7 s, and one without 1.6 to 1.7 s. The
+  median trials of arms 9 and 10 were 1.7 and 2.7 s shorter than arm 5's. Arm 10's mean was 1.5 s
+  longer, because of the canvas game.
+- **Charts:** arm 9 saw the chart, a canvas, on every call, and passed as often as arm 5. On the
+  TradingView demo, arm 10 cost half as much and passed two fewer: it missed both `zoom` trials,
+  and once reported the middle band as the upper one without looking. The outline does not label
+  the legend's values. The trend line missed in every arm's trials, again 2.4 to 2.6 above the low.
+
 ## Outcomes
 
 Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one

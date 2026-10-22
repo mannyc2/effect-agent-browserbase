@@ -36,6 +36,16 @@ first run, on `openai/gpt-6-luna`, found no difference from arm 5 beyond chance.
 passed the canvas game once in five, where arms 5 and 8 passed all five. The bench README has the
 run.
 
+The bench now also measures how the agent sees the page. It adds three operate tasks whose pages
+put the deciding fact in pixels: an icon toolbar, a seat map in color, and look-alike payments. It
+also adds four TradingView tasks that need many candles' data. `effect-agent-browser`'s `vision`
+option adds two modes. `"ask"` shows a screenshot only after the model calls `look`. `"page"` also
+shows one after pointer input, and over a canvas, a video or another site's frame. Bench arms 9
+and 10 use them. In their first run, they did the work on the page about as often as arm 5, which
+shows a picture every turn: 42 and 43 of 45 trials, against 44. They cost 42% and 46% less per
+trial, because a call that carries a picture does not extend the provider's prompt cache. The
+bench README has the run.
+
 ## 0.3
 
 The `0.3.0-beta.21` release fixes page operations in consumer bundles with preserved function
@@ -374,17 +384,19 @@ with agents on Yielded Agent, the renamed Effect Agent:
   there it also traces each DevTools command under the span that was open when it was sent. Hosted
   sessions carry their trial in Browserbase's user metadata, and connect through a relay in the
   bench that traces their commands the same way.
-- `bench` (private): twenty-one tasks over canvas games, live charts, dense quote tables, orders,
-  navigation, forms, a board, menus, a catalogue and a market board whose prices tick, flash,
+- `bench` (private): twenty-four tasks over canvas games, live charts, dense quote tables, orders,
+  navigation, forms, a board, menus, a catalogue, an icon toolbar, a seat map, look-alike payments
+  and a market board whose prices tick, flash,
   scroll out of view and keep ticking or stop, graded against seeded page truth and captured evidence; an understand task's
-  page records its changes from before its setup. The six operate tasks' pages vary with the seed,
+  page records its changes from before its setup. The nine operate tasks' pages vary with the seed,
   and `--split eval` holds a family of seeds out for comparing arms. Trials run with separate
   browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics and a
   shared model admission budget. Every trial is graded, an infrastructure failure, denied or
   unrun, and summaries keep those
   denominators apart. `--arm` runs the paired experiment's arms 1 (Yielded's tools alone),
-  2 (vision first), 5 (the default tools) and 6 (the default tools with moments in the thread) on
-  the same seeds, each a Yielded agent on the task's
+  2 (vision first), 5 (the default tools), 6 (the default tools with moments in the thread), 7 and
+  8 (Code Mode programs), and 9 and 10 (pictures by page or on request) on the same seeds, each a
+  Yielded agent on the task's
   page, whose streamed model requests are sent and charged as single completions. The bench is an `effect/cli` program (`run`, `report`, `judges`) on `Config` and
   `FileSystem`; its results are versioned Schema records, and a report states its estimand and
   tests arms with exact paired tests. Paid runs remain opt-in.
