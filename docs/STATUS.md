@@ -66,7 +66,11 @@ under a point. It can also change the chart through its API. Its `ChartTools` se
 over `effect-agent-browser`'s new `BrowserTools.Controller`, the run's controller, which any
 application's own tools can use. On the demo, chart reads lifted arm 5's 17 of 30 to 24 with the
 pointer still acting (arm 17), 26 with writes (arm 18, for 40% less), and 30 of 30 when programs
-read the chart (arm 19, 13 pairs to none, exact p 0.0002). The bench README has the runs.
+read the chart (arm 19, 13 pairs to none, exact p 0.0002). With luna-pro at low reasoning in
+Browserbase, arm 19 passed 12 of 20 against arm 5's 7. That run found that a program's pointer calls
+failed: their receipts held absent fields as `undefined`, which a program's JSON cannot carry. They
+now leave them out. luna-pro counts about 3.5 times luna's tokens for the same input, at the same
+per-token price. The bench README has the runs.
 
 ## 0.3
 

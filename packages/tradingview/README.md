@@ -77,4 +77,12 @@ CodeMode.make("chart_program", {
 });
 ```
 
+## Measured
+
+On the library's demo, in the repository's bench, ten chart tasks ran three times each with
+gpt-6-luna. Browser tools alone passed 17 of 30. Adding `Reads`, with the pointer still acting,
+passed 24. `Reads` and `Writes` passed 26, for 40% less per task. `methods` in a program beside the
+browser tools passed all 30. With gpt-6-luna-pro at low reasoning in Browserbase, the program passed
+12 of 20 against the browser tools' 7. Its misses were drawings made through the toolbar.
+
 TradingView and its marks belong to TradingView, Inc. This package is not affiliated with it.

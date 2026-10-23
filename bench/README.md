@@ -600,6 +600,29 @@ TradingView demo's ten tasks, three trials each. With one-trial checks, the run 
   trial cost less than arm 5's.
 - `switch`, `rsi`, `level`, `bands` and `change` passed in every arm.
 
+Arms 5 and 19 then ran as a hosted, watched session would: luna-pro at low reasoning, in Browserbase
+at 1280×720, on the demo's ten tasks twice. luna-pro bills luna's per-token prices, but it counted
+about 3.5 times the tokens for the same input: the same text as 6,616 against 1,751, and the same
+1280×720 picture as 3,603 against about 1,070. So a trial cost about a cent, and the run $0.68.
+
+| Arm            | TradingView demo | $ per trial | Median s |
+| -------------- | ---------------- | ----------- | -------- |
+| 5              | 7/20             | 0.0094      | 58       |
+| 19, first try  | 10/20            | 0.0112      | 50       |
+| 19, with fixes | 12/20            | 0.0119      | 52       |
+
+- **The first try found a bug in programs.** There, `click_at`, `type_text`, `press_keys` and
+  `wait_still` failed, because their receipts held absent fields as `undefined`, which a program's
+  JSON cannot carry; 4 of 67 programs met it. Another 27 were not one async function but a
+  function's body or an invoked function, and four trials ended at three failed calls in a row.
+  With receipts fixed and arm 19's instruction showing a program's shape, 1 of 48 programs failed.
+- **Arm 19 led arm 5 again,** by 6 pairs to 1 (exact p 0.125); with Wave C's 13 to 0, by 19 to 1.
+  `swing` passed both times against none, and `rsi`, `trend`, `average` and `zoom` once each
+  against none. Arm 5 led only on `level`, once.
+- **Drawing through the toolbar is what fails.** In `level` and `range`, arm 19's programs found
+  the right price and candle, then drew with the wrong toolbar tool, or with none. Arm 5 left RSI's
+  length at 14 in both of its `rsi` trials.
+
 ## Outcomes
 
 Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one
