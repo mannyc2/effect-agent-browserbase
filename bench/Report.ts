@@ -335,12 +335,44 @@ export const summary = (records: ReadonlyArray<TrialRecord>): ReadonlyArray<stri
 
     lines.push(
       `${tallied(`arm ${arm} (${arm === null ? "" : armNames[arm]}):`, subset)}${onPage}; median ${median(graded.map((record) => record.seconds)).toFixed(1)}s, ${median(graded.map((record) => record.steps ?? 0))} turns and ${median(graded.map((record) => record.actions ?? 0))} tool calls per graded trial; $${spent.toFixed(4)} known`,
+      ...callLines(subset),
     );
   }
 
   lines.push("", ...comparisonLines(records));
 
   return lines;
+};
+
+// Tools that act by point or keyboard, beside `act`, which acts on refs.
+const pointerTools = ["click_at", "hover", "drag", "type_text", "press_keys"];
+
+/**
+ * What an arm's model calls sent and cost: how many carried pictures, their input tokens, their
+ * seconds with and without pictures, and how often the model asked to look or acted by point.
+ */
+export const callLines = (records: ReadonlyArray<TrialRecord>) => {
+  const calls = records.flatMap((record) => record.modelCalls);
+
+  if (calls.length === 0) return [];
+  const pictured = calls.filter((call) => call.pictures > 0);
+  const plain = calls.filter((call) => call.pictures === 0);
+
+  const perCall = (count: (call: (typeof calls)[number]) => number) =>
+    (calls.reduce((total, call) => total + count(call), 0) / calls.length).toFixed(0);
+
+  const seconds = (part: typeof calls) =>
+    part.length === 0 ? "none" : `${median(part.map((call) => call.seconds)).toFixed(1)}s`;
+
+  const used = (names: ReadonlyArray<string>) =>
+    records.reduce(
+      (total, record) => total + names.reduce((sum, name) => sum + (record.tools?.[name] ?? 0), 0),
+      0,
+    );
+
+  return [
+    `  ${pictured.length} of ${calls.length} calls sent pictures; ${perCall((call) => call.inputTokens - call.cachedInputTokens)} uncached and ${perCall((call) => call.cachedInputTokens)} cached input tokens a call; median ${seconds(pictured)} a call with pictures, ${seconds(plain)} without; ${used(["look"])} looks, ${used(pointerTools)} pointer calls and ${used(["act"])} act calls`,
+  ];
 };
 
 /** Every trial's status, in all; `spent` says what the money line reports. */

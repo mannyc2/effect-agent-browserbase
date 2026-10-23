@@ -17,6 +17,7 @@ was an upstream release candidate with the same version, not the npm artifact.
 | -------------- | ------------------------------------------------------------------------------- |
 | `BrowserTools` | An agent's browser tools, and the layer that serves them on a page or its tabs  |
 | `PageControl`  | The controller the tools act through, and its observations and results' schemas |
+| `PromptCache`  | An HTTP client layer that keeps OpenRouter's prompt cache across pictured turns |
 
 ## An agent on a page
 
@@ -50,6 +51,22 @@ const buy = (task: string) =>
 Provide a `Browser`, such as `Chromium.layer()` or a Browserbase session, and a model with its
 `Model.ProviderName` and `Model.ModelName`, as the repository's
 [README](https://github.com/mannyc2/effect-agent-browserbase#readme) does.
+
+A turn's picture is dropped on the next call, so a provider that caches up to a breakpoint at the
+end of the prompt, as OpenAI's models do on OpenRouter, caches nothing a later call can use.
+`PromptCache.layer` marks the end of each chat completion's history instead: its last tool result
+or, before there is one, its system message. Provide it to the OpenRouter client:
+
+```ts
+import { OpenRouterClient } from "@effect/ai-openrouter";
+import { Config, Layer } from "effect";
+import { PromptCache } from "effect-agent-browser";
+import { FetchHttpClient } from "effect/http";
+
+const openRouter = OpenRouterClient.layerConfig({
+  apiKey: Config.Redacted("OPENROUTER_API_KEY"),
+}).pipe(Layer.provide(PromptCache.layer), Layer.provide(FetchHttpClient.layer));
+```
 
 ## The tools
 
@@ -88,6 +105,19 @@ the layer serves every tool either way. `make({ mode: "single" })` lets `act` ta
   Its pixel coordinates are viewport coordinates, which the pointer tools take. `vision: false`
   leaves the pictures out, and `zoom` then refuses. A queued crop is discarded if another tab
   becomes current before the next turn, so its coordinates never describe that other tab.
+- `vision: "ask"` shows the screenshot only before a turn after the model called `look`, a tool in
+  `BrowserTools.Look` to merge into the agent's toolkit; crops still follow `zoom`. `vision: "page"`
+  also shows it after pointer input, and while the viewport shows a canvas, a video or another
+  site's frame, where the outline cannot say what is there.
+- `BrowserTools.Find` holds `find`, which lists the whole page's outline lines that hold a text,
+  in view or not, with their refs. Merge it into the agent's toolkit; the layer serves it either way.
+- `boxes: true` ends each control's line in the outline with its box, `WxH at (x,y)` in viewport
+  CSS pixels, so the model can match a ref to what the screenshot shows there. `changes: true`
+  gives, after an action, only the outline's lines gone and new since the tab's last whole look,
+  when those are fewer; `observe` reads the whole outline again.
+- `placement: "crop"` makes `click_at` and `drag` first show a crop of the viewport around each
+  point and act only once called at points inside crops already shown, which costs a turn per
+  placement. A ref needs no crop.
 - An observation after an action begins with what followed it: a dialog and how the browser
   answered it, where the page went, a tab it opened and up to three changes its input caused,
   such as `"Full" became "Kept"`. A pointer tool's result says the same in `followed`.

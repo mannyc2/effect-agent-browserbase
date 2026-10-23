@@ -26,7 +26,7 @@ import * as ContextLease from "effect-browserbase/ContextLease";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
-import { type Arm, armNames, arms } from "./Arms.ts";
+import { type Arm, armNames, arms, deviceScale } from "./Arms.ts";
 import { BenchError, efforts, modelRunner, noCalls, noTiming, optedIn, refuse } from "./Budget.ts";
 import { tasks } from "./Catalog.ts";
 import * as Diagnostics from "./Diagnostics.ts";
@@ -201,6 +201,10 @@ export const command = Command.make(
       return yield* refuse("--arm needs --model: the scripted solutions have no arms");
     if (latency !== undefined && hosted)
       return yield* refuse("--latency slows a local chromium; a hosted browser has its own");
+    if ((hosted || latency !== undefined) && options.arm.some((arm) => deviceScale(arm) !== 1))
+      return yield* refuse(
+        "arms 11 and 12 set the device scale of a local chromium without --latency",
+      );
     if (model !== undefined && !(yield* optedIn("EFFECT_BROWSER_BENCH_LIVE")))
       return yield* refuse("model calls cost money: set EFFECT_BROWSER_BENCH_LIVE=1 to make them");
     if (hosted && !(yield* optedIn("EFFECT_BROWSER_BENCH_HOSTED")))
@@ -214,10 +218,12 @@ export const command = Command.make(
     );
 
     // A trial's browser. A latency or hosted run's records the DevTools commands the trial sends,
-    // and a hosted run's session carries the trial's `metadata`.
+    // and a hosted run's session carries the trial's `metadata`. A local one has its arm's device
+    // scale.
     const browser = (trial: {
       readonly record: (command: Latency.Command) => void;
       readonly metadata: Readonly<Record<string, string>>;
+      readonly deviceScaleFactor: number;
     }) => {
       return hosted
         ? hostedBrowser(trial.metadata).pipe(
@@ -227,7 +233,13 @@ export const command = Command.make(
           ? Fixtures.layer((requests) =>
               Latency.layer(latency, { frameHistory, requests }, trial.record),
             )
-          : Fixtures.layer((requests) => Chromium.layer({ frameHistory, requests }));
+          : Fixtures.layer((requests) =>
+              Chromium.layer({
+                frameHistory,
+                requests,
+                deviceScaleFactor: trial.deviceScaleFactor,
+              }),
+            );
     };
 
     // After a create whose outcome is unknown, no further hosted session is requested.
@@ -329,7 +341,7 @@ export const command = Command.make(
         yield* Results.append(
           file,
           new Results.TrialRecord({
-            version: 2,
+            version: 3,
             task: job.task.name,
             kind: job.task.kind,
             arm: job.arm,
@@ -350,7 +362,9 @@ export const command = Command.make(
             answer: null,
             steps: null,
             actions: null,
+            tools: null,
             accounting: calls.accounting,
+            modelCalls: calls.log,
             timing,
             phases: Trace.noPhases,
             protocol: null,
@@ -429,6 +443,7 @@ export const command = Command.make(
                       work,
                       browser({
                         record: (command) => commands.push(command),
+                        deviceScaleFactor: deviceScale(arm),
                         // Browserbase shows these with the session, to find its trial and trace.
                         metadata: {
                           run: stamp,
@@ -511,7 +526,7 @@ export const command = Command.make(
           const value = exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
 
           const record = new Results.TrialRecord({
-            version: 2,
+            version: 3,
             task: task.name,
             kind: task.kind,
             arm,
@@ -538,7 +553,9 @@ export const command = Command.make(
             answer: value?.answer ?? null,
             steps: value?.steps ?? null,
             actions: value?.actions ?? null,
+            tools: value?.tools ?? null,
             accounting: calls.accounting,
+            modelCalls: calls.log,
             timing: account === undefined ? noTiming : yield* account.timing,
             phases: exit === undefined ? Trace.noPhases : Trace.phases(traced.spans),
             protocol,

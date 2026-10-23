@@ -21,6 +21,7 @@ const answered: Calls = {
   },
   refusal: null,
   halt: null,
+  log: [],
 };
 
 const aiError = (reason: AiError.AiErrorReason) =>

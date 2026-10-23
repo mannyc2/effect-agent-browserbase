@@ -6,7 +6,7 @@ import { Arbitrary, Effect, FileSystem, Path, Result, Schema } from "effect";
 
 import type { Arm } from "../Arms.ts";
 import { emptyAccounting, noTiming } from "../Budget.ts";
-import { compare, pairs, summary } from "../Report.ts";
+import { callLines, compare, pairs, summary } from "../Report.ts";
 import * as Results from "../Results.ts";
 import { noPhases } from "../Trace.ts";
 import { type Reason, type Status, trialSeed } from "../Trial.ts";
@@ -21,7 +21,7 @@ const record = (fields: {
   readonly answer?: unknown;
 }) =>
   new Results.TrialRecord({
-    version: 2,
+    version: 3,
     task: fields.task,
     kind: "operate",
     arm: fields.arm ?? null,
@@ -55,7 +55,9 @@ const record = (fields: {
     answer: fields.answer ?? null,
     steps: 4,
     actions: 6,
+    tools: { observe: 2, act: 3, done: 1 },
     accounting: emptyAccounting,
+    modelCalls: [],
     timing: noTiming,
     phases: noPhases,
     protocol: null,
@@ -167,6 +169,36 @@ describe("pairs", () => {
       a: { pairs: 2, both: 1, onlyFirst: 1, onlySecond: 0, neither: 0 },
       b: { pairs: 2, both: 0, onlyFirst: 0, onlySecond: 1, neither: 1 },
     });
+  });
+});
+
+describe("call lines", () => {
+  it("say what an arm's calls sent and cost, and how it looked and acted", () => {
+    const call = (pictures: number, seconds: number) => ({
+      pictures,
+      inputTokens: 1500,
+      cachedInputTokens: 500,
+      outputTokens: 40,
+      seconds,
+    });
+
+    const records = [
+      new Results.TrialRecord({
+        ...record({ task: "checkout", trial: 1, arm: 5 }),
+        modelCalls: [call(1, 3), call(0, 1)],
+        tools: { look: 1, click_at: 2, act: 1, done: 1 },
+      }),
+      new Results.TrialRecord({
+        ...record({ task: "checkout", trial: 2, arm: 5 }),
+        modelCalls: [call(0, 2)],
+        tools: { act: 2, done: 1 },
+      }),
+    ];
+
+    assert.deepStrictEqual(callLines(records), [
+      "  1 of 3 calls sent pictures; 1000 uncached and 500 cached input tokens a call; median 3.0s a call with pictures, 1.5s without; 1 looks, 2 pointer calls and 3 act calls",
+    ]);
+    assert.deepStrictEqual(callLines([record({ task: "checkout", trial: 1 })]), []);
   });
 });
 

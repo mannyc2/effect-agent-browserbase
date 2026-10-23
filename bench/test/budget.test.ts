@@ -12,6 +12,7 @@ import {
   ledger,
   ListedEndpoint,
   modelRunner,
+  recordedCharge,
 } from "../Budget.ts";
 import { isolatedTrial, trialSeed, workDeadline } from "../Trial.ts";
 import * as Chromium from "./browser.ts";
@@ -314,6 +315,29 @@ describe("BYOK receipts", () => {
   );
 });
 
+describe("recorded receipts", () => {
+  it("settle a recorded call at the charge its receipt shows, and only then", () => {
+    const body = (usage: unknown) => `\n         \n${JSON.stringify({ id: "gen-1", usage })}`;
+    const usage = { prompt_tokens: 2215, completion_tokens: 35 };
+
+    assert.strictEqual(recordedCharge(body({ ...usage, cost: 0.000291225 })), 0.000291225);
+    assert.strictEqual(
+      recordedCharge(
+        body({
+          ...usage,
+          cost: 0.0001,
+          is_byok: true,
+          cost_details: { upstream_inference_cost: 0.0002 },
+        }),
+      ),
+      0.0001 + 0.0002,
+    );
+    assert.isUndefined(recordedCharge(body({ ...usage, is_byok: true, cost: 0.0001 })));
+    assert.isUndefined(recordedCharge(body(usage)));
+    assert.isUndefined(recordedCharge('{"error":{"message":"overloaded"}}'));
+  });
+});
+
 describe("unbudgeted routes", () => {
   it.effect("refuse decisions and raw generated requests before sending them", () =>
     Effect.gen(function* () {
@@ -389,6 +413,52 @@ describe("recorded provider payloads", () => {
       assert.strictEqual(recorded.length, 1);
       assert.strictEqual(JSON.stringify(recorded[0]?.request).includes(prompt), true);
       assert.deepStrictEqual(recorded[0]?.response, response);
+    }),
+  );
+
+  it.effect("logs each call's pictures, tokens and seconds", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+      const account = yield* budget.account;
+
+      const native = yield* OpenRouterClient.make({}).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          byokResponse({ cost: 0.002, prompt_tokens_details: { cached_tokens: 600 } }),
+        ),
+      );
+
+      const wrapped = budgetedClient(native, account, {
+        rates: { input: 1e-6, output: 2e-6 },
+        maxOutputTokens: 64,
+      });
+
+      const picture = {
+        type: "image_url" as const,
+        image_url: { url: "data:image/jpeg;base64,AA==" },
+      };
+
+      yield* wrapped.createChatCompletion({
+        model: "openai/test",
+        messages: [
+          { role: "user", content: "Look" },
+          { role: "user", content: [{ type: "text", text: "The screen" }, picture, picture] },
+        ],
+      });
+
+      const [call] = (yield* account.calls).log;
+
+      assert.deepStrictEqual(
+        { ...call, seconds: undefined },
+        {
+          pictures: 2,
+          inputTokens: 1000,
+          cachedInputTokens: 600,
+          outputTokens: 50,
+          seconds: undefined,
+        },
+      );
+      assert.isAtLeast(call?.seconds ?? -1, 0);
     }),
   );
 });

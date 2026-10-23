@@ -101,6 +101,11 @@ export interface ScreenshotOptions {
   readonly quality?: number | undefined;
   /** `"jpeg"`, the default, or `"png"`, which is always a new picture. */
   readonly format?: "jpeg" | "png" | undefined;
+  /**
+   * `"css"`, the default, a picture pixel per CSS pixel; `"device"`, the screen's own pixels, as
+   * many to a CSS pixel as its device scale factor, which is always a new picture.
+   */
+  readonly scale?: "css" | "device" | undefined;
 }
 
 /**
@@ -441,8 +446,14 @@ export interface Page {
    * screenshot timed by the host interval in which it was taken.
    */
   readonly frame: (options?: FrameOptions) => Effect.Effect<Frame, BrowserError>;
-  /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
-  readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
+  /**
+   * A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels.
+   * With `scale: "device"` its picture has the screen's own pixels, as a screenshot's would.
+   */
+  readonly zoom: (
+    region: Region,
+    options?: Pick<ScreenshotOptions, "scale">,
+  ) => Effect.Effect<Zoom, BrowserError>;
   /**
    * The viewport's size in CSS pixels, the space of points, crops and page scrolls. Over CDP the
    * page reports it, within the action timeout.

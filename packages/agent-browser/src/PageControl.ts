@@ -15,7 +15,8 @@
  * after an action begins with what followed it: a dialog and how the browser answered it, a
  * navigation, a tab it opened and what its input visibly changed. Every action goes through the
  * page's own input policy, with `task` as the user's task its judge reads, and the browser answers
- * dialogs itself. An action that failed before its input reached the browser is `not-dispatched`,
+ * dialogs itself. With `changes`, its outline holds only the lines that changed since the tab's last
+ * whole look, when those are fewer. An action that failed before its input reached the browser is `not-dispatched`,
  * one that failed after is `possibly-dispatched`, and nothing is ever retried.
  *
  * @since 0.3.0
@@ -26,7 +27,7 @@ import type * as Browser from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type * as Page from "effect-browser/Page";
 import * as Policy from "effect-browser/Policy";
-import type { Snapshot } from "effect-browser/Snapshot";
+import { Snapshot } from "effect-browser/Snapshot";
 
 import * as AdapterState from "./AdapterState.ts";
 import { destination, followed, told } from "./internal/receipts.ts";
@@ -126,6 +127,13 @@ export interface Options {
   readonly maxChars?: number | undefined;
   /** Bound on a condition wait. Defaults to 5,000 ms; an unmet wait returns the page as it is. */
   readonly maxWaitMillis?: number | undefined;
+  /** Give every control's box in the outline, as `WxH at (x,y)` in viewport CSS pixels. */
+  readonly boxes?: boolean | undefined;
+  /**
+   * After an action, give only the outline's lines that are gone and new since the tab's last whole
+   * look, when they are fewer than its lines. Defaults to false.
+   */
+  readonly changes?: boolean | undefined;
 }
 
 type Failing<A> = Effect.Effect<A, BrowserUse.BrowserUseError>;
@@ -141,6 +149,8 @@ export interface Controller {
     ) => Failing<ActionResult>;
   };
   readonly control: {
+    /** The whole page's outline lines that hold `text`, ignoring case. */
+    readonly find: (request: { readonly text: string }) => Failing<Observation>;
     readonly inspect: (request: {
       readonly selector?: string | undefined;
       readonly frame?: string | undefined;
@@ -302,6 +312,55 @@ const following = (browser: Browser.Service, follow: Follow, initial?: AdapterSt
     };
   });
 
+/**
+ * What of a page a read outlines: what is inside `within`, the lines of the whole page that hold
+ * `query`, or the viewport, which after an action may be only its `changes`.
+ */
+interface Scope {
+  readonly within?: string | undefined;
+  readonly query?: string | undefined;
+  readonly changes?: boolean | undefined;
+}
+
+/** The outline's lines that are gone from `before` and new in `after`, as often as each repeats. */
+const changed = (before: ReadonlyArray<string>, after: ReadonlyArray<string>) => {
+  const left = new Map<string, number>();
+
+  const take = (line: string) => {
+    const count = left.get(line) ?? 0;
+
+    left.set(line, count - 1);
+
+    return count > 0;
+  };
+
+  for (const line of before) left.set(line, (left.get(line) ?? 0) + 1);
+  const added = after.filter((line) => !take(line));
+
+  return { gone: before.filter(take), added };
+};
+
+/** A snapshot whose outline is only what changed since `before`, or itself when that is longer. */
+const changesOf = (snapshot: Snapshot, before: string) => {
+  const lines = snapshot.text.split("\n");
+  const { gone, added } = changed(before.split("\n"), lines);
+
+  if (gone.length + added.length >= lines.length) return snapshot;
+
+  const text = [
+    "Only what changed in the outline since the last observation:",
+    ...(gone.length + added.length === 0 ? ["(nothing)"] : []),
+    ...(gone.length === 0 ? [] : ["No longer shown:", ...gone]),
+    ...(added.length === 0 ? [] : ["Newly shown:", ...added]),
+  ].join("\n");
+
+  return new Snapshot({
+    ...snapshot,
+    text,
+    controls: snapshot.controls.filter((control) => text.includes(`[ref=${control.ref}]`)),
+  });
+};
+
 /** What the controller's parts share: the tab they act on, how they read it, and the run's task. */
 interface Session {
   readonly current: Effect.Effect<Page.Page, BrowserError>;
@@ -309,7 +368,7 @@ interface Session {
   readonly look: Effect.Effect<Page.Page, BrowserError>;
   readonly read: (
     page: Page.Page,
-    within?: string,
+    scope?: Scope,
     lines?: ReadonlyArray<string>,
   ) => Effect.Effect<Observation, BrowserError>;
   readonly tabs: Effect.Success<ReturnType<typeof following>> | undefined;
@@ -349,8 +408,32 @@ const session = Effect.fnUntraced(function* (target: Target, options: Options) {
           ),
         );
 
-  const read = (page: Page.Page, within?: string, lines: ReadonlyArray<string> = []) =>
-    Effect.all([page.snapshot({ maxChars, within }), tabs?.tabs ?? Effect.void, record(page)], {
+  // Each tab's last whole outline, with its address, which an action's changes are taken against.
+  const whole = new Map<string, { readonly url: string; readonly text: string }>();
+
+  const outlined = (page: Page.Page, scope: Scope) =>
+    Effect.map(
+      page.snapshot({
+        maxChars,
+        within: scope.within,
+        ...(scope.query === undefined ? {} : { full: true, query: scope.query }),
+        boxes: options.boxes,
+      }),
+      (snapshot) => {
+        if (options.changes !== true || scope.within !== undefined || scope.query !== undefined)
+          return snapshot;
+        const before = whole.get(page.id);
+
+        whole.set(page.id, { url: snapshot.url, text: snapshot.text });
+
+        return scope.changes === true && before?.url === snapshot.url
+          ? changesOf(snapshot, before.text)
+          : snapshot;
+      },
+    );
+
+  const read = (page: Page.Page, scope: Scope = {}, lines: ReadonlyArray<string> = []) =>
+    Effect.all([outlined(page, scope), tabs?.tabs ?? Effect.void, record(page)], {
       concurrency: "unbounded",
     }).pipe(
       Effect.map(([snapshot, open, unrecorded]) =>
@@ -406,7 +489,7 @@ const acting =
       if (!observe) return { completed, error, observation: null, dispatch };
 
       const seen = yield* Effect.result(
-        Effect.flatMap(look, (next) => read(next, undefined, lines)),
+        Effect.flatMap(look, (next) => read(next, { changes: true }, lines)),
       );
 
       return {
@@ -458,7 +541,7 @@ const waiting =
         millis,
       );
 
-      return yield* read(page, undefined, met ? [] : [`The wait ended after ${millis} ms unmet.`]);
+      return yield* read(page, {}, met ? [] : [`The wait ended after ${millis} ms unmet.`]);
     }).pipe(Effect.mapError(useError), withTask);
   };
 
@@ -468,10 +551,15 @@ const controlling = (context: Session): Controller["control"] => {
   const act = acting(context);
 
   return {
+    find: ({ text }) =>
+      Effect.flatMap(look, (page) => read(page, { query: text })).pipe(
+        Effect.mapError(useError),
+        withTask,
+      ),
     inspect: ({ selector, frame, optionFilter }) =>
       frame !== undefined
         ? frameless("inspect")
-        : Effect.flatMap(look, (page) => read(page, selector)).pipe(
+        : Effect.flatMap(look, (page) => read(page, { within: selector })).pipe(
             Effect.map((seen) =>
               optionFilter === undefined ? seen : filterOptions(seen, optionFilter),
             ),

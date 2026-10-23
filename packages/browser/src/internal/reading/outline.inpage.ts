@@ -18,6 +18,8 @@ export interface SnapshotRequest {
   /** A CSS selector: only what is inside the elements it matches is read. */
   readonly within: string | null;
   readonly maxChars: number;
+  /** Give every control's box, not only a canvas's or a frame's. */
+  readonly boxes: boolean;
 }
 
 /**
@@ -124,7 +126,7 @@ export const outline = (
       const kind = role ?? "clickable";
 
       const box =
-        role === "canvas" || role === "iframe"
+        request.boxes || role === "canvas" || role === "iframe"
           ? ` ${Math.round(rect.width)}x${Math.round(rect.height)} at (${Math.round(rect.x)},${Math.round(rect.y)})`
           : "";
 

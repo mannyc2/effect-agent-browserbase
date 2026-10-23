@@ -26,7 +26,15 @@ import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
 import * as Arms from "./Arms.ts";
-import { efforts, type ModelRunner, modelRunner, optedIn, refuse } from "./Budget.ts";
+import {
+  efforts,
+  type ModelCall,
+  type ModelRunner,
+  modelRunner,
+  optedIn,
+  type Refusal,
+  refuse,
+} from "./Budget.ts";
 import { errorText, hostedSessionSeconds } from "./run.ts";
 import { frameHistory } from "./Tasks.ts";
 import * as TradingView from "./TradingViewTasks.ts";
@@ -90,8 +98,14 @@ const flags = {
   ),
 };
 
-/** How a model run ended without an answer, in the bench's own words. */
-const ending = (cause: Cause.Cause<unknown>) => {
+/**
+ * How a model run ended without an answer, in the bench's own words. A call the ledger refused, or
+ * one that ended without a decoded response, is the bench's failure, not the model's.
+ */
+const ending = (cause: Cause.Cause<unknown>, refusal: Refusal | null) => {
+  if (refusal === "budget") return "denied: no call fit the budget";
+  if (refusal === "unresolved") return "infrastructure: a request ended without a decoded response";
+  if (refusal === "bound") return "infrastructure: a charge exceeded its reservation";
   const error = Cause.squash(cause);
 
   if (Schema.is(Arms.GaveUp)(error)) return `gave up: ${error.reason}`;
@@ -129,6 +143,7 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
     let answer = "";
     let ended = "done";
     let usd = 0;
+    let modelCalls: ReadonlyArray<ModelCall> = [];
 
     if (run.mode === "scripted") answer = yield* task.solve(page, start);
     if (run.runner !== undefined) {
@@ -144,9 +159,12 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
         run.runner.withModel(agent, run.reasoning, account).pipe(Effect.timeout("12 minutes")),
       );
 
+      const calls = yield* account.calls;
+
       if (Exit.isSuccess(exit)) answer = exit.value.answer;
-      else ended = ending(exit.cause);
+      else ended = ending(exit.cause, calls.refusal);
       usd = (yield* account.snapshot).knownUsd;
+      modelCalls = calls.log;
     }
 
     const end = yield* TradingView.state(page);
@@ -158,7 +176,21 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
         steps.map((step) => `${JSON.stringify(step)}\n`).join(""),
       );
 
-    return { ...task.grade(start, end, answer), answer, ended, turns: steps.length, usd };
+    const tools: Record<string, number> = {};
+
+    for (const { name } of steps.flatMap((step) => step.calls))
+      tools[name] = (tools[name] ?? 0) + 1;
+
+    return {
+      ...task.grade(start, end, answer),
+      answer,
+      ended,
+      arm: run.runner === undefined ? null : run.arm,
+      turns: steps.length,
+      tools,
+      modelCalls,
+      usd,
+    };
   });
 
 export const command = Command.make(
@@ -171,6 +203,8 @@ export const command = Command.make(
       return yield* refuse("Browserbase sessions cost money: set EFFECT_BROWSER_BENCH_HOSTED=1");
     if (options.signedIn && options.browser !== "browserbase")
       return yield* refuse("--signed-in loads a Browserbase context: use --browser browserbase");
+    if (options.browser === "browserbase" && Arms.deviceScale(options.arm) !== 1)
+      return yield* refuse("arms 11 and 12 set the device scale of a local chromium");
 
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -182,7 +216,11 @@ export const command = Command.make(
 
     const browser = (metadata: Readonly<Record<string, string>>) =>
       options.browser === "chromium"
-        ? Chromium.layer({ frameHistory, requests: TradingView.readOnly })
+        ? Chromium.layer({
+            frameHistory,
+            requests: TradingView.readOnly,
+            deviceScaleFactor: Arms.deviceScale(options.arm),
+          })
         : Browserbase.layer({
             requests: TradingView.readOnly,
             frameHistory,

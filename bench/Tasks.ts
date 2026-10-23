@@ -54,6 +54,8 @@ export interface Outcome extends Grade {
   readonly steps: number;
   /** Tool calls the model made, `done` and `give_up` included; 0 for an understand task. */
   readonly actions: number;
+  /** Those tool calls by tool name. */
+  readonly tools: Readonly<Record<string, number>>;
   readonly usage: Usage;
 }
 
@@ -240,6 +242,17 @@ export const fill = (page: Page, name: string, text: string) =>
       Effect.flatMap((snapshot) => page.type(text, { into: refOf(snapshot, "textbox", name) })),
     );
 
+/**
+ * Whether an answer quotes the issued `code`, however it is worded: it names that code and no other
+ * code of a code's shape, capitals, a hyphen and digits. "Booking reference: HP-94030." quotes
+ * HP-94030; "HP-94030 or HP-12345" does not.
+ */
+export const quotes = (answer: string, code: string | null | undefined) => {
+  const named = answer.toUpperCase().match(/\b[A-Z]+-\d+\b/g) ?? [];
+
+  return named.length > 0 && named.every((name) => name === code);
+};
+
 // The lobby's banner and age check, as this seed words them.
 const enterLobby = (page: Page) =>
   Effect.gen(function* () {
@@ -340,6 +353,7 @@ export const operate = <A, I>(spec: {
     Effect.gen(function* () {
       const page = yield* open(spec.start, options, spec.pages);
       let actions = 0;
+      const tools: Record<string, number> = {};
 
       const stopNarrating = yield* Deferred.make<void>();
 
@@ -355,6 +369,7 @@ export const operate = <A, I>(spec: {
         maxSteps: spec.maxSteps,
         onStep: (step) => {
           actions += step.calls.length;
+          for (const { name } of step.calls) tools[name] = (tools[name] ?? 0) + 1;
 
           return options.trace?.({ _tag: "Step", step }) ?? Effect.void;
         },
@@ -379,6 +394,7 @@ export const operate = <A, I>(spec: {
         answer: result.answer,
         steps: result.steps,
         actions,
+        tools,
         usage: result.usage,
       };
     }).pipe(Effect.scoped),
@@ -391,7 +407,7 @@ export const operate = <A, I>(spec: {
         .grade(answer, recordingTruth(page, options.trace))
         .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
-      return { ...grade, answer, steps: 0, actions: 0, usage: noUsage };
+      return { ...grade, answer, steps: 0, actions: 0, tools: {}, usage: noUsage };
     }).pipe(Effect.scoped),
 });
 
@@ -559,6 +575,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
           answer: value,
           steps: 1,
           actions: 0,
+          tools: {},
           usage,
         };
       }),
@@ -573,6 +590,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
           answer: answer ?? expected,
           steps: 0,
           actions: 0,
+          tools: {},
           usage: noUsage,
         };
       }),
@@ -796,7 +814,7 @@ const chartTrade = operate({
           order.type === "market";
 
         return {
-          pass: placed && order.id === answer.orderId,
+          pass: placed && quotes(answer.orderId, order.id),
           onPage: placed,
           detail: `The page holds ${market.orders.length === 0 ? "no orders" : market.orders.map((placed) => `${placed.id}, a ${placed.type} ${placed.side} of ${placed.qty} BTC (${placed.status})`).join("; ")}. The answer reported ${answer.orderId === "" ? "no order id" : answer.orderId}.`,
         };
@@ -848,7 +866,7 @@ const checkout = operate({
         return {
           pass:
             shop.confirmation !== null &&
-            answer.confirmation === shop.confirmation &&
+            quotes(answer.confirmation, shop.confirmation) &&
             wrong.length === 0,
           onPage: shop.confirmation !== null && wrong.length === 0,
           detail:

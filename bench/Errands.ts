@@ -5,13 +5,8 @@
 import { Duration, Effect, Schema } from "effect";
 import * as Stillness from "effect-browser/Stillness";
 
-import { style, truth } from "./Sites.ts";
-import { operate, press, type Task } from "./Tasks.ts";
-
-// Seeded helpers each page script starts with, over the stream `serve` injects.
-const draws = (salt: number) =>
-  `const random = __benchStream(${salt}), pick = (list) => list[Math.floor(random() * list.length)];
-  const shuffle = (list) => list.map((item) => [random(), item]).sort((a, b) => a[0] - b[0]).map(([, item]) => item);`;
+import { draws, style, truth } from "./Sites.ts";
+import { operate, press, quotes, type Task } from "./Tasks.ts";
 
 const target = "Rotate the API keys";
 
@@ -173,7 +168,7 @@ const policyFind = operate({
   grade: (answer, page) =>
     truth(page, PolicyTruth).pipe(
       Effect.map((shown) => ({
-        pass: shown.page === "returns" && answer.code === shown.code,
+        pass: shown.page === "returns" && quotes(answer.code, shown.code),
         onPage: shown.page === "returns",
         detail: `The tab shows the ${shown.page} page${shown.code === null ? "" : `, reference ${shown.code}`}. The answer reported ${answer.code === "" ? "no code" : answer.code}.`,
       })),

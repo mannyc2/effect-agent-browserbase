@@ -107,6 +107,46 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect(
+    "with changes, gives only what an action changed, and finds lines of the whole page",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* open("/form");
+
+        const { actions, control } = yield* PageControl.make(
+          { page },
+          { changes: true, boxes: true },
+        );
+
+        const seen = yield* actions.observe;
+
+        assert.match(seen.text, /button "Submit" \[ref=e\d+\].* \d+x\d+ at \(\d+,\d+\)/);
+
+        const done = yield* actions.act([{ kind: "click", ref: refOf(seen, "Submit") }]);
+        const text = done.observation?.text ?? "";
+
+        const [, gone = "", added = ""] =
+          /No longer shown:\n([^]*)Newly shown:\n([^]*)$/.exec(text) ?? [];
+
+        assert.include(gone, "text: Not ordered");
+        assert.include(added, "text: Ordered 10 btc");
+        assert.notInclude(text, 'heading "Place an order"');
+        for (const { ref } of done.observation?.controls ?? [])
+          assert.include(text, `[ref=${ref}]`);
+        // A look gives the whole outline again.
+        assert.include((yield* actions.observe).text, 'heading "Place an order"');
+
+        const found = yield* control.find({ text: "ship" });
+
+        assert.include(found.text, 'button "Ship later"');
+        assert.notInclude(found.text, "Amount");
+        assert.deepStrictEqual(
+          found.controls.map((control) => control.name),
+          ["Ship later"],
+        );
+      }),
+  );
+
   it.effect("stops at the first failure, saying whether its input went, and never retries", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
