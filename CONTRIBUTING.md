@@ -11,7 +11,7 @@ Open a focused PR against `main` that explains the change and how it was checked
 | Bun                  | 1.4.2                         |
 | Effect               | 4.0.3                         |
 | Playwright           | playwright-core 1.63.0        |
-| Yielded Agent        | @yielded/agent 0.1.0-beta.168 |
+| Yielded Agent        | @yielded/agent 0.1.0-beta.189 |
 | TypeScript / Vite+   | 7.0.2 / 1.1.0                 |
 | Vitest               | 5.0.3, as Vite+ 1.1.0 ships   |
 | Effect tsgo / Oxlint | 0.51.0 / 1.82.0               |
@@ -67,9 +67,9 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   `*.inpage.ts` factories, composed by `internal/page/bridge.ts` and frozen at packaging.
 - `packages/browserbase` (`effect-browserbase`): the Browserbase client and sessions as a
   `Browser`. It depends on `effect-browser` through its public entry points.
-- `packages/agent-browser` (`effect-agent-browser`): `effect-browser` pages as Yielded Agent's browser
-  ports, `BrowserActions` and `BrowserControl`, and the tools an agent drives them by. It depends on
-  `effect-browser` through its public entry points and on `@yielded/agent`, pinned exactly.
+- `packages/agent-browser` (`effect-agent-browser`): `effect-browser` pages as a Yielded agent's
+  browser tools, and the controller they act through. It depends on `effect-browser` through its
+  public entry points and on `@yielded/agent`, pinned exactly.
 - `packages/human-strokes` (`effect-browser-human-strokes`): an optional pointer planner over
   recorded human strokes. It depends on `effect-browser` through its public entry points only. Its
   code is MIT; its bundled stroke data is CC BY 4.0, with attribution in its README and

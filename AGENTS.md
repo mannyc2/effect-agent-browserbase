@@ -2,7 +2,7 @@
 
 Four packages and a bench in one Bun workspace: `packages/browser` (`effect-browser`),
 `packages/browserbase` (`effect-browserbase`), `packages/agent-browser` (`effect-agent-browser`, its pages
-as Yielded Agent's browser ports and tools), the optional `packages/human-strokes`
+as a Yielded agent's browser tools), the optional `packages/human-strokes`
 (`effect-browser-human-strokes`, MIT code with CC BY 4.0 stroke data) and the private `bench`. Read
 `README.md`, `CONTRIBUTING.md` and the neighbouring tests before editing; `docs/STATUS.md` is the
 current state.

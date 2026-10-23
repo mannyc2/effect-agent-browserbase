@@ -1,18 +1,22 @@
 // The arms of the paired experiment: which tools a Yielded agent drives a task's page with, and
-// what it sees. Arm 5 is the library's default: `act` in batches, Yielded's control tools, the
-// pointer tools and a screenshot before each turn. Arm 1 is Yielded's own tools alone: one action
-// per `act`, an outline after each, and no pictures. Arm 2 sees a screenshot before each turn and
-// acts by pixels. Arm 6 is arm 5 with moments in its thread instead of the screenshot: after each
-// turn's results, what the page did since the turn before. Understand tasks differ only in arm 1,
-// whose moments add the outline.
-import { Agent, AgentRuntime, BrowserUse, InMemory, type RunEvent } from "@yielded/agent";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+// what it sees. Arm 5 is the library's default: `act` in batches, the control tools, the pointer
+// tools and a screenshot before each turn. Arm 1 is the ref and control tools alone, as Yielded
+// once gave them: one action per `act`, an outline after each, and no pictures. Arm 2 sees a
+// screenshot before each turn and acts by pixels. Arm 6 is arm 5 with moments in its thread instead
+// of the screenshot: after each turn's results, what the page did since the turn before. Arm 7 is
+// arm 5 with its tools behind one Code Mode tool, `browser_program`: the model writes a program
+// whose `browser.*` calls are those tools. Arm 8 has both: arm 5's tools and the program tool.
+// Understand tasks differ only in arm 1, whose moments add the outline.
+import { Agent, AgentRuntime, CodeMode, InMemory, type RunEvent } from "@yielded/agent";
+import { inProcessCodeExecutorLayer } from "@yielded/agent-testing/code-executor-substitute";
+import { CodeExecutionLimits } from "@yielded/agent/code-executor";
+import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/BrowserTools";
 import type * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
-export const arms = [1, 2, 5, 6] as const;
+export const arms = [1, 2, 5, 6, 7, 8] as const;
 
 export type Arm = (typeof arms)[number];
 
@@ -21,6 +25,8 @@ export const armNames: { readonly [A in Arm]: string } = {
   2: "vision first",
   5: "default",
   6: "moments",
+  7: "programs",
+  8: "programs and tools",
 };
 
 /** Token counts, as the run or the model's response reported them. */
@@ -109,6 +115,23 @@ const instructions: { readonly [A in Arm]: string } = {
     "- Prefer refs where the outline has them.",
     ...closing,
   ].join("\n"),
+  7: [
+    "You operate a web browser to complete the user's task by writing programs for browser_program.",
+    "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates, which browser.click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+    "- browser.observe reads the viewport as an outline whose controls carry refs such as e12, with the controls as values; browser.act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+    "- A program can find a control in an observation, act on it, check what followed and go on. Its calls run one at a time, in order.",
+    "- Only what a program returns or logs reaches you, with the screenshot before your next turn: return what you need to decide what comes next.",
+    "- Prefer refs where the outline has them. done and give_up are tools of their own, not program calls.",
+    ...closing,
+  ].join("\n"),
+  8: [
+    "You operate a web browser through tools to complete the user's task.",
+    "- Before each turn you see a screenshot of the viewport. Its pixel coordinates are viewport coordinates, which click_at, hover, drag and zoom take: use them for what has no ref, such as a canvas game or a chart.",
+    "- observe reads the viewport as an outline whose controls carry refs such as e12; act clicks, fills or selects them, up to eight in one call, and answers with the next outline and what followed.",
+    "- browser_program runs a program whose browser.* calls are these same tools, one at a time, in order: use it for several steps that depend on each other, such as finding a control in an observation and acting on it. Only what the program returns or logs reaches you.",
+    "- Prefer refs where the outline has them.",
+    ...closing,
+  ].join("\n"),
 };
 
 const finishing = <A, I>(answer: Schema.Codec<A, I>) =>
@@ -130,6 +153,29 @@ const { tools: pointer } = BrowserTools.Pointer;
 const single = BrowserTools.make({ mode: "single" });
 const batched = BrowserTools.make();
 
+// Arm 5's tools act on one page, so a program's calls run one at a time. The executor runs the
+// model's program in the bench's own process, isolated by nothing but shadowed globals: the bench's,
+// not a sandbox for untrusted hosts.
+const program = CodeMode.make("browser_program", {
+  description:
+    "Operate the browser by writing a program whose browser.* calls are the browser tools, run one at a time, in order, on the current tab.",
+  tools: { browser: batched.toolkit.tools },
+  limits: CodeExecutionLimits.make({
+    maxSourceBytes: 64 * 1024,
+    maxWallTime: Duration.seconds(90),
+    maxLogBytes: 64 * 1024,
+    maxResultBytes: 256 * 1024,
+    maxHostCalls: 64,
+    maxHostCallConcurrency: 1,
+    maxHostCallArgumentBytes: 64 * 1024,
+    maxHostCallResultBytes: 1024 * 1024,
+  }),
+});
+
+// Every arm serves the program tool over its tools, which it calls by name; only arms 7 and 8 show
+// it to the model.
+const programs = program.handlers.pipe(Layer.provide(inProcessCodeExecutorLayer));
+
 const VisionToolkit = Toolkit.make(
   control.navigate,
   pointer.back,
@@ -145,18 +191,23 @@ const VisionToolkit = Toolkit.make(
 /** Each arm's tools, the run's layer, and whether it shows pictures. */
 const tooling = {
   1: {
-    toolkit: Toolkit.merge(BrowserUse.make().toolkit, BrowserTools.Control),
+    toolkit: Toolkit.merge(
+      Toolkit.make(single.toolkit.tools.observe, single.toolkit.tools.act),
+      BrowserTools.Control,
+    ),
     tools: single,
     vision: false,
   },
   2: { toolkit: VisionToolkit, tools: batched, vision: true },
   5: { toolkit: batched.toolkit, tools: batched, vision: true },
   6: { toolkit: batched.toolkit, tools: batched, vision: "moments" },
+  7: { toolkit: Toolkit.make(program.tool), tools: batched, vision: true },
+  8: {
+    toolkit: Toolkit.merge(batched.toolkit, Toolkit.make(program.tool)),
+    tools: batched,
+    vision: true,
+  },
 } as const;
-
-/** What the run hands back: the answer, or why there is none. */
-const Outcome = <A, I>(answer: Schema.Codec<A, I>) =>
-  Schema.Union([Schema.Struct({ answer }), Schema.Struct({ gaveUp: Schema.String })]);
 
 /**
  * A turn's steps from the run's events: its text, its calls and their results. A turn completes
@@ -215,11 +266,10 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
   Effect.gen(function* () {
     const { toolkit, tools, vision } = tooling[arm];
     const finish = finishing(options.answer);
-    const output = Outcome(options.answer);
 
     const agent = Agent.make(`bench-arm-${arm}`, {
       input: Schema.String,
-      output,
+      output: options.answer,
       instructions:
         options.persona === undefined
           ? instructions[arm]
@@ -231,23 +281,18 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
         maxDuration: "15 minutes",
         toolConcurrency: 1,
       },
-      completion: {
-        tool: "done",
-        required: true,
-        project: ({ parameters }) => ({ answer: parameters.answer }),
-      },
-      completionFromTools: [
-        {
-          tool: "give_up",
-          project: ({ parameters }) => Option.some({ gaveUp: parameters.reason }),
-        },
-      ],
+      completion: { tool: "done", project: ({ parameters }) => parameters.answer },
     });
 
     const { record, flush } = steps(options.onStep);
     let completed: RunEvent.RunCompleted | undefined;
+    let gaveUp: string | undefined;
 
     yield* AgentRuntime.stream(agent, task).pipe(
+      // Yielded completes a run by its one completion tool, `done`; giving up ends the trial here.
+      Stream.takeUntil(
+        (event) => event._tag === "ToolCallSucceeded" && event.toolName === "give_up",
+      ),
       Stream.runForEach((event) =>
         event._tag === "RunCompleted"
           ? Effect.sync(() => {
@@ -263,26 +308,35 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
       }),
       Effect.provide(
         Layer.mergeAll(
-          tools.layer({ page }, { task, vision, onMoment: options.onMoment }),
-          finish.toLayer({ done: () => Effect.void, give_up: () => Effect.void }),
+          Layer.provideMerge(
+            programs,
+            tools.layer({ page }, { task, vision, onMoment: options.onMoment }),
+          ),
+          finish.toLayer({
+            done: () => Effect.void,
+            give_up: ({ reason }) =>
+              Effect.sync(() => {
+                gaveUp = reason;
+              }),
+          }),
           InMemory.layer,
         ),
       ),
       Effect.ensuring(flush),
     );
 
+    if (gaveUp !== undefined) return yield* new GaveUp({ reason: gaveUp });
     if (completed === undefined)
       return yield* new Unanswered({ detail: "the run ended without completing" });
 
-    const outcome = yield* Schema.decodeUnknownEffect(output)(completed.output).pipe(
+    const answer = yield* Schema.decodeUnknownEffect(options.answer)(completed.output).pipe(
       Effect.mapError((error) => new Unanswered({ detail: error.message })),
     );
 
-    if ("gaveUp" in outcome) return yield* new GaveUp({ reason: outcome.gaveUp });
     const usage = completed.usage;
 
     return {
-      answer: outcome.answer,
+      answer,
       steps: completed.turns,
       usage: { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 },
     };
