@@ -86,4 +86,9 @@ export interface SnapshotOptions {
   readonly within?: string | undefined;
   /** Bound on the outline's length. Defaults to 12,000 characters. */
   readonly maxChars?: number | undefined;
+  /**
+   * Give every control's box, as `WxH at (x,y)` in viewport CSS pixels, as a canvas's or a frame's
+   * always has. Defaults to false.
+   */
+  readonly boxes?: boolean | undefined;
 }

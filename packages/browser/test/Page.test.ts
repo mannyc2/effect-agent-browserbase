@@ -112,6 +112,20 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.isAbove(snapshot.below, 0);
         assert.include((yield* page.snapshot({ full: true })).text, "Bottom of the page");
         assert.notInclude((yield* page.snapshot({ query: "submit" })).text, "Amount");
+
+        // Asked, each control's line ends with its box.
+        const [submit] = yield* page.find({ role: "button", name: "Submit" });
+        const boxed = (yield* page.snapshot({ boxes: true })).text.split("\n");
+        const box = submit?.box;
+
+        assert.notInclude(snapshot.text, " at (");
+        assert.isTrue(
+          boxed.some(
+            (line) =>
+              line.includes('button "Submit"') &&
+              line.endsWith(` ${box?.width}x${box?.height} at (${box?.x},${box?.y})`),
+          ),
+        );
       }),
     ),
   );
