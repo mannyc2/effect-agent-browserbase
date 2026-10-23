@@ -155,6 +155,22 @@ describe("TradingView graders", () => {
     assert.isFalse(grade("change", {}, "5.00%", fell));
   });
 
+  it("says how far the closest drawing missed, in bars and in price", () => {
+    const missed = (name: string, end: Partial<State>) =>
+      task(name).grade(chart, { ...chart, ...end }, "").error;
+
+    assert.deepStrictEqual(missed("trend", trend([{ time: rows[43]![0]!, price: 138 }, high])), {
+      bars: 3,
+      price: 0,
+    });
+    assert.deepStrictEqual(missed("level", { shapes: [line("a", 301), line("b", 310)] }), {
+      bars: 0,
+      price: 1,
+    });
+    assert.deepStrictEqual(missed("range", vertical(71)), { bars: 1, price: 0 });
+    assert.isUndefined(missed("range", {}));
+  });
+
   it("swing passes an added line between the lowest lows of the view's halves", () => {
     const left = low;
     const right = { time: rows[70]![0]!, price: 168 };

@@ -215,6 +215,38 @@ describe("arms 11 and 12, picture sizes", () => {
     );
 });
 
+describe("arms 13 to 16, the outline and the picture", () => {
+  const done = () => [call("done", { answer: { confirmation: "CONF-0" } }), finish];
+
+  it.live("arm 13 gives each control's box, and arm 14 has find", () =>
+    Effect.gen(function* () {
+      const boxed = yield* trial("checkout", 13, [() => [call("observe", {}), finish], done]);
+      const finding = yield* trial("checkout", 14, [done]);
+
+      assert.match(textOf(boxed.seen[1]!.prompt), /\d+x\d+ at \(\d+,\d+\)/);
+      assert.notInclude(names(boxed.seen[0]?.tools ?? []), "find");
+      assert.include(names(finding.seen[0]?.tools ?? []), "find");
+    }),
+  );
+
+  it.live("arm 16 shows a crop around a point before clicking it", () =>
+    Effect.gen(function* () {
+      const result = yield* trial("checkout", 16, [
+        () => [call("click_at", { x: 5, y: 5 }), finish],
+        () => [call("click_at", { x: 6, y: 6 }), finish],
+        done,
+      ]);
+
+      assert.include(textOf(result.seen[1]!.prompt), "Not done yet");
+      assert.deepStrictEqual(
+        result.seen.map(({ prompt }) => pictures(prompt)),
+        [1, 2, 1],
+      );
+      assert.include(textOf(result.seen[2]!.prompt), "Clicked");
+    }),
+  );
+});
+
 describe("arms 7 and 8, programs", () => {
   // A program finds the first field in an observation and fills it, and returns only what it read.
   const program = `async () => {

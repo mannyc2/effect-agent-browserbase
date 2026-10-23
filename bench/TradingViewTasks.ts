@@ -171,6 +171,16 @@ export const readOnly: RequestPolicy = {
 export interface Grade {
   readonly pass: boolean;
   readonly detail: string;
+  /**
+   * For a drawing, how far the closest one the run added lies from where it belongs: its ends'
+   * largest errors in bars and in price. Absent when the run drew none.
+   */
+  readonly error?: Miss | undefined;
+}
+
+interface Miss {
+  readonly bars: number;
+  readonly price: number;
 }
 
 const visible = (chart: State) =>
@@ -213,6 +223,46 @@ const near = (chart: State, point: Point, target: Point) =>
 // The drawings of this kind that a run added.
 const drawn = (start: State, end: State, name: string) =>
   added(start.shapes, end.shapes).filter((shape) => shape.name === name);
+
+// How far a drawn point lies from its target.
+const off = (chart: State, point: Point, target: Point): Miss => ({
+  bars: Math.abs(barIndex(chart, point.time) - barIndex(chart, target.time)),
+  price: Math.abs(point.price - target.price),
+});
+
+// The closest miss, each weighed by what passes: two bars and half a percent of `around`.
+const closest = (misses: ReadonlyArray<Miss>, around: number) => {
+  const weight = (miss: Miss) => Math.max(miss.bars / 2, miss.price / (Math.abs(around) * 0.005));
+
+  return misses.reduce<Miss | undefined>(
+    (best, miss) => (best === undefined || weight(miss) < weight(best) ? miss : best),
+    undefined,
+  );
+};
+
+// How far the closest drawn line's ends lie from these two points, either way round.
+const lineMiss = (chart: State, lines: State["shapes"], one: Point, other: Point) =>
+  closest(
+    lines.flatMap(({ points: [a, b] }) =>
+      a === undefined || b === undefined
+        ? []
+        : [
+            [off(chart, a, one), off(chart, b, other)] as const,
+            [off(chart, a, other), off(chart, b, one)] as const,
+          ].map(([x, y]) => ({
+            bars: Math.max(x.bars, y.bars),
+            price: Math.max(x.price, y.price),
+          })),
+    ),
+    one.price,
+  );
+
+// How far the closest horizontal line lies from a price.
+const levelMiss = (prices: ReadonlyArray<number>, target: number) =>
+  closest(
+    prices.map((at) => ({ bars: 0, price: Math.abs(at - target) })),
+    target,
+  );
 
 // Whether a drawn line runs between these two points, either way round.
 const joins = (chart: State, lines: State["shapes"], one: Point, other: Point) =>
@@ -359,6 +409,7 @@ const level: Task = {
     return {
       pass: prices.some((at) => within(at, high.price, 0.0025)),
       detail: `highest visible high ${price(high.price)}; lines at ${prices.map(price).join(", ") || "none"}`,
+      error: levelMiss(prices, high.price),
     };
   },
   solve: (page, start) =>
@@ -379,6 +430,7 @@ const trend: Task = {
     return {
       pass: joins(start, lines, low, high),
       detail: `low ${price(low.price)}, high ${price(high.price)}; lines ${ends(lines)}`,
+      error: lineMiss(start, lines, low, high),
     };
   },
   solve: (page, start) =>
@@ -460,6 +512,7 @@ const average: Task = {
     return {
       pass: prices.some((at) => within(at, target, 0.0025)),
       detail: `average close ${price(target)}; lines at ${prices.map(price).join(", ") || "none"}`,
+      error: levelMiss(prices, target),
     };
   },
   solve: (page, start) => {
@@ -496,6 +549,15 @@ const range: Task = {
         times.some((candle) => barIndex(start, time) === barIndex(start, candle)),
       ),
       detail: `widest candle at ${times.map(day).join(" or ")}; lines at ${marked.map(day).join(", ") || "none"}`,
+      error: closest(
+        marked.map((time) => ({
+          bars: Math.min(
+            ...times.map((candle) => Math.abs(barIndex(start, time) - barIndex(start, candle))),
+          ),
+          price: 0,
+        })),
+        1,
+      ),
     };
   },
   solve: (page, start) =>
@@ -552,6 +614,7 @@ const swing: Task = {
     return {
       pass: joins(start, lines, left, right),
       detail: `left low ${price(left.price)}, right low ${price(right.price)}; lines ${ends(lines)}`,
+      error: lineMiss(start, lines, left, right),
     };
   },
   solve: (page, start) =>
