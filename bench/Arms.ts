@@ -205,7 +205,7 @@ const instructions: { readonly [A in Arm]: string } = {
     "- On a chart, chart_state and chart_bars read the chart itself, its bars as numbers with times in UTC seconds; chart_draw, chart_range, chart_symbol, chart_timeframe and chart_indicator change it directly, and chart_point gives the viewport point of a time and price.",
   ),
   19: arm5With(
-    "- On a chart, chart_program runs a program whose chart.* calls read the chart itself: chart.state({}), chart.bars({ last, from, to }) as [time, open, high, low, close, volume] with times in UTC seconds, and chart.point({ points }), the viewport points of times and prices, which the pointer tools take. Its browser.* calls are the browser tools. Compute in the program and return only what you need.",
+    "- On a chart, chart_program runs a program whose chart.* calls read the chart itself: chart.state({}), chart.bars({ last, from, to }) as [time, open, high, low, close, volume] with times in UTC seconds, and chart.point({ points }), the viewport points of times and prices, which the pointer tools take. Its browser.* calls are the browser tools. Its code is one async arrow function, such as async () => { const { view } = await chart.state({}); return view; }. Compute in the program and return only what you need.",
   ),
 };
 
