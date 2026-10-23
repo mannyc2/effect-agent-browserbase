@@ -202,6 +202,36 @@ describe("arms 7 and 8, programs", () => {
     }),
   );
 
+  it.live("returns the pointer tools' receipts to a program, without their absent options", () =>
+    Effect.gen(function* () {
+      // Each call leaves an option out: a program's results cross a JSON boundary, which an
+      // undefined field cannot.
+      const pointing = `async () => {
+        const clicked = await browser.click_at({ x: 5, y: 5 });
+        // Before a field has focus and its caret blinks.
+        const still = await browser.wait_still({ seconds: 5 });
+        const typed = await browser.type_text({ text: "A" });
+        const pressed = await browser.press_keys({ keys: "Tab" });
+        return [clicked, still, typed, pressed].map((receipt) => receipt.did);
+      }`;
+
+      const result = yield* trial("checkout", 7, [
+        () => [call("browser_program", { code: pointing }), finish],
+        () => [call("give_up", { reason: "scripted" }), finish],
+      ]);
+
+      const [, second] = result.seen;
+
+      assert.isDefined(second);
+      if (second === undefined) return;
+      const shown = textOf(second.prompt);
+
+      assert.notInclude(shown, "outside JSON");
+      for (const did of ["Clicked", "Typed", "Pressed Tab.", "The screen is still."])
+        assert.include(shown, did);
+    }),
+  );
+
   it.live("offers the program beside the tools in arm 8", () =>
     Effect.gen(function* () {
       const result = yield* trial("checkout", 8, [

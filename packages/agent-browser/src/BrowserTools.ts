@@ -337,7 +337,12 @@ const pointing = (
     action?: Action,
   ) =>
     controller.perform(run).pipe(
-      Effect.map(({ value, followed }) => ({ did: did(value), followed, action })),
+      // A program reads a receipt as JSON, which has no undefined, so absent fields are left out.
+      Effect.map(({ value, followed }) =>
+        action === undefined
+          ? { did: did(value), followed }
+          : { did: did(value), followed, action },
+      ),
       Effect.mapError(PageControl.useError),
     );
 
@@ -349,7 +354,10 @@ const pointing = (
         {
           _tag: "Click",
           target: { x, y },
-          options: { button, clickCount: double === true ? 2 : 1 },
+          options: {
+            clickCount: double === true ? 2 : 1,
+            ...(button === undefined ? {} : { button }),
+          },
         },
       ),
     hover: (place) =>
@@ -378,13 +386,20 @@ const pointing = (
       act(
         (page) => page.type(typed, { submit }),
         () => `Typed ${JSON.stringify(typed)}${submit === true ? " and pressed Enter" : ""}.`,
-        { _tag: "Type", text: typed, options: { submit } },
+        { _tag: "Type", text: typed, ...(submit === undefined ? {} : { options: { submit } }) },
       ),
     press_keys: ({ keys, times, holdMillis }) =>
       act(
         (page) => page.press(keys, { times, holdMillis }),
         () => `Pressed ${keys}${times === undefined || times === 1 ? "" : ` ${times} times`}.`,
-        { _tag: "Press", keys, options: { times, holdMillis } },
+        {
+          _tag: "Press",
+          keys,
+          options: {
+            ...(times === undefined ? {} : { times }),
+            ...(holdMillis === undefined ? {} : { holdMillis }),
+          },
+        },
       ),
     zoom: (region) =>
       vision !== false
