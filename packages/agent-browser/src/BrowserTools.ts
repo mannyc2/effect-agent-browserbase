@@ -457,6 +457,36 @@ const missing = (what: string) =>
     }),
   );
 
+/** The `zoom` tool's handler: a crop of the current tab, shown before the next turn. */
+const cropping =
+  (
+    controller: PageControl.Controller,
+    zooms: Ref.Ref<Array<Page.Zoom>>,
+    vision: Vision,
+    scale: Ref.Ref<number>,
+    zoomed: { readonly scale: "device" } | undefined,
+  ) =>
+  (region: ConstructorParameters<typeof Page.Region>[0]) =>
+    vision !== false
+      ? Effect.all([controller.current, Ref.get(scale)]).pipe(
+          Effect.flatMap(([page, scale]) =>
+            page.zoom(viewportRegion(new Page.Region(region), scale), zoomed),
+          ),
+          Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
+          Effect.map(() => ({
+            did: `Cropped (${region.x}, ${region.y}), ${region.width}x${region.height}: it is shown before your next turn if this tab is still current.`,
+            followed: [],
+          })),
+          Effect.mapError(PageControl.useError),
+          controller.withTask,
+        )
+      : Effect.fail(
+          new BrowserUse.BrowserUseError({
+            code: "invalid",
+            message: "These tools show no pictures, so a crop cannot be shown.",
+          }),
+        );
+
 /**
  * The pointer tools' handlers over the controller's current tab. Each sets `pointed` once its input
  * reaches the page, but going back. Points and crops are in the pictures' pixels, `scale` to a
@@ -482,7 +512,12 @@ const pointing = (
       Effect.tap(() =>
         action === undefined || action._tag === "Back" ? Effect.void : Ref.set(pointed, true),
       ),
-      Effect.map(({ value, followed }) => ({ did: did(value), followed, action })),
+      // A program reads a receipt as JSON, which has no undefined, so absent fields are left out.
+      Effect.map(({ value, followed }) =>
+        action === undefined
+          ? { did: did(value), followed }
+          : { did: did(value), followed, action },
+      ),
       Effect.mapError(PageControl.useError),
     );
 
@@ -524,7 +559,11 @@ const pointing = (
   return Pointer.of({
     click_at: ({ x, y, double, button }) =>
       Effect.flatMap(Ref.get(scale), (scale) => {
-        const options = { button, clickCount: double === true ? 2 : 1 };
+        const options = {
+          clickCount: double === true ? 2 : 1,
+          ...(button === undefined ? {} : { button }),
+        };
+
         const at = { x: x / scale, y: y / scale };
 
         return placed(
@@ -576,34 +615,22 @@ const pointing = (
       act(
         (page) => page.type(typed, { submit }),
         () => `Typed ${JSON.stringify(typed)}${submit === true ? " and pressed Enter" : ""}.`,
-        { _tag: "Type", text: typed, options: { submit } },
+        { _tag: "Type", text: typed, ...(submit === undefined ? {} : { options: { submit } }) },
       ),
     press_keys: ({ keys, times, holdMillis }) =>
       act(
         (page) => page.press(keys, { times, holdMillis }),
         () => `Pressed ${keys}${times === undefined || times === 1 ? "" : ` ${times} times`}.`,
-        { _tag: "Press", keys, options: { times, holdMillis } },
+        {
+          _tag: "Press",
+          keys,
+          options: {
+            ...(times === undefined ? {} : { times }),
+            ...(holdMillis === undefined ? {} : { holdMillis }),
+          },
+        },
       ),
-    zoom: (region) =>
-      vision !== false
-        ? Effect.all([controller.current, Ref.get(scale)]).pipe(
-            Effect.flatMap(([page, scale]) =>
-              page.zoom(viewportRegion(new Page.Region(region), scale), zoomed),
-            ),
-            Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
-            Effect.map(() => ({
-              did: `Cropped (${region.x}, ${region.y}), ${region.width}x${region.height}: it is shown before your next turn if this tab is still current.`,
-              followed: [],
-            })),
-            Effect.mapError(PageControl.useError),
-            controller.withTask,
-          )
-        : Effect.fail(
-            new BrowserUse.BrowserUseError({
-              code: "invalid",
-              message: "These tools show no pictures, so a crop cannot be shown.",
-            }),
-          ),
+    zoom: cropping(controller, zooms, vision, scale, zoomed),
     wait_still: ({ seconds }) =>
       act(
         (page) =>
