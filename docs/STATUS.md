@@ -44,8 +44,9 @@ shows one after pointer input, and over a canvas, a video or another site's fram
 and 10 use them. In their first run, they did the work on the page about as often as arm 5, which
 shows a picture every turn: 42 and 43 of 45 trials, against 44. They cost 42% and 46% less per
 trial, because a call that carried a picture did not extend the provider's prompt cache: the
-provider's own breakpoint fell inside the picture, which the next call drops. The bench now marks
-each request's last tool result as a breakpoint, which cut arm 5's cost per operate trial by 22%
+provider's own breakpoint fell inside the picture, which the next call drops.
+`effect-agent-browser`'s `PromptCache.layer` now marks each request's last tool result as a
+breakpoint. In the bench, that cut arm 5's cost per operate trial by 22%
 and on the TradingView demo by 53%. A code answer now passes when it quotes the issued code.
 `effect-browser` takes screenshots and zooms in device pixels, and `effect-agent-browser`'s
 `pixels: "device"` shows them and takes points in them. Bench arms 11 and 12 show half-size

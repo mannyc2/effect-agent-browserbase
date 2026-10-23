@@ -11,7 +11,6 @@ import {
   eligibleEndpoints,
   ledger,
   ListedEndpoint,
-  markHistory,
   modelRunner,
   recordedCharge,
 } from "../Budget.ts";
@@ -336,63 +335,6 @@ describe("recorded receipts", () => {
     assert.isUndefined(recordedCharge(body({ ...usage, is_byok: true, cost: 0.0001 })));
     assert.isUndefined(recordedCharge(body(usage)));
     assert.isUndefined(recordedCharge('{"error":{"message":"overloaded"}}'));
-  });
-});
-
-describe("prompt cache", () => {
-  it("marks the last tool result, or before any the system message, ahead of the turn's picture", () => {
-    const picture = {
-      role: "user",
-      content: [
-        { type: "text", text: "The current tab's viewport." },
-        { type: "image_url", image_url: { url: "data:image/jpeg;base64,AA==" } },
-      ],
-    } as const;
-
-    const first: Parameters<typeof markHistory>[0] = [
-      { role: "system", content: [{ type: "text", text: "You operate a browser." }] },
-      { role: "user", content: "Find the cheapest tent." },
-      picture,
-    ];
-
-    const later: Parameters<typeof markHistory>[0] = [
-      ...first.slice(0, 2),
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: ["a", "b"].map((id) => ({
-          id,
-          type: "function",
-          function: { name: "observe", arguments: "{}" },
-        })),
-      },
-      { role: "tool", tool_call_id: "a", content: '{"text":"one"}' },
-      { role: "tool", tool_call_id: "b", content: '{"text":"two"}' },
-      picture,
-    ];
-
-    const mark = { type: "ephemeral" } as const;
-
-    assert.deepStrictEqual(markHistory(first), [
-      {
-        role: "system",
-        content: [{ type: "text", text: "You operate a browser.", cache_control: mark }],
-      },
-      ...first.slice(1),
-    ]);
-    assert.deepStrictEqual(markHistory(later), [
-      ...later.slice(0, 4),
-      {
-        role: "tool",
-        tool_call_id: "b",
-        content: [{ type: "text", text: '{"text":"two"}', cache_control: mark }],
-      },
-      picture,
-    ]);
-
-    const unmarked = first.slice(1);
-
-    assert.strictEqual(markHistory(unmarked), unmarked);
   });
 });
 

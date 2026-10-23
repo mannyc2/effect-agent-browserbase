@@ -465,7 +465,8 @@ $0.54 in all.
   the legend's values. The trend line missed in every arm's trials, again 2.4 to 2.6 above the low.
 
 The second run, on 2026-10-23, repeated the first with two fixes and added arms 11 and 12. Each
-request now marks its last tool result as a prompt-cache breakpoint (`markHistory` in `Budget.ts`),
+request now marks its last tool result as a prompt-cache breakpoint (`effect-agent-browser`'s
+`PromptCache.layer` beneath the OpenRouter client),
 and a code answer passes when it quotes the issued code. Each of arms 5, 9, 10, 11 and 12 ran the
 same trials as before. With a one-trial check, the run cost $0.68.
 
