@@ -43,8 +43,15 @@ option adds two modes. `"ask"` shows a screenshot only after the model calls `lo
 shows one after pointer input, and over a canvas, a video or another site's frame. Bench arms 9
 and 10 use them. In their first run, they did the work on the page about as often as arm 5, which
 shows a picture every turn: 42 and 43 of 45 trials, against 44. They cost 42% and 46% less per
-trial, because a call that carries a picture does not extend the provider's prompt cache. The
-bench README has the run.
+trial, because a call that carried a picture did not extend the provider's prompt cache: the
+provider's own breakpoint fell inside the picture, which the next call drops. The bench now marks
+each request's last tool result as a breakpoint, which cut arm 5's cost per operate trial by 22%
+and on the TradingView demo by 53%. A code answer now passes when it quotes the issued code.
+`effect-browser` takes screenshots and zooms in device pixels, and `effect-agent-browser`'s
+`pixels: "device"` shows them and takes points in them. Bench arms 11 and 12 show half-size
+(640×360) and sharper (1920×1080) pictures. Half size did the work as often as arm 5 for a third
+less. Sharper passed all 45 operate trials and was the first arm to draw TradingView's trend line
+through the low, for 56% more. The bench README has both runs.
 
 ## 0.3
 

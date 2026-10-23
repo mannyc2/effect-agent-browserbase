@@ -203,7 +203,8 @@ continues 500 ms after a trial so it ends on the settled page. Lost frames or ev
 New recordings also retain complete moments (including their JSON-encoded frame bytes), the raw
 fixture state actually read by the grader, full provider request/response pairs keyed by turn,
 and HTTP exchanges beneath the real provider codec. The existing live opt-in and reservation cap
-still apply before any recorded provider request. Recordings remain private local evidence.
+still apply before any recorded provider request, and each recorded call is settled at the charge
+its receipt shows, so the cap bounds a trial's spend rather than its calls. Recordings remain private local evidence.
 `bun run --cwd bench bench regrade path/to/recording.json` re-runs the current task grader using
 that saved truth, with no browser or model; a changed task prompt is refused. The public
 `effect-agent-browser/testing` HTTP cassette can replay the saved `http` exchanges beneath the
@@ -462,6 +463,45 @@ $0.54 in all.
   TradingView demo, arm 10 cost half as much and passed two fewer: it missed both `zoom` trials,
   and once reported the middle band as the upper one without looking. The outline does not label
   the legend's values. The trend line missed in every arm's trials, again 2.4 to 2.6 above the low.
+
+The second run, on 2026-10-23, repeated the first with two fixes and added arms 11 and 12. Each
+request now marks its last tool result as a prompt-cache breakpoint (`markHistory` in `Budget.ts`),
+and a code answer passes when it quotes the issued code. Each of arms 5, 9, 10, 11 and 12 ran the
+same trials as before. With a one-trial check, the run cost $0.68.
+
+| Arm | Operate | On the page | Calls per trial | With a picture | Input read from the cache | $ per trial | Median s | TradingView demo |
+| --- | ------- | ----------- | --------------- | -------------- | ------------------------- | ----------- | -------- | ---------------- |
+| 5   | 41/45   | 41/45       | 6.0             | 100%           | 65%                       | 0.0018      | 10.6     | 8/12             |
+| 9   | 42/44   | 42/44       | 6.5             | 35%            | 77%                       | 0.0013      | 10.8     | 8/12             |
+| 10  | 43/45   | 43/45       | 7.8             | 17%            | 82%                       | 0.0012      | 10.8     | 8/12             |
+| 11  | 42/45   | 42/45       | 5.8             | 100%           | 78%                       | 0.0012      | 10.7     | 8/12             |
+| 12  | 45/45   | 45/45       | 6.0             | 100%           | 53%                       | 0.0028      | 12.7     | 10/12            |
+
+- **The cache:** after a call with a picture, the next call found more of its prompt cached in 79%
+  to 81% of calls in arms 5, 11 and 12. In the first run it found none. Arm 5 read 65% of its input
+  from the cache, against 41%, and cost 22% less per operate trial. On the TradingView demo it cost
+  53% less, $0.051 for 12 trials against $0.107. Arms 9 and 10, with fewer pictures, changed
+  little.
+- **Picture size:** on gpt-6-luna a picture's input tokens grow with its area: about 255 at
+  640×360, 1,070 at 1280×720 and 2,420 at 1920×1080. These are first calls, set against those of
+  arms 9 and 10, which show no picture on the first call.
+- **Half size:** arm 11 did the work as often as arm 5, 42 against 41 of 45, for a third less per
+  trial. It missed the same two `catalog-buy` seeds as arm 5, and once saved a note aligned right
+  instead of justified. On the TradingView demo it passed 8 of 12, as arm 5 did.
+- **Sharper:** arm 12 was the only arm to pass all 45 operate trials. It passed `note-format` 5 of
+  5, against arm 5's 3, in fewer calls, and with arms 9 and 10 every `catalog-buy` trial. The four
+  pairs where it and arm 5 differ all favor it, but that is not beyond chance (stratified exact p
+  0.125, Holm 1). On TradingView it was the first arm to pass `trend`, in both trials: its lines'
+  low ends landed at 325.88 and 325.92 against the low of 325.81, where every other arm's landed
+  2.0 to 2.6 above. It cost 56% more per operate trial than arm 5, and 62% more on the demo.
+- **Answers:** with a code inside a sentence now passing, arms 9 and 10 passed 42 and 43, as many
+  as did the work on the page.
+- **Other failures:** `zoom` failed in every arm. One call's response did not decode, so its
+  trial counts as an infrastructure failure and leaves its pairs. The bench never learned that
+  call's charge; OpenRouter's usage shows the run cost $0.68 in all.
+- **Time:** the $1.20 cap admitted three to five calls at a time at $0.234 reserved each, so trials
+  waited a median 6 to 8 s for the budget. The medians above leave that wait out. A call with a
+  picture took 2.6 s in arms 5 and 11 and 2.9 s in arm 12.
 
 ## Outcomes
 
