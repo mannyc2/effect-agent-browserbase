@@ -541,6 +541,36 @@ ran `trend` and the four chart data tasks three times each. With one-trial check
   ran out of their 24 turns before drawing the line. Arm 12's `swing` lines ended at the right
   prices, 325.92 and 330.74, yet failed twice: at least one end lay more than two bars off.
 
+Arms 13 to 16 ran on 2026-10-23 against arm 5, with luna at medium reasoning. Each ran
+`note-format`, `payment-refund` and `casino-play` five times on eval seeds 201 to 205, and the
+TradingView demo's ten tasks twice. By the records, the run cost $0.85, including an earlier
+attempt whose browsers were all lost at once. Arm 5 lost seven chart trials to the budget: one
+request ended without a decoded response, its $0.23 reservation stayed held, and no later call fit
+the $0.45 cap. Those seven ran again. The TradingView runner now records such an ending as `denied`
+or `infrastructure`, not as the provider's error.
+
+| Arm | Operate | Calls per trial | $ per trial | Median s | TradingView demo | $ per chart trial | Median chart s |
+| --- | ------- | --------------- | ----------- | -------- | ---------------- | ----------------- | -------------- |
+| 5   | 14/15   | 9.5             | 0.0029      | 37.5     | 15/20            | 0.0045            | 33             |
+| 13  | 14/15   | 9.1             | 0.0029      | 42.6     | 14/20            | 0.0051            | 35             |
+| 14  | 15/15   | 10.1            | 0.0030      | 40.5     | 13/20            | 0.0039            | 40             |
+| 15  | 14/15   | 9.2             | 0.0029      | 39.2     | 12/20            | 0.0052            | 43             |
+| 16  | 14/15   | 11.3            | 0.0034      | 56.5     | 13/20            | 0.0058            | 61             |
+
+- **No arm beat arm 5.** On operate tasks, no pair differed in more than one trial each way. On
+  charts, each arm failed two or three trials that arm 5 passed, and only arm 13 passed one that
+  arm 5 failed (exact p 0.25 to 1).
+- **The miss is the candle, not the pointer.** `trend` and `swing` failed in every arm. Each line's
+  low end sat at 328.2 to 328.4, on a candle beside the lowest low of 325.81, so its price missed by
+  about 2.5 with boxes, after zooms or through a crop. Arm 15 zoomed twice as often as arm 5 and still
+  chose that candle. `level`, whose price is the visible high, passed everywhere with no miss.
+- **Find and changes:** arm 14 called `find` three times in 35 trials. With only the changed lines
+  after an action, a call's input fell 3%, but the arm made 6% more calls, so a trial cost the same.
+- **Placement by crop** doubled the pointer calls, 82 against 42 on operate tasks, and took 51%
+  longer, for 17% more per trial. Its lines missed by as much as arm 5's.
+- **Boxes** changed neither calls nor cost on operate tasks, and arm 13 hovered three times as often
+  as arm 5 on charts.
+
 ## Outcomes
 
 Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one

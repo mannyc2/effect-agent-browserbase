@@ -32,6 +32,7 @@ import {
   type ModelRunner,
   modelRunner,
   optedIn,
+  type Refusal,
   refuse,
 } from "./Budget.ts";
 import { errorText, hostedSessionSeconds } from "./run.ts";
@@ -97,8 +98,14 @@ const flags = {
   ),
 };
 
-/** How a model run ended without an answer, in the bench's own words. */
-const ending = (cause: Cause.Cause<unknown>) => {
+/**
+ * How a model run ended without an answer, in the bench's own words. A call the ledger refused, or
+ * one that ended without a decoded response, is the bench's failure, not the model's.
+ */
+const ending = (cause: Cause.Cause<unknown>, refusal: Refusal | null) => {
+  if (refusal === "budget") return "denied: no call fit the budget";
+  if (refusal === "unresolved") return "infrastructure: a request ended without a decoded response";
+  if (refusal === "bound") return "infrastructure: a charge exceeded its reservation";
   const error = Cause.squash(cause);
 
   if (Schema.is(Arms.GaveUp)(error)) return `gave up: ${error.reason}`;
@@ -152,10 +159,12 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
         run.runner.withModel(agent, run.reasoning, account).pipe(Effect.timeout("12 minutes")),
       );
 
+      const calls = yield* account.calls;
+
       if (Exit.isSuccess(exit)) answer = exit.value.answer;
-      else ended = ending(exit.cause);
+      else ended = ending(exit.cause, calls.refusal);
       usd = (yield* account.snapshot).knownUsd;
-      modelCalls = (yield* account.calls).log;
+      modelCalls = calls.log;
     }
 
     const end = yield* TradingView.state(page);

@@ -56,7 +56,9 @@ chart trials it failed and failed 1 it passed (exact p 0.039), and they drew Tra
 line through the low every time, where arm 5 never did. On page tasks they did no better in the
 repeat, for 56% more. Moments (arm 6) cost 2.2 times arm 5's and did no better.
 Arms 13 to 16 tie the outline to the picture: `boxes` gives each control's box, `find` and
-`changes` lean the text, and `placement: "crop"` shows a crop before a pointer acts. The bench
+`changes` lean the text, and `placement: "crop"` shows a crop before a pointer acts. None beat
+arm 5, on page tasks or on charts. On TradingView's trend and swing lines, every arm drew from the
+candle beside the lowest, so the miss is reading the chart, not placing the pointer. The bench
 README has the runs.
 
 ## 0.3
