@@ -41,6 +41,7 @@ const markHistory = (messages: ReadonlyArray<unknown>) => {
       Predicate.hasProperty(message, "role") &&
       (message.role === "tool" || message.role === "system"),
   );
+
   const message = messages[at];
 
   if (!Predicate.hasProperty(message, "content")) return messages;

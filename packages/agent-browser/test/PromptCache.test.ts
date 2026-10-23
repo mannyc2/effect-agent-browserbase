@@ -15,6 +15,7 @@ const picture = {
 
 const system = { role: "system", content: [{ type: "text", text: "You operate a browser." }] };
 const task = { role: "user", content: "Find the cheapest tent." };
+
 const calls = {
   role: "assistant",
   content: null,
@@ -24,6 +25,7 @@ const calls = {
     function: { name: "observe", arguments: "{}" },
   })),
 };
+
 const result = (id: string, text: string) => ({ role: "tool", tool_call_id: id, content: text });
 const mark = { type: "ephemeral" };
 
@@ -31,6 +33,7 @@ const mark = { type: "ephemeral" };
 const sent = (url: string, payload: object) =>
   Effect.gen(function* () {
     const bodies: Array<string> = [];
+
     const recording = Layer.succeed(
       HttpClient.HttpClient,
       HttpClient.make((request) => {

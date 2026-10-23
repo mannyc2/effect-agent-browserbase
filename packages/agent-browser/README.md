@@ -60,8 +60,8 @@ or, before there is one, its system message. Provide it to the OpenRouter client
 ```ts
 import { OpenRouterClient } from "@effect/ai-openrouter";
 import { Config, Layer } from "effect";
-import { FetchHttpClient } from "effect/http";
 import { PromptCache } from "effect-agent-browser";
+import { FetchHttpClient } from "effect/http";
 
 const openRouter = OpenRouterClient.layerConfig({
   apiKey: Config.Redacted("OPENROUTER_API_KEY"),
