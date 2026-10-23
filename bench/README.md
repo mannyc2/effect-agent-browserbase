@@ -292,7 +292,8 @@ at once: a line at the last 20 closes' average (`average`), a mark on the candle
 range in view (`range`), the change from the leftmost open to the latest close (`change`) and a
 line between the lowest lows of the view's two halves (`swing`). Each is graded on the chart's own
 state, read through the page's chart API, which the model never sees. Graders count only the
-indicators and drawings a run adds.
+indicators and drawings a run adds. A drawing task's record also gives `error`, how far the closest
+drawing the run added lies from where it belongs: its ends' largest miss in bars and in price.
 
 ```sh
 bun run bench tradingview                       # scripted solutions on the demo, at no cost
@@ -356,6 +357,10 @@ a code given inside a sentence.
 | 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                   | As arm 5                                       |
 | 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels            | As arm 5                                       |
 | 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels            | As arm 5                                       |
+| 13  | Boxes in the outline: arm 5 with each control's box, `WxH at (x,y)`, on its outline line                                                                              | As arm 5                                       |
+| 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                             | As arm 5                                       |
+| 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                          | As arm 5                                       |
+| 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                         | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has

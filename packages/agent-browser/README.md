@@ -109,6 +109,15 @@ the layer serves every tool either way. `make({ mode: "single" })` lets `act` ta
   `BrowserTools.Look` to merge into the agent's toolkit; crops still follow `zoom`. `vision: "page"`
   also shows it after pointer input, and while the viewport shows a canvas, a video or another
   site's frame, where the outline cannot say what is there.
+- `BrowserTools.Find` holds `find`, which lists the whole page's outline lines that hold a text,
+  in view or not, with their refs. Merge it into the agent's toolkit; the layer serves it either way.
+- `boxes: true` ends each control's line in the outline with its box, `WxH at (x,y)` in viewport
+  CSS pixels, so the model can match a ref to what the screenshot shows there. `changes: true`
+  gives, after an action, only the outline's lines gone and new since the tab's last whole look,
+  when those are fewer; `observe` reads the whole outline again.
+- `placement: "crop"` makes `click_at` and `drag` first show a crop of the viewport around each
+  point and act only once called at points inside crops already shown, which costs a turn per
+  placement. A ref needs no crop.
 - An observation after an action begins with what followed it: a dialog and how the browser
   answered it, where the page went, a tab it opened and up to three changes its input caused,
   such as `"Full" became "Kept"`. A pointer tool's result says the same in `followed`.
