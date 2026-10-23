@@ -178,6 +178,30 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("with placement by crop, shows a crop around a point before clicking in it", () =>
+    Effect.gen(function* () {
+      const { page, prompts } = yield* run(
+        "Press spin once",
+        [
+          () => calling(call("click_at", { x: 300, y: 320 })),
+          () => calling(call("click_at", { x: 302, y: 318 }), call("wait_still", { seconds: 10 })),
+          () => answer("Spun once."),
+        ],
+        { placement: "crop" },
+      );
+
+      const { value: state } = yield* page.read(() => Reflect.get(window, "state"), {
+        arg: undefined,
+        result: Schema.Struct({ spins: Schema.Int }),
+      });
+
+      assert.strictEqual(state.spins, 1);
+      assert.include(textOf(prompts[1]!), "Not done yet");
+      assert.include(textOf(prompts[1]!), "Zoom: viewport origin (200, 260), 200x120");
+      assert.include(textOf(prompts[2]!), "at (302, 318)");
+    }),
+  );
+
   it.effect("with device pixels, shows the screen at the device's scale and maps points back", () =>
     Effect.gen(function* () {
       const { page, prompts } = yield* run(

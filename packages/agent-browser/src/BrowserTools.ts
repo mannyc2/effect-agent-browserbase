@@ -248,6 +248,19 @@ export const Control = Toolkit.make(
   ),
 );
 
+/**
+ * The tool that finds lines of the whole page's outline, in view or not. The layer serves it
+ * whether or not the agent has it.
+ */
+export const Find = Toolkit.make(
+  pageTool(
+    "find",
+    "Find the lines of the whole page's outline, in view or not, that hold this text, ignoring case: controls with their refs, headings and text.",
+    { text: Schema.NonEmptyString.check(Schema.isMaxLength(300)) },
+    PageControl.Observation,
+  ),
+);
+
 const observe = Tool.make("observe", {
   description: "Read the visible page and controls. Only observed controls may receive actions.",
   parameters: Tool.EmptyParams,
@@ -301,6 +314,12 @@ export interface LayerOptions extends PageControl.Options {
    * device scale factor, so smaller below 1 and sharper above. Moments' frames are not changed.
    */
   readonly pixels?: "css" | "device" | undefined;
+  /**
+   * How `click_at` and `drag` place a point: `"point"`, the default, at once; `"crop"`, first
+   * showing a crop of the viewport around each point, then placing once called at points inside
+   * crops already shown. A ref needs no crop.
+   */
+  readonly placement?: "point" | "crop" | undefined;
 }
 
 const text = (value: string) => ({ type: "text" as const, text: value });
@@ -397,6 +416,21 @@ const viewportRegion = (region: Page.Region, scale: number) => {
 
 const named = (to: Page.Target) => (typeof to === "string" ? to : `(${to.x}, ${to.y})`);
 
+// The 200x120 region around a point, within a viewport at least that size.
+const around = (point: Page.Point, viewport: { readonly width: number; readonly height: number }) =>
+  new Page.Region({
+    x: Math.round(Math.min(Math.max(point.x - 100, 0), Math.max(viewport.width - 200, 0))),
+    y: Math.round(Math.min(Math.max(point.y - 60, 0), Math.max(viewport.height - 120, 0))),
+    width: 200,
+    height: 120,
+  });
+
+const holds = ({ region }: Page.Zoom, point: Page.Point) =>
+  point.x >= region.x &&
+  point.y >= region.y &&
+  point.x <= region.x + region.width &&
+  point.y <= region.y + region.height;
+
 const missing = (what: string) =>
   Effect.fail(
     new BrowserUse.BrowserUseError({
@@ -408,7 +442,7 @@ const missing = (what: string) =>
 /**
  * The pointer tools' handlers over the controller's current tab. Each sets `pointed` once its input
  * reaches the page, but going back. Points and crops are in the pictures' pixels, `scale` to a
- * CSS pixel.
+ * CSS pixel. With placement by crop, `framed` holds the crops around the points last asked.
  */
 const pointing = (
   controller: PageControl.Controller,
@@ -417,7 +451,10 @@ const pointing = (
   pointed: Ref.Ref<boolean>,
   pixels: "css" | "device",
   scale: Ref.Ref<number>,
+  framed: Ref.Ref<Array<Page.Zoom>> | undefined,
 ) => {
+  const zoomed = pixels === "device" ? ({ scale: "device" } as const) : undefined;
+
   const act = <A>(
     run: (page: Page.Page) => Effect.Effect<A, BrowserError>,
     did: (value: A) => string,
@@ -431,16 +468,55 @@ const pointing = (
       Effect.mapError(PageControl.useError),
     );
 
+  // Act once crops shown since the model asked hold every point; otherwise show crops around them.
+  const placed = <A>(
+    targets: ReadonlyArray<Page.Target>,
+    asked: string,
+    run: Effect.Effect<A, BrowserUse.BrowserUseError>,
+  ) =>
+    Effect.gen(function* () {
+      const points = targets.filter((to) => typeof to !== "string");
+
+      if (framed === undefined || vision === false || points.length === 0) return yield* run;
+      const pending = yield* Ref.get(zooms);
+      const shown = (yield* Ref.get(framed)).filter((crop) => !pending.includes(crop));
+
+      if (points.every((point) => shown.some((crop) => holds(crop, point)))) {
+        yield* Ref.set(framed, []);
+
+        return yield* run;
+      }
+
+      const crops = yield* Effect.gen(function* () {
+        const page = yield* controller.current;
+        const viewport = yield* page.viewport;
+
+        return yield* Effect.forEach(points, (point) => page.zoom(around(point, viewport), zoomed));
+      }).pipe(Effect.mapError(PageControl.useError), controller.withTask);
+
+      yield* Ref.set(framed, crops);
+      yield* Ref.update(zooms, (all) => [...all, ...crops]);
+
+      return {
+        did: `Not done yet: a crop around ${asked} is shown before your next turn. Call again at the points you mean, inside the crops, to act.`,
+        followed: [],
+      };
+    });
+
   return Pointer.of({
     click_at: ({ x, y, double, button }) =>
       Effect.flatMap(Ref.get(scale), (scale) => {
         const options = { button, clickCount: double === true ? 2 : 1 };
         const at = { x: x / scale, y: y / scale };
 
-        return act(
-          (page) => page.click(at, options),
-          ({ element }) => `Clicked ${element} at (${x}, ${y}).`,
-          { _tag: "Click", target: at, options },
+        return placed(
+          [at],
+          `(${x}, ${y})`,
+          act(
+            (page) => page.click(at, options),
+            ({ element }) => `Clicked ${element} at (${x}, ${y}).`,
+            { _tag: "Click", target: at, options },
+          ),
         );
       }),
     hover: (place) =>
@@ -467,10 +543,14 @@ const pointing = (
             const start = viewportTarget(from.value, scale);
             const end = viewportTarget(to.value, scale);
 
-            return act(
-              (page) => page.drag(start, end),
-              () => `Dragged from ${named(from.value)} to ${named(to.value)}.`,
-              { _tag: "Drag", from: start, to: end },
+            return placed(
+              [start, end],
+              `each end, ${named(from.value)} and ${named(to.value)},`,
+              act(
+                (page) => page.drag(start, end),
+                () => `Dragged from ${named(from.value)} to ${named(to.value)}.`,
+                { _tag: "Drag", from: start, to: end },
+              ),
             );
           });
     },
@@ -490,10 +570,7 @@ const pointing = (
       vision !== false
         ? Effect.all([controller.current, Ref.get(scale)]).pipe(
             Effect.flatMap(([page, scale]) =>
-              page.zoom(
-                viewportRegion(new Page.Region(region), scale),
-                pixels === "device" ? { scale: "device" } : undefined,
-              ),
+              page.zoom(viewportRegion(new Page.Region(region), scale), zoomed),
             ),
             Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
             Effect.map(() => ({
@@ -555,6 +632,9 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
         const asked = yield* Ref.make(false);
         const pointed = yield* Ref.make(false);
 
+        const framed =
+          options.placement === "crop" ? yield* Ref.make<Array<Page.Zoom>>([]) : undefined;
+
         // Whether the screen is shown before a turn: always with `true`, after `look` with `"ask"`,
         // and with `"page"` also after pointer input or while the viewport shows a picture.
         const wanted = (page: Page.Page) =>
@@ -581,7 +661,8 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
             press: control.press,
             select_tab: control.selectTab,
           }),
-          Pointer.toLayer(pointing(controller, zooms, vision, pointed, pixels, scale)),
+          Pointer.toLayer(pointing(controller, zooms, vision, pointed, pixels, scale, framed)),
+          Find.toLayer({ find: control.find }),
           Look.toLayer({
             look: () =>
               vision === false
