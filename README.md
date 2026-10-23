@@ -16,6 +16,7 @@ evidence; applications own their decisions and durable business records.
 | [`effect-agent-browser`](packages/agent-browser)         | Its pages as a Yielded agent's browser tools                       |
 | [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
 | [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
+| [`effect-browser-tradingview`](packages/tradingview)     | TradingView charts' data, exact screen points and agent tools      |
 | [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
 | [`site`](site) (private)                                 | The docs site, its narrated demo and a player for recorded runs    |
 

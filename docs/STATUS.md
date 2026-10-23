@@ -58,8 +58,19 @@ repeat, for 56% more. Moments (arm 6) cost 2.2 times arm 5's and did no better.
 Arms 13 to 16 tie the outline to the picture: `boxes` gives each control's box, `find` and
 `changes` lean the text, and `placement: "crop"` shows a crop before a pointer acts. None beat
 arm 5, on page tasks or on charts. On TradingView's trend and swing lines, every arm drew from the
-candle beside the lowest, so the miss is reading the chart, not placing the pointer. The bench
-README has the runs.
+candle beside the lowest, so the miss is reading the chart, not placing the pointer.
+
+A fifth package, `effect-browser-tradingview` (unpublished), reads a TradingView chart's own data:
+its state, its bars as arrays, the viewport point of a time and a price, and the time and price
+under a point. It can also change the chart through its API. Its `ChartTools` serve a Yielded agent
+over `effect-agent-browser`'s new `BrowserTools.Controller`, the run's controller, which any
+application's own tools can use. On the demo, chart reads lifted arm 5's 17 of 30 to 24 with the
+pointer still acting (arm 17), 26 with writes (arm 18, for 40% less), and 30 of 30 when programs
+read the chart (arm 19, 13 pairs to none, exact p 0.0002). With luna-pro at low reasoning in
+Browserbase, arm 19 passed 12 of 20 against arm 5's 7. That run found that a program's pointer calls
+failed: their receipts held absent fields as `undefined`, which a program's JSON cannot carry. They
+now leave them out. luna-pro counts about 3.5 times luna's tokens for the same input, at the same
+per-token price. The bench README has the runs.
 
 ## 0.3
 
@@ -269,7 +280,14 @@ with agents on Yielded Agent, the renamed Effect Agent:
   check installs it from the registry with npm and with Bun's isolated linker, holding each to
   the registry integrity and to one copy of each runtime package. Earlier releases used a
   commit-pinned release-candidate archive from `vendor/yielded-agent`; it remains available for
-  their consumers, as [RELEASING.md](RELEASING.md) records.
+  their consumers, as [RELEASING.md](RELEASING.md) records. Its layer also provides the run's
+  controller as `BrowserTools.Controller`, so an application's own tools act on the tab the model
+  sees, with the run's task.
+- `effect-browser-tradingview` (unpublished): a TradingView chart's state, bars, and the viewport
+  points of times and prices, read from the chart's model, plus drawings, range, symbol, timeframe
+  and indicators through its API. `ChartTools` serves them as a Yielded agent's tools, and names the
+  reads for a Code Mode program. It is checked live on the Advanced Charts demo only; tradingview.com
+  lacks `setVisibleRange` and refuses drawings when signed out.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
 - Structured reads in one call to the page. `Page.find` returns the elements that a query of role,

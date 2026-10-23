@@ -345,22 +345,25 @@ trial counts when its page holds the work the task asked for, whatever the answe
 keeps this as `onPage`. The runs recorded below matched answers exactly, so their pass counts fail
 a code given inside a sentence.
 
-| Arm | Operate tasks                                                                                                                                                         | Understand tasks                               |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools        | The moment with its outline                    |
-| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                          | As arm 5                                       |
-| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                                   | `Moment.capture` as it is: frames and timeline |
-| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                          | As arm 5                                       |
-| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                       | As arm 5                                       |
-| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                  | As arm 5                                       |
-| 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look` | As arm 5                                       |
-| 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                   | As arm 5                                       |
-| 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels            | As arm 5                                       |
-| 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels            | As arm 5                                       |
-| 13  | Boxes in the outline: arm 5 with each control's box, `WxH at (x,y)`, on its outline line                                                                              | As arm 5                                       |
-| 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                             | As arm 5                                       |
-| 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                          | As arm 5                                       |
-| 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                         | As arm 5                                       |
+| Arm | Operate tasks                                                                                                                                                          | Understand tasks                               |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools         | The moment with its outline                    |
+| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                           | As arm 5                                       |
+| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                                    | `Moment.capture` as it is: frames and timeline |
+| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                           | As arm 5                                       |
+| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                        | As arm 5                                       |
+| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                   | As arm 5                                       |
+| 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look`  | As arm 5                                       |
+| 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                    | As arm 5                                       |
+| 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels             | As arm 5                                       |
+| 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels             | As arm 5                                       |
+| 13  | Boxes in the outline: arm 5 with each control's box, `WxH at (x,y)`, on its outline line                                                                               | As arm 5                                       |
+| 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                              | As arm 5                                       |
+| 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                           | As arm 5                                       |
+| 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                          | As arm 5                                       |
+| 17  | Chart reads: arm 5 with `effect-browser-tradingview`'s `chart_state`, `chart_bars`, `chart_point` and `chart_at`; drawings still by pointer, at `chart_point`'s points | As arm 5                                       |
+| 18  | Chart writes: arm 17 with `chart_draw`, `chart_range`, `chart_symbol`, `chart_timeframe` and `chart_indicator`, which change the chart with no visible input           | As arm 5                                       |
+| 19  | Chart programs: arm 5 with `chart_program`, whose JavaScript reads the chart as `chart.state`, `chart.bars`, `chart.point` and `chart.at` beside `browser.*`           | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
@@ -369,7 +372,7 @@ the task's page, so none offers `select_tab`. A run's steps come from its events
 request is sent and charged as one completion, so the budget sees every call. Arms 3 (parsed
 frames) and 4 (a local grounder) are not built.
 
-A program in arms 7 and 8 is one tool call. Its calls to the tools run one at a time, in order, at
+A program in arms 7, 8 and 19 is one tool call. Its calls to the tools run one at a time, in order, at
 most 64 of them in 90 seconds, and only what it returns or logs reaches the model, besides the
 screenshot before its next turn. Yielded's in-process executor (`@yielded/agent-testing`) runs it
 in the bench's own process with its globals shadowed: enough for the bench's pages, not a sandbox
@@ -567,6 +570,58 @@ or `infrastructure`, not as the provider's error.
   longer, for 17% more per trial. Its lines missed by as much as arm 5's.
 - **Boxes** changed neither calls nor cost on operate tasks, and arm 13 hovered three times as often
   as arm 5 on charts.
+
+Arms 17 to 19 ran on 2026-10-23 against arm 5, with luna at medium reasoning in local Chromium: the
+TradingView demo's ten tasks, three trials each. With one-trial checks, the run cost $0.47.
+
+| Arm | Chart tools             | TradingView demo | Paired with arm 5     | Calls per trial | $ per trial | Median s |
+| --- | ----------------------- | ---------------- | --------------------- | --------------- | ----------- | -------- |
+| 5   | None                    | 17/30            |                       | 8.5             | 0.0042      | 55       |
+| 17  | Reads; the pointer acts | 24/30            | 7 to 0, exact p 0.016 | 8.7             | 0.0044      | 51       |
+| 18  | Reads and writes        | 26/30            | 9 to 0, exact p 0.004 | 5.8             | 0.0025      | 26       |
+| 19  | Reads in a program      | 30/30            | 13 to 0, p 0.0002     | 8.1             | 0.0040      | 40       |
+
+- **Every chart arm beat arm 5,** and none failed a trial that arm 5 passed. Holm across the three
+  keeps each below 0.02.
+- **The chart's data wins where the picture misses.** `trend` passed 2, 2 and 3 times of three
+  against arm 5's none, `swing` 1, 2 and 3 times, and `average` 2, 3 and 3 times. Passing lines
+  ended at the low itself, 325.81 or 325.82, no bar off. Arm 5 again drew from the candle beside the
+  low, at 328.3 to 328.4. On `average` it took a median 25 turns hovering candles, and twice drew
+  no line.
+- **Reads, with the pointer acting** (arm 17): every change is still a visible input. It drew at
+  `chart_point`'s points with the pointer. Its trend miss chose the neighbouring candle, as arm 5's
+  did.
+- **Writes** (arm 18) were the cheapest and fastest: 40% less per trial than arm 5, in half the time.
+  It added RSI through `chart_indicator` in 3 turns against arm 5's 12, and drew through `chart_draw`
+  every time it drew. For `zoom` it used `chart_range` once in three trials, and missed it.
+- **Programs** (arm 19) passed every trial, all three zooms included, which no other arm passed more
+  than once. Its programs scrolled the chart in loops and read `chart.state` until 20 to 40 candles
+  were in view. Its input was the largest, 128,000 tokens a trial, but 85% came from the cache, so a
+  trial cost less than arm 5's.
+- `switch`, `rsi`, `level`, `bands` and `change` passed in every arm.
+
+Arms 5 and 19 then ran as a hosted, watched session would: luna-pro at low reasoning, in Browserbase
+at 1280×720, on the demo's ten tasks twice. luna-pro bills luna's per-token prices, but it counted
+about 3.5 times the tokens for the same input: the same text as 6,616 against 1,751, and the same
+1280×720 picture as 3,603 against about 1,070. So a trial cost about a cent, and the run $0.68.
+
+| Arm            | TradingView demo | $ per trial | Median s |
+| -------------- | ---------------- | ----------- | -------- |
+| 5              | 7/20             | 0.0094      | 58       |
+| 19, first try  | 10/20            | 0.0112      | 50       |
+| 19, with fixes | 12/20            | 0.0119      | 52       |
+
+- **The first try found a bug in programs.** There, `click_at`, `type_text`, `press_keys` and
+  `wait_still` failed, because their receipts held absent fields as `undefined`, which a program's
+  JSON cannot carry; 4 of 67 programs met it. Another 27 were not one async function but a
+  function's body or an invoked function, and four trials ended at three failed calls in a row.
+  With receipts fixed and arm 19's instruction showing a program's shape, 1 of 48 programs failed.
+- **Arm 19 led arm 5 again,** by 6 pairs to 1 (exact p 0.125); with Wave C's 13 to 0, by 19 to 1.
+  `swing` passed both times against none, and `rsi`, `trend`, `average` and `zoom` once each
+  against none. Arm 5 led only on `level`, once.
+- **Drawing through the toolbar is what fails.** In `level` and `range`, arm 19's programs found
+  the right price and candle, then drew with the wrong toolbar tool, or with none. Arm 5 left RSI's
+  length at 14 in both of its `rsi` trials.
 
 ## Outcomes
 

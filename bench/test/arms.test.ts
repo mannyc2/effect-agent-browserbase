@@ -247,6 +247,29 @@ describe("arms 13 to 16, the outline and the picture", () => {
   );
 });
 
+describe("arms 17 to 19, a chart's own tools", () => {
+  it.live("arm 17 reads the chart, arm 18 also changes it, and arm 19 reads it in programs", () =>
+    Effect.gen(function* () {
+      const give = () => [call("give_up", { reason: "scripted" }), finish];
+      const reads = yield* trial("checkout", 17, [give]);
+      const writes = yield* trial("checkout", 18, [give]);
+
+      const program = yield* trial("checkout", 19, [
+        () => [call("chart_program", { code: "async () => await chart.state({})" }), finish],
+        give,
+      ]);
+
+      assert.includeMembers(names(reads.seen[0]?.tools ?? []), ["chart_bars", "chart_point"]);
+      assert.notInclude(names(reads.seen[0]?.tools ?? []), "chart_draw");
+      assert.includeMembers(names(writes.seen[0]?.tools ?? []), ["chart_point", "chart_draw"]);
+      assert.includeMembers(names(program.seen[0]?.tools ?? []), ["click_at", "chart_program"]);
+      assert.notInclude(names(program.seen[0]?.tools ?? []), "chart_bars");
+      // The checkout has no chart, and the program's call says so.
+      assert.include(textOf(program.seen[1]!.prompt), "TradingView chart was not found");
+    }),
+  );
+});
+
 describe("arms 7 and 8, programs", () => {
   // A program finds the first field in an observation and fills it, and returns only what it read.
   const program = `async () => {
