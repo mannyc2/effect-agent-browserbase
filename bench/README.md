@@ -571,6 +571,35 @@ or `infrastructure`, not as the provider's error.
 - **Boxes** changed neither calls nor cost on operate tasks, and arm 13 hovered three times as often
   as arm 5 on charts.
 
+Arms 17 to 19 ran on 2026-10-23 against arm 5, with luna at medium reasoning in local Chromium: the
+TradingView demo's ten tasks, three trials each. With one-trial checks, the run cost $0.47.
+
+| Arm | Chart tools             | TradingView demo | Paired with arm 5     | Calls per trial | $ per trial | Median s |
+| --- | ----------------------- | ---------------- | --------------------- | --------------- | ----------- | -------- |
+| 5   | None                    | 17/30            |                       | 8.5             | 0.0042      | 55       |
+| 17  | Reads; the pointer acts | 24/30            | 7 to 0, exact p 0.016 | 8.7             | 0.0044      | 51       |
+| 18  | Reads and writes        | 26/30            | 9 to 0, exact p 0.004 | 5.8             | 0.0025      | 26       |
+| 19  | Reads in a program      | 30/30            | 13 to 0, p 0.0002     | 8.1             | 0.0040      | 40       |
+
+- **Every chart arm beat arm 5,** and none failed a trial that arm 5 passed. Holm across the three
+  keeps each below 0.02.
+- **The chart's data wins where the picture misses.** `trend` passed 2, 2 and 3 times of three
+  against arm 5's none, `swing` 1, 2 and 3 times, and `average` 2, 3 and 3 times. Passing lines
+  ended at the low itself, 325.81 or 325.82, no bar off. Arm 5 again drew from the candle beside the
+  low, at 328.3 to 328.4. On `average` it took a median 25 turns hovering candles, and twice drew
+  no line.
+- **Reads, with the pointer acting** (arm 17): every change is still a visible input. It drew at
+  `chart_point`'s points with the pointer. Its trend miss chose the neighbouring candle, as arm 5's
+  did.
+- **Writes** (arm 18) were the cheapest and fastest: 40% less per trial than arm 5, in half the time.
+  It added RSI through `chart_indicator` in 3 turns against arm 5's 12, and drew through `chart_draw`
+  every time it drew. For `zoom` it used `chart_range` once in three trials, and missed it.
+- **Programs** (arm 19) passed every trial, all three zooms included, which no other arm passed more
+  than once. Its programs scrolled the chart in loops and read `chart.state` until 20 to 40 candles
+  were in view. Its input was the largest, 128,000 tokens a trial, but 85% came from the cache, so a
+  trial cost less than arm 5's.
+- `switch`, `rsi`, `level`, `bands` and `change` passed in every arm.
+
 ## Outcomes
 
 Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one

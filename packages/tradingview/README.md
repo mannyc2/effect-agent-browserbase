@@ -1,9 +1,12 @@
 # effect-browser-tradingview
 
 TradingView charts for `effect-browser`: read a chart's own data, find the exact screen point of a
-time and price, and change the chart through its API. It works on pages that embed TradingView's
-Advanced Charts library and on tradingview.com. Its `ChartTools` give a Yielded agent the same as
-tools, beside `effect-agent-browser`'s browser tools.
+time and price, and change the chart through its API. It finds the chart of pages that embed
+TradingView's Advanced Charts library and of tradingview.com. Its `ChartTools` give a Yielded agent
+the same as tools, beside `effect-agent-browser`'s browser tools.
+
+It is checked live on the library's demo. tradingview.com does not implement `setVisibleRange`,
+which `range` uses, and refuses drawings when signed out.
 
 ```sh
 npm install effect-browser-tradingview@beta effect-browser@beta effect playwright-core
