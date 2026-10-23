@@ -17,6 +17,7 @@ was an upstream release candidate with the same version, not the npm artifact.
 | -------------- | ------------------------------------------------------------------------------- |
 | `BrowserTools` | An agent's browser tools, and the layer that serves them on a page or its tabs  |
 | `PageControl`  | The controller the tools act through, and its observations and results' schemas |
+| `PromptCache`  | An HTTP client layer that keeps OpenRouter's prompt cache across pictured turns |
 
 ## An agent on a page
 
@@ -50,6 +51,22 @@ const buy = (task: string) =>
 Provide a `Browser`, such as `Chromium.layer()` or a Browserbase session, and a model with its
 `Model.ProviderName` and `Model.ModelName`, as the repository's
 [README](https://github.com/mannyc2/effect-agent-browserbase#readme) does.
+
+A turn's picture is dropped on the next call, so a provider that caches up to a breakpoint at the
+end of the prompt, as OpenAI's models do on OpenRouter, caches nothing a later call can use.
+`PromptCache.layer` marks the end of each chat completion's history instead: its last tool result
+or, before there is one, its system message. Provide it to the OpenRouter client:
+
+```ts
+import { OpenRouterClient } from "@effect/ai-openrouter";
+import { Config, Layer } from "effect";
+import { FetchHttpClient } from "effect/http";
+import { PromptCache } from "effect-agent-browser";
+
+const openRouter = OpenRouterClient.layerConfig({
+  apiKey: Config.Redacted("OPENROUTER_API_KEY"),
+}).pipe(Layer.provide(PromptCache.layer), Layer.provide(FetchHttpClient.layer));
+```
 
 ## The tools
 
