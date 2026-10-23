@@ -22,13 +22,23 @@
  * `transientContext` replaces the pictures.
  *
  * `make` gives the toolkit to put in an agent, and `layer`, which provides every tool's handler
- * and the pictures for one run, on a page or a browser's tabs.
+ * and the pictures for one run, on a page or a browser's tabs, with the run's `Controller` for an
+ * application's own tools on the same tabs.
  *
  * @since 0.3.0
  */
 import { BrowserUse } from "@yielded/agent";
 import { RunContextPreparation } from "@yielded/agent/run-options";
-import { Effect, Layer, Option, Predicate, Ref, Schema, SchemaTransformation } from "effect";
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+  SchemaTransformation,
+} from "effect";
 import { Action } from "effect-browser/Action";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type * as Moment from "effect-browser/Moment";
@@ -291,6 +301,14 @@ const batched = Toolkit.make(
     PageControl.ActionResult,
   ),
 );
+
+/**
+ * The controller of the run `layer` serves, for an application's own tools beside these, such as a
+ * chart's: they act on the tab the model sees now, with the run's task, and say what followed.
+ */
+export class Controller extends Context.Service<Controller, PageControl.Controller>()(
+  "effect-agent-browser/BrowserTools/Controller",
+) {}
 
 /** What the model sees of the page; see `LayerOptions`. */
 export type Vision = boolean | "ask" | "page" | "moments";
@@ -616,7 +634,7 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
 
   /**
    * Every tool's handler, and with `vision` the pictures before each turn or the moments in the
-   * thread, for one run on `target`.
+   * thread, for one run on `target`, with the run's `Controller`.
    */
   const layer = (target: PageControl.Target, options: LayerOptions = {}) =>
     Layer.unwrap(
@@ -704,7 +722,7 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
                   },
                 });
 
-        return Layer.mergeAll(handlers, preparation);
+        return Layer.mergeAll(handlers, preparation, Layer.succeed(Controller, controller));
       }),
     );
 
