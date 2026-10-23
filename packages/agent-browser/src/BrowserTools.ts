@@ -48,6 +48,7 @@ import { Prompt, Tool, Toolkit } from "effect/ai";
 
 import type * as AdapterState from "./AdapterState.ts";
 import * as Moments from "./internal/moments.ts";
+import * as Points from "./internal/points.ts";
 import * as PageControl from "./PageControl.ts";
 
 // A parameter a model may leave out. Its JSON Schema allows null, as an optional one's does, and
@@ -403,52 +404,6 @@ const pictorial = () => {
   );
 };
 
-// A point is the more specific of the two, such as a spot on a canvas a ref names.
-const target = (place: {
-  readonly ref?: string | undefined;
-  readonly x?: number | undefined;
-  readonly y?: number | undefined;
-}): Option.Option<Page.Target> =>
-  place.x !== undefined && place.y !== undefined
-    ? Option.some({ x: place.x, y: place.y })
-    : place.ref === undefined
-      ? Option.none()
-      : Option.some(place.ref);
-
-// A target the model read from a picture of `scale` pixels to a CSS pixel, on the viewport.
-const viewportTarget = (to: Page.Target, scale: number): Page.Target =>
-  typeof to === "string" ? to : { x: to.x / scale, y: to.y / scale };
-
-// A region read from such a picture, in the whole CSS pixels that hold it within the viewport.
-const viewportRegion = (region: Page.Region, scale: number) => {
-  const x = Math.floor(region.x / scale);
-  const y = Math.floor(region.y / scale);
-
-  return new Page.Region({
-    x,
-    y,
-    width: Math.max(1, Math.floor((region.x + region.width) / scale) - x),
-    height: Math.max(1, Math.floor((region.y + region.height) / scale) - y),
-  });
-};
-
-const named = (to: Page.Target) => (typeof to === "string" ? to : `(${to.x}, ${to.y})`);
-
-// The 200x120 region around a point, within a viewport at least that size.
-const around = (point: Page.Point, viewport: { readonly width: number; readonly height: number }) =>
-  new Page.Region({
-    x: Math.round(Math.min(Math.max(point.x - 100, 0), Math.max(viewport.width - 200, 0))),
-    y: Math.round(Math.min(Math.max(point.y - 60, 0), Math.max(viewport.height - 120, 0))),
-    width: 200,
-    height: 120,
-  });
-
-const holds = ({ region }: Page.Zoom, point: Page.Point) =>
-  point.x >= region.x &&
-  point.y >= region.y &&
-  point.x <= region.x + region.width &&
-  point.y <= region.y + region.height;
-
 const missing = (what: string) =>
   Effect.fail(
     new BrowserUse.BrowserUseError({
@@ -470,7 +425,7 @@ const cropping =
     vision !== false
       ? Effect.all([controller.current, Ref.get(scale)]).pipe(
           Effect.flatMap(([page, scale]) =>
-            page.zoom(viewportRegion(new Page.Region(region), scale), zoomed),
+            page.zoom(Points.viewportRegion(new Page.Region(region), scale), zoomed),
           ),
           Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
           Effect.map(() => ({
@@ -534,7 +489,7 @@ const pointing = (
       const pending = yield* Ref.get(zooms);
       const shown = (yield* Ref.get(framed)).filter((crop) => !pending.includes(crop));
 
-      if (points.every((point) => shown.some((crop) => holds(crop, point)))) {
+      if (points.every((point) => shown.some((crop) => Points.holds(crop, point)))) {
         yield* Ref.set(framed, []);
 
         return yield* run;
@@ -544,7 +499,9 @@ const pointing = (
         const page = yield* controller.current;
         const viewport = yield* page.viewport;
 
-        return yield* Effect.forEach(points, (point) => page.zoom(around(point, viewport), zoomed));
+        return yield* Effect.forEach(points, (point) =>
+          page.zoom(Points.around(point, viewport), zoomed),
+        );
       }).pipe(Effect.mapError(PageControl.useError), controller.withTask);
 
       yield* Ref.set(framed, crops);
@@ -577,35 +534,35 @@ const pointing = (
         );
       }),
     hover: (place) =>
-      Option.match(target(place), {
+      Option.match(Points.target(place), {
         onNone: () => missing("hover"),
         onSome: (to) =>
           Effect.flatMap(Ref.get(scale), (scale) => {
-            const at = viewportTarget(to, scale);
+            const at = Points.viewportTarget(to, scale);
 
             return act(
               (page) => page.hover(at),
-              () => `Hovered over ${named(to)}.`,
+              () => `Hovered over ${Points.named(to)}.`,
               { _tag: "Hover", target: at },
             );
           }),
       }),
     drag: (drag) => {
-      const from = target({ ref: drag.fromRef, x: drag.fromX, y: drag.fromY });
-      const to = target({ ref: drag.toRef, x: drag.toX, y: drag.toY });
+      const from = Points.target({ ref: drag.fromRef, x: drag.fromX, y: drag.fromY });
+      const to = Points.target({ ref: drag.toRef, x: drag.toX, y: drag.toY });
 
       return Option.isNone(from) || Option.isNone(to)
         ? missing("each end of a drag")
         : Effect.flatMap(Ref.get(scale), (scale) => {
-            const start = viewportTarget(from.value, scale);
-            const end = viewportTarget(to.value, scale);
+            const start = Points.viewportTarget(from.value, scale);
+            const end = Points.viewportTarget(to.value, scale);
 
             return placed(
               [start, end],
-              `each end, ${named(from.value)} and ${named(to.value)},`,
+              `each end, ${Points.named(from.value)} and ${Points.named(to.value)},`,
               act(
                 (page) => page.drag(start, end),
-                () => `Dragged from ${named(from.value)} to ${named(to.value)}.`,
+                () => `Dragged from ${Points.named(from.value)} to ${Points.named(to.value)}.`,
                 { _tag: "Drag", from: start, to: end },
               ),
             );
