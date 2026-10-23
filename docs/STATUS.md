@@ -50,9 +50,14 @@ breakpoint. In the bench, that cut arm 5's cost per operate trial by 22%
 and on the TradingView demo by 53%. A code answer now passes when it quotes the issued code.
 `effect-browser` takes screenshots and zooms in device pixels, and `effect-agent-browser`'s
 `pixels: "device"` shows them and takes points in them. Bench arms 11 and 12 show half-size
-(640×360) and sharper (1920×1080) pictures. Half size did the work as often as arm 5 for a third
-less. Sharper passed all 45 operate trials and was the first arm to draw TradingView's trend line
-through the low, for 56% more. The bench README has both runs.
+(640×360) and sharper (1920×1080) pictures. Half size did the work as often as arm 5 for a fifth
+to a third less. Sharper pictures help on charts: over two runs, paired with arm 5, they passed 8
+chart trials it failed and failed 1 it passed (exact p 0.039), and they drew TradingView's trend
+line through the low every time, where arm 5 never did. On page tasks they did no better in the
+repeat, for 56% more. Moments (arm 6) cost 2.2 times arm 5's and did no better.
+Arms 13 to 16 tie the outline to the picture: `boxes` gives each control's box, `find` and
+`changes` lean the text, and `placement: "crop"` shows a crop before a pointer acts. The bench
+README has the runs.
 
 ## 0.3
 

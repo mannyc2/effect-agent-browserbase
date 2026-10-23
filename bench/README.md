@@ -471,8 +471,8 @@ $0.54 in all.
 
 The second run, on 2026-10-23, repeated the first with two fixes and added arms 11 and 12. Each
 request now marks its last tool result as a prompt-cache breakpoint (`effect-agent-browser`'s
-`PromptCache.layer` beneath the OpenRouter client),
-and a code answer passes when it quotes the issued code. Each of arms 5, 9, 10, 11 and 12 ran the
+`PromptCache.layer` beneath the OpenRouter client), and a code answer passes when it quotes the
+issued code. Each of arms 5, 9, 10, 11 and 12 ran the
 same trials as before. With a one-trial check, the run cost $0.68.
 
 | Arm | Operate | On the page | Calls per trial | With a picture | Input read from the cache | $ per trial | Median s | TradingView demo |
@@ -508,6 +508,35 @@ same trials as before. With a one-trial check, the run cost $0.68.
 - **Time:** the $1.20 cap admitted three to five calls at a time at $0.234 reserved each, so trials
   waited a median 6 to 8 s for the budget. The medians above leave that wait out. A call with a
   picture took 2.6 s in arms 5 and 11 and 2.9 s in arm 12.
+
+The third run, on 2026-10-23, put arm 6 (moments) on these tasks and repeated arms 5, 11 and 12 on
+new seeds, 101 to 105, to check the second run's picture sizes. On TradingView, arms 5, 6 and 12
+ran `trend` and the four chart data tasks three times each. With one-trial checks, it cost $0.73.
+
+| Arm | Operate | On the page | Calls per trial | Input read from the cache | $ per trial | Median s | TradingView charts |
+| --- | ------- | ----------- | --------------- | ------------------------- | ----------- | -------- | ------------------ |
+| 5   | 42/45   | 42/45       | 5.5             | 64%                       | 0.0016      | 10.9     | 5/15               |
+| 6   | 40/45   | 40/45       | 6.0             | 48%                       | 0.0035      | 13.0     | 7/15               |
+| 11  | 40/45   | 40/45       | 5.8             | 78%                       | 0.0013      | 11.2     |                    |
+| 12  | 42/45   | 42/45       | 5.6             | 53%                       | 0.0025      | 11.6     | 10/15              |
+
+- **The cache:** with the mark now made by `PromptCache.layer`, each arm read as much of its input
+  from the cache as in the second run: 64% for arm 5 against 65%, 78% for arm 11 and 53% for arm 12.
+- **Sharper, on charts:** arm 12 passed 10 of 15 chart trials, against 5 for arm 5 and 7 for arm 6.
+  It passed `trend` all three times and arms 5 and 6 never did: their lines' low ends sat at 327.7
+  to 328.4, on a candle beside the lowest, where arm 12's sat at 325.92 against the low of 325.81.
+  Over both runs, paired by task and trial, arm 12 passed 8 trials that arm 5 failed and failed 1
+  that it passed (exact p 0.039). On operate tasks the second run's lead did not repeat: 42 of 45
+  each, with one pair either way.
+- **Half size:** arm 11 passed 40 of 45 against arm 5's 42, both differing pairs for arm 5 (exact
+  p 0.5), for 19% less per trial. Over both runs it passed 82 of 90 against 83.
+- **Moments:** arm 6 passed 40 of 45 for 2.2 times arm 5's cost per trial. Its thread keeps each
+  turn's account, so less of its input was cached, 48%. On charts it passed 7 of 15, `range` all
+  three times.
+- **Chart data:** `change` passed in every arm. `average` passed twice in nine: the models hovered
+  the 20 candles one at a time and mostly reached the right mean, 343.4 to 343.9 against 343.48, but
+  ran out of their 24 turns before drawing the line. Arm 12's `swing` lines ended at the right
+  prices, 325.92 and 330.74, yet failed twice: at least one end lay more than two bars off.
 
 ## Outcomes
 
