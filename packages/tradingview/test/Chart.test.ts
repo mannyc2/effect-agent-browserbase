@@ -126,14 +126,18 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           inputs: { length: 21 },
         });
 
+        const moved = [
+          { time: time(70), price: 170 },
+          { time: time(90), price: 190 },
+        ];
+
+        yield* Chart.move(page, { id: trend, points: moved });
+        yield* Chart.remove(page, level);
         const state = yield* Chart.state(page);
 
         assert.deepStrictEqual(
-          state.drawings.map(({ id, name, points }) => [id, name, points.length]),
-          [
-            [level, "horizontal_line", 1],
-            [trend, "trend_line", 2],
-          ],
+          state.drawings.map(({ id, name, points }) => [id, name, points]),
+          [[trend, "trend_line", moved]],
         );
         assert.deepStrictEqual([state.symbol, state.resolution], ["MSFT", "240"]);
         const { studies, calls } = yield* recorded(page);
@@ -142,6 +146,53 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           { id: study, name: "Relative Strength Index", inputs: { length: 21 } },
         ]);
         assert.deepStrictEqual(calls, [{ range: { from: time(80), to: time(99) } }]);
+      }),
+    );
+
+    it.effect("reads a study's inputs as its settings show them, and its plots' values", () =>
+      Effect.gen(function* () {
+        const page = yield* charted;
+
+        const study = yield* Chart.indicator(page, {
+          name: "Relative Strength Index",
+          inputs: { length: 21 },
+        });
+
+        assert.deepStrictEqual((yield* Chart.state(page)).studies, [
+          {
+            id: study,
+            name: "Relative Strength Index",
+            // Not the hidden source, nor the symbol, which the settings do not show.
+            inputs: [
+              { id: "length", name: "Length", value: 21 },
+              { id: "smoothing", name: "Smoothing", value: "SMA" },
+            ],
+            // A colourer holds no value; a second plot of a title is told by its id.
+            latest: { Plot: 99, "Plot plot_2": 198 },
+          },
+        ]);
+        assert.deepStrictEqual(yield* Chart.values(page, { study, last: 2 }), {
+          id: study,
+          name: "Relative Strength Index",
+          plots: ["Plot", "Plot plot_2"],
+          rows: [
+            [time(98), 98, 196],
+            [time(99), 99, 198],
+          ],
+        });
+        yield* Chart.inputs(page, { study, inputs: { length: 9, smoothing: "EMA" } });
+        assert.deepStrictEqual(
+          (yield* Chart.state(page)).studies[0]?.inputs.map(({ value }) => value),
+          [9, "EMA"],
+        );
+        const unknown = yield* Effect.exit(Chart.values(page, { study: "nothing" }));
+
+        assert.strictEqual(
+          Exit.isFailure(unknown) && unknown.cause.reasons[0]?._tag === "Fail"
+            ? unknown.cause.reasons[0].error.reason._tag
+            : undefined,
+          "NotFound",
+        );
       }),
     );
 

@@ -1,7 +1,7 @@
 {
   "name": "effect-browser-tradingview",
   "version": "0.3.0-beta.21",
-  "description": "TradingView charts for effect-browser: their bars, exact screen points and changes, and tools for a Yielded agent.",
+  "description": "TradingView charts for effect-browser: their bars and studies, exact screen points, changes made with visible input, and tools for a Yielded agent.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -24,6 +24,11 @@
       "@effect-browser/source": "./src/Chart.ts",
       "types": "./dist/Chart.d.mts",
       "default": "./dist/Chart.mjs"
+    },
+    "./ChartInput": {
+      "@effect-browser/source": "./src/ChartInput.ts",
+      "types": "./dist/ChartInput.d.mts",
+      "default": "./dist/ChartInput.mjs"
     },
     "./ChartTools": {
       "@effect-browser/source": "./src/ChartTools.ts",
