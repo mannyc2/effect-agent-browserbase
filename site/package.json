@@ -14,16 +14,16 @@
     "upload": "node --conditions=@effect-browser/source upload.ts"
   },
   "dependencies": {
-    "@effect/platform-browser": "4.0.3",
+    "@effect/platform-browser": "4.0.5",
     "@foldkit/markdown": "0.14.2",
-    "effect": "4.0.3",
+    "effect": "4.0.5",
     "foldkit": "0.167.0"
   },
   "devDependencies": {
     "@alchemy.run/frontend-frameworks": "2.0.0-beta.81",
-    "@effect/ai-openrouter": "4.0.3",
-    "@effect/platform-node": "4.0.3",
-    "@effect/vitest": "4.0.3",
+    "@effect/ai-openrouter": "4.0.5",
+    "@effect/platform-node": "4.0.5",
+    "@effect/vitest": "4.0.5",
     "@foldkit/devtools": "0.167.0",
     "@foldkit/vite-plugin": "0.27.0",
     "@tailwindcss/vite": "4.3.3",
