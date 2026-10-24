@@ -206,8 +206,9 @@ on a browser's tabs. `PageControl.make` gives the controller alone, for a host w
 - `navigate` opens only http and https addresses, `data:` URLs and `about:blank`; a model cannot
   open a local file. `Page.goto` also opens the `file:` URLs its caller passes.
 - The browser answers dialogs itself, so `respond_dialog` is left out and the port refuses it.
-  Yielded's `screenshot` tool is left out too: the pictures before each turn replace it, and the
-  port takes PNGs for a host that asks.
+  Yielded's `screenshot` tool is left out too: the pictures before each turn replace it. A host
+  that wants a PNG takes one from the controller's `current` page with
+  `page.screenshot({ format: "png" })`.
 - The run is Yielded's: its policy bounds turns, tool calls, time and spend, and it adds approval,
   context management, durable runs and run events. See its
   [documentation](https://github.com/yielded-dev/agent).

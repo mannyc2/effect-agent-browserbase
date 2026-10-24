@@ -187,7 +187,7 @@ const pageTool = <
 export const Control = Toolkit.make(
   pageTool(
     "inspect",
-    "Inspect the main page or an observed frame and CSS scope, including open shadow roots. Other frames are listed with inspected=false; inspect one when it contains the missing controls. Narrow a truncated observation with selector, frame or optionFilter before acting.",
+    "Inspect the page or a CSS scope within it, including open shadow roots. Frames are read inline in the observation, so leave frame unset. Narrow a truncated observation with selector or optionFilter before acting.",
     {
       selector: absent(Selector),
       frame: absent(PageControl.Ref),
