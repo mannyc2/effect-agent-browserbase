@@ -290,14 +290,28 @@ an indicator with a changed setting, drawing a level and a trend line at prices 
 zooming, and reading values from an indicator or a past candle. Four more need many candles' data
 at once: a line at the last 20 closes' average (`average`), a mark on the candle with the widest
 range in view (`range`), the change from the leftmost open to the latest close (`change`) and a
-line between the lowest lows of the view's two halves (`swing`). Each is graded on the chart's own
-state, read through the page's chart API, which the model never sees. Graders count only the
-indicators and drawings a run adds. A drawing task's record also gives `error`, how far the closest
-drawing the run added lies from where it belongs: its ends' largest miss in bars and in price.
+line between the lowest lows of the view's two halves (`swing`). Six work with what a chart holds
+and its other drawing tools: reading a shown RSI's latest value (`rsi-read`), changing a shown RSI's
+length (`rsi-edit`), a Fibonacci retracement from the low to the high (`fib`), a rectangle around
+the last ten candles (`box`), removing the higher of two lines (`remove`) and a text note at the high
+(`note`). The RSI and the lines are added through the chart API before the run. Each task is graded
+on the chart's own state, read through the page's chart API, which the model never sees. Graders
+count only the indicators and drawings a run adds. A drawing task's record also gives `error`, how
+far the closest drawing the run added lies from where it belongs: its ends' largest miss in bars and
+in price, and every record counts the page's input by kind, `act` being the chart API's.
+
+The scripted solutions make each change with the chart's own controls, through
+`effect-browser-tradingview`'s `ChartInput`, so they are also its live check. `--humanize` performs
+the input through a presenter, at a person's pace, for any mode, and each model tool call's record
+gives the seconds it ran. `--mode replayed` records the scripted walk as a `Plan`, replays it on a
+fresh browser from the same start, and grades the replayed chart, each walk's plan beside its
+results.
 
 ```sh
 bun run bench tradingview                       # scripted solutions on the demo, at no cost
+bun run bench tradingview --humanize            # the same through a presenter
 bun run bench tradingview --mode untouched      # the chart left alone: every task should fail
+bun run bench tradingview --mode replayed       # the scripted walks, recorded and replayed
 
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
   bun run bench tradingview --mode model --task trend --trials 3
@@ -345,25 +359,27 @@ trial counts when its page holds the work the task asked for, whatever the answe
 keeps this as `onPage`. The runs recorded below matched answers exactly, so their pass counts fail
 a code given inside a sentence.
 
-| Arm | Operate tasks                                                                                                                                                          | Understand tasks                               |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools         | The moment with its outline                    |
-| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                           | As arm 5                                       |
-| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                                    | `Moment.capture` as it is: frames and timeline |
-| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                           | As arm 5                                       |
-| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                        | As arm 5                                       |
-| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                   | As arm 5                                       |
-| 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look`  | As arm 5                                       |
-| 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                    | As arm 5                                       |
-| 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels             | As arm 5                                       |
-| 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels             | As arm 5                                       |
-| 13  | Boxes in the outline: arm 5 with each control's box, `WxH at (x,y)`, on its outline line                                                                               | As arm 5                                       |
-| 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                              | As arm 5                                       |
-| 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                           | As arm 5                                       |
-| 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                          | As arm 5                                       |
-| 17  | Chart reads: arm 5 with `effect-browser-tradingview`'s `chart_state`, `chart_bars`, `chart_point` and `chart_at`; drawings still by pointer, at `chart_point`'s points | As arm 5                                       |
-| 18  | Chart writes: arm 17 with `chart_draw`, `chart_range`, `chart_symbol`, `chart_timeframe` and `chart_indicator`, which change the chart with no visible input           | As arm 5                                       |
-| 19  | Chart programs: arm 5 with `chart_program`, whose JavaScript reads the chart as `chart.state`, `chart.bars`, `chart.point` and `chart.at` beside `browser.*`           | As arm 5                                       |
+| Arm | Operate tasks                                                                                                                                                                                                  | Understand tasks                               |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools                                                 | The moment with its outline                    |
+| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                                                                   | As arm 5                                       |
+| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                                                                            | `Moment.capture` as it is: frames and timeline |
+| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                                                                   | As arm 5                                       |
+| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                                                                | As arm 5                                       |
+| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                                                           | As arm 5                                       |
+| 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look`                                          | As arm 5                                       |
+| 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                                                            | As arm 5                                       |
+| 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels                                                     | As arm 5                                       |
+| 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels                                                     | As arm 5                                       |
+| 13  | Boxes in the outline: arm 5 with each control's box, `WxH at (x,y)`, on its outline line                                                                                                                       | As arm 5                                       |
+| 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                                                                      | As arm 5                                       |
+| 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                                                                   | As arm 5                                       |
+| 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                                                                  | As arm 5                                       |
+| 17  | Chart reads: arm 5 with `effect-browser-tradingview`'s `chart_state`, `chart_bars`, `chart_values`, `chart_point` and `chart_at`; drawings still by pointer, at `chart_point`'s points                         | As arm 5                                       |
+| 18  | Retired. Chart writes through the API, with no visible input; arm 20 makes the same changes as input                                                                                                           | As arm 5                                       |
+| 19  | Chart programs: arm 5 with `chart_program`, whose JavaScript reads the chart as `chart.state`, `chart.bars`, `chart.values`, `chart.point` and `chart.at` beside `browser.*`                                   | As arm 5                                       |
+| 20  | Chart changes: arm 17 with `chart_draw`, `chart_remove`, `chart_range`, `chart_symbol`, `chart_timeframe`, `chart_indicator` and `chart_inputs`, which change the chart with its own toolbar, keys and dialogs | As arm 5                                       |
+| 21  | Chart change programs: arm 19 whose `chart.*` calls also change the chart, as arm 20's tools do                                                                                                                | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
@@ -622,6 +638,33 @@ about 3.5 times the tokens for the same input: the same text as 6,616 against 1,
 - **Drawing through the toolbar is what fails.** In `level` and `range`, arm 19's programs found
   the right price and candle, then drew with the wrong toolbar tool, or with none. Arm 5 left RSI's
   length at 14 in both of its `rsi` trials.
+
+`ChartTools.Writes` then began to make each change with the chart's own toolbar, keys and dialogs,
+and arm 18 was retired. Arms 5, 19, 20 and 21 ran the demo's sixteen tasks twice, again as a watched
+session would: luna-pro at low reasoning, in Browserbase at 1280×720, through a presenter
+(`--humanize`). Model spend was $0.80. While this host was loaded far past its cores, arm 19's
+`switch-2` and arm 20's `rsi-1` stalled for over ten minutes and ended unread, so they are left out;
+the stalled call held its reservation, so arm 19's budget refused its last thirteen trials, which
+ran again.
+
+| Arm | Chart tools                     | Passed | Old tasks | New tasks | $ per trial | Median s | Calls per trial |
+| --- | ------------------------------- | ------ | --------- | --------- | ----------- | -------- | --------------- |
+| 5   | None                            | 14/32  | 10/20     | 4/12      | 0.0110      | 77       | 8               |
+| 19  | Reads in a program              | 20/31  | 13/19     | 7/12      | 0.0088      | 70       | 8               |
+| 20  | Reads and changes, as tools     | 25/31  | 15/19     | 10/12     | 0.0033      | 42       | 4               |
+| 21  | Reads and changes, in a program | 32/32  | 20/20     | 12/12     | 0.0017      | 31       | 2               |
+
+- **Programs that change the chart passed every trial,** for about a sixth of arm 5's cost per
+  trial, in two calls. Paired by task and trial, arm 21 led arm 5 by 18 to none, arm 19 by 11 to
+  none and arm 20 by 6 to none (exact p 0.031). Arm 20 led arm 5 by 13 to 2 (exact p 0.007).
+- **The changes were visible input.** Of arm 20's 26 changes, 25 were input and one went through
+  the API: a vertical line at a candle out of view, which input cannot reach. All 27 of arm 21's
+  receipts were input. On air, a drawing took a median 7.5 s, an indicator 8.3 s, an input change
+  8.7 s and a zoom 8.2 s; a whole program, 7.2 s.
+- **Arm 20's misses were readings, not input.** It drew the trend line from the candle beside the
+  low, as arm 5 does, chose the wrong candle for `range` twice, and once removed the wrong line with
+  the pointer instead of `chart_remove`.
+- **Arm 19 still draws with the pointer,** so `box` and `note` failed in both of its trials.
 
 ## Outcomes
 

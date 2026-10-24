@@ -72,6 +72,16 @@ failed: their receipts held absent fields as `undefined`, which a program's JSON
 now leave them out. luna-pro counts about 3.5 times luna's tokens for the same input, at the same
 per-token price. The bench README has the runs.
 
+The package's changes are now visible input. `ChartInput` makes each one with the chart's own
+toolbar, hotkeys, searches and dialogs, then reads the chart back. The API corrects a point the
+chart put elsewhere and makes a change the chart shows no control for, and `via` says which.
+`ChartTools.Writes` and the program methods go through it; arm 18, whose writes were unseen, is
+retired. The bench gained six tasks on what a chart holds and its other drawing tools, a presented
+mode and a replay check. Watched, with luna-pro in Browserbase, programs with the changes (arm 21)
+passed 32 of 32 against arm 5's 14, for a sixth of its cost; the same changes as tools (arm 20)
+passed 25 of 31. The replay check found that recorded chart walks do not replay: a click at a point
+on an unnamed canvas, the chart's time axis, records a subject that replay cannot find.
+
 ## 0.3
 
 The `0.3.0-beta.21` release fixes page operations in consumer bundles with preserved function
@@ -283,11 +293,12 @@ with agents on Yielded Agent, the renamed Effect Agent:
   their consumers, as [RELEASING.md](RELEASING.md) records. Its layer also provides the run's
   controller as `BrowserTools.Controller`, so an application's own tools act on the tab the model
   sees, with the run's task.
-- `effect-browser-tradingview` (unpublished): a TradingView chart's state, bars, and the viewport
-  points of times and prices, read from the chart's model, plus drawings, range, symbol, timeframe
-  and indicators through its API. `ChartTools` serves them as a Yielded agent's tools, and names the
-  reads for a Code Mode program. It is checked live on the Advanced Charts demo only; tradingview.com
-  lacks `setVisibleRange` and refuses drawings when signed out.
+- `effect-browser-tradingview` (unpublished): a TradingView chart's state, studies, bars and study
+  values, and the viewport points of times and prices, read from the chart's model. `ChartInput`
+  changes the chart as a person does, with its toolbar, hotkeys, searches and dialogs, and the API
+  corrects or completes a change. `ChartTools` serves both as a Yielded agent's tools and as a Code
+  Mode program's methods. It is checked live on the Advanced Charts demo only; tradingview.com
+  refuses drawings when signed out.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
 - Structured reads in one call to the page. `Page.find` returns the elements that a query of role,

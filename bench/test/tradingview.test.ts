@@ -32,18 +32,33 @@ const task = (name: string) => tasks.tradingview.find((candidate) => candidate.n
 const grade = (name: string, end: Partial<State>, answer = "", start: State = chart) =>
   task(name).grade(start, { ...start, ...end }, answer).pass;
 
-const line = (id: string, price: number) => ({
+type Point = { readonly time: number; readonly price: number };
+
+const drawing = (
+  id: string,
+  name: string,
+  points: ReadonlyArray<Point>,
+  text: string | null = null,
+) => ({
   id,
-  name: "horizontal_line",
-  points: [{ time: high.time, price }],
+  name,
+  points,
+  text,
 });
 
-const trend = (points: ReadonlyArray<{ time: number; price: number }>) => ({
-  shapes: [{ id: "a", name: "trend_line", points }],
-});
+const line = (id: string, price: number) =>
+  drawing(id, "horizontal_line", [{ time: high.time, price }]);
+
+const trend = (points: ReadonlyArray<Point>) => ({ shapes: [drawing("a", "trend_line", points)] });
 
 const vertical = (index: number) => ({
-  shapes: [{ id: "a", name: "vertical_line", points: [{ time: rows[index]![0]!, price: 150 }] }],
+  shapes: [drawing("a", "vertical_line", [{ time: rows[index]![0]!, price: 150 }])],
+});
+
+const rsi = (id: string, length: number) => ({
+  id,
+  name: "Relative Strength Index",
+  inputs: [{ id: "length", value: length }],
 });
 
 describe("TradingView graders", () => {
@@ -54,12 +69,6 @@ describe("TradingView graders", () => {
   });
 
   it("rsi passes an added RSI of length 21 only", () => {
-    const rsi = (id: string, length: number) => ({
-      id,
-      name: "Relative Strength Index",
-      inputs: [{ id: "length", value: length }],
-    });
-
     assert.isTrue(grade("rsi", { studies: [rsi("a", 21)] }));
     assert.isFalse(grade("rsi", { studies: [rsi("a", 14)] }));
     assert.isFalse(
@@ -179,6 +188,92 @@ describe("TradingView graders", () => {
     assert.isTrue(grade("swing", trend([right, left])));
     // The lowest low to the latest bar's low is not the swing.
     assert.isFalse(grade("swing", trend([left, { time: rows[99]![0]!, price: 197 }])));
+  });
+
+  it("rsi-read passes the latest bar's RSI", () => {
+    // Closes that rise 2 and fall 1 in turn, ending on a rise: once Wilder's averages settle, the
+    // gains average 28/27 and the losses 13/27, an RSI of 100 × 28/41, about 68.29.
+    const closes = Array.from(
+      { length: 300 },
+      (_, index) => 100 + Math.ceil(index / 2) * 2 - Math.floor(index / 2),
+    );
+
+    const zigzag: State = {
+      ...chart,
+      rows: closes.map((close, index) => [
+        october + index * day,
+        close,
+        close + 1,
+        close - 3,
+        close,
+      ]),
+    };
+
+    assert.isTrue(grade("rsi-read", {}, "The RSI is 68.29", zigzag));
+    assert.isFalse(grade("rsi-read", {}, "68.6", zigzag));
+    assert.isFalse(grade("rsi-read", {}, "", zigzag));
+  });
+
+  it("rsi-edit passes when every RSI on the chart has a length of 9", () => {
+    const start = { ...chart, studies: [rsi("a", 14)] };
+
+    assert.isTrue(grade("rsi-edit", { studies: [rsi("a", 9)] }, "", start));
+    // Removed and added again, as a viewer sees it.
+    assert.isTrue(grade("rsi-edit", { studies: [rsi("b", 9)] }, "", start));
+    assert.isFalse(grade("rsi-edit", { studies: [rsi("a", 14), rsi("b", 9)] }, "", start));
+    assert.isFalse(grade("rsi-edit", { studies: [] }, "", start));
+  });
+
+  it("fib passes an added retracement from the lowest low to the highest high", () => {
+    const fib = (points: ReadonlyArray<Point>) => ({
+      shapes: [drawing("a", "fib_retracement", points)],
+    });
+
+    assert.isTrue(grade("fib", fib([low, high])));
+    assert.isTrue(grade("fib", fib([high, low])));
+    assert.isFalse(grade("fib", fib([{ time: rows[43]![0]!, price: 138 }, high])));
+    assert.isFalse(grade("fib", trend([low, high])));
+  });
+
+  it("box passes an added rectangle around the last ten candles, through either corners", () => {
+    // Bars 90 to 99: lows from 188, highs to 201.
+    const box = (first: number, top: number, last: number, bottom: number) => ({
+      shapes: [
+        drawing("a", "rectangle", [
+          { time: rows[first]![0]!, price: top },
+          { time: rows[last]![0]!, price: bottom },
+        ]),
+      ],
+    });
+
+    assert.isTrue(grade("box", box(90, 201, 99, 188)));
+    assert.isTrue(grade("box", box(99, 188, 90, 201)));
+    assert.isFalse(grade("box", box(90, 201, 96, 188)));
+    assert.isFalse(grade("box", box(90, 205, 99, 188)));
+  });
+
+  it("remove passes the higher seeded line removed and the lower kept", () => {
+    const start = { ...chart, shapes: [line("higher", 300), line("lower", 138)] };
+
+    assert.isTrue(grade("remove", { shapes: [line("lower", 138)] }, "", start));
+    assert.isFalse(grade("remove", { shapes: [line("higher", 300)] }, "", start));
+    assert.isFalse(grade("remove", { shapes: [] }, "", start));
+    assert.isFalse(grade("remove", { shapes: start.shapes }, "", start));
+  });
+
+  it("note passes an added drawing reading High at the highest high", () => {
+    const note = (text: string, at: Point) => drawing("n", "text", [at], text);
+
+    assert.isTrue(grade("note", { shapes: [note(" High", high)] }));
+    assert.isTrue(grade("note", { shapes: [{ ...note("high", high), name: "callout" }] }));
+    assert.isFalse(grade("note", { shapes: [note("Low", high)] }));
+    assert.isFalse(grade("note", { shapes: [note("High", low)] }));
+    assert.isFalse(
+      grade("note", { shapes: [note("High", high)] }, "", {
+        ...chart,
+        shapes: [note("High", high)],
+      }),
+    );
   });
 
   it("read passes 1 October's close on a daily chart", () => {
