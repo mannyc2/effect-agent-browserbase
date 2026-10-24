@@ -13,18 +13,24 @@
 // the picture's coordinates. Arms 13 to 16 are arm 5 with the outline and the picture tied closer:
 // arm 13's outline gives each control's box; arm 14 has `find`, and after an action reads only what
 // changed in the outline; arm 15 is told to zoom before a precise placement; arm 16's click_at and
-// drag first show a crop around each point. Understand tasks differ only in arm 1, whose moments
+// drag first show a crop around each point. Arms 17 and 19 to 21 are arm 5 with a TradingView
+// chart's own tools: arm 17 reads its bars, studies and the viewport points of times and prices, and
+// still draws with the pointer; arm 19 reads the chart only in programs, as `chart.*` calls beside
+// `browser.*`; arm 20 can also change the chart, as tools that work its own toolbar, keys and
+// dialogs; arm 21 has those changes in programs, as arm 19 has the reads. Arm 18, which changed the
+// chart through its API, unseen, is retired. Understand tasks differ only in arm 1, whose moments
 // add the outline.
 import { Agent, AgentRuntime, CodeMode, InMemory, type RunEvent } from "@yielded/agent";
 import { inProcessCodeExecutorLayer } from "@yielded/agent-testing/code-executor-substitute";
 import { CodeExecutionLimits } from "@yielded/agent/code-executor";
-import { Duration, Effect, Layer, Schema, Stream } from "effect";
+import { DateTime, Duration, Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/BrowserTools";
+import * as ChartTools from "effect-browser-tradingview/ChartTools";
 import type * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
-export const arms = [1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] as const;
+export const arms = [1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21] as const;
 
 export type Arm = (typeof arms)[number];
 
@@ -43,6 +49,10 @@ export const armNames: { readonly [A in Arm]: string } = {
   14: "find and changes",
   15: "zoom before placing",
   16: "placement by crop",
+  17: "chart reads",
+  19: "chart programs",
+  20: "chart changes",
+  21: "chart change programs",
 };
 
 /** The device scale factor of an arm's browser: its pictures' pixels to a CSS pixel. */
@@ -66,6 +76,8 @@ export interface Step {
     readonly name: string;
     readonly result: unknown;
     readonly isFailure: boolean;
+    /** How long the call's handler ran, from its start to its result. */
+    readonly seconds?: number | undefined;
   }>;
 }
 
@@ -191,6 +203,18 @@ const instructions: { readonly [A in Arm]: string } = {
   16: arm5With(
     "- click_at and drag first show a crop around each point you give, then act when you call them again at the points you mean, inside those crops, in viewport coordinates.",
   ),
+  17: arm5With(
+    "- On a chart, chart_state and chart_bars read the chart itself, its bars as numbers with times in UTC seconds, and chart_point gives the viewport point of a time and price: to draw or click at a value, use the pointer at that point.",
+  ),
+  19: arm5With(
+    "- On a chart, chart_program runs a program whose chart.* calls read the chart itself: chart.state({}), with its studies' inputs and latest values; chart.bars({ last, from, to }) as [time, open, high, low, close, volume] with times in UTC seconds; chart.values({ study, last }), a study's values; and chart.point({ points }), the viewport points of times and prices, which the pointer tools take. Its browser.* calls are the browser tools. Its code is one async arrow function, such as async () => { const { view } = await chart.state({}); return view; }. Compute in the program and return only what you need.",
+  ),
+  20: arm5With(
+    "- On a chart, chart_state, chart_bars and chart_values read the chart itself: its studies with their inputs and latest values, and its bars and a study's values as numbers, with times in UTC seconds. chart_draw, chart_remove, chart_range, chart_symbol, chart_timeframe, chart_indicator and chart_inputs change it with the chart's own toolbar, keys and dialogs, at exact times and prices, and chart_point gives the viewport point of a time and price.",
+  ),
+  21: arm5With(
+    "- On a chart, chart_program runs a program whose chart.* calls read and change the chart itself. chart.state({}) gives its view, its studies with their inputs and latest values, and its drawings; chart.bars({ last, from, to }) gives [time, open, high, low, close, volume] with times in UTC seconds; chart.values({ study, last }), a study's values. chart.draw({ shape, points, text }), chart.remove({ id }), chart.range({ from, to }), chart.symbol({ symbol }), chart.timeframe({ resolution }), chart.indicator({ name, inputs }) and chart.inputs({ study, inputs }) change it with the chart's own toolbar, keys and dialogs, at exact times and prices. Its browser.* calls are the browser tools. Its code is one async arrow function, such as async () => { const { view } = await chart.state({}); return view; }. Compute in the program and return only what you need.",
+  ),
 };
 
 const finishing = <A, I>(answer: Schema.Codec<A, I>) =>
@@ -215,25 +239,48 @@ const batched = BrowserTools.make();
 // Arm 5's tools act on one page, so a program's calls run one at a time. The executor runs the
 // model's program in the bench's own process, isolated by nothing but shadowed globals: the bench's,
 // not a sandbox for untrusted hosts.
+const limits = CodeExecutionLimits.make({
+  maxSourceBytes: 64 * 1024,
+  maxWallTime: Duration.seconds(90),
+  maxLogBytes: 64 * 1024,
+  maxResultBytes: 256 * 1024,
+  maxHostCalls: 64,
+  maxHostCallConcurrency: 1,
+  maxHostCallArgumentBytes: 64 * 1024,
+  maxHostCallResultBytes: 1024 * 1024,
+});
+
 const program = CodeMode.make("browser_program", {
   description:
     "Operate the browser by writing a program whose browser.* calls are the browser tools, run one at a time, in order, on the current tab.",
   tools: { browser: batched.toolkit.tools },
-  limits: CodeExecutionLimits.make({
-    maxSourceBytes: 64 * 1024,
-    maxWallTime: Duration.seconds(90),
-    maxLogBytes: 64 * 1024,
-    maxResultBytes: 256 * 1024,
-    maxHostCalls: 64,
-    maxHostCallConcurrency: 1,
-    maxHostCallArgumentBytes: 64 * 1024,
-    maxHostCallResultBytes: 1024 * 1024,
-  }),
+  limits,
 });
 
-// Every arm serves the program tool over its tools, which it calls by name; only arms 7 and 8 show
-// it to the model.
-const programs = program.handlers.pipe(Layer.provide(inProcessCodeExecutorLayer));
+const { state, bars, values, point, at } = ChartTools.methods;
+
+const chartProgram = CodeMode.make("chart_program", {
+  description:
+    "Read a TradingView chart and operate the browser by writing a program whose chart.* calls read the chart and whose browser.* calls are the browser tools, run one at a time, in order, on the current tab.",
+  tools: { chart: { state, bars, values, point, at }, browser: batched.toolkit.tools },
+  limits,
+});
+
+// Arm 21's program tool, of the same name as arm 19's: its chart.* calls also change the chart.
+const chartChanges = CodeMode.make("chart_program", {
+  description:
+    "Read and change a TradingView chart and operate the browser by writing a program whose chart.* calls read and change the chart and whose browser.* calls are the browser tools, run one at a time, in order, on the current tab.",
+  tools: { chart: ChartTools.methods, browser: batched.toolkit.tools },
+  limits,
+});
+
+// Every arm serves the program tools and the chart's tools over its own, which they call by name;
+// only arms 7, 8, 17 and 19 to 21 show some of them to the model. The chart's program tools share
+// a name, so an arm serves one of them.
+const programs = (arm: Arm) =>
+  Layer.mergeAll(program.handlers, arm === 21 ? chartChanges.handlers : chartProgram.handlers).pipe(
+    Layer.provide(inProcessCodeExecutorLayer),
+  );
 
 const VisionToolkit = Toolkit.make(
   control.navigate,
@@ -274,6 +321,22 @@ const tooling = {
   14: { toolkit: Toolkit.merge(batched.toolkit, BrowserTools.Find), tools: batched, vision: true },
   15: { toolkit: batched.toolkit, tools: batched, vision: true },
   16: { toolkit: batched.toolkit, tools: batched, vision: true },
+  17: { toolkit: Toolkit.merge(batched.toolkit, ChartTools.Reads), tools: batched, vision: true },
+  19: {
+    toolkit: Toolkit.merge(batched.toolkit, Toolkit.make(chartProgram.tool)),
+    tools: batched,
+    vision: true,
+  },
+  20: {
+    toolkit: Toolkit.merge(batched.toolkit, ChartTools.Reads, ChartTools.Writes),
+    tools: batched,
+    vision: true,
+  },
+  21: {
+    toolkit: Toolkit.merge(batched.toolkit, Toolkit.make(chartChanges.tool)),
+    tools: batched,
+    vision: true,
+  },
 } as const;
 
 /** What arms 13, 14 and 16 change in how the tools show the page. */
@@ -306,7 +369,24 @@ const steps = (onStep: (step: Step) => Effect.Effect<void>) => {
     return step === undefined ? Effect.void : onStep(step);
   });
 
+  const started = new Map<string, number>();
+
+  // Seconds since the call's handler started, by the run's own timestamps.
+  const ran = (event: { readonly toolCallId: string; readonly timestamp: DateTime.Utc }) => {
+    const start = started.get(event.toolCallId);
+
+    return start === undefined
+      ? undefined
+      : (DateTime.toEpochMillis(event.timestamp) - start) / 1000;
+  };
+
   const record = (event: RunEvent.RunEvent) => {
+    if (event._tag === "ToolCallStarted") {
+      started.set(event.toolCallId, DateTime.toEpochMillis(event.timestamp));
+
+      return Effect.void;
+    }
+
     if (event._tag === "TurnStarted") {
       return flush.pipe(
         Effect.andThen(
@@ -325,9 +405,19 @@ const steps = (onStep: (step: Step) => Effect.Effect<void>) => {
     else if (event._tag === "ToolCallDeclared")
       step.calls.push({ name: event.toolName, params: event.parameters });
     else if (event._tag === "ToolCallSucceeded")
-      step.results.push({ name: event.toolName, result: event.result, isFailure: false });
+      step.results.push({
+        name: event.toolName,
+        result: event.result,
+        isFailure: false,
+        seconds: ran(event),
+      });
     else if (event._tag === "ToolCallFailed")
-      step.results.push({ name: event.toolName, result: event.message, isFailure: true });
+      step.results.push({
+        name: event.toolName,
+        result: event.message,
+        isFailure: true,
+        seconds: ran(event),
+      });
 
     return Effect.void;
   };
@@ -385,10 +475,14 @@ export const operate = <A, I>(arm: Arm, page: Page, task: string, options: Opera
       Effect.provide(
         Layer.mergeAll(
           Layer.provideMerge(
-            programs,
-            tools.layer(
-              { page },
-              { task, vision, pixels, onMoment: options.onMoment, ...presenting[arm] },
+            programs(arm),
+            ChartTools.layer.pipe(
+              Layer.provideMerge(
+                tools.layer(
+                  { page },
+                  { task, vision, pixels, onMoment: options.onMoment, ...presenting[arm] },
+                ),
+              ),
             ),
           ),
           finish.toLayer({

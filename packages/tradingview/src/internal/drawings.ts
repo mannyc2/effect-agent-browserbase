@@ -1,0 +1,100 @@
+// TradingView's drawing tools that clicks finish: each by its name in the chart API, with its
+// toolbar group, its menu item and how many points, one click each, make it. The group is the
+// toolbar's `linetool-group-<group>`; the item, its menu's `LineTool<item>`. The freehand tools,
+// the brush, highlighter, path, polyline and ghost feed, end otherwise and are left out. Read off
+// the library's demo, where every one was drawn by clicks.
+
+type Group =
+  | "trend-line"
+  | "gann-and-fibonacci"
+  | "patterns"
+  | "prediction-and-measurement"
+  | "geometric-shapes"
+  | "annotation";
+
+export const drawings = {
+  trend_line: ["trend-line", "TrendLine", 2],
+  ray: ["trend-line", "Ray", 2],
+  info_line: ["trend-line", "InfoLine", 2],
+  extended: ["trend-line", "Extended", 2],
+  trend_angle: ["trend-line", "TrendAngle", 2],
+  horizontal_line: ["trend-line", "HorzLine", 1],
+  horizontal_ray: ["trend-line", "HorzRay", 1],
+  vertical_line: ["trend-line", "VertLine", 1],
+  cross_line: ["trend-line", "CrossLine", 1],
+  parallel_channel: ["trend-line", "ParallelChannel", 3],
+  regression_trend: ["trend-line", "RegressionTrend", 2],
+  flat_bottom: ["trend-line", "FlatBottom", 3],
+  disjoint_angle: ["trend-line", "DisjointAngle", 3],
+  pitchfork: ["trend-line", "Pitchfork", 3],
+  schiff_pitchfork_modified: ["trend-line", "SchiffPitchfork", 3],
+  schiff_pitchfork: ["trend-line", "SchiffPitchfork2", 3],
+  inside_pitchfork: ["trend-line", "InsidePitchfork", 3],
+  fib_retracement: ["gann-and-fibonacci", "FibRetracement", 2],
+  fib_trend_ext: ["gann-and-fibonacci", "TrendBasedFibExtension", 3],
+  fib_channel: ["gann-and-fibonacci", "FibChannel", 3],
+  fib_timezone: ["gann-and-fibonacci", "FibTimeZone", 2],
+  fib_speed_resist_fan: ["gann-and-fibonacci", "FibSpeedResistanceFan", 2],
+  fib_trend_time: ["gann-and-fibonacci", "TrendBasedFibTime", 3],
+  fib_circles: ["gann-and-fibonacci", "FibCircles", 2],
+  fib_spiral: ["gann-and-fibonacci", "FibSpiral", 2],
+  fib_speed_resist_arcs: ["gann-and-fibonacci", "FibSpeedResistanceArcs", 2],
+  fib_wedge: ["gann-and-fibonacci", "FibWedge", 3],
+  pitchfan: ["gann-and-fibonacci", "Pitchfan", 3],
+  gannbox: ["gann-and-fibonacci", "GannSquare", 2],
+  gannbox_square: ["gann-and-fibonacci", "GannComplex", 2],
+  gannbox_fixed: ["gann-and-fibonacci", "GannFixed", 2],
+  gannbox_fan: ["gann-and-fibonacci", "GannFan", 2],
+  xabcd_pattern: ["patterns", "5PointsPattern", 6],
+  cypher_pattern: ["patterns", "CypherPattern", 5],
+  head_and_shoulders: ["patterns", "HeadAndShoulders", 7],
+  abcd_pattern: ["patterns", "ABCD", 4],
+  triangle_pattern: ["patterns", "TrianglePattern", 4],
+  "3divers_pattern": ["patterns", "ThreeDrivers", 7],
+  elliott_impulse_wave: ["patterns", "ElliottImpulse", 6],
+  elliott_correction: ["patterns", "ElliottCorrection", 4],
+  elliott_triangle_wave: ["patterns", "ElliottTriangle", 6],
+  elliott_double_combo: ["patterns", "ElliottDoubleCombo", 4],
+  elliott_triple_combo: ["patterns", "ElliottTripleCombo", 6],
+  cyclic_lines: ["patterns", "CircleLines", 2],
+  time_cycles: ["patterns", "TimeCycles", 2],
+  sine_line: ["patterns", "SineLine", 2],
+  long_position: ["prediction-and-measurement", "RiskRewardLong", 1],
+  short_position: ["prediction-and-measurement", "RiskRewardShort", 1],
+  forecast: ["prediction-and-measurement", "Prediction", 2],
+  bars_pattern: ["prediction-and-measurement", "BarsPattern", 2],
+  projection: ["prediction-and-measurement", "Projection", 3],
+  anchored_vwap: ["prediction-and-measurement", "AnchoredVWAP", 1],
+  fixed_range_volume_profile: ["prediction-and-measurement", "FixedRangeVolumeProfile", 2],
+  price_range: ["prediction-and-measurement", "PriceRange", 2],
+  date_range: ["prediction-and-measurement", "DateRange", 2],
+  date_and_price_range: ["prediction-and-measurement", "DateAndPriceRange", 2],
+  rectangle: ["geometric-shapes", "Rectangle", 2],
+  rotated_rectangle: ["geometric-shapes", "RotatedRectangle", 3],
+  circle: ["geometric-shapes", "Circle", 2],
+  ellipse: ["geometric-shapes", "Ellipse", 3],
+  triangle: ["geometric-shapes", "Triangle", 3],
+  arc: ["geometric-shapes", "Arc", 3],
+  curve: ["geometric-shapes", "BezierQuadro", 2],
+  double_curve: ["geometric-shapes", "BezierCubic", 2],
+  arrow: ["geometric-shapes", "Arrow", 2],
+  arrow_marker: ["geometric-shapes", "ArrowMarker", 2],
+  arrow_up: ["geometric-shapes", "ArrowMarkUp", 1],
+  arrow_down: ["geometric-shapes", "ArrowMarkDown", 1],
+  arrow_left: ["geometric-shapes", "ArrowMarkLeft", 1],
+  arrow_right: ["geometric-shapes", "ArrowMarkRight", 1],
+  text: ["annotation", "Text", 1],
+  text_note: ["annotation", "TextNote", 2],
+  note: ["annotation", "Note", 1],
+  price_note: ["annotation", "PriceNote", 2],
+  price_label: ["annotation", "PriceLabel", 1],
+  callout: ["annotation", "Callout", 2],
+  comment: ["annotation", "Comment", 1],
+  signpost: ["annotation", "Signpost", 1],
+  flag: ["annotation", "FlagMark", 1],
+  table: ["annotation", "Table", 1],
+} as const satisfies Record<string, readonly [Group, string, number]>;
+
+export type Shape = keyof typeof drawings;
+
+export const shapes = Object.keys(drawings).filter((key): key is Shape => key in drawings);

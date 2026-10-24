@@ -1,11 +1,15 @@
-// TradingView tasks for an agent: switching symbols and timeframes, an indicator and its
-// settings, drawing at prices read off the chart, zooming, reading values, and working with many
-// candles' data at once. Each grades the chart's own state, read through the page's chart API,
-// which the model never sees. They run on tradingview.com or on TradingView's Advanced Charts
-// demo, the same chart without an account: signed out, tradingview.com refuses its drawing tools
-// and indicator search. A signed-in chart opens on the account's own layout, so graders count
-// only the indicators and drawings a run adds.
+// TradingView tasks for an agent: switching symbols and timeframes, indicators, their settings and
+// values, drawing at prices read off the chart, removing a drawing, zooming, reading values, and
+// working with many candles' data at once. Each grades the chart's own state, read through the
+// page's chart API, which the model never sees. They run on tradingview.com or on TradingView's
+// Advanced Charts demo, the same chart without an account: signed out, tradingview.com refuses
+// its drawing tools and indicator search. A signed-in chart opens on the account's own layout, so
+// graders count only the indicators and drawings a run adds. A task may start from a study or
+// drawings its setup adds through the API; its scripted solution makes its changes as
+// `ChartInput` does, with the chart's own controls.
 import { DateTime, Effect, Schedule, Schema } from "effect";
+import * as Chart from "effect-browser-tradingview/Chart";
+import * as ChartInput from "effect-browser-tradingview/ChartInput";
 import type { RequestPolicy } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
@@ -36,7 +40,13 @@ export const State = Schema.Struct({
     }),
   ),
   shapes: Schema.Array(
-    Schema.Struct({ id: Schema.String, name: Schema.String, points: Schema.Array(Point) }),
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      points: Schema.Array(Point),
+      /** What a drawing that shows text reads. */
+      text: Schema.NullOr(Schema.String),
+    }),
   ),
 });
 
@@ -64,6 +74,7 @@ interface Chart {
   readonly getAllShapes: () => ReadonlyArray<{ readonly id: string; readonly name: string }>;
   readonly getShapeById: (id: string) => {
     readonly getPoints: () => ReadonlyArray<{ readonly time: number; readonly price: number }>;
+    readonly getProperties: () => { readonly text?: unknown };
   };
   readonly setSymbol: (symbol: string) => Promise<unknown>;
   readonly setResolution: (resolution: string) => Promise<unknown>;
@@ -115,14 +126,22 @@ const readState = () => {
       name,
       inputs: chart.getStudyById(id).getInputValues(),
     })),
-    shapes: chart.getAllShapes().map(({ id, name }) => ({
-      id,
-      name,
-      points: chart
-        .getShapeById(id)
-        .getPoints()
-        .map(({ time, price }) => ({ time, price })),
-    })),
+    shapes: chart.getAllShapes().map(({ id, name }) => {
+      // A drawing's points and text, none while the chart loads, when TradingView throws for them.
+      try {
+        const shape = chart.getShapeById(id);
+        const text = shape.getProperties().text;
+
+        return {
+          id,
+          name,
+          points: shape.getPoints().map(({ time, price }) => ({ time, price })),
+          text: typeof text === "string" ? text : null,
+        };
+      } catch {
+        return { id, name, points: [], text: null };
+      }
+    }),
   };
 };
 
@@ -287,6 +306,22 @@ export const upperBand = (chart: State) => {
   return middle + 2 * Math.sqrt(mean(closes.map((close) => (close - middle) ** 2)));
 };
 
+// TradingView's RSI on the latest bar: Wilder's averages of the closes' gains and losses, each
+// first the mean of the first `length` changes, then a `length`-bar running average.
+export const rsiOf = (chart: State, length = 14) => {
+  const closes = chart.rows.map((row) => row[4]!);
+  const moves = closes.slice(1).map((close, index) => close - closes[index]!);
+  let gain = mean(moves.slice(0, length).map((move) => Math.max(move, 0)));
+  let loss = mean(moves.slice(0, length).map((move) => Math.max(-move, 0)));
+
+  for (const move of moves.slice(length)) {
+    gain = (gain * (length - 1) + Math.max(move, 0)) / length;
+    loss = (loss * (length - 1) + Math.max(-move, 0)) / length;
+  }
+
+  return loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+};
+
 // The first number in a model's answer, with a typographic minus read as one.
 const numberIn = (text: string) => {
   const match = /[-−]?\d[\d,]*(?:\.\d+)?/.exec(text);
@@ -303,11 +338,16 @@ export interface Task {
   readonly prompt: string;
   readonly maxSteps: number;
   readonly grade: (start: State, end: State, answer: string) => Grade;
-  /** Reaches the graded state through the chart API, showing the grader can pass. */
+  /** What the chart starts from besides its bars, added through the chart API before the run. */
+  readonly setup?: ((page: Page) => Effect.Effect<void, BrowserError>) | undefined;
+  /**
+   * Reaches the graded state with the chart's own controls, as `ChartInput` makes changes,
+   * showing the grader can pass. The page may be a presenter's view of it.
+   */
   readonly solve: (page: Page, start: State) => Effect.Effect<string, BrowserError>;
 }
 
-// Chart API calls as a recorded action on the page's current document.
+// Chart API calls as a recorded action on the page's current document, for a task's setup.
 const apply = <Arg>(page: Page, script: (arg: Arg) => unknown, arg: Arg) =>
   Effect.gen(function* () {
     const { document, connection } = yield* page.read(() => true, {
@@ -334,6 +374,23 @@ const shape = (page: Page, name: string, points: ReadonlyArray<Point>) =>
     { name, points },
   );
 
+// A study with its default inputs, through the chart API.
+const study = (name: string) => (page: Page) =>
+  apply(
+    page,
+    (name: string) => {
+      const charts = window as unknown as Charts;
+      const chart = (charts.tvWidget ?? charts.TradingViewApi)!.activeChart();
+
+      return chart.createStudy(name, false, false);
+    },
+    name,
+  );
+
+// A drawing with the chart's own tools.
+const draw = (page: Page, shape: Chart.Shape, points: ReadonlyArray<Point>, text?: string) =>
+  ChartInput.draw(page, { shape, points, text }).pipe(Effect.as("drawn"));
+
 // The prices of the horizontal lines a run added.
 const levels = (start: State, end: State) =>
   drawn(start, end, "horizontal_line").map((line) => line.points[0]?.price ?? Number.NaN);
@@ -351,16 +408,10 @@ const switching = (ticker: string, symbol: string, name: string): Task => ({
     detail: `chart shows ${end.symbol} at ${end.resolution}`,
   }),
   solve: (page) =>
-    apply(
-      page,
-      (symbol: string) => {
-        const charts = window as unknown as Charts;
-        const chart = (charts.tvWidget ?? charts.TradingViewApi)!.activeChart();
-
-        return chart.setSymbol(symbol).then(() => chart.setResolution("240"));
-      },
-      symbol,
-    ).pipe(Effect.as("switched")),
+    ChartInput.symbol(page, symbol).pipe(
+      Effect.andThen(ChartInput.timeframe(page, "240")),
+      Effect.as("switched"),
+    ),
 });
 
 // The API's RSI names its length `length`. tradingview.com's indicator search adds its Pine RSI
@@ -368,15 +419,18 @@ const switching = (ticker: string, symbol: string, name: string): Task => ({
 const input = (study: State["studies"][number], id: string) =>
   study.inputs.find((candidate) => candidate.id === id);
 
+const lengthOf = (study: State["studies"][number]) =>
+  (input(study, "length") ?? input(study, "in_0"))?.value;
+
+const isRsi = (study: { readonly name: string }) => /relative strength index/i.test(study.name);
+
 const rsi: Task = {
   name: "rsi",
   prompt:
     "Add the Relative Strength Index (RSI) indicator to this TradingView chart, with its length set to 21 instead of the default 14. Then call done.",
   maxSteps: 20,
   grade: (start, end) => {
-    const lengths = added(start.studies, end.studies)
-      .filter((study) => /relative strength index/i.test(study.name))
-      .map((study) => (input(study, "length") ?? input(study, "in_0"))?.value);
+    const lengths = added(start.studies, end.studies).filter(isRsi).map(lengthOf);
 
     return {
       pass: lengths.includes(21),
@@ -384,16 +438,14 @@ const rsi: Task = {
     };
   },
   solve: (page) =>
-    apply(
-      page,
-      () => {
-        const charts = window as unknown as Charts;
-        const chart = (charts.tvWidget ?? charts.TradingViewApi)!.activeChart();
+    Effect.gen(function* () {
+      const added = yield* ChartInput.indicator(page, { name: "Relative Strength Index" });
+      const length = added.inputs.find(({ name }) => /^(rsi )?length$/i.test(name))?.id;
 
-        return chart.createStudy("Relative Strength Index", false, false, { length: 21 });
-      },
-      undefined,
-    ).pipe(Effect.as("added")),
+      yield* ChartInput.inputs(page, { study: added.id, inputs: { [length ?? "length"]: 21 } });
+
+      return "added";
+    }),
 };
 
 const level: Task = {
@@ -413,7 +465,7 @@ const level: Task = {
     };
   },
   solve: (page, start) =>
-    shape(page, "horizontal_line", [extremes(start).high]).pipe(
+    draw(page, "horizontal_line", [extremes(start).high]).pipe(
       Effect.as(price(extremes(start).high.price)),
     ),
 };
@@ -433,8 +485,7 @@ const trend: Task = {
       error: lineMiss(start, lines, low, high),
     };
   },
-  solve: (page, start) =>
-    shape(page, "trend_line", [extremes(start).low, extremes(start).high]).pipe(Effect.as("drawn")),
+  solve: (page, start) => draw(page, "trend_line", [extremes(start).low, extremes(start).high]),
 };
 
 const zoom: Task = {
@@ -451,19 +502,10 @@ const zoom: Task = {
       detail: `${shown} candles in view; latest ${latest ? "on" : "off"} screen`,
     };
   },
-  // tradingview.com does not implement setVisibleRange. Spacing bars a fortieth of the width
-  // apart shows about thirty, past the ten bars' margin the chart keeps on the right.
-  solve: (page) =>
-    apply(
-      page,
-      () => {
-        const charts = window as unknown as Charts;
-        const scale = (charts.tvWidget ?? charts.TradingViewApi)!.activeChart().getTimeScale();
-
-        scale.setBarSpacing(scale.width() / 40);
-      },
-      undefined,
-    ).pipe(Effect.as("zoomed")),
+  solve: (page, start) =>
+    ChartInput.range(page, { from: start.rows.at(-30)![0]!, to: start.rows.at(-1)![0]! }).pipe(
+      Effect.as("zoomed"),
+    ),
 };
 
 const bands: Task = {
@@ -481,20 +523,15 @@ const bands: Task = {
       detail: `bands ${shown ? "on" : "not on"} the chart; upper ${price(upper)}; answered ${said ?? JSON.stringify(answer)}`,
     };
   },
+  // The chart's own value, which the grader's reckoning must match.
   solve: (page) =>
-    apply(
-      page,
-      () => {
-        const charts = window as unknown as Charts;
-        const chart = (charts.tvWidget ?? charts.TradingViewApi)!.activeChart();
+    Effect.gen(function* () {
+      const added = yield* ChartInput.indicator(page, { name: "Bollinger Bands" });
+      const { plots, rows } = yield* Chart.values(page, { study: added.id, last: 1 });
+      const at = plots.findIndex((plot) => /upper/i.test(plot));
 
-        return chart.createStudy("Bollinger Bands", false, false);
-      },
-      undefined,
-    ).pipe(
-      Effect.andThen(state(page)),
-      Effect.map((chart) => price(upperBand(chart))),
-    ),
+      return price((at < 0 ? undefined : rows.at(-1)?.[at + 1]) ?? Number.NaN);
+    }),
 };
 
 // Tasks over the chart's data: each needs many candles' values, which a model reads off the chart
@@ -518,7 +555,7 @@ const average: Task = {
   solve: (page, start) => {
     const target = mean(latestCloses(start));
 
-    return shape(page, "horizontal_line", [{ time: start.rows.at(-1)![0]!, price: target }]).pipe(
+    return draw(page, "horizontal_line", [{ time: start.rows.at(-1)![0]!, price: target }]).pipe(
       Effect.as(price(target)),
     );
   },
@@ -560,10 +597,9 @@ const range: Task = {
       ),
     };
   },
+  // At the latest close, a price in view, as the pointer can reach no other.
   solve: (page, start) =>
-    shape(page, "vertical_line", [{ time: widest(start)[0]!, price: start.rows.at(-1)![4]! }]).pipe(
-      Effect.as("drawn"),
-    ),
+    draw(page, "vertical_line", [{ time: widest(start)[0]!, price: start.rows.at(-1)![4]! }]),
 };
 
 // The change from the leftmost candle's open to the latest close, in percent. The leftmost candle
@@ -617,8 +653,7 @@ const swing: Task = {
       error: lineMiss(start, lines, left, right),
     };
   },
-  solve: (page, start) =>
-    shape(page, "trend_line", [halves(start).left, halves(start).right]).pipe(Effect.as("drawn")),
+  solve: (page, start) => draw(page, "trend_line", [halves(start).left, halves(start).right]),
 };
 
 // A daily candle found by its date, read through the chart's crosshair legend.
@@ -649,6 +684,212 @@ const read: Task = {
   solve: (_page, start) => Effect.succeed(price(candleOf(start)?.[4] ?? Number.NaN)),
 };
 
+// Tasks on what a chart already holds, and on its other drawing tools: a study's value, a study's
+// settings, a drawing to remove, and drawings besides lines.
+
+const rsiRead: Task = {
+  name: "rsi-read",
+  prompt:
+    "This TradingView chart shows the Relative Strength Index (RSI). Read the RSI's value on the most recent candle, and call done with it as a number.",
+  maxSteps: 16,
+  setup: study("Relative Strength Index"),
+  grade: (_start, end, answer) => {
+    const value = rsiOf(end);
+    const said = numberIn(answer);
+
+    return {
+      pass: said !== undefined && Math.abs(said - value) <= 0.15,
+      detail: `RSI ${value.toFixed(2)}; answered ${said ?? JSON.stringify(answer)}`,
+    };
+  },
+  // The chart's own value, which the grader's reckoning must match.
+  solve: (page) =>
+    Chart.state(page).pipe(
+      Effect.map(({ studies }) => {
+        const [value] = Object.values(studies.find(isRsi)?.latest ?? {});
+
+        return typeof value === "number" ? value.toFixed(2) : "none";
+      }),
+    ),
+};
+
+const rsiEdit: Task = {
+  name: "rsi-edit",
+  prompt:
+    "This TradingView chart shows the Relative Strength Index (RSI) with a length of 14. Change its length to 9. Then call done.",
+  maxSteps: 16,
+  setup: study("Relative Strength Index"),
+  // What a viewer sees: every RSI on the chart at 9, whether changed or added again.
+  grade: (_start, end) => {
+    const lengths = end.studies.filter(isRsi).map(lengthOf);
+
+    return {
+      pass: lengths.length > 0 && lengths.every((length) => length === 9),
+      detail: lengths.length === 0 ? "no RSI on the chart" : `RSI lengths ${lengths.join(", ")}`,
+    };
+  },
+  solve: (page, start) => {
+    const shown = start.studies.find(isRsi);
+
+    return shown === undefined
+      ? Effect.succeed("no RSI")
+      : ChartInput.inputs(page, {
+          study: shown.id,
+          inputs: { [input(shown, "length") === undefined ? "in_0" : "length"]: 9 },
+        }).pipe(Effect.as("changed"));
+  },
+};
+
+const fib: Task = {
+  name: "fib",
+  prompt:
+    "On this TradingView chart, draw a Fibonacci retracement from the lowest low to the highest high among the candles visible right now: one end on the lowest candle's low, the other on the highest candle's high. Then call done.",
+  maxSteps: 24,
+  grade: (start, end) => {
+    const { high, low } = extremes(start);
+    const retracements = drawn(start, end, "fib_retracement");
+
+    return {
+      pass: joins(start, retracements, low, high),
+      detail: `low ${price(low.price)}, high ${price(high.price)}; retracements ${ends(retracements)}`,
+      error: lineMiss(start, retracements, low, high),
+    };
+  },
+  solve: (page, start) =>
+    draw(page, "fib_retracement", [extremes(start).low, extremes(start).high]),
+};
+
+// The ten latest candles' box: from the first's time to the latest's, their lowest low to their
+// highest high, as its lower and upper corners.
+const lastTen = (chart: State) => {
+  const rows = chart.rows.slice(-10);
+
+  return {
+    lower: { time: rows[0]![0]!, price: Math.min(...rows.map((row) => row[3]!)) },
+    upper: { time: rows.at(-1)![0]!, price: Math.max(...rows.map((row) => row[2]!)) },
+  };
+};
+
+// A rectangle's lower and upper corners, whichever two it was drawn through.
+const corners = ({ points: [a, b] }: State["shapes"][number]) =>
+  a === undefined || b === undefined
+    ? undefined
+    : {
+        lower: { time: Math.min(a.time, b.time), price: Math.min(a.price, b.price) },
+        upper: { time: Math.max(a.time, b.time), price: Math.max(a.price, b.price) },
+      };
+
+const box: Task = {
+  name: "box",
+  prompt:
+    "On this TradingView chart, draw a rectangle around the 10 most recent candles: from the first of them to the latest, and from their lowest low to their highest high. Then call done.",
+  maxSteps: 24,
+  grade: (start, end) => {
+    const target = lastTen(start);
+    const boxes = drawn(start, end, "rectangle").flatMap((shape) => corners(shape) ?? []);
+
+    return {
+      pass: boxes.some(
+        (at) => near(start, at.lower, target.lower) && near(start, at.upper, target.upper),
+      ),
+      detail: `box ${price(target.lower.price)}→${price(target.upper.price)}; rectangles ${boxes.map((at) => `${price(at.lower.price)}→${price(at.upper.price)}`).join("; ") || "none"}`,
+      error: closest(
+        boxes.map((at) => {
+          const [lower, upper] = [
+            off(start, at.lower, target.lower),
+            off(start, at.upper, target.upper),
+          ];
+
+          return {
+            bars: Math.max(lower.bars, upper.bars),
+            price: Math.max(lower.price, upper.price),
+          };
+        }),
+        target.upper.price,
+      ),
+    };
+  },
+  solve: (page, start) => {
+    const { lower, upper } = lastTen(start);
+
+    return draw(page, "rectangle", [
+      { time: lower.time, price: upper.price },
+      { time: upper.time, price: lower.price },
+    ]);
+  },
+};
+
+// The two levels the setup draws, at the highest high and the lowest low in view.
+const twoLevels = (page: Page) =>
+  Effect.gen(function* () {
+    const { high, low } = extremes(yield* state(page));
+
+    yield* shape(page, "horizontal_line", [high]);
+    yield* shape(page, "horizontal_line", [low]);
+  });
+
+// The setup's levels on a chart: the higher, to remove, and the lower, to keep.
+const seededLevels = (chart: State) => {
+  const lines = chart.shapes.filter((shape) => shape.name === "horizontal_line");
+  const { high, low } = extremes(chart);
+
+  const at = (target: number) =>
+    lines.find((line) => within(line.points[0]?.price ?? Number.NaN, target, 1e-4));
+
+  return { higher: at(high.price), lower: at(low.price) };
+};
+
+const remove: Task = {
+  name: "remove",
+  prompt:
+    "This TradingView chart has two horizontal lines. Remove the higher one, and keep the lower one. Then call done.",
+  maxSteps: 16,
+  setup: twoLevels,
+  grade: (start, end) => {
+    const { higher, lower } = seededLevels(start);
+
+    if (higher === undefined || lower === undefined)
+      return { pass: false, detail: "the chart did not start with both lines" };
+    const kept = (line: { readonly id: string }) => end.shapes.some(({ id }) => id === line.id);
+
+    return {
+      pass: !kept(higher) && kept(lower),
+      detail: `higher line ${kept(higher) ? "kept" : "removed"}, lower line ${kept(lower) ? "kept" : "removed"}`,
+    };
+  },
+  solve: (page, start) => {
+    const { higher } = seededLevels(start);
+
+    return higher === undefined
+      ? Effect.succeed("no line")
+      : ChartInput.remove(page, higher.id).pipe(Effect.as("removed"));
+  },
+};
+
+const note: Task = {
+  name: "note",
+  prompt:
+    'On this TradingView chart, add a text note that reads "High", anchored at the highest high among the candles visible right now. Then call done.',
+  maxSteps: 20,
+  // Any drawing that reads High counts, whichever text tool made it.
+  grade: (start, end) => {
+    const { high } = extremes(start);
+    const texts = added(start.shapes, end.shapes).filter(({ text }) => text !== null);
+    const notes = texts.filter(({ text }) => text?.trim().toLowerCase() === "high");
+    const anchors = notes.flatMap(({ points }) => points.slice(0, 1));
+
+    return {
+      pass: anchors.some((point) => near(start, point, high)),
+      detail: `high ${price(high.price)}; texts ${texts.map(({ text, points }) => `${JSON.stringify(text)} at ${points[0] === undefined ? "?" : price(points[0].price)}`).join(", ") || "none"}`,
+      error: closest(
+        anchors.map((point) => off(start, point, high)),
+        high.price,
+      ),
+    };
+  },
+  solve: (page, start) => draw(page, "text", [extremes(start).high], "High"),
+};
+
 /** Each site's tasks: the demo charts Apple hourly, tradingview.com Bitcoin daily. */
 export const tasks: { readonly [S in Site]: ReadonlyArray<Task> } = {
   demo: [
@@ -662,6 +903,12 @@ export const tasks: { readonly [S in Site]: ReadonlyArray<Task> } = {
     range,
     change,
     swing,
+    rsiRead,
+    rsiEdit,
+    fib,
+    box,
+    remove,
+    note,
   ],
   tradingview: [
     switching("ETHUSDT", "BINANCE:ETHUSDT", "Ethereum against Tether on Binance"),
@@ -675,5 +922,11 @@ export const tasks: { readonly [S in Site]: ReadonlyArray<Task> } = {
     range,
     change,
     swing,
+    rsiRead,
+    rsiEdit,
+    fib,
+    box,
+    remove,
+    note,
   ],
 };

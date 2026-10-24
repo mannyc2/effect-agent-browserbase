@@ -247,6 +247,51 @@ describe("arms 13 to 16, the outline and the picture", () => {
   );
 });
 
+describe("arms 17 and 19 to 21, a chart's own tools", () => {
+  it.live(
+    "arm 17 reads the chart, arm 20 also changes it, and arms 19 and 21 do so in programs",
+    () =>
+      Effect.gen(function* () {
+        const give = () => [call("give_up", { reason: "scripted" }), finish];
+        const reads = yield* trial("checkout", 17, [give]);
+        const changes = yield* trial("checkout", 20, [give]);
+        const draw = `async () => await chart.draw({ shape: "horizontal_line", points: [{ time: 1, price: 1 }] })`;
+
+        const programs = (arm: Arm) =>
+          trial("checkout", arm, [
+            () => [call("chart_program", { code: "async () => await chart.state({})" }), finish],
+            () => [call("chart_program", { code: draw }), finish],
+            give,
+          ]);
+
+        const reading = yield* programs(19);
+        const changing = yield* programs(21);
+
+        assert.includeMembers(names(reads.seen[0]?.tools ?? []), ["chart_bars", "chart_point"]);
+        assert.notInclude(names(reads.seen[0]?.tools ?? []), "chart_draw");
+        assert.includeMembers(names(changes.seen[0]?.tools ?? []), [
+          "chart_point",
+          "chart_draw",
+          "chart_inputs",
+        ]);
+
+        for (const program of [reading, changing]) {
+          assert.includeMembers(names(program.seen[0]?.tools ?? []), ["click_at", "chart_program"]);
+          assert.notInclude(names(program.seen[0]?.tools ?? []), "chart_bars");
+          // The checkout has no chart, and the program's call says so.
+          assert.include(textOf(program.seen[1]!.prompt), "TradingView chart was not found");
+        }
+
+        // Only arm 21's programs can change the chart: arm 19's have no chart.draw to call.
+        const second = (program: typeof reading) =>
+          textOf(program.seen[2]!.prompt).slice(textOf(program.seen[1]!.prompt).length);
+
+        assert.include(second(reading), "chart.draw is not a function");
+        assert.include(second(changing), "TradingView chart was not found");
+      }),
+  );
+});
+
 describe("arms 7 and 8, programs", () => {
   // A program finds the first field in an observation and fills it, and returns only what it read.
   const program = `async () => {

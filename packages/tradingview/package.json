@@ -1,0 +1,77 @@
+{
+  "name": "effect-browser-tradingview",
+  "version": "0.3.0-beta.21",
+  "description": "TradingView charts for effect-browser: their bars and studies, exact screen points, changes made with visible input, and tools for a Yielded agent.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
+    "directory": "packages/tradingview"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": {
+      "@effect-browser/source": "./src/index.ts",
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./Chart": {
+      "@effect-browser/source": "./src/Chart.ts",
+      "types": "./dist/Chart.d.mts",
+      "default": "./dist/Chart.mjs"
+    },
+    "./ChartInput": {
+      "@effect-browser/source": "./src/ChartInput.ts",
+      "types": "./dist/ChartInput.d.mts",
+      "default": "./dist/ChartInput.mjs"
+    },
+    "./ChartTools": {
+      "@effect-browser/source": "./src/ChartTools.ts",
+      "types": "./dist/ChartTools.d.mts",
+      "default": "./dist/ChartTools.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --run"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.3",
+    "@types/node": "26.1.2",
+    "@yielded/agent": "0.1.0-beta.189",
+    "effect": "4.0.3",
+    "effect-agent-browser": "workspace:*",
+    "effect-browser": "workspace:*",
+    "playwright-core": "1.63.0",
+    "typescript": "7.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+    "vite-plus": "1.1.0",
+    "vitest": "5.0.3"
+  },
+  "peerDependencies": {
+    "@yielded/agent": "0.1.0-beta.189",
+    "effect": "~4.0.3",
+    "effect-agent-browser": "^0.3.0-beta.21",
+    "effect-browser": "^0.3.0-beta.20"
+  },
+  "peerDependenciesMeta": {
+    "@yielded/agent": {
+      "optional": true
+    },
+    "effect-agent-browser": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  }
+}

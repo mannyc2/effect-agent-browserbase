@@ -19,6 +19,7 @@
     "effect": "4.0.3",
     "effect-agent-browser": "workspace:*",
     "effect-browser": "workspace:*",
+    "effect-browser-tradingview": "workspace:*",
     "effect-browserbase": "workspace:*",
     "playwright-core": "1.63.0",
     "typescript": "7.0.2",

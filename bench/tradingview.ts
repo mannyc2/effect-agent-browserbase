@@ -1,8 +1,10 @@
 // The `tradingview` command: an agent working TradingView's charts, graded on the chart's own
-// state. `--mode scripted` reaches each graded state through the chart API and `--mode untouched`
-// leaves the chart alone, so the graders show they can pass and fail at no model cost; `--mode
-// model` runs the agent, behind its opt-in. Live sites change, so its results speak to the day
-// they were taken.
+// state. `--mode scripted` reaches each graded state with the chart's own controls and `--mode
+// untouched` leaves the chart alone, so the graders show they can pass and fail at no model cost;
+// `--mode replayed` records the scripted walk and replays it on a fresh browser, grading the
+// replayed chart; `--mode model` runs the agent, behind its opt-in. `--humanize` performs the
+// input for viewers, through a presenter. Live sites change, so its results speak to the day they
+// were taken.
 import {
   Cause,
   Clock,
@@ -18,7 +20,10 @@ import {
   Schema,
 } from "effect";
 import { Browser } from "effect-browser/Browser";
+import type * as BrowserEvent from "effect-browser/BrowserEvent";
 import * as Chromium from "effect-browser/Chromium";
+import * as Plan from "effect-browser/Plan";
+import * as Presentation from "effect-browser/Presentation";
 import * as Browserbase from "effect-browserbase/Browserbase";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
 import * as ContextLease from "effect-browserbase/ContextLease";
@@ -50,11 +55,15 @@ const flags = {
       "TradingView's Advanced Charts demo, which needs no account, or tradingview.com. Defaults to demo.",
     ),
   ),
-  mode: Flag.Literals("mode", ["scripted", "untouched", "model"]).pipe(
+  mode: Flag.Literals("mode", ["scripted", "untouched", "replayed", "model"]).pipe(
     Flag.withDefault("scripted"),
     Flag.withDescription(
-      "scripted solves each task through the chart API, untouched leaves the chart alone, model runs the agent. Defaults to scripted.",
+      "scripted solves each task with the chart's own controls, untouched leaves the chart alone, replayed replays the scripted walk on a fresh browser and grades that, model runs the agent. Defaults to scripted.",
     ),
+  ),
+  humanize: Flag.Boolean("humanize").pipe(
+    Flag.withDefault(false),
+    Flag.withDescription("Perform the input for viewers, through a presenter's view of the page."),
   ),
   task: Flag.Literals("task", names).pipe(
     Flag.atLeast(0),
@@ -98,6 +107,16 @@ const flags = {
   ),
 };
 
+// What stopped a trial or its replay: a page operation's or a replay's own message, which names
+// the input or step that failed, or the bench's word for anything else.
+const stopped = (cause: Cause.Cause<unknown>) => {
+  const error = Cause.squash(cause);
+
+  return error instanceof Error && ["BrowserError", "ReplayError"].includes(error.name)
+    ? error.message
+    : errorText(cause);
+};
+
 /**
  * How a model run ended without an answer, in the bench's own words. A call the ledger refused, or
  * one that ended without a decoded response, is the bench's failure, not the model's.
@@ -116,12 +135,32 @@ const ending = (cause: Cause.Cause<unknown>, refusal: Refusal | null) => {
 };
 
 interface Run {
-  readonly mode: "scripted" | "untouched" | "model";
+  readonly mode: "scripted" | "untouched" | "replayed" | "model";
+  readonly humanize: boolean;
   readonly arm: Arms.Arm;
   readonly reasoning: (typeof efforts)[number];
   readonly runner: ModelRunner | undefined;
   readonly directory: string;
 }
+
+// What a walk typed, by the input slots its plan names, from the events it was recorded from: the
+// plan keeps each typed text as a slot, never the text.
+const typed = (plan: Plan.Plan, events: ReadonlyArray<BrowserEvent.BrowserEvent>) => {
+  const page = events.find((event) => event._tag === "Action")?.page;
+
+  const actions = events.filter(
+    (event): event is BrowserEvent.Action =>
+      event._tag === "Action" && event.page === page && event.ok && event.value._tag !== "Act",
+  );
+
+  return Object.fromEntries(
+    plan.steps.flatMap((step, index) => {
+      const value = actions[index]?.value;
+
+      return step.input === undefined || value?._tag !== "Type" ? [] : [[step.input, value.text]];
+    }),
+  );
+};
 
 /** One trial on its own browser: the chart before, the work, the chart after and its grade. */
 const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
@@ -129,10 +168,12 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const page = yield* (yield* Browser).firstPage;
+    const acting = run.humanize ? (yield* Presentation.make()).view(page) : page;
     const steps: Array<Arms.Step> = [];
 
     yield* page.goto(url);
     yield* TradingView.chartLoaded(page);
+    if (task.setup !== undefined) yield* task.setup(page);
     const start = yield* TradingView.state(page);
 
     yield* fs.writeFile(
@@ -145,11 +186,12 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
     let usd = 0;
     let modelCalls: ReadonlyArray<ModelCall> = [];
 
-    if (run.mode === "scripted") answer = yield* task.solve(page, start);
+    if (run.mode === "scripted" || run.mode === "replayed")
+      answer = yield* task.solve(acting, start);
     if (run.runner !== undefined) {
       const account = yield* run.runner.account;
 
-      const agent = Arms.operate(run.arm, page, task.prompt, {
+      const agent = Arms.operate(run.arm, acting, task.prompt, {
         answer: Schema.String,
         maxSteps: task.maxSteps,
         onStep: (step) => Effect.sync(() => void steps.push(step)),
@@ -181,6 +223,20 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
     for (const { name } of steps.flatMap((step) => step.calls))
       tools[name] = (tools[name] ?? 0) + 1;
 
+    const events = yield* page.recentEvents;
+    const plan = Plan.fromEvents(events);
+
+    if (run.mode === "replayed")
+      yield* fs.writeFileString(
+        path.join(run.directory, `${id}.plan.json`),
+        JSON.stringify(yield* Schema.encodeEffect(Plan.Plan)(plan), null, 2),
+      );
+    // The page's input by kind; `act` counts the chart API's changes, the setup's among them.
+    const actions: Record<string, number> = {};
+
+    for (const event of events)
+      if (event._tag === "Action" && event.ok) actions[event.name] = (actions[event.name] ?? 0) + 1;
+
     return {
       ...task.grade(start, end, answer),
       answer,
@@ -188,8 +244,49 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
       arm: run.runner === undefined ? null : run.arm,
       turns: steps.length,
       tools,
+      actions,
       modelCalls,
       usd,
+      walk: run.mode === "replayed" ? { plan, inputs: typed(plan, events) } : undefined,
+    };
+  });
+
+/**
+ * A recorded walk replayed on a fresh browser, from the chart the task starts from, and the
+ * replayed chart graded: whether a recording keeps the work.
+ */
+const replay = (
+  url: string,
+  task: TradingView.Task,
+  walk: { readonly plan: Plan.Plan; readonly inputs: Readonly<Record<string, string>> },
+  answer: string,
+) =>
+  Effect.gen(function* () {
+    const page = yield* (yield* Browser).firstPage;
+    const [first] = walk.plan.steps;
+
+    yield* page.goto(url);
+    yield* TradingView.chartLoaded(page);
+    if (task.setup !== undefined) yield* task.setup(page);
+    const start = yield* TradingView.state(page);
+
+    // The walk opens on the chart this page has just loaded.
+    const replayed = yield* Effect.exit(
+      Plan.replay(page, walk.plan, {
+        inputs: walk.inputs,
+        from: first?.action._tag === "Goto" ? 1 : 0,
+      }),
+    );
+
+    const end = yield* TradingView.state(page);
+    const grade = task.grade(start, end, answer);
+
+    return {
+      pass: grade.pass,
+      detail: Exit.isSuccess(replayed)
+        ? grade.detail
+        : `stopped: ${stopped(replayed.cause)}; ${grade.detail}`,
+      steps: walk.plan.steps.length,
     };
   });
 
@@ -267,6 +364,7 @@ export const command = Command.make(
 
     const run: Run = {
       mode: options.mode,
+      humanize: options.humanize,
       arm: options.arm,
       reasoning: options.reasoning,
       directory,
@@ -291,20 +389,55 @@ export const command = Command.make(
         );
 
         const seconds = ((yield* Clock.currentTimeMillis) - started) / 1000;
+        const walk = Exit.isSuccess(exit) ? exit.value.walk : undefined;
+        const answer = Exit.isSuccess(exit) ? exit.value.answer : "";
 
-        const record = Exit.isSuccess(exit)
-          ? exit.value
-          : { pass: false, detail: `infrastructure: ${errorText(exit.cause)}`, ended: "", usd: 0 };
+        const graded = Exit.isSuccess(exit)
+          ? { ...exit.value, walk: undefined }
+          : { pass: false, detail: `infrastructure: ${stopped(exit.cause)}`, ended: "", usd: 0 };
+
+        // The replayed chart's grade is the trial's: the scripted one stands beside it.
+        const replayed =
+          walk === undefined
+            ? undefined
+            : yield* Effect.exit(
+                replay(TradingView.sites[options.site], task, walk, answer).pipe(
+                  Effect.scoped,
+                  Effect.provide(
+                    browser({
+                      bench: "tradingview",
+                      task: task.name,
+                      trial: String(number),
+                      replay: "1",
+                    }),
+                  ),
+                ),
+              );
+
+        const record =
+          replayed === undefined
+            ? graded
+            : Exit.isSuccess(replayed)
+              ? {
+                  ...graded,
+                  pass: replayed.value.pass,
+                  detail: `replayed ${replayed.value.steps} steps: ${replayed.value.detail}; scripted ${graded.pass ? "passed" : "failed"}`,
+                }
+              : {
+                  ...graded,
+                  pass: false,
+                  detail: `replay infrastructure: ${stopped(replayed.cause)}`,
+                };
 
         if (record.pass) passed += 1;
         spent += record.usd;
         yield* fs.writeFileString(
           path.join(directory, "results.jsonl"),
-          `${JSON.stringify({ task: task.name, trial: number, site: options.site, mode: options.mode, seconds, ...record })}\n`,
+          `${JSON.stringify({ task: task.name, trial: number, site: options.site, mode: options.mode, humanize: options.humanize, seconds, ...record })}\n`,
           { flag: "a" },
         );
         yield* Console.log(
-          `${id.padEnd(10)} ${record.pass ? "pass" : "FAIL"}  ${seconds.toFixed(0)}s  $${record.usd.toFixed(4)}  ${record.ended}  | ${record.detail}`,
+          `${id.padEnd(12)} ${record.pass ? "pass" : "FAIL"}  ${seconds.toFixed(0)}s  $${record.usd.toFixed(4)}  ${record.ended}  | ${record.detail}`,
         );
       }
 

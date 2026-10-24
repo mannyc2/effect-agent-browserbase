@@ -74,8 +74,11 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   recorded human strokes. It depends on `effect-browser` through its public entry points only. Its
   code is MIT; its bundled stroke data is CC BY 4.0, with attribution in its README and
   `LICENSE-data`.
-- `bench`: private graded tasks, depending on `effect-browser`, `effect-browserbase` and
-  `effect-agent-browser`, whose agents run on Yielded.
+- `packages/tradingview` (`effect-browser-tradingview`): TradingView charts' data, screen points
+  and changes, and a Yielded agent's tools for them. It depends on `effect-browser`, and for its
+  tools on `effect-agent-browser` and `@yielded/agent`, through their public entry points.
+- `bench`: private graded tasks, depending on `effect-browser`, `effect-browserbase`,
+  `effect-agent-browser` and `effect-browser-tradingview`, whose agents run on Yielded.
 - `tools/`: the pinned-toolchain installer, `check-packed.sh`, which checks the packed
   packages in a clean consumer, and shared repository-only CDP test support in `tools/testing/`.
   Package test cases stay in their package; shared support does not import package-private code. Releases are `.github/workflows/publish.yml`; see
