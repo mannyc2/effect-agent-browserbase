@@ -233,15 +233,17 @@ it.live("presentation and future cuts run on the page clock under a suspended ca
 
     const view = presenter.view(page);
 
+    // The timeouts catch only a hang on the caller's clock: a person's glide alone can take two
+    // seconds.
     yield* view
       .hover({ x: 100, y: 100 })
-      .pipe(Effect.provideService(Clock.Clock, caller), Effect.timeout("2 seconds"));
+      .pipe(Effect.provideService(Clock.Clock, caller), Effect.timeout("15 seconds"));
     const stage = yield* Stage.make().pipe(Effect.provideService(Clock.Clock, caller));
     const asked = (yield* browser.now) + 30;
 
     const presented = yield* stage
       .present(view, { at: asked })
-      .pipe(Effect.provideService(Clock.Clock, caller), Effect.timeout("3 seconds"));
+      .pipe(Effect.provideService(Clock.Clock, caller), Effect.timeout("15 seconds"));
 
     assert.isAtLeast(presented.at, asked);
     assert.strictEqual(presented.latency, presented.at - asked);
