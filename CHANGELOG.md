@@ -4,6 +4,39 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.22
+
+- **Breaking:** `effect-browser` replaces its kernel and lifecycle contracts (#308). `Page.perform`
+  runs one decoded `Action` under every named page method, policy, `Plan`, recording and agent
+  receipt, which now agree on what was requested, whether it was dispatched and whether a retry must
+  check the page first. It adds the subpaths `Action`, `ActionPort`, `Clock`, `Geometry`,
+  `Matching`, `Released`, `Stillness`, `Style`, `Url`, `Window` and `testing`, and `Page.perform`,
+  `clock`, `read`, `act`, `afterInput` and `until`. `Cdp`, `Chromium`, `Moment`, `Motion`, `Plan`,
+  `Policy`, `Presentation`, `Stage` and `Supervisor` leave the portable root for their own subpaths.
+  `Expect`, `Page.playwright`, `Browser.Service.context`, `Page.waitFor`, `Page.aim` and the
+  supervisor's `Admission` and `Releasing` are removed, and plan recordings are version 3 only.
+  `effect-browserbase` replaces `Browserbase.supervise` with `generations`, whose `OpenFailed`
+  carries cleanup evidence and retry classification, and closes build resources before provider
+  release. The other packages require `effect-browser` from this release.
+- **Breaking:** `effect-agent-browser` peers on `@yielded/agent` `0.1.0-beta.189` exactly (#309).
+  Yielded replaced its ref-based browser vocabulary with Code Mode over raw CDP, so `PageControl`
+  now owns `Ref`, `Action`, `Observation` and `ActionResult`, and `BrowserTools` owns `observe`,
+  `act` and the control tools, with the names, parameters and descriptions models had. An uncertain
+  dispatch is `possibly-dispatched`. `PageControl.layer` and the controller's `screenshot` and
+  `respondDialog` are removed. Pointer receipts leave absent fields out, so a Code Mode program can
+  read them.
+- `effect-agent-browser` adds `vision: "ask"` and `"page"` with `BrowserTools.Look`,
+  `BrowserTools.Find`, and the layer options `pixels`, `placement`, `boxes` and `changes` (#310).
+  `PromptCache.layer` marks each request's last tool result as a prompt-cache breakpoint, so calls
+  that carry a picture still reuse the conversation's cached history. `effect-browser` adds
+  `SnapshotOptions.boxes`, `ScreenshotOptions.scale`, `Page.zoom`'s options and
+  `Chromium.Options.deviceScaleFactor`; `HttpCassette` can settle each recorded call at its receipt.
+- `BrowserTools.Controller` gives an application's own tools the run's controller, so they act on
+  the tab the model sees (#311).
+- `effect-browser-tradingview` joins the workspace, unpublished: a TradingView chart's state, bars,
+  studies and points, changes made with the chart's own controls, and `ChartTools` for a Yielded
+  agent's tools or a Code Mode program (#311).
+
 ## 0.3.0-beta.21
 
 - Published page scripts survive consumer bundling with preserved function names and minification,

@@ -1,8 +1,8 @@
 # Status
 
-## Current replacement implementation
+## 0.3.0-beta.22
 
-The October audit replacement is implemented on an isolated branch. Root exports contain the
+The `0.3.0-beta.22` release ships the October audit replacement. Root exports contain the
 portable kernel; optional features use public page contracts and have enforced import/deletion
 checks. Actions are schema values through execution, policy, receipts and replay. The generic
 supervisor reports cleanup per attempt and keeps retirement owned through cancellation.
@@ -24,7 +24,7 @@ per-finding results, current validation and remaining acceptance gates. The
 recommendations accepted or rejected after reproduction. The release history below
 records earlier APIs and evidence, rather than the current supervisor contract.
 
-On top of that branch, `@yielded/agent` moves from `0.1.0-beta.168` to `0.1.0-beta.189`. Yielded's
+The same release moves `@yielded/agent` from `0.1.0-beta.168` to `0.1.0-beta.189`. Yielded's
 `0.1.0-beta.174` replaced its ref-based browser ports and tools with one Code Mode tool over raw
 CDP, so `effect-agent-browser` now defines the ref and control tools itself, with the names,
 parameters and descriptions models were given before. `PageControl.layer` and the ports'
