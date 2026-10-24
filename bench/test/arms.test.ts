@@ -5,7 +5,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
 import { type Prompt, Tool } from "effect/ai";
 
-import type { Arm, Step } from "../Arms.ts";
+import { type Arm, deviceScale, type Step } from "../Arms.ts";
 import { noCalls } from "../Budget.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
 import { classify, isolatedTrial } from "../Trial.ts";
@@ -21,7 +21,10 @@ const parameters = (tools: ReadonlyArray<Tool.Any>, name: string): ReadonlyArray
 
 const names = (tools: ReadonlyArray<Tool.Any>) => tools.map((tool) => tool.name);
 
-/** Run one task in one arm with a scripted model, and classify its outcome as the runner does. */
+/**
+ * Run one task in one arm with a scripted model, on a browser at the arm's device scale, and
+ * classify its outcome as the runner does.
+ */
 const trial = (name: string, arm: Arm, turns: ReadonlyArray<Turn>) =>
   Effect.gen(function* () {
     const task = tasks.find((candidate) => candidate.name === name);
@@ -42,7 +45,7 @@ const trial = (name: string, arm: Arm, turns: ReadonlyArray<Turn>) =>
               steps.push({ ...entry.step, results: [...entry.step.results] });
           }),
       }),
-      Chromium.layer({ frameHistory }),
+      Chromium.layer({ frameHistory, deviceScaleFactor: deviceScale(arm) }),
     ).pipe(Effect.provide(model.layer), Effect.exit);
 
     return {
@@ -158,7 +161,88 @@ describe("arm 2, vision first", () => {
       assert.sameMembers([...parameters(first.tools, "type_text")], ["text", "submit"]);
       assert.deepStrictEqual(result.outcome, { status: "graded", reason: "answered", pass: false });
       assert.strictEqual(result.outcomeValue?.actions, 3);
+      assert.deepStrictEqual(result.outcomeValue?.tools, { click_at: 1, zoom: 1, done: 1 });
       assert.strictEqual(result.outcomeValue?.steps, 2);
+    }),
+  );
+});
+
+describe("arms 9 and 10, fewer pictures", () => {
+  const counts = (seen: ReadonlyArray<{ readonly prompt: Prompt.Prompt }>) =>
+    seen.map(({ prompt }) => pictures(prompt));
+
+  it.live("arm 9 shows the screen after pointer input on a page its outline reads", () =>
+    Effect.gen(function* () {
+      const result = yield* trial("checkout", 9, [
+        () => [call("observe", {}), finish],
+        () => [call("click_at", { x: 5, y: 5 }), finish],
+        () => [call("observe", {}), finish],
+        () => [call("done", { answer: { confirmation: "CONF-0" } }), finish],
+      ]);
+
+      assert.deepStrictEqual(counts(result.seen), [0, 0, 1, 0]);
+      assert.include(names(result.seen[0]?.tools ?? []), "look");
+    }),
+  );
+
+  it.live("arm 10 shows the screen only after look", () =>
+    Effect.gen(function* () {
+      const result = yield* trial("checkout", 10, [
+        () => [call("observe", {}), finish],
+        () => [call("click_at", { x: 5, y: 5 }), finish],
+        () => [call("look", {}), finish],
+        () => [call("done", { answer: { confirmation: "CONF-0" } }), finish],
+      ]);
+
+      assert.deepStrictEqual(counts(result.seen), [0, 0, 0, 1]);
+    }),
+  );
+});
+
+describe("arms 11 and 12, picture sizes", () => {
+  for (const [arm, size] of [
+    [11, "640x360"],
+    [12, "1920x1080"],
+  ] as const)
+    it.live(`arm ${arm} shows the 1280x720 viewport at ${size}`, () =>
+      Effect.gen(function* () {
+        const result = yield* trial("checkout", arm, [
+          () => [call("done", { answer: { confirmation: "CONF-0" } }), finish],
+        ]);
+
+        assert.include(textOf(result.seen[0]!.prompt), `The current tab's viewport, ${size}.`);
+      }),
+    );
+});
+
+describe("arms 13 to 16, the outline and the picture", () => {
+  const done = () => [call("done", { answer: { confirmation: "CONF-0" } }), finish];
+
+  it.live("arm 13 gives each control's box, and arm 14 has find", () =>
+    Effect.gen(function* () {
+      const boxed = yield* trial("checkout", 13, [() => [call("observe", {}), finish], done]);
+      const finding = yield* trial("checkout", 14, [done]);
+
+      assert.match(textOf(boxed.seen[1]!.prompt), /\d+x\d+ at \(\d+,\d+\)/);
+      assert.notInclude(names(boxed.seen[0]?.tools ?? []), "find");
+      assert.include(names(finding.seen[0]?.tools ?? []), "find");
+    }),
+  );
+
+  it.live("arm 16 shows a crop around a point before clicking it", () =>
+    Effect.gen(function* () {
+      const result = yield* trial("checkout", 16, [
+        () => [call("click_at", { x: 5, y: 5 }), finish],
+        () => [call("click_at", { x: 6, y: 6 }), finish],
+        done,
+      ]);
+
+      assert.include(textOf(result.seen[1]!.prompt), "Not done yet");
+      assert.deepStrictEqual(
+        result.seen.map(({ prompt }) => pictures(prompt)),
+        [1, 2, 1],
+      );
+      assert.include(textOf(result.seen[2]!.prompt), "Clicked");
     }),
   );
 });

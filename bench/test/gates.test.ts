@@ -1,6 +1,6 @@
 // The bench's own gates for operate tasks: each page varies with the seed, so a task's trials
 // sample a family of pages rather than repeat one, and each grader reads the page, so an agent that
-// reports the right answer without doing the work fails, while work reported in the wrong form
+// reports the right answer without doing the work fails, while work reported without its code
 // still counts on the page. No model is called.
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
@@ -65,15 +65,15 @@ describe("operate tasks", () => {
 const refIn = (prompt: Prompt.Prompt, pattern: RegExp) =>
   pattern.exec(textOf(prompt))?.[1] ?? "missing";
 
-describe("work reported in the wrong form", () => {
-  it.live("fails the grade but counts on the page", () =>
+describe("work reported in other words", () => {
+  // The order is placed as asked; the answer gives its id as `answer` words it.
+  const placed = (answer: (id: string) => string) =>
     Effect.gen(function* () {
       const task = tasks.find((candidate) => candidate.name === "chart-trade");
 
       if (task === undefined) return yield* Effect.die("the bench has no chart-trade task");
 
-      // The order is placed as asked; its id comes back inside a sentence, as models write it.
-      const outcome = yield* isolatedTrial(
+      return yield* isolatedTrial(
         task.withModel({ seed: 1, onUsage: () => Effect.void }),
         browser,
       ).pipe(
@@ -96,18 +96,30 @@ describe("work reported in the wrong form", () => {
             ],
             (prompt) => [
               call("done", {
-                answer: {
-                  orderId: `Order ${/ORD-\d+/.exec(textOf(prompt))?.[0] ?? "none"} was filled.`,
-                },
+                answer: { orderId: answer(/ORD-\d+/.exec(textOf(prompt))?.[0] ?? "none") },
               }),
               finish,
             ],
           ]).layer,
         ),
       );
+    });
 
-      assert.isFalse(outcome.pass, outcome.detail);
-      assert.isTrue(outcome.onPage, outcome.detail);
-    }),
+  it.live("passes with the id inside a sentence, as models write it", () =>
+    placed((id) => `Order ${id} was filled.`).pipe(
+      Effect.map((outcome) => {
+        assert.isTrue(outcome.pass, outcome.detail);
+        assert.isTrue(outcome.onPage, outcome.detail);
+      }),
+    ),
+  );
+
+  it.live("fails the grade without the id but counts on the page", () =>
+    placed(() => "The order was filled.").pipe(
+      Effect.map((outcome) => {
+        assert.isFalse(outcome.pass, outcome.detail);
+        assert.isTrue(outcome.onPage, outcome.detail);
+      }),
+    ),
   );
 });

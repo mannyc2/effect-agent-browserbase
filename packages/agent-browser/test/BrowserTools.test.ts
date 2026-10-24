@@ -178,6 +178,55 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("with placement by crop, shows a crop around a point before clicking in it", () =>
+    Effect.gen(function* () {
+      const { page, prompts } = yield* run(
+        "Press spin once",
+        [
+          () => calling(call("click_at", { x: 300, y: 320 })),
+          () => calling(call("click_at", { x: 302, y: 318 }), call("wait_still", { seconds: 10 })),
+          () => answer("Spun once."),
+        ],
+        { placement: "crop" },
+      );
+
+      const { value: state } = yield* page.read(() => Reflect.get(window, "state"), {
+        arg: undefined,
+        result: Schema.Struct({ spins: Schema.Int }),
+      });
+
+      assert.strictEqual(state.spins, 1);
+      assert.include(textOf(prompts[1]!), "Not done yet");
+      assert.include(textOf(prompts[1]!), "Zoom: viewport origin (200, 260), 200x120");
+      assert.include(textOf(prompts[2]!), "at (302, 318)");
+    }),
+  );
+
+  it.effect("with device pixels, shows the screen at the device's scale and maps points back", () =>
+    Effect.gen(function* () {
+      const { page, prompts } = yield* run(
+        "Press spin once",
+        [
+          () => calling(call("click_at", { x: 150, y: 160 }), call("wait_still", { seconds: 10 })),
+          () => calling(call("zoom", { x: 25, y: 30, width: 75, height: 90 })),
+          () => answer("Spun once."),
+        ],
+        { pixels: "device" },
+      );
+
+      const { value: state } = yield* page.read(() => Reflect.get(window, "state"), {
+        arg: undefined,
+        result: Schema.Struct({ spins: Schema.Int }),
+      });
+
+      assert.strictEqual(state.spins, 1);
+      assert.include(textOf(prompts[0]!), "The current tab's viewport, 640x360.");
+      // The receipt and the crop give the picture's coordinates back.
+      assert.include(textOf(prompts[1]!), "(150, 160)");
+      assert.include(textOf(prompts[2]!), "Zoom: viewport origin (25, 30), 75x90");
+    }).pipe(Effect.provide(Chromium.layer({ deviceScaleFactor: 0.5 }))),
+  );
+
   it.effect(
     "keeps a moment of the tab after each turn's results, pictured for the latest few",
     () =>
@@ -247,6 +296,65 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.deepStrictEqual(prompts.map(pictures), [[], []]);
       assert.include(textOf(prompts[1]!), "a crop cannot be shown");
+    }),
+  );
+
+  it.effect("with vision ask, shows the screen only after look, and a crop on its own", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+
+      const looking = Agent.make("browser-test-look", {
+        input: Schema.String,
+        output: Output.text(Schema.String),
+        instructions: "Use the browser tools to do the task, then say what you did.",
+        toolkit: Toolkit.merge(tools.toolkit, BrowserTools.Look),
+        policy: { maxTurns: 6, maxToolCalls: 12, maxDuration: "1 minute", toolConcurrency: 1 },
+      });
+
+      const model = scripted([
+        () => calling(call("observe", {})),
+        () => calling(call("look", {})),
+        () => calling(call("zoom", { x: 0, y: 0, width: 200, height: 100 })),
+        () => answer("Looked."),
+      ]);
+
+      yield* AgentRuntime.run(looking, "Look at the form").pipe(
+        Effect.provide(
+          Layer.mergeAll(tools.layer({ page }, { vision: "ask" }), InMemory.layer, model.layer),
+        ),
+      );
+
+      assert.deepStrictEqual(
+        model.prompts.map((prompt) => pictures(prompt).length),
+        [0, 0, 1, 1],
+      );
+      assert.include(textOf(model.prompts[2]!), "The current tab's viewport");
+      assert.include(textOf(model.prompts[3]!), "Zoom: viewport origin (0, 0), 200x100");
+      assert.notInclude(textOf(model.prompts[3]!), "The current tab's viewport");
+    }),
+  );
+
+  it.effect("with vision page, shows the screen after pointer input and over a canvas", () =>
+    Effect.gen(function* () {
+      const form = yield* run(
+        "Hover the amount",
+        [
+          () => calling(call("observe", {})),
+          (prompt) => calling(call("hover", { ref: refIn(prompt, "textbox", "Amount") })),
+          () => calling(call("observe", {})),
+          () => answer("Hovered."),
+        ],
+        { vision: "page" },
+      );
+
+      assert.deepStrictEqual(
+        form.prompts.map((prompt) => pictures(prompt).length),
+        [0, 0, 1, 0],
+      );
+
+      const slots = yield* run("Look at the spin", [() => answer("Seen.")], { vision: "page" });
+
+      assert.strictEqual(pictures(slots.prompts[0]!).length, 1);
     }),
   );
 

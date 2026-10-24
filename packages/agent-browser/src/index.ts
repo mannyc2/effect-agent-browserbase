@@ -3,3 +3,4 @@
  */
 export * as BrowserTools from "./BrowserTools.ts";
 export * as PageControl from "./PageControl.ts";
+export * as PromptCache from "./PromptCache.ts";

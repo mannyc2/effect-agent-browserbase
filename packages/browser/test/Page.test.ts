@@ -112,6 +112,20 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.isAbove(snapshot.below, 0);
         assert.include((yield* page.snapshot({ full: true })).text, "Bottom of the page");
         assert.notInclude((yield* page.snapshot({ query: "submit" })).text, "Amount");
+
+        // Asked, each control's line ends with its box.
+        const [submit] = yield* page.find({ role: "button", name: "Submit" });
+        const boxed = (yield* page.snapshot({ boxes: true })).text.split("\n");
+        const box = submit?.box;
+
+        assert.notInclude(snapshot.text, " at (");
+        assert.isTrue(
+          boxed.some(
+            (line) =>
+              line.includes('button "Submit"') &&
+              line.endsWith(` ${box?.width}x${box?.height} at (${box?.x},${box?.y})`),
+          ),
+        );
       }),
     ),
   );
@@ -810,7 +824,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     ),
   );
 
-  it.effect("zooms a scrolled viewport in CSS pixels at device scale factor two", () =>
+  it.effect("zooms a scrolled viewport in CSS or device pixels at device scale factor two", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
         const browser = yield* Browser;
@@ -858,6 +872,18 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.isBelow(pixel[0] ?? 255, 40);
         assert.isAbove(pixel[1] ?? 0, 180);
         assert.isBelow(pixel[2] ?? 255, 60);
+
+        const sharp = yield* page.zoom(region, { scale: "device" });
+        const screen = yield* page.screenshot({ scale: "device" });
+
+        assert.deepStrictEqual({ ...sharp.region }, region);
+        assert.deepStrictEqual([sharp.image.width, sharp.image.height], [200, 120]);
+        assert.deepStrictEqual(yield* centerPixel(page, sharp.image), pixel);
+        assert.deepStrictEqual([screen.width, screen.height], [1280, 960]);
+        assert.deepStrictEqual(
+          [(yield* page.screenshot()).width, (yield* page.screenshot()).height],
+          [640, 480],
+        );
 
         const clicked = yield* page.click({ x: 130, y: 150 });
 

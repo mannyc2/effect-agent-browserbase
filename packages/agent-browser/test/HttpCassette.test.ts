@@ -107,6 +107,41 @@ it.effect("requires exact opt-in and reserves the full cap before dispatch", () 
   ),
 );
 
+it.effect("counts a settled recording at its charge, so the cap bounds spend, not requests", () =>
+  Effect.gen(function* () {
+    let calls = 0;
+
+    const http = HttpClient.make((request) =>
+      Effect.sync(() => {
+        calls++;
+
+        return HttpClientResponse.fromWeb(request, new Response('{"cost":0.25}'));
+      }),
+    );
+
+    const charge = (response: HttpCassette.Exchange["response"]) =>
+      response.body.includes("cost") ? 0.25 : undefined;
+
+    const cassette = yield* HttpCassette.make({
+      mode: "record",
+      http,
+      cap: 2,
+      reserve: () => Effect.succeed(1),
+      settle: charge,
+      append: () => Effect.void,
+    });
+
+    // Each request needs 1 of the cap of 2 free and settles at 0.25: five fit, the sixth does not.
+    for (let request = 0; request < 5; request++) yield* cassette.http.get("https://model.test");
+    yield* cassette.http.get("https://model.test").pipe(Effect.flip);
+    assert.strictEqual(calls, 5);
+  }).pipe(
+    Effect.provide(
+      ConfigProvider.layer(ConfigProvider.fromUnknown({ EFFECT_BROWSER_BENCH_LIVE: "1" })),
+    ),
+  ),
+);
+
 // 1d6d7c7: reconstructing Fetch null-body responses with an empty string caused a defect.
 it.effect("records and replays responses whose status forbids a body", () =>
   Effect.gen(function* () {

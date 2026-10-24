@@ -3,13 +3,13 @@
 import { Effect, FileSystem, type PlatformError, Schema } from "effect";
 
 import { arms } from "./Arms.ts";
-import { Accounting, BenchError, Timing } from "./Budget.ts";
+import { Accounting, BenchError, ModelCall, Timing } from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import { Phases, Protocol } from "./Trace.ts";
 import { Reason, RunInfo, Status } from "./Trial.ts";
 
 export class TrialRecord extends Schema.Class<TrialRecord>("bench/TrialRecord")({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   task: Schema.String,
   kind: Schema.Literals(["operate", "understand"]),
   /** Null for a scripted solution. */
@@ -38,7 +38,11 @@ export class TrialRecord extends Schema.Class<TrialRecord>("bench/TrialRecord")(
   /** Model turns and tool calls of a trial that reached an outcome; null otherwise. */
   steps: Schema.NullOr(Schema.Int),
   actions: Schema.NullOr(Schema.Int),
+  /** Those tool calls by tool name; null without an outcome. */
+  tools: Schema.NullOr(Schema.Record(Schema.String, Schema.Int)),
   accounting: Accounting,
+  /** Each model call with a receipt, in order: its pictures, tokens and seconds. */
+  modelCalls: Schema.Array(ModelCall),
   /** Admission queueing and provider request time within `seconds`. */
   timing: Timing,
   /** Opening the browser, the model's tool calls and looks at the page, within `seconds`. */

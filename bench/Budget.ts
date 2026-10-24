@@ -14,6 +14,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as PromptCache from "effect-agent-browser/PromptCache";
 import { HttpCassette } from "effect-agent-browser/testing";
 import { AiError, type LanguageModel, Model } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
@@ -123,12 +124,23 @@ const Billed = Schema.Union([
 ]);
 
 /** USD a receipt establishes, or undefined when it does not show the whole charge. */
-export const chargeOf = (usage: RawUsage): number | undefined =>
+export const chargeOf = (usage: unknown): number | undefined =>
   Option.getOrUndefined(
     Option.map(Schema.decodeUnknownOption(Billed)(usage), (billed) =>
       "cost_details" in billed
         ? billed.cost + billed.cost_details.upstream_inference_cost
         : billed.cost,
+    ),
+  );
+
+// A chat completion's body, for the usage its receipt carries.
+const Receipt = Schema.fromJsonString(Schema.Struct({ usage: Schema.Unknown }));
+
+/** The charge a recorded chat completion's receipt shows, or undefined when it shows none. */
+export const recordedCharge = (body: string) =>
+  Option.getOrUndefined(
+    Option.flatMap(Schema.decodeOption(Receipt)(body), ({ usage }) =>
+      Option.fromUndefinedOr(chargeOf(usage)),
     ),
   );
 
@@ -152,6 +164,20 @@ export const emptyAccounting: Accounting = {
   reservedUsd: 0,
   uncertainCalls: 0,
 };
+
+/**
+ * One model call with a receipt: the pictures its request carried, its tokens, and its seconds in
+ * the provider request.
+ */
+export const ModelCall = Schema.Struct({
+  pictures: Count,
+  inputTokens: Count,
+  cachedInputTokens: Count,
+  outputTokens: Count,
+  seconds: Schema.Finite,
+});
+
+export type ModelCall = typeof ModelCall.Type;
 
 /** Wall time an account's calls spent queued for admission and in their provider requests. */
 export const Timing = Schema.Struct({ queueSeconds: Schema.Finite, requestSeconds: Schema.Finite });
@@ -185,6 +211,8 @@ export interface Calls {
   readonly refusal: Refusal | null;
   /** The ledger's halt when it refused this unit's admission; null for a capacity denial. */
   readonly halt: Halt | null;
+  /** Each call that returned a receipt, in order. */
+  readonly log: ReadonlyArray<ModelCall>;
 }
 
 export const noCalls: Calls = {
@@ -192,6 +220,7 @@ export const noCalls: Calls = {
   lastResponse: null,
   refusal: null,
   halt: null,
+  log: [],
 };
 
 // Integer nanodollars round reservations up and the limit down. Floating subtraction must never
@@ -277,6 +306,7 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
         // Why the ledger had stopped when it refused this account, if it had.
         const haltedBy = yield* Ref.make<Halt | null>(null);
         const timing = yield* Ref.make(noTiming);
+        const log = yield* Ref.make<ReadonlyArray<ModelCall>>([]);
         // When the call now waiting for admission started waiting, if one is.
         const waiting = yield* Ref.make<bigint | null>(null);
 
@@ -311,11 +341,13 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
             lastResponse: Ref.get(lastResponse),
             refusal: Ref.get(refusal),
             halt: Ref.get(haltedBy),
+            log: Ref.get(log),
           }),
           run: <A, E, R>(
             request: Effect.Effect<A, E, R>,
             usageOf: (response: A) => RawUsage | undefined,
             receiptOf?: (response: A) => Diagnostics.Receipt,
+            pictures = 0,
           ): Effect.Effect<A, E | BenchError, R> =>
             Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
@@ -409,6 +441,7 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                 );
 
                 const usage = usageOf(response);
+                const answered = yield* Clock.monotonicTimeNanos;
 
                 const remember = () =>
                   receiptOf === undefined
@@ -432,6 +465,16 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                       (usage.prompt_tokens_details?.cached_tokens ?? 0),
                   },
                 }));
+                yield* Ref.update(log, (calls) => [
+                  ...calls,
+                  {
+                    pictures,
+                    inputTokens: usage.prompt_tokens,
+                    cachedInputTokens: usage.prompt_tokens_details?.cached_tokens ?? 0,
+                    outputTokens: usage.completion_tokens,
+                    seconds: Number(answered - admitted) / 1e9,
+                  },
+                ]);
 
                 const billed = chargeOf(usage);
 
@@ -541,6 +584,8 @@ const asChunk = (completion: Completion): Chunk => ({
   ...(completion.usage === undefined ? {} : { usage: completion.usage }),
 });
 
+type ChatRequest = Parameters<OpenRouterClient.Service["createChatCompletion"]>[0];
+
 /**
  * Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding. A
  * stream is asked as one completion, charged alike; decisions and the raw generated client have
@@ -558,7 +603,7 @@ export const budgetedClient = (
   },
 ): OpenRouterClient.Service => {
   const createChatCompletion: OpenRouterClient.Service["createChatCompletion"] = (request) => {
-    const configured: Parameters<OpenRouterClient.Service["createChatCompletion"]>[0] = {
+    const configured: ChatRequest = {
       ...request,
       ...(bounds.outputParameter === "max_completion_tokens"
         ? { max_completion_tokens: bounds.maxOutputTokens }
@@ -597,6 +642,14 @@ export const budgetedClient = (
         client.createChatCompletion(configured),
         ([response]) => response.usage,
         Diagnostics.receipt,
+        configured.messages.reduce(
+          (count, message) =>
+            count +
+            (Array.isArray(message.content)
+              ? message.content.filter((part) => part.type === "image_url").length
+              : 0),
+          0,
+        ),
       )
       .pipe(
         Effect.tap(([response]) => bounds.record?.(configured, response) ?? Effect.void),
@@ -781,12 +834,15 @@ export const modelRunner = (options: {
                 const native = yield* HttpClient.HttpClient;
 
                 // account.run already reserves this request before reaching the HTTP seam. This cap
-                // independently bounds recording transport; it does not charge the ledger twice.
+                // independently bounds recording transport; it does not charge the ledger twice. A
+                // receipt settles its request at the charge it shows, as the ledger does, so the cap
+                // bounds a trial's spend rather than its calls.
                 const cassette = yield* HttpCassette.make({
                   mode: "record",
                   http: native,
                   cap: options.maxUsd,
                   reserve: () => Effect.succeed(endpoint.requestUsd),
+                  settle: (response) => recordedCharge(response.body),
                   append: recorder.http,
                 }).pipe(Effect.mapError((error) => new BenchError({ message: error.detail })));
 
@@ -809,6 +865,7 @@ export const modelRunner = (options: {
         Layer.provide(
           OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") }),
         ),
+        Layer.provide(PromptCache.layer),
         Layer.provide(http),
       );
 

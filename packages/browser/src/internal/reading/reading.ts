@@ -42,6 +42,7 @@ export const make = (page: PageContext, bridge: Bridge) =>
         query: snapshotOptions.query ?? null,
         within: snapshotOptions.within ?? null,
         maxChars: snapshotOptions.maxChars ?? 12_000,
+        boxes: snapshotOptions.boxes ?? false,
       };
 
       return snapshots(

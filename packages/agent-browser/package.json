@@ -30,6 +30,11 @@
       "types": "./dist/PageControl.d.mts",
       "default": "./dist/PageControl.mjs"
     },
+    "./PromptCache": {
+      "@effect-browser/source": "./src/PromptCache.ts",
+      "types": "./dist/PromptCache.d.mts",
+      "default": "./dist/PromptCache.mjs"
+    },
     "./testing": {
       "@effect-browser/source": "./src/testing.ts",
       "types": "./dist/testing.d.mts",

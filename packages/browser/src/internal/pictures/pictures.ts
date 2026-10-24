@@ -60,6 +60,9 @@ export const pngSize = (bytes: Uint8Array): Size | undefined => {
 /** The format a new picture is taken in. */
 export type Format = "jpeg" | "png";
 
+// A picture's pixels: CSS pixels, or the screen's own.
+type Scale = NonNullable<ScreenshotOptions["scale"]>;
+
 // The part of `Page.getLayoutMetrics` a clip needs: the visual viewport's place in the document and
 // its pinch scale, and the content's size in device and CSS pixels, whose ratio is the device's.
 const LayoutMetrics = Schema.Struct({
@@ -246,23 +249,37 @@ const camera = (
     );
 
   // Playwright's promise owns native restoration; the outer Effect alone bounds callers.
-  const emulatedShot = (operation: string, format: Format, quality: number, crop?: Region) =>
+  const emulatedShot = (
+    operation: string,
+    format: Format,
+    quality: number,
+    scale: Scale,
+    crop?: Region,
+  ) =>
     take(operation, format, () =>
       playwright.screenshot({
         type: format,
         ...(format === "jpeg" ? { quality } : {}),
-        scale: "css",
+        scale,
         timeout: 0,
         ...(crop === undefined ? {} : { clip: crop }),
       }),
     );
 
-  return (operation: string, quality: number, crop?: Region, format: Format = "jpeg") =>
+  return (
+    operation: string,
+    quality: number,
+    crop?: Region,
+    format: Format = "jpeg",
+    pixels: Scale = "css",
+  ) =>
     Effect.gen(function* () {
       const known = viewport.knownViewport();
       let whole: Image | undefined;
 
-      if (crop === undefined && ratio === 1) {
+      // A copy without a clip can come at the viewport's CSS size whatever the device scale
+      // factor, so a picture in device pixels always takes a clip.
+      if (crop === undefined && ratio === 1 && pixels === "css") {
         whole = yield* shot(operation, format, quality);
         if (whole.width === known?.width && whole.height === known.height) return whole;
       }
@@ -272,7 +289,7 @@ const camera = (
       if (emulated !== null) {
         if (whole !== undefined) ratio = whole.width / emulated.width;
 
-        return yield* emulatedShot(operation, format, quality, crop);
+        return yield* emulatedShot(operation, format, quality, pixels, crop);
       }
 
       const [metrics] = yield* native(operation, () => send("Page.getLayoutMetrics")).pipe(
@@ -300,7 +317,7 @@ const camera = (
         y: pageY + rect.y,
         width: Math.floor(rect.width / scale + 1e-3),
         height: Math.floor(rect.height / scale + 1e-3),
-        scale: scale / ratio,
+        scale: pixels === "device" ? scale : scale / ratio,
       });
     }).pipe(capture.excluding, within(operation));
 };
@@ -410,17 +427,24 @@ export const make = Effect.fnUntraced(function* (
         options.clip,
         options.quality,
         options.format,
+        options.scale,
       ]),
       Effect.gen(function* () {
-        // Screencast frames are JPEGs, so a PNG is always new.
+        // A reused frame is a JPEG of the viewport's CSS size, so a PNG or a device picture is new.
         const reused =
-          options.clip === undefined && options.format !== "png"
+          options.clip === undefined && options.format !== "png" && options.scale !== "device"
             ? yield* reusable("screenshot", { maxAge: options.maxAge, after: "input" })
             : Option.none<Frame>();
 
         const image = Option.isSome(reused)
           ? reused.value.image
-          : yield* picture("screenshot", options.quality ?? 80, options.clip, options.format);
+          : yield* picture(
+              "screenshot",
+              options.quality ?? 80,
+              options.clip,
+              options.format,
+              options.scale,
+            );
 
         yield* Effect.annotateCurrentSpan({ source: sourceOf(reused), bytes: image.data.length });
 
@@ -474,7 +498,7 @@ export const make = Effect.fnUntraced(function* (
       owned,
     );
 
-  const zoom = (requested: Region) =>
+  const zoom = (requested: Region, options: Pick<ScreenshotOptions, "scale"> = {}) =>
     lane
       .read("zoom")(
         Effect.gen(function* () {
@@ -489,7 +513,7 @@ export const make = Effect.fnUntraced(function* (
 
           if (region.x + region.width > size.width || region.y + region.height > size.height)
             return yield* refuse("zoom", "the crop must fit entirely within the viewport");
-          const image = yield* picture("zoom", 80, region);
+          const image = yield* picture("zoom", 80, region, "jpeg", options.scale);
 
           return new Zoom({ page: id, region, image });
         }).pipe(within("zoom")),

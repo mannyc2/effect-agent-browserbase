@@ -48,6 +48,9 @@ tools against `dev`, the default, and compare arms on `eval`.
 | `board-move`     | operate    | Drag a card to the top of a board's Done column and report how many cards Done holds            |
 | `policy-find`    | operate    | Find the returns policy behind header menus that open on hover and report its reference         |
 | `catalog-buy`    | operate    | Add the cheapest tent for two in stock, from a catalogue across three pages, to the cart        |
+| `note-format`    | operate    | Format a note as a comment asks, through a toolbar of icons no button names, and save it        |
+| `seat-book`      | operate    | Book two seats together nearest the stage, on a seat map that shows free seats by color alone   |
+| `payment-refund` | operate    | Refund the one payment a support ticket describes, among payments that look alike               |
 
 An operate task gives a Yielded agent the browser tools. An understand task brings the page to
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call:
@@ -164,13 +167,15 @@ all further admission. Only non-streaming chat completions are budgeted: the cli
 streaming, decisions and raw generated requests before sending them.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git),
-a `TrialRecord` (`Results.ts`, `version` 1) that `report` decodes again: the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
+a `TrialRecord` (`Results.ts`, `version` 3) that `report` decodes again: the task, its arm (null for a scripted solution), base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
 model, pinned endpoint with its rates and per-call reservation, browser, added latency, humanize,
 output-token limit, budget, concurrency, recording and narration), effective reasoning, status and
 reason, the answer, model turns
-(`steps`) and tool calls (`actions`) once a trial has an outcome, any
+(`steps`) and tool calls (`actions`, and by tool name `tools`) once a trial has an outcome, any
 error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
-reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
+reservations and uncertain calls), each call with a receipt in `modelCalls` (the pictures its
+request carried, its input, cached input and output tokens, and its seconds in the provider
+request), `timing` (seconds queued for budget admission and seconds in
 provider requests), `phases` (seconds opening the browser, in the model's tool calls, and looking
 at the page outside them: the agent's observations, an arm's own pictures and outlines, a moment's
 capture), a latency or hosted run's `protocol` (see below), the fastest round trip to the browser
@@ -198,7 +203,8 @@ continues 500 ms after a trial so it ends on the settled page. Lost frames or ev
 New recordings also retain complete moments (including their JSON-encoded frame bytes), the raw
 fixture state actually read by the grader, full provider request/response pairs keyed by turn,
 and HTTP exchanges beneath the real provider codec. The existing live opt-in and reservation cap
-still apply before any recorded provider request. Recordings remain private local evidence.
+still apply before any recorded provider request, and each recorded call is settled at the charge
+its receipt shows, so the cap bounds a trial's spend rather than its calls. Recordings remain private local evidence.
 `bun run --cwd bench bench regrade path/to/recording.json` re-runs the current task grader using
 that saved truth, with no browser or model; a changed task prompt is refused. The public
 `effect-agent-browser/testing` HTTP cassette can replay the saved `http` exchanges beneath the
@@ -281,9 +287,13 @@ after the session ended, and a session whose page never navigated had none.
 
 `tradingview` gives an agent tasks on TradingView's charts: switching symbol and timeframe, adding
 an indicator with a changed setting, drawing a level and a trend line at prices read off the chart,
-zooming, and reading values from an indicator or a past candle. Each is graded on the chart's own
+zooming, and reading values from an indicator or a past candle. Four more need many candles' data
+at once: a line at the last 20 closes' average (`average`), a mark on the candle with the widest
+range in view (`range`), the change from the leftmost open to the latest close (`change`) and a
+line between the lowest lows of the view's two halves (`swing`). Each is graded on the chart's own
 state, read through the page's chart API, which the model never sees. Graders count only the
-indicators and drawings a run adds.
+indicators and drawings a run adds. A drawing task's record also gives `error`, how far the closest
+drawing the run added lies from where it belongs: its ends' largest miss in bars and in price.
 
 ```sh
 bun run bench tradingview                       # scripted solutions on the demo, at no cost
@@ -316,6 +326,9 @@ passes more often than another on these tasks' pages. The tasks are fixed, not s
 difference speaks to these pages only. It then gives:
 
 - each arm's tallies, and its median seconds, model turns and tool calls per graded trial;
+- each arm's model calls: how many sent pictures, their uncached and cached input tokens, their
+  median seconds with pictures and without, and how often the model called `look`, a pointer tool
+  or `act`;
 - per task and arm, the pass rate with Wilson's 95% interval; pass^3, the chance that three
   trials all pass, estimated as τ-bench does; the dollars and seconds per pass; and, for an
   operate task, how many graded trials left the work on the page;
@@ -326,19 +339,28 @@ difference speaks to these pages only. It then gives:
   Browserbase.
 
 A wrong answer counts against its arm; an infrastructure failure leaves its pair out of the test.
-On the page, an operate trial counts when its page holds the work the task asked for, whatever
-the answer said, so an order placed and then reported inside a sentence counts there but fails its
-grade. Each record keeps it as `onPage`, so a report counts format-only failures both ways until
-answers are judged rather than matched.
+A code answer passes when it quotes the issued code, however it is worded. "Order ORD-3136 was
+filled." passes, but an answer that also names another code does not. On the page, an operate
+trial counts when its page holds the work the task asked for, whatever the answer said. Each record
+keeps this as `onPage`. The runs recorded below matched answers exactly, so their pass counts fail
+a code given inside a sentence.
 
-| Arm | Operate tasks                                                                                                                                                  | Understand tasks                               |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools | The moment with its outline                    |
-| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                   | As arm 5                                       |
-| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                            | `Moment.capture` as it is: frames and timeline |
-| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                   | As arm 5                                       |
-| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                | As arm 5                                       |
-| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                           | As arm 5                                       |
+| Arm | Operate tasks                                                                                                                                                         | Understand tasks                               |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools        | The moment with its outline                    |
+| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                          | As arm 5                                       |
+| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                                   | `Moment.capture` as it is: frames and timeline |
+| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                          | As arm 5                                       |
+| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                       | As arm 5                                       |
+| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                  | As arm 5                                       |
+| 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look` | As arm 5                                       |
+| 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                   | As arm 5                                       |
+| 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels            | As arm 5                                       |
+| 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels            | As arm 5                                       |
+| 13  | Boxes in the outline: arm 5 with each control's box, `WxH at (x,y)`, on its outline line                                                                              | As arm 5                                       |
+| 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                             | As arm 5                                       |
+| 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                          | As arm 5                                       |
+| 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                         | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
@@ -409,6 +431,142 @@ all.
   across arms: its low end landed 2.0 to 2.6 above the chart's low of 325.81. Zoom passed 2 of 6.
 - **Cost:** programs cost a fifth to a quarter more per trial than arm 5. Model requests took 98%
   of every arm's mean trial time.
+
+The first run of arms 9 and 10, on 2026-10-22, used `openai/gpt-6-luna` with medium reasoning in
+local Chromium. Each of arms 5, 9 and 10 ran 5 trials of each of nine operate tasks on the `eval`
+split (the six above, `note-format`, `seat-book` and `payment-refund`) and 2 of each of the
+TradingView demo's first six tasks. With a one-trial check and an aborted first try, the run cost
+$0.54 in all.
+
+| Arm | Operate | On the page | Calls per trial | With a picture | Uncached input tokens per trial | $ per trial | Median s | TradingView demo |
+| --- | ------- | ----------- | --------------- | -------------- | ------------------------------- | ----------- | -------- | ---------------- |
+| 5   | 40/45   | 44/45       | 5.5             | 100%           | 16,014                          | 0.0023      | 12.3     | 9/12             |
+| 9   | 35/45   | 42/45       | 6.3             | 35%            | 7,179                           | 0.0014      | 10.6     | 9/12             |
+| 10  | 36/45   | 43/45       | 7.8             | 17%            | 6,209                           | 0.0013      | 9.6      | 7/12             |
+
+- **No winner on the page:** no pair of arms differs beyond chance (stratified exact p, after
+  Holm, 0.905, 0.905 and 1 over all operate tasks). Answer format drives most of the difference in
+  passes. Arms 9 and 10 gave the seat reference inside a sentence in all ten `seat-book` trials, and
+  arm 5 gave the order number inside one in four `checkout` trials. Format alone failed 4, 7 and 7
+  trials.
+- **Cost:** arms 9 and 10 cost 42% and 46% less per operate trial than arm 5, despite making more
+  calls. A call that carried a picture did not extend the provider's prompt cache. Across both
+  runs, the calls that followed 557 calls with a picture found a median 0% of those calls' new
+  input cached, against 78% after 507 calls without one. Arm 5, which sends a picture with every
+  call, therefore pays for most of its conversation again on each one.
+- **Turns:** on the canvas game, arm 10 took 21 calls where arm 5 took 10 to 14, clicking, waiting
+  and looking for each spin. Arm 9 was shown the game on every call, as arm 5 was, and took 10.
+- **Where pictures mattered:** on `note-format`, whose toolbar names no button, arms 9 and 10
+  averaged 15.8 and 14.2 calls against arm 5's 10.0. Two trials of each ran out of turns before
+  saving, against one of arm 5's. On `seat-book`, both looked once per trial and booked the right
+  pair every time. On `payment-refund`, neither looked, and both refunded the right payment every
+  time, because its twins differ in text that the outline carries.
+- **Latency:** a call with a picture took a median 2.8 to 3.7 s, and one without 1.6 to 1.7 s. The
+  median trials of arms 9 and 10 were 1.7 and 2.7 s shorter than arm 5's. Arm 10's mean was 1.5 s
+  longer, because of the canvas game.
+- **Charts:** arm 9 saw the chart, a canvas, on every call, and passed as often as arm 5. On the
+  TradingView demo, arm 10 cost half as much and passed two fewer: it missed both `zoom` trials,
+  and once reported the middle band as the upper one without looking. The outline does not label
+  the legend's values. The trend line missed in every arm's trials, again 2.4 to 2.6 above the low.
+
+The second run, on 2026-10-23, repeated the first with two fixes and added arms 11 and 12. Each
+request now marks its last tool result as a prompt-cache breakpoint (`effect-agent-browser`'s
+`PromptCache.layer` beneath the OpenRouter client), and a code answer passes when it quotes the
+issued code. Each of arms 5, 9, 10, 11 and 12 ran the
+same trials as before. With a one-trial check, the run cost $0.68.
+
+| Arm | Operate | On the page | Calls per trial | With a picture | Input read from the cache | $ per trial | Median s | TradingView demo |
+| --- | ------- | ----------- | --------------- | -------------- | ------------------------- | ----------- | -------- | ---------------- |
+| 5   | 41/45   | 41/45       | 6.0             | 100%           | 65%                       | 0.0018      | 10.6     | 8/12             |
+| 9   | 42/44   | 42/44       | 6.5             | 35%            | 77%                       | 0.0013      | 10.8     | 8/12             |
+| 10  | 43/45   | 43/45       | 7.8             | 17%            | 82%                       | 0.0012      | 10.8     | 8/12             |
+| 11  | 42/45   | 42/45       | 5.8             | 100%           | 78%                       | 0.0012      | 10.7     | 8/12             |
+| 12  | 45/45   | 45/45       | 6.0             | 100%           | 53%                       | 0.0028      | 12.7     | 10/12            |
+
+- **The cache:** after a call with a picture, the next call found more of its prompt cached in 79%
+  to 81% of calls in arms 5, 11 and 12. In the first run it found none. Arm 5 read 65% of its input
+  from the cache, against 41%, and cost 22% less per operate trial. On the TradingView demo it cost
+  53% less, $0.051 for 12 trials against $0.107. Arms 9 and 10, with fewer pictures, changed
+  little.
+- **Picture size:** on gpt-6-luna a picture's input tokens grow with its area: about 255 at
+  640×360, 1,070 at 1280×720 and 2,420 at 1920×1080. These are first calls, set against those of
+  arms 9 and 10, which show no picture on the first call.
+- **Half size:** arm 11 did the work as often as arm 5, 42 against 41 of 45, for a third less per
+  trial. It missed the same two `catalog-buy` seeds as arm 5, and once saved a note aligned right
+  instead of justified. On the TradingView demo it passed 8 of 12, as arm 5 did.
+- **Sharper:** arm 12 was the only arm to pass all 45 operate trials. It passed `note-format` 5 of
+  5, against arm 5's 3, in fewer calls, and with arms 9 and 10 every `catalog-buy` trial. The four
+  pairs where it and arm 5 differ all favor it, but that is not beyond chance (stratified exact p
+  0.125, Holm 1). On TradingView it was the first arm to pass `trend`, in both trials: its lines'
+  low ends landed at 325.88 and 325.92 against the low of 325.81, where every other arm's landed
+  2.0 to 2.6 above. It cost 56% more per operate trial than arm 5, and 62% more on the demo.
+- **Answers:** with a code inside a sentence now passing, arms 9 and 10 passed 42 and 43, as many
+  as did the work on the page.
+- **Other failures:** `zoom` failed in every arm. One call's response did not decode, so its
+  trial counts as an infrastructure failure and leaves its pairs. The bench never learned that
+  call's charge; OpenRouter's usage shows the run cost $0.68 in all.
+- **Time:** the $1.20 cap admitted three to five calls at a time at $0.234 reserved each, so trials
+  waited a median 6 to 8 s for the budget. The medians above leave that wait out. A call with a
+  picture took 2.6 s in arms 5 and 11 and 2.9 s in arm 12.
+
+The third run, on 2026-10-23, put arm 6 (moments) on these tasks and repeated arms 5, 11 and 12 on
+new seeds, 101 to 105, to check the second run's picture sizes. On TradingView, arms 5, 6 and 12
+ran `trend` and the four chart data tasks three times each. With one-trial checks, it cost $0.73.
+
+| Arm | Operate | On the page | Calls per trial | Input read from the cache | $ per trial | Median s | TradingView charts |
+| --- | ------- | ----------- | --------------- | ------------------------- | ----------- | -------- | ------------------ |
+| 5   | 42/45   | 42/45       | 5.5             | 64%                       | 0.0016      | 10.9     | 5/15               |
+| 6   | 40/45   | 40/45       | 6.0             | 48%                       | 0.0035      | 13.0     | 7/15               |
+| 11  | 40/45   | 40/45       | 5.8             | 78%                       | 0.0013      | 11.2     |                    |
+| 12  | 42/45   | 42/45       | 5.6             | 53%                       | 0.0025      | 11.6     | 10/15              |
+
+- **The cache:** with the mark now made by `PromptCache.layer`, each arm read as much of its input
+  from the cache as in the second run: 64% for arm 5 against 65%, 78% for arm 11 and 53% for arm 12.
+- **Sharper, on charts:** arm 12 passed 10 of 15 chart trials, against 5 for arm 5 and 7 for arm 6.
+  It passed `trend` all three times and arms 5 and 6 never did: their lines' low ends sat at 327.7
+  to 328.4, on a candle beside the lowest, where arm 12's sat at 325.92 against the low of 325.81.
+  Over both runs, paired by task and trial, arm 12 passed 8 trials that arm 5 failed and failed 1
+  that it passed (exact p 0.039). On operate tasks the second run's lead did not repeat: 42 of 45
+  each, with one pair either way.
+- **Half size:** arm 11 passed 40 of 45 against arm 5's 42, both differing pairs for arm 5 (exact
+  p 0.5), for 19% less per trial. Over both runs it passed 82 of 90 against 83.
+- **Moments:** arm 6 passed 40 of 45 for 2.2 times arm 5's cost per trial. Its thread keeps each
+  turn's account, so less of its input was cached, 48%. On charts it passed 7 of 15, `range` all
+  three times.
+- **Chart data:** `change` passed in every arm. `average` passed twice in nine: the models hovered
+  the 20 candles one at a time and mostly reached the right mean, 343.4 to 343.9 against 343.48, but
+  ran out of their 24 turns before drawing the line. Arm 12's `swing` lines ended at the right
+  prices, 325.92 and 330.74, yet failed twice: at least one end lay more than two bars off.
+
+Arms 13 to 16 ran on 2026-10-23 against arm 5, with luna at medium reasoning. Each ran
+`note-format`, `payment-refund` and `casino-play` five times on eval seeds 201 to 205, and the
+TradingView demo's ten tasks twice. By the records, the run cost $0.85, including an earlier
+attempt whose browsers were all lost at once. Arm 5 lost seven chart trials to the budget: one
+request ended without a decoded response, its $0.23 reservation stayed held, and no later call fit
+the $0.45 cap. Those seven ran again. The TradingView runner now records such an ending as `denied`
+or `infrastructure`, not as the provider's error.
+
+| Arm | Operate | Calls per trial | $ per trial | Median s | TradingView demo | $ per chart trial | Median chart s |
+| --- | ------- | --------------- | ----------- | -------- | ---------------- | ----------------- | -------------- |
+| 5   | 14/15   | 9.5             | 0.0029      | 37.5     | 15/20            | 0.0045            | 33             |
+| 13  | 14/15   | 9.1             | 0.0029      | 42.6     | 14/20            | 0.0051            | 35             |
+| 14  | 15/15   | 10.1            | 0.0030      | 40.5     | 13/20            | 0.0039            | 40             |
+| 15  | 14/15   | 9.2             | 0.0029      | 39.2     | 12/20            | 0.0052            | 43             |
+| 16  | 14/15   | 11.3            | 0.0034      | 56.5     | 13/20            | 0.0058            | 61             |
+
+- **No arm beat arm 5.** On operate tasks, no pair differed in more than one trial each way. On
+  charts, each arm failed two or three trials that arm 5 passed, and only arm 13 passed one that
+  arm 5 failed (exact p 0.25 to 1).
+- **The miss is the candle, not the pointer.** `trend` and `swing` failed in every arm. Each line's
+  low end sat at 328.2 to 328.4, on a candle beside the lowest low of 325.81, so its price missed by
+  about 2.5 with boxes, after zooms or through a crop. Arm 15 zoomed twice as often as arm 5 and still
+  chose that candle. `level`, whose price is the visible high, passed everywhere with no miss.
+- **Find and changes:** arm 14 called `find` three times in 35 trials. With only the changed lines
+  after an action, a call's input fell 3%, but the arm made 6% more calls, so a trial cost the same.
+- **Placement by crop** doubled the pointer calls, 82 against 42 on operate tasks, and took 51%
+  longer, for 17% more per trial. Its lines missed by as much as arm 5's.
+- **Boxes** changed neither calls nor cost on operate tasks, and arm 13 hovered three times as often
+  as arm 5 on charts.
 
 ## Outcomes
 
@@ -553,5 +711,5 @@ with one answer on every seed, and a constant answer passes at most one of the t
 hosted browser is called.
 
 A new task is an `operate` or `understand` entry in `Tasks.ts`, or an errand in `Errands.ts`, an
-operate task on an everyday page of its own; `Catalog.ts` lists every task, and the tests pick it
-up.
+operate task on an everyday page of its own, or one in `Seeing.ts` if its page shows what matters
+in pixels more than in text; `Catalog.ts` lists every task, and the tests pick it up.
