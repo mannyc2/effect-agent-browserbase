@@ -180,7 +180,7 @@ export const history = (
   /** When something in view last changed, or something not yet judged; for a wait for stillness. */
   const changing = (): number =>
     Math.max(
-      Number.NEGATIVE_INFINITY,
+      begun ?? Number.NEGATIVE_INFINITY,
       ...Array.from(
         tracks.values(),
         (track) =>

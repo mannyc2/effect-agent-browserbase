@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Random, Schema } from "effect";
 
-import * as Motion from "../src/Motion.ts";
+import * as Motion from "../src/presentation/Motion.ts";
 
 const plan = (from: Motion.Point, to: Motion.Point): Effect.Effect<ReadonlyArray<Motion.Sample>> =>
   Motion.lognormal.plan(from, to);

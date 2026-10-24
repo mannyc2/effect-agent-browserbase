@@ -6,9 +6,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, type Scope } from "effect";
 
-import * as Presentation from "../src/Presentation.ts";
+import * as Presentation from "../src/presentation/Presentation.ts";
 
 /** A presenter's pace with no wait before an action, for a test that times only its input. */
 export const unpaused: Presentation.Pacing = {
@@ -216,6 +216,8 @@ const links = `<!doctype html><title>Links</title>
 <a href="/cart;jsessionid=0123456789abcdefABCDEF">Cart</a>`;
 
 const pages: Record<string, string> = {
+  "/replacing":
+    "<!doctype html><title>Replacing</title><script>setTimeout(() => location.reload(), 30)</script>",
   "/links": links,
   "/navigating": navigating,
   "/desk": desk,
@@ -232,13 +234,32 @@ const pages: Record<string, string> = {
   "/chart": chart,
 };
 
-export class Site extends Context.Service<Site, { readonly url: (path: string) => string }>()(
-  "test/Site",
-) {}
+export class Site extends Context.Service<
+  Site,
+  {
+    readonly url: (path: string) => string;
+    readonly hold: (path: "/slow") => Effect.Effect<
+      {
+        readonly arrived: Effect.Effect<void>;
+        readonly release: Effect.Effect<void>;
+      },
+      never,
+      Scope.Scope
+    >;
+  }
+>()("test/Site") {}
 
 export const SiteLayer = Layer.effect(
   Site,
   Effect.gen(function* () {
+    const held = new Map<
+      string,
+      {
+        readonly arrived: ReturnType<typeof Promise.withResolvers<void>>;
+        readonly release: ReturnType<typeof Promise.withResolvers<void>>;
+      }
+    >();
+
     const server = yield* Effect.acquireRelease(
       Effect.callback<ReturnType<typeof createServer>>((resume) => {
         const server = createServer((request, response) => {
@@ -251,7 +272,13 @@ export const SiteLayer = Layer.effect(
             return;
           }
           if (request.url === "/slow") {
-            setTimeout(() => response.end("ok"), 500);
+            const gate = held.get(request.url);
+
+            if (gate === undefined) setTimeout(() => response.end("ok"), 500);
+            else {
+              gate.arrived.resolve();
+              void gate.release.promise.then(() => response.end("ok"));
+            }
 
             return;
           }
@@ -281,6 +308,31 @@ export const SiteLayer = Layer.effect(
 
     const { port } = server.address() as AddressInfo;
 
-    return Site.of({ url: (path) => `http://127.0.0.1:${port}${path}` });
+    return Site.of({
+      url: (path) => `http://127.0.0.1:${port}${path}`,
+      hold: (path) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            const gate = {
+              arrived: Promise.withResolvers<void>(),
+              release: Promise.withResolvers<void>(),
+            };
+
+            held.set(path, gate);
+
+            return gate;
+          }),
+          (gate) =>
+            Effect.sync(() => {
+              gate.release.resolve();
+              if (held.get(path) === gate) held.delete(path);
+            }),
+        ).pipe(
+          Effect.map((gate) => ({
+            arrived: Effect.promise(() => gate.arrived.promise),
+            release: Effect.sync(() => gate.release.resolve()),
+          })),
+        ),
+    });
   }),
 );

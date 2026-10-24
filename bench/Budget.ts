@@ -14,10 +14,12 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { HttpCassette } from "effect-agent-browser/testing";
 import { AiError, type LanguageModel, Model } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
 import * as Diagnostics from "./Diagnostics.ts";
+import type { Recorder } from "./Recorder.ts";
 
 /** A problem with how the bench was asked to run, or a call the budget refused. */
 export class BenchError extends Schema.TaggedError<BenchError>()("BenchError", {
@@ -552,48 +554,52 @@ export const budgetedClient = (
     readonly maxOutputTokens: number;
     readonly outputParameter?: "max_tokens" | "max_completion_tokens";
     readonly provider?: string;
+    readonly record?: Recorder["model"] | undefined;
   },
 ): OpenRouterClient.Service => {
-  const createChatCompletion: OpenRouterClient.Service["createChatCompletion"] = (request) =>
-    account
+  const createChatCompletion: OpenRouterClient.Service["createChatCompletion"] = (request) => {
+    const configured: Parameters<OpenRouterClient.Service["createChatCompletion"]>[0] = {
+      ...request,
+      ...(bounds.outputParameter === "max_completion_tokens"
+        ? { max_completion_tokens: bounds.maxOutputTokens }
+        : { max_tokens: bounds.maxOutputTokens }),
+      service_tier: "default",
+      modalities: ["text"],
+      // Omission inherits account defaults. Enforced account plugins still need an external
+      // policy check before live runs, because OpenRouter can prevent request overrides. The
+      // request schema cannot disable web-fetch or moderation; the README says so.
+      plugins: [
+        { id: "web", enabled: false },
+        { id: "file-parser", enabled: false },
+        { id: "response-healing", enabled: false },
+        { id: "context-compression", enabled: false },
+        { id: "auto-router", enabled: false },
+        { id: "auto-beta-router", enabled: false },
+        { id: "pareto-router", enabled: false },
+        { id: "fusion", enabled: false },
+      ],
+      provider: {
+        ...(bounds.provider === undefined ? {} : { only: [bounds.provider] }),
+        allow_fallbacks: false,
+        require_parameters: true,
+        max_price: {
+          prompt: perMillion(bounds.rates.input),
+          completion: perMillion(bounds.rates.output),
+          request: "0",
+          image: "0",
+          audio: "0",
+        },
+      },
+    };
+
+    return account
       .run(
-        client.createChatCompletion({
-          ...request,
-          ...(bounds.outputParameter === "max_completion_tokens"
-            ? { max_completion_tokens: bounds.maxOutputTokens }
-            : { max_tokens: bounds.maxOutputTokens }),
-          service_tier: "default",
-          modalities: ["text"],
-          // Omission inherits account defaults. Enforced account plugins still need an external
-          // policy check before live runs, because OpenRouter can prevent request overrides. The
-          // request schema cannot disable web-fetch or moderation; the README says so.
-          plugins: [
-            { id: "web", enabled: false },
-            { id: "file-parser", enabled: false },
-            { id: "response-healing", enabled: false },
-            { id: "context-compression", enabled: false },
-            { id: "auto-router", enabled: false },
-            { id: "auto-beta-router", enabled: false },
-            { id: "pareto-router", enabled: false },
-            { id: "fusion", enabled: false },
-          ],
-          provider: {
-            ...(bounds.provider === undefined ? {} : { only: [bounds.provider] }),
-            allow_fallbacks: false,
-            require_parameters: true,
-            max_price: {
-              prompt: perMillion(bounds.rates.input),
-              completion: perMillion(bounds.rates.output),
-              request: "0",
-              image: "0",
-              audio: "0",
-            },
-          },
-        }),
+        client.createChatCompletion(configured),
         ([response]) => response.usage,
         Diagnostics.receipt,
       )
       .pipe(
+        Effect.tap(([response]) => bounds.record?.(configured, response) ?? Effect.void),
         Effect.mapError((error) =>
           error._tag === "BenchError"
             ? AiError.make({
@@ -604,6 +610,7 @@ export const budgetedClient = (
             : error,
         ),
       );
+  };
 
   return {
     client: refusingClient,
@@ -763,7 +770,30 @@ export const modelRunner = (options: {
       >,
       reasoning: Reasoning,
       account: Account,
+      recorder?: Pick<Recorder, "model" | "http">,
     ) => {
+      const http =
+        recorder === undefined
+          ? FetchHttpClient.layer
+          : Layer.effect(
+              HttpClient.HttpClient,
+              Effect.gen(function* () {
+                const native = yield* HttpClient.HttpClient;
+
+                // account.run already reserves this request before reaching the HTTP seam. This cap
+                // independently bounds recording transport; it does not charge the ledger twice.
+                const cassette = yield* HttpCassette.make({
+                  mode: "record",
+                  http: native,
+                  cap: options.maxUsd,
+                  reserve: () => Effect.succeed(endpoint.requestUsd),
+                  append: recorder.http,
+                }).pipe(Effect.mapError((error) => new BenchError({ message: error.detail })));
+
+                return cassette.http;
+              }),
+            ).pipe(Layer.provide(FetchHttpClient.layer));
+
       const client = Layer.effect(
         OpenRouterClient.OpenRouterClient,
         Effect.map(OpenRouterClient.OpenRouterClient, (native) =>
@@ -772,13 +802,14 @@ export const modelRunner = (options: {
             maxOutputTokens: options.maxOutputTokens,
             outputParameter: endpoint.outputParameter,
             provider: endpoint.tag,
+            record: recorder?.model,
           }),
         ),
       ).pipe(
         Layer.provide(
           OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") }),
         ),
-        Layer.provide(FetchHttpClient.layer),
+        Layer.provide(http),
       );
 
       // @effect/ai-openrouter 4.0.0 sends `strict: null` unless this is set, and OpenRouter then

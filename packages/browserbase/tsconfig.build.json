@@ -1,5 +1,4 @@
-// The declarations' build reads the source alone. The tests reach effect-browser's own counting
-// proxy, and would otherwise have its declarations written beside it.
+// Package declarations use public source; tests can import repository-only helpers.
 {
   "extends": "./tsconfig.json",
   "include": ["src"]

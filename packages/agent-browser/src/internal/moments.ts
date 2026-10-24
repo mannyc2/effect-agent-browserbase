@@ -14,22 +14,13 @@ import * as Moment from "effect-browser/Moment";
 import type * as Page from "effect-browser/Page";
 import { Prompt } from "effect/ai";
 
+import * as AdapterState from "../AdapterState.ts";
+
 /** Frames in a moment, spread over it and ending with the page as it is. */
 const framesPerMoment = 3;
 
-/** The moments whose pictures are shown: the latest. */
-const pictured = 3;
-
 /** At most this many crops are shown at once: the latest. */
 const maxZooms = 8;
-
-/** One immutable account where it sits in the thread. No image data survives here. */
-interface Placed {
-  readonly turn: string;
-  /** How many of the run's messages come before it. */
-  readonly after: number;
-  readonly message: Prompt.UserMessage;
-}
 
 const text = (value: string) => Prompt.makePart("text", { text: value });
 
@@ -99,31 +90,6 @@ const shown = (moment: Moment.Moment, crops: ReadonlyArray<Page.Zoom>, turn: num
   };
 };
 
-/** The run's messages with each account after the ones it followed. */
-const woven = (source: Prompt.Prompt, placed: ReadonlyArray<Placed>) => {
-  const messages: Array<Prompt.Message> = [];
-  const end = source.content.length;
-  let next = 0;
-
-  const place = (at: number) => {
-    let moment = placed[next];
-
-    while (moment !== undefined && Math.min(moment.after, end) === at) {
-      messages.push(moment.message);
-      next++;
-      moment = placed[next];
-    }
-  };
-
-  source.content.forEach((message, index) => {
-    place(index);
-    messages.push(message);
-  });
-  place(end);
-
-  return Prompt.fromMessages(messages);
-};
-
 /**
  * Context preparation that shows the model, after each turn's tool results, the moment of the tab
  * `look` finds since the previous one, with the crops `crops` hands over; `onMoment` is called
@@ -133,12 +99,9 @@ export const make = Effect.fnUntraced(function* (
   look: Effect.Effect<Page.Page, BrowserError>,
   crops: Effect.Effect<ReadonlyArray<Page.Zoom>>,
   onMoment: (moment: Moment.Moment) => Effect.Effect<void>,
+  initial: AdapterState.Moments = AdapterState.moments(),
 ) {
-  const state = yield* Ref.make<{
-    readonly placed: ReadonlyArray<Placed>;
-    readonly recent: ReadonlyArray<Prompt.UserMessage>;
-    readonly previous: Moment.Window | undefined;
-  }>({ placed: [], recent: [], previous: undefined });
+  const state = yield* Ref.make(initial);
 
   const capture = Effect.fnUntraced(
     function* (previous: Moment.Window | undefined) {
@@ -172,18 +135,16 @@ export const make = Effect.fnUntraced(function* (
       const taken = yield* capture(known.previous);
       const moment = shown(taken, yield* crops, request.turn);
 
-      const all = {
-        placed: [
-          ...known.placed,
-          {
-            turn: request.turnId,
-            after: request.source.content.length,
-            message: moment.account,
-          },
-        ],
-        recent: [...known.recent, moment.pictures].slice(-pictured),
-        previous: moment.previous,
-      };
+      const all = AdapterState.place(
+        known,
+        {
+          turn: request.turnId,
+          after: request.source.content.length,
+          message: moment.account,
+        },
+        moment.pictures,
+        moment.previous,
+      );
 
       yield* Ref.set(state, all);
       yield* onMoment(taken);
@@ -194,7 +155,9 @@ export const make = Effect.fnUntraced(function* (
   return {
     hook: {
       prepare: (request: RunContextRequest) =>
-        Effect.map(take(request), ({ placed }) => ({ prompt: woven(request.source, placed) })),
+        Effect.map(take(request), ({ placed }) => ({
+          prompt: AdapterState.weave(request.source, placed),
+        })),
     },
     transientContext: {
       load: (request: RunContextRequest) =>

@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { assert, it } from "@effect/vitest";
 import { Effect, Result } from "effect";
 
-import * as Chromium from "../src/Chromium.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 
 /**
  * The command line of the browser that these options launch. Other files' browsers run beside it,
@@ -58,5 +58,17 @@ it.live("leaves the process's signals to the program", () =>
     yield* Chromium.open();
 
     assert.deepStrictEqual(listeners(), before);
+  }).pipe(Effect.scoped),
+);
+
+it.live("gives each launch its own identity even when the Chromium version matches", () =>
+  Effect.gen(function* () {
+    const first = yield* Chromium.open();
+    const second = yield* Chromium.open();
+
+    assert.notStrictEqual(first.id, second.id);
+    assert.notStrictEqual(first.connection, second.connection);
+    assert.strictEqual(first.id, first.connection);
+    assert.strictEqual(second.id, second.connection);
   }).pipe(Effect.scoped),
 );

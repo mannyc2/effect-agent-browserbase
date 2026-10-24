@@ -1,5 +1,29 @@
 # Status
 
+## Current replacement implementation
+
+The October audit replacement is implemented on an isolated branch. Root exports contain the
+portable kernel; optional features use public page contracts and have enforced import/deletion
+checks. Actions are schema values through execution, policy, receipts and replay. The generic
+supervisor reports cleanup per attempt and keeps retirement owned through cancellation.
+`Browserbase.generations` supplies its provider port. Unused supervisor extensions and Expect are
+removed. Stage and Plan remain optional features for the bench. Claude review follow-through
+passes 956 workspace tests, 14 local latency checks, all 40 packed entrypoints, 941 consumer tests,
+55 scripted browser cases and both local Workers modes. The user authorized removing the aggregate source-line constraint after
+the review found useful simplifications but no safe reduction sufficient to satisfy it. Module
+and function limits remain. The original `1d6d7c7` result—14,024 lines against the then-required
+12,000-line gate, with `ready` failing—is retained in the audit ledger as historical evidence.
+
+The consumer now uses document-bound `read`/`act`, fixed registration viewports and request
+policies. Public raw Playwright members are removed after isolated consumer and local Worker/CDP
+runtime proof. Both Workers flag configurations were exercised with the supplied connector.
+Completed abandoned reads expire after 250 ms; in-flight reads retain their original shared
+lifetime. Policy failures refuse input and remain typed failures. See [the audit ledger](AUDIT-IMPLEMENTATION.md) for
+per-finding results, current validation and remaining acceptance gates. The
+[Claude follow-through](CLAUDE-FOLLOWTHROUGH.md) records the subsequent findings and the
+recommendations accepted or rejected after reproduction. The release history below
+records earlier APIs and evidence, rather than the current supervisor contract.
+
 ## 0.3
 
 The `0.3.0-beta.21` release fixes page operations in consumer bundles with preserved function

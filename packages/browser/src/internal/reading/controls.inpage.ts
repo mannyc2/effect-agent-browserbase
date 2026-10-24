@@ -1,29 +1,15 @@
 /**
  * In the page: a control's states and value as the outline shows them, and as a value; the elements a CSS selector scopes a
- * read to; and a condition `Page.waitFor` waits for. See `names.inpage.ts` for what a page-side part
+ * read to. See `names.inpage.ts` for what a page-side part
  * may use.
  */
-import { Schema } from "effect";
-
 import type { Control } from "../../Snapshot.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
-import type { Walk } from "./walk.inpage.ts";
 
-/** What `waitUntil` waits for, as `Page.waitFor` asks it. */
-export interface ConditionRequest {
-  readonly selector: string | null;
-  readonly text: string | null;
-  readonly state: "visible" | "hidden" | "enabled";
-}
-
-/** Whether the condition held by the deadline, or why the selector is not CSS. */
-export type ConditionResult = typeof ConditionResultSchema.Encoded;
-
-export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: Texts) => {
-  const { clean, isDisabled, isHtml, isInput, isSelect, isTextArea, refFor, textOf } = names;
-  const { visible } = walked;
+export const controls = (names: Names, subjects: Subjects, texts: Texts) => {
+  const { clean, isInput, isSelect, isTextArea, refFor, textEntry } = names;
   const { stateOf } = subjects;
   const { shown } = texts;
 
@@ -55,9 +41,6 @@ export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: 
     return value === undefined || value === "" ? "" : ` value=${JSON.stringify(clean(value, 80))}`;
   };
 
-  // Inputs that take no typed text.
-  const untyped = ["button", "reset", "submit", "image", "checkbox", "radio", "file", "range"];
-
   /** A control as a value, as its outline line shows it. */
   const controlOf = (element: Element, role: string | null, kind: string, name: string) => {
     const { disabled, checked } = stateOf(element, role);
@@ -70,10 +53,7 @@ export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: 
           ? clean(shown(element, true), 200)
           : "";
 
-    const editable =
-      isTextArea(element) ||
-      (isInput(element) && !untyped.includes(element.type)) ||
-      (isHtml(element) && element.isContentEditable);
+    const editable = textEntry(element);
 
     const control: typeof Control.Encoded = {
       ref: refFor(element),
@@ -114,52 +94,7 @@ export const controls = (names: Names, walked: Walk, subjects: Subjects, texts: 
     );
   };
 
-  // Whether the condition holds now: what the selector matches, or the body, and shows, with the
-  // text when one is asked, case and all. A document has no body until its parser reaches one.
-  const holds = (request: ConditionRequest): ConditionResult => {
-    const roots =
-      request.selector === null ? [document.body].filter(Boolean) : rootsOf(request.selector);
-
-    if ("invalid" in roots) return roots;
-    const text = request.text === null ? null : clean(request.text, Infinity);
-
-    const showing = roots.filter(
-      (element) =>
-        visible(element) && (text === null || clean(textOf(element), Infinity).includes(text)),
-    );
-
-    return {
-      met:
-        request.state === "hidden"
-          ? showing.length === 0
-          : request.state === "enabled"
-            ? showing.some((element) => !isDisabled(element))
-            : showing.length > 0,
-    };
-  };
-
-  // Looks every 100 ms until the condition holds or the deadline passes.
-  const waitUntil = async (request: ConditionRequest, millis: number) => {
-    const until = performance.now() + millis;
-
-    for (;;) {
-      const result = holds(request);
-      const left = until - performance.now();
-
-      if ("invalid" in result || result.met || left <= 0) return result;
-      const { promise, resolve } = Promise.withResolvers<void>();
-
-      setTimeout(resolve, Math.min(100, left));
-      await promise;
-    }
-  };
-
-  return { controlOf, rootsOf, states, valueOf, waitUntil };
+  return { controlOf, rootsOf, states, valueOf };
 };
 
 export type Controls = ReturnType<typeof controls>;
-
-export const ConditionResultSchema = Schema.Union([
-  Schema.Struct({ met: Schema.Boolean }),
-  Schema.Struct({ invalid: Schema.String }),
-]);

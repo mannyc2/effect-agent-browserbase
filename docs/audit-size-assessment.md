@@ -1,0 +1,53 @@
+# Source size assessment
+
+**Superseded by the Claude review follow-through.** The user authorized removing the aggregate
+source-line gate when safe, substantive simplifications could not recover the gap without
+regressions. The Action and Window cleanups remove unnecessary machinery, but the inspected
+opportunities do not justify deleting required behavior to reach 12,000 lines. The aggregate
+script and its `ready` entry are removed; module/function limits and their downward-only
+exceptions remain. Follow-through validation is pending.
+
+## Historical assessment through `1d6d7c7`
+
+The measurements, commands and failed gate below describe the original implementation, not
+the acceptance status of the follow-through.
+
+This is a read-only architecture assessment, not an implemented reduction or an approval request. The 12,000-code-line ceiling remains unchanged. At 21:41 UTC on 21 October 2026, `bash tools/check-size.sh` exited 1 with **13,828** code lines, a gap of **1,828** (`.work/evidence/input-size-assessment.log`). This uses lint's source count, including published testing code and excluding blank/comment-only lines. Earlier inspection before request ownership added 13,636; neither number is a projected reduction.
+
+The final package source, after request retirement/body/worker hardening and the recorder ordering repair, measures **14,024** code lines. Pinned `bun run size` exits 1 with a **2,024**-line gap (`.work/evidence/size-final.log`). The ceiling and counting rule are unchanged. The assessments below describe inspected opportunities, not a demonstrated path to recover that final gap.
+
+The current modules already share the main vocabulary: Action schemas and dispatch, public Page clock/capture contracts, element names/state, frame lineage and native/seeded contract tests. Native and seeded pages still have duplicated workflow projections. The following are concrete candidates for a later rewrite; their savings are estimates of removed code minus replacement and call-site code, not measured results.
+
+| Candidate | Canonical owner and deleted duplication | Estimated net code lines | Required proof and constraint |
+| --- | --- | --- | --- |
+| Page runtime shared by native and seeded interpreters | One owner for public Page projection, lane/timeline/clock state and common action setup; native observations and seeded observations remain ports. Replace the two page assemblies. | 150–250 | Retain native/seeded contract checks, native async ownership, page close/navigation, unsupported-operation failures and explicit seed semantics. This is a substantial rewrite. |
+| Action run evidence | One run owns start/completion, dispatch, URL/redaction, subject/box and event correlation. Native and seeded execution supply their actual observations rather than independently recording equivalent events. | 40–70 | Preserve cancellation receipts, policy-before-lane ordering, partial dispatched errors, secret redaction and replay's effective Type replacement option. This overlaps the Page runtime estimate. |
+| Browser registration lifecycle | One Opening/Ready/Closed registration owns its Deferred, page and scope; replace the registry plus separate registration/registration-in-progress maps. | 40–80 | Preserve popup first-load tracking, concurrent registration deduplication, crash/close classification and event-before-scope-close ordering. New state-machine/runtime evidence is necessary. |
+| Reading acquisition | One constructor owns shared-read lifetime, evaluation, decoding, bounds and instrumentation for snapshot/find/text; operation descriptors retain distinct observations and viewed-state effects. | 25–45 | Preserve FIFO writer boundaries, shared-read lifetime, cancellation, trace costs and operation-specific metadata. Descriptors themselves count against the estimate. |
+| Legacy action-event projections | Derive event name/target/text from canonical Action where possible; keep dynamic execution coordinates, subject/box and current public consumer fields. Delete the duplicate call record where derivation is total. | 30–60 | Existing consumers use these public projections. Preserve their shape and typed action consistency; resolved coordinates and dispatch evidence cannot be reconstructed from a ref-only Action. |
+
+These estimates overlap and total less than the required gap even before that overlap. A credible local consolidation is in the low hundreds, not the final 2,024-line gap. There is no inspected deletion set that both preserves all required capabilities and proves the existing ceiling.
+
+Several superficially similar modules are not interchangeable. Input reply tracking has a bounded admitted-input pool and release ordering; capture quiescence owns restart/restoration and native-loss ordering. A generic promise tracker would relocate their bookkeeping without deleting those distinct contracts. Per-reader capture queues, Stage's FIFO delivery, separate capture transport, clock mapping and foreign-frame filtering also enforce observed requirements. Replacing them with a semaphore, Stream.share or one mutable latest value would need the parity that the audit probes did not establish.
+
+No source was removed, count exclusions added, limit changed or mandatory capability weakened for this assessment. A further runtime rewrite could seek greater compression, but its ability to recover the full gap is unproven and would require new failure-first native/model evidence. Current full acceptance must continue to report the size gate as failed.
+
+## Capture command interpreter assessment
+
+A deeper read of the complete capture/picture path found no credible 400–500-line net deletion, or a path to the overall 2,024-line gap, while retaining Stage, Plan and all required capture behavior. This is a read-only conclusion, not proof that a later redesign cannot improve the code. It rejects claiming a large saving before a replacement exists and passes the same evidence.
+
+On the inspected revision, the existing lint counter reports 1,433 code lines across the eight private picture modules: capture 549, pictures 367, transport 185, dimensions 112, quiescence 75, counts 70, frame 56 and state 19. Removing 400 would require eliminating 28% of that complete path. Replacing the 19-line phase transition helper alone cannot materially change the total.
+
+The strongest concrete redesign would put capture acquisition, leases, pause/restore/resume, native start/stop replies, growth restart and scope closure behind one private command interpreter. Its canonical state would own the generation, readers and pending transaction. Native frame/connection callbacks would feed observations; actual native replies would complete commands. This could remove the semaphore's coordination with the quiescence callback bundle, operation-name promise map and repeated generation/health checks. The current deletion region is approximately 300–400 lines, depending on how much acquisition/transport lifecycle is included. A replacement still needs the command vocabulary, waiter cancellation, bounded command admission, actual-reply ownership, first-frame-before-start acknowledgement, restore transaction, terminal failure and scope closure. An estimated 200–300 replacement lines leaves roughly 50–150 net lines, with substantial uncertainty. These are design estimates, not measured savings; claiming the entire deletion region as the saving would omit its replacement.
+
+Several constraints limit that consolidation:
+
+- A command interpreter cannot wait for a long picture or start reply while blocking native frame acknowledgements. ACK sends need their separate bounded capacity and failure handling. Otherwise the new owner introduces the backlog/deadlock that the current native callback path avoids.
+- A sync response is a capture-connection ordering barrier. If frame callbacks become queued commands, confirm must also wait until all earlier frame observations have been applied. A native round trip alone would no longer establish currency.
+- Capture phase and capture-connection attachment have distinct lifetimes. The connection survives a generation with no readers, can end during attachment, and can be reacquired later. Combining their tagged unions without changing ownership creates product states rather than deleting decisions.
+- Camera device ratio and held screen emulation describe screenshot restoration; capture caps describe requested output; the dimension filter's expected device size and held run distinguish foreign captures from genuine resize. Those facts can disagree legitimately. Replacing them with one shared size would remove evidence needed for browser zoom, clipped screenshots, foreign frames or viewport growth.
+- Nonlast-reader cancellation must not wait behind another reader's picture; last-reader retirement must retain native cleanup. The interpreter therefore needs explicit cancellation and lease handling, rather than replacing all operations with one FIFO effect queue.
+
+The picture camera, portable image/metadata decoding, clock calibration, time uncertainty, per-reader missed-frame accounting, count windows and foreign-size hold/adoption still need implementations after this rewrite. They are not duplicated control flows. A generic promise tracker or moving these into a new module does not remove them.
+
+The candidate is a possible later lifecycle simplification, with new model and native evidence required. It is not a demonstrated way to recover the unchanged 12,000-line gate. The inspected broader candidates above also remain in the low hundreds and overlap each other; there is no credible deletion path for the remaining 2,024 lines without a larger unproven rewrite or removal of required capabilities. No Stage/Plan/capture capability removal is proposed here.

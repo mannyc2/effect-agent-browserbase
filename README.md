@@ -42,7 +42,8 @@ import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
 import { BrowserTools } from "effect-agent-browser";
-import { Browser, Chromium } from "effect-browser";
+import { Browser } from "effect-browser";
+import * as Chromium from "effect-browser/Chromium";
 import { Model } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 
@@ -211,11 +212,11 @@ tools.
 - The run is Yielded's: its policy bounds turns, tool calls, time and spend, and it adds approval,
   context management, durable runs and run events. See its
   [documentation](https://github.com/yielded-dev/agent).
-- A page waits only for itself. An action has its page to itself, in the order actions were asked,
+- A page waits only for itself. An action has its page to itself, in the order it was admitted after policy approval,
   and reads share it after the action in flight, so a read describes the page an action left. A
   wait behind other operations on the page fails `Busy`, and `Page.failFast` fails it at once.
   Identical reads in flight share one call, and a read whose caller gave up serves the next caller
-  to ask the same. `Browser.Options.maxPages` bounds the open pages, failing `Limit`.
+  to ask the same for up to 250 ms after completion. `Browser.Options.maxPages` bounds the open pages, failing `Limit`.
 - `Browser.Options.guard` checks input and navigation, including hover, scroll and a new tab's URL.
   It receives the facts the page's structure establishes (form submissions, other-origin
   destinations, downloads, uploads, secret fields, script-only controls and unnamed targets) and
@@ -228,14 +229,14 @@ tools.
 - `Policy.make` builds a guard for unattended runs. A judge, `Policy.reviewer` over a
   `LanguageModel` or `Policy.decider` over a `DecisionModel` such as Jev, reads what an input
   means: a payment, an account, access, a deletion, a message or a secret. The guard denies a risk
-  the user's task does not ask for, and fails closed on input with facts when the judge fails.
+  the user's task does not ask for, and fails closed when the judge fails, including requests without structural facts.
   `BrowserTools` and `PageControl` give the guard the run's `task`.
 - `Presentation` performs input for viewers: `presenter.view(page)` is a page whose actions wait as
   a person reacts, glide the presenter's one drawn pointer along a tuned two-stroke
   sigma-lognormal planner's paths, scroll off-screen targets into view with visible wheel input and
   type at about 70 WPM, with overlapping key holds and slower word starts, while the page itself
   stays plain. Presentation time has a budget of its own, outside `actionTimeout`, and
-  `view.aim(target)` starts a glide early. The optional `effect-browser-human-strokes` package
+  schedules above 10 seconds are refused before input. The optional `effect-browser-human-strokes` package
   supplies 32,130 recorded strokes as a planner, `HumanStrokes.motion`; the core package contains
   no data. Each full glide is validated and admitted before its clock starts.
 - `Stage` is the source of a live output: `present(page, { at })` switches it between pages, in one

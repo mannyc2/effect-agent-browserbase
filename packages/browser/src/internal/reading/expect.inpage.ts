@@ -2,7 +2,7 @@
  * In the page: the wait an expectation takes on what `find` matches, and the mark that stands for
  * what the matches show. See `names.inpage.ts` for what a page-side part may use.
  */
-import type { FindRequest } from "./match.inpage.ts";
+import type { FindRequest, Match } from "../../Matching.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 
@@ -12,29 +12,23 @@ import type { Subjects } from "./subjects.inpage.ts";
  */
 export type Want = "some" | "none" | { readonly other: string };
 
-export const expectations = (names: Names, subjected: Subjects) => {
+export const expectations = (names: Names, subjected: Subjects, matching: Match) => {
   const { isInput, isSelect, isTextArea, roleOf, textOf } = names;
   const { elementsOf, stateOf } = subjected;
 
   // What matched elements show, their text, values and states but focus, as a mark that carries
   // none of it: a count and FNV-1a over each in turn.
-  const markOf = (elements: ReadonlyArray<Element>) => {
-    let hash = 0x811c9dc5;
+  const markOf = (elements: ReadonlyArray<Element>) =>
+    matching.mark(
+      elements.map((element) => {
+        const { focused: _focused, ...state } = stateOf(element, roleOf(element));
 
-    for (const element of elements) {
-      const { focused: _focused, ...state } = stateOf(element, roleOf(element));
+        const value =
+          isInput(element) || isSelect(element) || isTextArea(element) ? element.value : "";
 
-      const value =
-        isInput(element) || isSelect(element) || isTextArea(element) ? element.value : "";
-
-      const shown = `${textOf(element)}\u0000${value}\u0000${JSON.stringify(state)}\u0001`;
-
-      for (let index = 0; index < shown.length; index++)
-        hash = Math.imul(hash ^ shown.charCodeAt(index), 0x01000193);
-    }
-
-    return `${elements.length}:${(hash >>> 0).toString(16)}`;
-  };
+        return `${textOf(element)}\u0000${value}\u0000${JSON.stringify(state)}\u0001`;
+      }),
+    );
 
   /**
    * What `find` matches, looked at every 100 ms until `want` holds of it or `millis` have passed,
@@ -45,6 +39,8 @@ export const expectations = (names: Names, subjected: Subjects) => {
 
     for (;;) {
       const elements = elementsOf(request);
+
+      if ("invalid" in elements) return elements;
       const mark = markOf(elements);
 
       const met =

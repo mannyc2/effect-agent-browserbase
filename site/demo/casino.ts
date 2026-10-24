@@ -155,7 +155,7 @@ export const grade = (answer: Answer, record: ReadonlyArray<Site.Spin>): Show.Ch
 export const explore = (options: Show.ExploreOptions, seed = Site.freshSeed()) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
-    const served = yield* Site.serve(browser, seed);
+    const served = yield* Site.serve(seed);
     const page = yield* browser.firstPage;
 
     yield* Console.log(`Opal Crown seed: ${served.seed}`);

@@ -5,7 +5,6 @@ import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Exit, Layer, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
-import * as Chromium from "effect-browser/Chromium";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 import type { LanguageModel, Model, Prompt, Response } from "effect/ai";
@@ -22,6 +21,8 @@ import {
 } from "../Sites.ts";
 import { frameHistory, tasks } from "../Tasks.ts";
 import { classify } from "../Trial.ts";
+import * as Chromium from "./browser.ts";
+import { NativeContext } from "./browser.ts";
 import { modelOf } from "./scripted.ts";
 
 /** A model that answers every call with the same parts. */
@@ -82,7 +83,7 @@ const describeWith = (
       options.dropFramesAfterClicks !== undefined && clicks >= options.dropFramesAfterClicks;
 
     if (frameDelayMillis > 0 || options.dropFramesAfterClicks !== undefined) {
-      const context = browser.context;
+      const context = yield* NativeContext;
       const createSession = context.newCDPSession.bind(context);
       const pending = new Set<ReturnType<typeof setTimeout>>();
 

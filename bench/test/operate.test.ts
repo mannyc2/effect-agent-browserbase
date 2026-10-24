@@ -3,7 +3,6 @@
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit, Layer } from "effect";
-import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel, Model } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
@@ -11,6 +10,7 @@ import { budgetedClient, ledger } from "../Budget.ts";
 import type { Trace } from "../Recording.ts";
 import { frameHistory, type ModelOptions, tasks } from "../Tasks.ts";
 import { classify, isolatedTrial } from "../Trial.ts";
+import * as Chromium from "./browser.ts";
 
 const completion = (message: unknown) => ({
   id: "free-test",

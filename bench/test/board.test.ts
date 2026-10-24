@@ -1,9 +1,8 @@
 // The market board's tasks: seeded changes the page never gives away, and grading that judges what
 // an answer says rather than how it says it. No model is called.
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Schedule } from "effect";
+import { Effect, Layer, Schedule, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
 import * as Moment from "effect-browser/Moment";
 
 import { tasks } from "../Catalog.ts";
@@ -17,6 +16,7 @@ import {
   gradeCaption,
   gradeFlux,
 } from "../Tasks.ts";
+import * as Chromium from "./browser.ts";
 import { modelOf } from "./scripted.ts";
 
 const tick: BoardAnswer = {
@@ -163,9 +163,10 @@ const pushed = (seed: number, push: "tick" | "flash") =>
       );
     const board = yield* truth(page, BoardTruth);
 
-    const text = yield* Effect.promise(() =>
-      page.playwright.evaluate(() => document.body.innerText),
-    );
+    const { value: text } = yield* page.read(() => document.body.innerText, {
+      arg: undefined,
+      result: Schema.String,
+    });
 
     return { board, text, title: yield* page.title };
   }).pipe(Effect.scoped, Effect.provide(Chromium.layer()));

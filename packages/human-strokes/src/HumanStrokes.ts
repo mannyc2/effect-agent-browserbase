@@ -22,14 +22,14 @@ const read = Effect.tryPromise({
  * `Presentation.make({ motion: yield* HumanStrokes.motion })`. Loading reads, decompresses and
  * validates the package's own asset, with no network or path options, and fails `DataError`.
  */
-export const motion: Effect.Effect<Motion.Service, DataError> = Effect.gen(function* () {
+export const motion: Effect.Effect<Motion.Planner, DataError> = Effect.gen(function* () {
   // No binding here holds the compressed asset, so the planner's closure keeps only the payload.
   const decoded = index(yield* Effect.flatMap(read, inflate));
 
   if (Result.isFailure(decoded)) return yield* decoded.failure;
   const data = decoded.success;
 
-  const plan: Motion.Service["plan"] = Effect.fnUntraced(function* (from, to) {
+  const plan: Motion.Planner["plan"] = Effect.fnUntraced(function* (from, to) {
     const scale = Math.max(1, Math.abs(from.x), Math.abs(from.y), Math.abs(to.x), Math.abs(to.y));
 
     const distance =
@@ -41,5 +41,5 @@ export const motion: Effect.Effect<Motion.Service, DataError> = Effect.gen(funct
     return retarget(data, record, from, to, (yield* Random.next) < 0.5);
   });
 
-  return { plan } satisfies Motion.Service;
+  return { plan } satisfies Motion.Planner;
 });

@@ -10,7 +10,9 @@ import { refuse, undispatched } from "../page/context.ts";
 
 /** The owning Browser validates capacity and closes this timeline with its scope. */
 export const make = (capacity: number) => {
-  let records: ReadonlyArray<RecordedEvent> = [];
+  const records = Array.from<RecordedEvent | undefined>({ length: capacity });
+  let start = 0;
+  let size = 0;
   let sequence = 0;
   let closed = false;
   let changed = Deferred.makeUnsafe<void>();
@@ -28,7 +30,9 @@ export const make = (capacity: number) => {
     sequence += 1;
     const recorded = new RecordedEvent({ sequence, event });
 
-    records = records.length < capacity ? [...records, recorded] : [...records.slice(1), recorded];
+    records[(start + size) % capacity] = recorded;
+    if (size < capacity) size++;
+    else start = (start + 1) % capacity;
     wake();
 
     return sequence;
@@ -51,14 +55,16 @@ export const make = (capacity: number) => {
         return Stream.fromEffectRepeat(
           Effect.gen(function* () {
             while (true) {
-              const oldest = records[0]?.sequence ?? sequence + 1;
+              const oldest = sequence - size + 1;
 
               if (cursor < oldest - 1)
                 return yield* undispatched(
                   "events",
                   new EventHistoryExpired({ after: cursor, oldest, latest: sequence }),
                 );
-              const next = records[cursor - oldest + 1];
+
+              const next =
+                cursor < sequence ? records[(start + cursor - oldest + 1) % capacity] : undefined;
 
               if (next !== undefined) {
                 cursor = next.sequence;
@@ -80,7 +86,11 @@ export const make = (capacity: number) => {
   return {
     publish,
     sequence: () => sequence,
-    recent: Effect.sync(() => records),
+    recent: Effect.sync(() =>
+      Array.from({ length: size }, (_, index) => records[(start + index) % capacity]).filter(
+        (record): record is RecordedEvent => record !== undefined,
+      ),
+    ),
     stream,
     close: Effect.sync(() => {
       if (closed) return;

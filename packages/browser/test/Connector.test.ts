@@ -3,11 +3,11 @@ import { assert, it } from "@effect/vitest";
 import { Arbitrary, Deferred, Effect, Exit, Fiber, Redacted, Schema } from "effect";
 import { type Browser, chromium } from "playwright-core";
 
+import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { BrowserError } from "../src/BrowserError.ts";
-import * as Cdp from "../src/Cdp.ts";
+import * as Cdp from "../src/providers/Cdp.ts";
 import * as WorkerCdp from "../src/workerd/Cdp.ts";
 import { nativeConnect } from "./nativeConnector.ts";
-import { behindProxy } from "./protocol.ts";
 
 it.effect.prop(
   "refuses invalid connection bounds before invoking the connector",

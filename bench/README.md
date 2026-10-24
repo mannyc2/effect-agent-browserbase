@@ -195,6 +195,16 @@ Recording runs a screencast on every page, so it adds capture load to operate tr
 continues 500 ms after a trial so it ends on the settled page. Lost frames or events are listed in
 `problems`.
 
+New recordings also retain complete moments (including their JSON-encoded frame bytes), the raw
+fixture state actually read by the grader, full provider request/response pairs keyed by turn,
+and HTTP exchanges beneath the real provider codec. The existing live opt-in and reservation cap
+still apply before any recorded provider request. Recordings remain private local evidence.
+`bun run --cwd bench bench regrade path/to/recording.json` re-runs the current task grader using
+that saved truth, with no browser or model; a changed task prompt is refused. The public
+`effect-agent-browser/testing` HTTP cassette can replay the saved `http` exchanges beneath the
+same provider layer. Changed request bodies or tool schemas fail with re-record guidance.
+These codec checks do not claim deterministic replay of a live page's changing screenshots.
+
 `--narrate <seconds>`, with `--model`, captions an operate task's page that often while its agent
 works: each caption is one structured call over a `Moment` of the time since the previous one, with
 reasoning off. Captions go to the recording; they neither steer nor grade the agent. Their calls
@@ -266,6 +276,36 @@ trip and 46 to 60 round trips each. Browserbase's
 session log is no substitute: on 7 October 2026 its entries carried no timestamps, though its API
 reference lists them, it kept about every other DevTools message, it appeared 5 to 20 seconds
 after the session ended, and a session whose page never navigated had none.
+
+### TradingView
+
+`tradingview` gives an agent tasks on TradingView's charts: switching symbol and timeframe, adding
+an indicator with a changed setting, drawing a level and a trend line at prices read off the chart,
+zooming, and reading values from an indicator or a past candle. Each is graded on the chart's own
+state, read through the page's chart API, which the model never sees. Graders count only the
+indicators and drawings a run adds.
+
+```sh
+bun run bench tradingview                       # scripted solutions on the demo, at no cost
+bun run bench tradingview --mode untouched      # the chart left alone: every task should fail
+
+EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
+  bun run bench tradingview --mode model --task trend --trials 3
+
+EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... BROWSERBASE_CONTEXT_ID=... \
+  bun run bench tradingview --site tradingview --browser browserbase --signed-in
+```
+
+`--site demo` (the default) is TradingView's Advanced Charts demo, which needs no account.
+`--site tradingview` is tradingview.com, which signed out refuses its drawing tools and indicator
+search, so its drawing and indicator tasks need `--signed-in`. That loads the Browserbase stored
+context `BROWSERBASE_CONTEXT_ID` names, holding a signed-in TradingView, and saves nothing back to
+it. A session created with a stored context carries its id as `contextId` in Browserbase's session
+listing (`GET /v1/sessions`). Every trial refuses any request to tradingview.com but a `GET`, `HEAD`
+or `OPTIONS`, so no run saves a layout, alert or setting to the account.
+
+Results, each trial's steps and its first and last screenshots go to `.work/tradingview`. Both
+sites are live, so a result speaks to the day it was taken.
 
 ## Arms
 
@@ -425,7 +465,7 @@ and Jev `jev-1.13.0`, for $0.018 in all:
 
 The separate [hosted capability probes](../docs/HOSTED_CHECKS.md) make no model calls:
 
-- `bun run bench handover --allowance /private/h2-allowance.json`: H2, a live retained hold,
+- `bun run bench handover --allowance /private/h2-allowance.json`: H2, revoked work and scoped cleanup,
   exclusive replacement and persisted cookie/local-storage read-back; at most two 120-second sessions.
 - `bun run bench cue --allowance /private/h1-allowance.json`: H1, two retained captures for a full
   five-minute window, 20 cued reveals and a third loading page; one 420-second session.

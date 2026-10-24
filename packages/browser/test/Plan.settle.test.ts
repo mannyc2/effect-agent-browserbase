@@ -7,11 +7,12 @@ import { Duration, Effect, Exit, Schedule } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import { Subject } from "../src/BrowserEvent.ts";
-import * as Chromium from "../src/Chromium.ts";
-import * as Plan from "../src/Plan.ts";
+import * as Plan from "../src/plan/index.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
+import * as Stillness from "../src/stillness/Stillness.ts";
 
 const named = (name: string) => new Subject({ role: "button", name, tag: "button", context: {} });
-const settle = { still: "content", quietMillis: 300, timeout: "1 second" } as const;
+const settle = { quietMillis: 300, timeout: "1 second" } as const;
 
 const site = Effect.fnUntraced(function* () {
   const requests: Array<string> = [];
@@ -66,8 +67,8 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
         const url = fixture.url("/shop");
 
         const plan = Plan.Plan.new([
-          new Plan.Step({ action: "navigate", url, target: url }),
-          new Plan.Step({ action: "click", url, subject: named("Buy") }),
+          new Plan.Step({ action: { _tag: "Goto", url: url }, url }),
+          new Plan.Step({ action: { _tag: "Click", target: "e0" }, url, subject: named("Buy") }),
         ]);
 
         // On a busy host a still page can take longer than the refusal's second to show its quiet.
@@ -86,7 +87,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
         assert.strictEqual(bought(), 1);
         assert.isTrue(Exit.isSuccess(result), "acknowledged input needs its receipt");
         if (Exit.isSuccess(result)) assert.strictEqual(result.value.outcome, "taken");
-        const refused = yield* page.ready(settle).pipe(Effect.exit);
+
+        const refused = yield* Stillness.wait(page, { ...settle, still: "content" }).pipe(
+          Effect.exit,
+        );
 
         assert.isTrue(Exit.isFailure(refused), "the final page remains live");
       }),
@@ -99,7 +103,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
           const fixture = yield* site();
           const page = yield* open();
           const url = fixture.url("/live");
-          const opening = new Plan.Step({ action: "navigate", url, target: url });
+          const opening = new Plan.Step({ action: { _tag: "Goto", url: url }, url });
           const receipt = yield* Plan.take(page, Plan.Plan.new([opening]), 0, { settle });
 
           assert.strictEqual(receipt.outcome, "taken");
@@ -108,7 +112,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
             page,
             Plan.Plan.new([
               opening,
-              new Plan.Step({ action: "click", url, subject: named("Buy") }),
+              new Plan.Step({
+                action: { _tag: "Click", target: "e0" },
+                url,
+                subject: named("Buy"),
+              }),
             ]),
             1,
             { settle },
@@ -135,9 +143,19 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
           const receipts = yield* Plan.replay(
             page,
             Plan.Plan.new([
-              new Plan.Step({ action: "navigate", url: form, target: form }),
-              new Plan.Step({ action: "click", url: form, subject: named("Save") }),
-              new Plan.Step({ action, url: destination, target: destination }),
+              new Plan.Step({ action: { _tag: "Goto", url: form }, url: form }),
+              new Plan.Step({
+                action: { _tag: "Click", target: "e0" },
+                url: form,
+                subject: named("Save"),
+              }),
+              new Plan.Step({
+                action:
+                  action === "navigate"
+                    ? { _tag: "Goto", url: destination }
+                    : { _tag: action === "back" ? "Back" : "Reload" },
+                url: destination,
+              }),
             ]),
             { settle },
           );

@@ -9,7 +9,7 @@ import * as Probe from "../HandoverProbe.ts";
 import * as Latency from "../Latency.ts";
 
 describe("H2 local composition", () => {
-  it.live("executes retained rotation and read-back through two fake provider sessions", () =>
+  it.live("executes revoked-work rotation and read-back through two fake provider sessions", () =>
     Effect.gen(function* () {
       const endpoint = yield* Latency.chromiumEndpoint;
 

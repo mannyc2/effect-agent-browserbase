@@ -8,16 +8,15 @@
  *
  * Reads keep their work. An identical read asked in the same epoch and document joins the one in
  * flight, which runs in the page's scope under the action timeout whoever gives up; one that ends
- * after all its callers gave up serves the next to ask the same, within an action timeout. A write
+ * after all its callers gave up serves the next to ask the same, within 250 milliseconds. A write
  * stops the reads nobody awaits, since no caller after it could use them.
  *
  * Effect's `Semaphore` is not fair to a writer that needs every permit, so the rule is this
  * module's own: one state, changed by `step` alone, which the model test drives.
  */
-import { Context, Deferred, Duration, Effect, Exit, type Fiber, type Scope } from "effect";
+import { Context, Deferred, type Duration, Effect, Exit, type Fiber, type Scope } from "effect";
 
-import { BrowserError, Busy } from "../../BrowserError.ts";
-import type { Gate } from "../input/gate.ts";
+import { undispatched, type BrowserError, Busy } from "../../BrowserError.ts";
 
 export type Kind = "read" | "write";
 
@@ -129,7 +128,8 @@ export const make = (options: {
   readonly gone: (operation: string) => BrowserError;
   /** The page's scope, which shared reads run in. */
   readonly scope: Scope.Scope;
-  readonly inputGate?: Gate | undefined;
+  readonly beforeWrite?: ((operation: string) => Effect.Effect<void, BrowserError>) | undefined;
+  readonly refusal?: ((operation: string) => Effect.Effect<never, BrowserError>) | undefined;
 }) => {
   const { now, actionTimeout } = options;
   let state = initial;
@@ -153,11 +153,10 @@ export const make = (options: {
   };
 
   const busy = (operation: string, askedAt: number, id?: number) =>
-    new BrowserError({
+    undispatched(
       operation,
-      reason: new Busy({ waitedMillis: Math.round(now() - askedAt), ahead: ahead(state, id) }),
-      dispatched: false,
-    });
+      new Busy({ waitedMillis: Math.round(now() - askedAt), ahead: ahead(state, id) }),
+    );
 
   /**
    * Run `effect` in a turn of `kind`, waiting at most `wait` for it, or failing `Busy`. The turn
@@ -171,8 +170,8 @@ export const make = (options: {
           const ticket: Ticket = { id: ++tickets, kind };
           const askedAt = now();
 
-          if (kind === "write" && options.inputGate !== undefined)
-            yield* options.inputGate.check(operation);
+          if (kind === "write" && options.beforeWrite !== undefined)
+            yield* options.beforeWrite(operation);
 
           if ((yield* FailFast) && !admitsNow(state, kind)) return yield* busy(operation, askedAt);
           const admitted = Deferred.makeUnsafe<void>();
@@ -192,8 +191,8 @@ export const make = (options: {
 
           const given = yield* Effect.exit(
             restore(
-              kind === "write" && options.inputGate !== undefined
-                ? Effect.raceFirst(waiting, options.inputGate.refused(operation))
+              kind === "write" && options.beforeWrite !== undefined
+                ? Effect.raceFirst(waiting, options.refusal?.(operation) ?? Effect.never)
                 : waiting,
             ),
           );
@@ -213,7 +212,7 @@ export const make = (options: {
   /**
    * A read whose identical calls share their work: `work` runs once per epoch and document while
    * calls await it, and with `keep` its result serves the next call after all of them gave up,
-   * within an action timeout of its end. Pictures, whose callers say how old they may be, only
+   * within 250 milliseconds of its end. Pictures, whose callers say how old they may be, only
    * join.
    */
   const shared = <A>(operation: string, keep: boolean) => {
@@ -250,7 +249,7 @@ export const make = (options: {
         flight.fiber.addObserver((exit) => {
           flights.delete(id);
           if (keep && Exit.isSuccess(exit) && flight.waiting === 0 && flight.epoch === state.epoch)
-            kept.set(id, { value: exit.value, until: now() + Duration.toMillis(actionTimeout) });
+            kept.set(id, { value: exit.value, until: now() + 250 });
           Deferred.doneUnsafe(
             flight.result,
             Exit.hasInterrupts(exit) ? Effect.fail(options.gone(operation)) : exit,

@@ -1,13 +1,13 @@
 import { assert, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber, Random, Stream } from "effect";
+import { Clock, Deferred, Duration, Effect, Fiber, Random, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
-import * as Chromium from "../src/Chromium.ts";
-import * as Motion from "../src/Motion.ts";
-import * as Presentation from "../src/Presentation.ts";
+import * as Motion from "../src/presentation/Motion.ts";
+import * as Presentation from "../src/presentation/Presentation.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 import { unpaused } from "./fixtures.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 interface NativeInput {
   readonly type?: string;
@@ -27,13 +27,13 @@ interface Dispatch {
 // Chromium's replies to input wait until the test releases them. The browser, its presenter and the
 // recorded times all keep the clock the fixture is made on.
 const setup = Effect.fnUntraced(function* (
-  motion: Motion.Service,
+  motion: Motion.Planner,
   {
     performed = true,
     held = false,
   }: { readonly performed?: boolean; readonly held?: boolean } = {},
 ) {
-  const native = (yield* Browser).context.browser();
+  const native = TestCdp.nativeContext(yield* Browser).browser();
   const clock = yield* Clock.Clock;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
 
@@ -44,50 +44,45 @@ const setup = Effect.fnUntraced(function* (
     (context) => Effect.promise(() => context.close()),
   );
 
-  const createSession = context.newCDPSession.bind(context);
+  const faults = yield* TestCdp.make();
   const dispatches: Array<Dispatch> = [];
+  const active = new Map<TestCdp.Call, Dispatch>();
   const moved = Promise.withResolvers<void>();
-  const released = Promise.withResolvers<void>();
+  const released = yield* Deferred.make<void>();
   let outstanding = 0;
   let maximumOutstanding = 0;
 
-  if (!held) released.resolve();
+  if (!held) Deferred.doneUnsafe(released, Effect.void);
+  faults.rule(
+    { method: { prefix: "Input." } },
+    { _tag: "Hold", gate: released },
+    { phase: "after" },
+  );
+  faults.observe((call, phase) => {
+    if (!call.method.startsWith("Input.")) return;
+    const input = (call.params as NativeInput | undefined) ?? {};
 
-  // Chromium receives each original command immediately. Only its returned receipt is held,
-  // as a remote connection's would be, without replacing input dispatch or native browser behavior.
-  context.newCDPSession = async (target) => {
-    const session = await createSession(target);
-    const send = session.send.bind(session);
+    if (phase === "before") {
+      const dispatch: Dispatch = { method: call.method, input, at: now() };
 
-    const observed: CDPSession["send"] = (method, params) => {
-      if (!method.startsWith("Input.")) return send(method, params);
-
-      const input = (params as NativeInput | undefined) ?? {};
-      const dispatch: Dispatch = { method, input, at: now() };
-
+      active.set(call, dispatch);
       dispatches.push(dispatch);
       outstanding++;
       maximumOutstanding = Math.max(maximumOutstanding, outstanding);
+    }
+    if (phase === "received" && input.type === "mouseMoved") moved.resolve();
+    if (phase === "after") {
+      const dispatch = active.get(call);
 
-      return send(method, params)
-        .then(async (result) => {
-          if (input.type === "mouseMoved") moved.resolve();
-          await released.promise;
+      if (dispatch !== undefined) dispatch.settledAt = now();
+      outstanding--;
+    }
+  });
 
-          return result;
-        })
-        .finally(() => {
-          dispatch.settledAt = now();
-          outstanding--;
-        });
-    };
+  const browser = yield* faults.provide(
+    makeBrowser(context, { id: "motion-test", provider: "test" }),
+  );
 
-    session.send = observed;
-
-    return session;
-  };
-
-  const browser = yield* makeBrowser(context, { id: "motion-test", provider: "test" });
   const presenter = yield* Presentation.make({ motion, pacing: unpaused });
 
   const open = Effect.gen(function* () {
@@ -95,7 +90,9 @@ const setup = Effect.fnUntraced(function* (
     const page = performed ? presenter.view(plain) : plain;
 
     yield* Effect.promise(() =>
-      page.playwright.setContent('<body style="margin:0;width:800px;height:600px"></body>'),
+      TestCdp.nativePage(page).setContent(
+        '<body style="margin:0;width:800px;height:600px"></body>',
+      ),
     );
 
     return page;
@@ -106,15 +103,17 @@ const setup = Effect.fnUntraced(function* (
     open,
     dispatches,
     moved: moved.promise,
-    release: () => released.resolve(),
+    release: () => Deferred.doneUnsafe(released, Effect.void),
     maximumOutstanding: () => maximumOutstanding,
   };
 });
 
-layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
-  "Motion integration",
-  (it) => {
-    it.effect("plans every view's glide with its presenter's planner, never plain input's", () =>
+layer(TestCdp.provideLayer(Chromium.layer()), {
+  excludeTestServices: true,
+  timeout: Duration.seconds(60),
+})("Motion integration", (it) => {
+  it.effect("plans every view's glide with its presenter's planner, never plain input's", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const planned: Array<{ readonly from: Motion.Point; readonly to: Motion.Point }> = [];
 
@@ -166,9 +165,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(plainCalls, 0);
         assert.strictEqual(plain.dispatches.length, 1);
       }),
-    );
+    ),
+  );
 
-    it.effect("rejects an invalid complete schedule before publishing or submitting input", () =>
+  it.effect("rejects an invalid complete schedule before publishing or submitting input", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         let current: (to: Motion.Point) => ReadonlyArray<Motion.Sample> = () => [];
         const fixture = yield* setup({ plan: (_from, to) => Effect.sync(() => current(to)) });
@@ -211,9 +212,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           (yield* fixture.browser.recentEvents).filter((event) => event._tag === "TrackPlanned"),
         );
       }),
-    );
+    ),
+  );
 
-    it.effect("publishes and performs exactly the copy it checked", () =>
+  it.effect("publishes and performs exactly the copy it checked", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         let reads = 0;
         const second = { x: 500, y: 300, afterMillis: 40 };
@@ -269,15 +272,17 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           expected.map(({ x, y }) => ({ x, y })),
         );
       }),
-    );
+    ),
+  );
 
-    it.effect("moves the pointer with every default sample except a repeated exact endpoint", () =>
+  it.effect("moves the pointer with every default sample except a repeated exact endpoint", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const fixture = yield* setup(Motion.lognormal);
         const page = yield* fixture.open;
 
         const record = Effect.promise(() =>
-          page.playwright.evaluate(() => {
+          TestCdp.nativePage(page).evaluate(() => {
             const moves: Array<{ x: number; y: number; dx: number; dy: number }> = [];
 
             (window as unknown as { moves: typeof moves }).moves = moves;
@@ -293,9 +298,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
 
         // Rendering may deliver the last mousemove after the native reply; wait for the endpoint.
-        const take = (target: Motion.Point) =>
-          Effect.promise(async () => {
-            await page.playwright.waitForFunction(
+        const take = (target: Motion.Point) => {
+          const native = TestCdp.nativePage(page);
+
+          return Effect.promise(async () => {
+            await native.waitForFunction(
               ([x, y]) => {
                 const moves = (window as unknown as { moves: Array<{ x: number; y: number }> })
                   .moves;
@@ -305,7 +312,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
               [target.x, target.y],
             );
 
-            return page.playwright.evaluate(() => {
+            return native.evaluate(() => {
               const recorded = window as unknown as {
                 moves: Array<{ x: number; y: number; dx: number; dy: number }>;
               };
@@ -313,6 +320,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
               return recorded.moves.splice(0);
             });
           });
+        };
 
         // A page's first mousemove has no previous position, so its movement is 0 by definition
         // (Chromium 153 reports it that way). Place the pointer before recording.
@@ -360,12 +368,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           for (const event of dom.slice(0, -1)) assert.isTrue(event.dx !== 0 || event.dy !== 0);
         }
       }),
-    );
+    ),
+  );
 
-    // The browser runs on a test clock that moves only when the test says, and Chromium's replies
-    // wait until the test releases them: each sample's time is then exact, and so is never waiting
-    // for a reply, however loaded the machine.
-    it.effect("submits every dense original sample at its own millisecond, before any reply", () =>
+  // The browser runs on a test clock that moves only when the test says, and Chromium's replies
+  // wait until the test releases them: each sample's time is then exact, and so is never waiting
+  // for a reply, however loaded the machine.
+  it.effect("submits every dense original sample at its own millisecond, before any reply", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         let original: ReadonlyArray<Motion.Sample> = [];
         const clock = yield* TestClock.make();
@@ -435,9 +445,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             assert.isAtLeast(timestamp, moves()[index - 1]?.input.timestamp ?? Infinity);
         }
       }),
-    );
+    ),
+  );
 
-    it.effect("clips cancellation to the native submitted prefix and resumes from that point", () =>
+  it.effect("clips cancellation to the native submitted prefix and resumes from that point", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         let interrupted = true;
 
@@ -491,6 +503,6 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.isDefined(next);
         if (next !== undefined) assert.deepStrictEqual(next.from, { x: terminal.x, y: terminal.y });
       }),
-    );
-  },
-);
+    ),
+  );
+});

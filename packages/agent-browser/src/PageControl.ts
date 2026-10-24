@@ -28,6 +28,7 @@ import type * as Page from "effect-browser/Page";
 import * as Policy from "effect-browser/Policy";
 import type { Snapshot } from "effect-browser/Snapshot";
 
+import * as AdapterState from "./AdapterState.ts";
 import { destination, followed, told } from "./internal/receipts.ts";
 
 type Observation = typeof BrowserUse.Observation.Type;
@@ -47,6 +48,8 @@ export type Target =
 export interface Options {
   /** The user's task, which the input policy's judge reads as what authorizes a risky input. */
   readonly task?: string | undefined;
+  /** Resume stable tab identities from a prior finished adapter state. */
+  readonly initialTabs?: AdapterState.Tabs | undefined;
   /** Bound on an observation's outline, in characters. Defaults to 8,000. */
   readonly maxChars?: number | undefined;
   /** Bound on a condition wait. Defaults to 5,000 ms; an unmet wait returns the page as it is. */
@@ -112,72 +115,88 @@ const observation = (
 });
 
 /** The tabs a browser's ports follow: which one is current, and a stable ref for each. */
-const following = (browser: Browser.Service, follow: Follow) =>
+const following = (browser: Browser.Service, follow: Follow, initial?: AdapterState.Tabs) =>
   Effect.gen(function* () {
-    let shown: Page.Page | undefined;
-    const seen = new Set((yield* browser.pages).map((tab) => tab.id));
-    const refs = new Map<string, string>();
-
-    const refOf = (tab: Page.Page) => {
-      const known = refs.get(tab.id);
-
-      if (known !== undefined) return known;
-      const ref = `tab${refs.size + 1}`;
-
-      refs.set(tab.id, ref);
-
-      return ref;
-    };
+    let state = initial ?? AdapterState.tabs((yield* browser.pages).map((tab) => tab.id));
 
     const become = (tab: Page.Page) =>
       Effect.gen(function* () {
-        // Bringing a tab to front is for whoever watches it; the ports act on it either way.
-        if (follow === "front" && shown !== undefined && tab.id !== shown.id)
-          yield* tab.bringToFront.pipe(Effect.ignore);
-        shown = tab;
+        if (follow === "front" && state.shown !== undefined && tab.id !== state.shown)
+          yield* tab.bringToFront;
+        state = new AdapterState.Tabs({ ...state, shown: tab.id });
 
         return tab;
       });
 
-    // A look follows the newest tab opened since the last, unless told never to; a tab that has
-    // gone gives way to the first one open.
     const look = Effect.gen(function* () {
       const open = yield* browser.pages;
-      const newest = open.filter((tab) => !seen.has(tab.id)).at(-1);
 
-      for (const tab of open) seen.add(tab.id);
-
-      return yield* become(
-        follow !== "never" && newest !== undefined
-          ? newest
-          : (open.find((tab) => tab.id === shown?.id) ?? (yield* browser.firstPage)),
+      const next = AdapterState.follow(
+        state,
+        open.map((tab) => tab.id),
+        follow,
       );
+
+      const tab = open.find((tab) => tab.id === next.selected) ?? (yield* browser.firstPage);
+
+      yield* become(tab);
+      state = next.state;
+
+      return tab;
     });
 
     const tabs = Effect.gen(function* () {
       const open = yield* browser.pages;
 
-      return yield* Effect.forEach(open, (tab) =>
-        Effect.map(tab.url, (url) => ({
-          ref: refOf(tab),
+      state = new AdapterState.Tabs({
+        ...state,
+        refs: AdapterState.follow(
+          state,
+          open.map((tab) => tab.id),
+          "never",
+        ).state.refs,
+      });
+
+      return yield* Effect.forEach(open, (tab) => {
+        const ref = state.refs[tab.id];
+
+        if (ref === undefined) return Effect.die("registered tab is missing its stable ref");
+
+        return Effect.map(tab.url, (url) => ({
+          ref,
           url: url.startsWith("data:") ? "data:" : url,
-          active: tab.id === shown?.id,
-        })),
-      );
+          active: tab.id === state.shown,
+        }));
+      });
     });
 
     const select = (ref: string) =>
       Effect.gen(function* () {
-        const tab = (yield* browser.pages).find((open) => refs.get(open.id) === ref);
+        const open = yield* browser.pages;
+
+        const id = AdapterState.selected(
+          state,
+          open.map((tab) => tab.id),
+          ref,
+        );
+
+        const tab = open.find((tab) => tab.id === id);
 
         if (tab === undefined) return Option.none<Page.Page>();
-        seen.add(tab.id);
+        state = new AdapterState.Tabs({ ...state, seen: [...new Set([...state.seen, tab.id])] });
 
         return Option.some(yield* become(tab));
       });
 
     return {
-      current: Effect.suspend(() => (shown === undefined ? look : Effect.succeed(shown))),
+      current: Effect.suspend(() =>
+        state.shown === undefined
+          ? look
+          : Effect.flatMap(
+              browser.page(state.shown),
+              Option.match({ onNone: () => look, onSome: Effect.succeed }),
+            ),
+      ),
       look,
       tabs,
       select,
@@ -206,11 +225,14 @@ const session = Effect.fnUntraced(function* (target: Target, options: Options) {
   const { current, look, tabs } =
     "page" in target
       ? { current: Effect.succeed(target.page), look: Effect.succeed(target.page), tabs: undefined }
-      : yield* Effect.map(following(target.browser, target.follow ?? "select"), (followed) => ({
-          current: followed.current,
-          look: followed.look,
-          tabs: followed,
-        }));
+      : yield* Effect.map(
+          following(target.browser, target.follow ?? "select", options.initialTabs),
+          (followed) => ({
+            current: followed.current,
+            look: followed.look,
+            tabs: followed,
+          }),
+        );
 
   // The pages whose changes are recorded, from their first look, so the receipt of the first
   // action on one can say what it changed. A page whose record could not start says so, and the
@@ -303,11 +325,11 @@ const acting =
 const action = (step: BrowserUse.Action) => (page: Page.Page) => {
   switch (step.kind) {
     case "click":
-      return page.click(step.ref);
+      return page.perform({ _tag: "Click", target: step.ref });
     case "fill":
-      return page.type(step.value, { into: step.ref });
+      return page.perform({ _tag: "Type", text: step.value, options: { into: step.ref } });
     case "select":
-      return page.select(step.ref, [step.value]);
+      return page.perform({ _tag: "Select", ref: step.ref, values: [step.value] });
   }
 };
 
@@ -327,15 +349,15 @@ const waiting =
     return Effect.gen(function* () {
       const page = yield* current;
 
-      const met = yield* page
-        .waitFor({ selector: request.selector, text: request.text, state }, millis)
-        .pipe(
-          Effect.as(true),
-          Effect.catchIf(
-            (error) => error.reason._tag === "Timeout",
-            () => Effect.succeed(false),
-          ),
-        );
+      const { met } = yield* page.until(
+        {
+          selector: request.selector,
+          text: request.text,
+          state: state === "enabled" ? "enabled" : "visible",
+        },
+        state === "hidden" ? "none" : "some",
+        millis,
+      );
 
       return yield* read(page, undefined, met ? [] : [`The wait ended after ${millis} ms unmet.`]);
     }).pipe(Effect.mapError(useError), withTask);
@@ -377,6 +399,7 @@ const controlling = (context: Session) => {
       tabs === undefined
         ? invalid("These tools are pinned to one tab.")
         : tabs.select(ref).pipe(
+            Effect.mapError(useError),
             Effect.flatMap(
               Option.match({
                 onNone: () => invalid(`${ref} is not an open tab; observe for the current tabs.`),

@@ -11,7 +11,13 @@ import { Duration, Effect, Layer, Option, Result, Schema, Stream } from "effect"
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import type * as Moment from "effect-browser/Moment";
-import { AnthropicStructuredOutput, OpenAiStructuredOutput, Prompt, Toolkit } from "effect/ai";
+import {
+  AnthropicStructuredOutput,
+  Model,
+  OpenAiStructuredOutput,
+  Prompt,
+  Toolkit,
+} from "effect/ai";
 
 import * as BrowserTools from "../src/BrowserTools.ts";
 import {
@@ -100,7 +106,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.strictEqual(result.output, "Ordered 25 Ethereum.");
       assert.strictEqual(
-        yield* Effect.promise(() => page.playwright.textContent("#outcome")),
+        (yield* page.read(() => document.querySelector("#outcome")?.textContent ?? null, {
+          arg: undefined,
+          result: Schema.NullOr(Schema.String),
+        })).value,
         "Ordered 25 eth",
       );
       assert.strictEqual(prompts.length, 3);
@@ -113,6 +122,40 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("reads null as left out in the control tools' parameters, as models send it", () =>
+    Effect.gen(function* () {
+      const { prompts } = yield* run("Look around", [
+        () =>
+          calling(
+            call("inspect", { selector: "form", frame: null, optionFilter: null }),
+            call("scroll", { ref: null, deltaX: 0, deltaY: 100 }),
+            call("wait", {
+              selector: "form",
+              frame: null,
+              state: "visible",
+              text: null,
+              timeoutMillis: 500,
+            }),
+          ),
+        () => answer("Looked around."),
+      ]);
+
+      const results = prompts[1]!.content.flatMap((message) =>
+        message.role === "tool"
+          ? message.content.flatMap((part) =>
+              part.type === "tool-result" ? [[part.name, part.isFailure]] : [],
+            )
+          : [],
+      );
+
+      assert.deepStrictEqual(results, [
+        ["inspect", false],
+        ["scroll", false],
+        ["wait", false],
+      ]);
+    }),
+  );
+
   it.effect("plays a canvas by point, and shows a crop before the next turn", () =>
     Effect.gen(function* () {
       const { page, prompts } = yield* run("Press spin once", [
@@ -121,9 +164,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         () => answer("Spun once."),
       ]);
 
-      const state = yield* Effect.promise(() =>
-        page.playwright.evaluate(() => (window as unknown as { state: { spins: number } }).state),
-      );
+      const { value: state } = yield* page.read(() => Reflect.get(window, "state"), {
+        arg: undefined,
+        result: Schema.Struct({ spins: Schema.Int }),
+      });
 
       assert.strictEqual(state.spins, 1);
       assert.include(textOf(prompts[1]!), "The screen is still.");
@@ -279,6 +323,12 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           () => answer("Finished observing."),
         ]);
 
+        const sharedModel = Model.make(
+          "scripted",
+          "test-model",
+          Layer.succeedContext(yield* Layer.build(model.layer)),
+        );
+
         const observer = Agent.make("compacting-browser", {
           input: Schema.String,
           output: Output.text(Schema.String),
@@ -305,7 +355,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
                 Effect.map(preparation.hook!.prepare(request), (prepared) => ({
                   ...prepared,
                   modelCall: {
-                    model: model.layer,
+                    model: sharedModel,
                     context: ModelCallContext.make({
                       contextCapacity: 3000,
                       outputReserveTokens: 128,

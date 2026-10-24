@@ -6,11 +6,11 @@
  * `pushState` asks for no document, and a navigation a handler starts after a fetch answers is the
  * next look's to see. A tab the input opened waits for the browser's registration too.
  */
-import { Deferred, Duration, Effect, Exit } from "effect";
+import { Deferred, Duration, Effect, Exit, Option } from "effect";
 
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, type PageContext } from "../page/context.ts";
-import { Current } from "./replies.ts";
+import { Current } from "../page/replies.ts";
 
 // A document still loading after this, or a closed page, is the next look's to show.
 const settling = Duration.seconds(5);
@@ -42,9 +42,11 @@ export const make = (page: PageContext, bridge: Bridge) => {
       );
       while (document() > before.document && parsed < document()) yield* Deferred.await(changed);
     }).pipe(
-      Effect.timeoutOrElse({ duration: settling, orElse: () => Effect.fail("unsettled") }),
-      Effect.catch(() =>
-        page.stopLoading.pipe(Effect.andThen(Effect.annotateCurrentSpan("settled", false))),
+      Effect.timeoutOption(settling),
+      Effect.flatMap((result) =>
+        Option.isSome(result)
+          ? Effect.void
+          : page.stopLoading.pipe(Effect.andThen(Effect.annotateCurrentSpan("settled", false))),
       ),
       Effect.andThen(page.openings.settle(before.openings)),
       page.span("Page.settle", {}, "Debug"),

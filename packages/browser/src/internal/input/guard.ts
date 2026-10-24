@@ -5,11 +5,12 @@
  */
 import { Effect } from "effect";
 
+import { recorded, nameOf, type Action } from "../../Action.ts";
 import { type BrowserError, InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
-import { InputRequest, redacted } from "../../Page.ts";
+import { InputRequest } from "../../Page.ts";
+import * as Url from "../../Url.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
-import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
-import * as Url from "../page/url.ts";
+import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
 import * as Script from "./guard.inpage.ts";
 
 export interface Approval {
@@ -62,7 +63,7 @@ export const make = (page: PageContext, bridge: Bridge) => {
   const { current, evaluateIn, evaluateWithContext } = bridge;
 
   const preparePolicy = (
-    action: string,
+    asked: Action,
     info: { readonly target?: string | undefined; readonly text?: string | undefined },
     targets: Script.InputPlan["targets"],
     flags: {
@@ -72,16 +73,7 @@ export const make = (page: PageContext, bridge: Bridge) => {
     } = {},
   ): Effect.Effect<PolicyPlan, BrowserError> =>
     Effect.gen(function* () {
-      for (const target of targets) {
-        if (typeof target === "string" && !/^e\d+$/.test(target))
-          return yield* refuse(action, `"${target}" is not a ref; refs look like e12`);
-        if (
-          target !== null &&
-          typeof target !== "string" &&
-          (!Number.isFinite(target.x) || !Number.isFinite(target.y))
-        )
-          return yield* refuse(action, "point coordinates must be finite");
-      }
+      const action = nameOf(asked);
 
       const input: Script.InputPlan = {
         action,
@@ -103,17 +95,16 @@ export const make = (page: PageContext, bridge: Bridge) => {
       const target = targets[0];
       const { title, description, dialog, heading, nearby, form } = prepared.evidence;
 
+      const safe = recorded(asked, first?.secret !== true);
+
       // A guard may hand the request to a judge's model, so its addresses keep no secrets.
       const request = new InputRequest({
         page: id,
         url: Url.redact(prepared.url),
         title,
-        action,
+        action: safe,
         target: info.target,
-        text:
-          info.text !== undefined && action === "type" && first?.secret === true
-            ? redacted
-            : info.text,
+        text: safe._tag === "Type" ? safe.text : info.text,
         element: first?.element,
         role: first?.role,
         name: first?.name,
@@ -124,7 +115,7 @@ export const make = (page: PageContext, bridge: Bridge) => {
           prepared.destination === undefined ? undefined : Url.redact(prepared.destination),
         facts: prepared.facts,
         context: { dialog, heading, nearby },
-        form,
+        form: form === undefined ? undefined : { ...form, action: Url.redact(form.action) },
       });
 
       const check = (options: Script.ValidationOptions = {}) =>

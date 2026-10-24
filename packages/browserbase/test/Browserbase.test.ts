@@ -19,16 +19,15 @@ import {
   Stream,
 } from "effect";
 import { Browser } from "effect-browser/Browser";
-import type * as Supervisor from "effect-browser/Supervisor";
+import * as Supervisor from "effect-browser/Supervisor";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
-import { chromium } from "playwright-core";
+import { type Browser as NativeBrowser, chromium } from "playwright-core";
 
 import * as Browserbase from "../src/Browserbase.ts";
 import {
   BrowserbaseClient,
   layer as clientLayer,
-  type Session,
   type SessionOptions,
 } from "../src/BrowserbaseClient.ts";
 import { BrowserbaseError } from "../src/BrowserbaseError.ts";
@@ -509,6 +508,22 @@ const chromiumEndpoint = Effect.gen(function* () {
 
   return `http://127.0.0.1:${port}`;
 });
+
+/** The test owns the connector it may drop, without a raw provider escape hatch. */
+const connections = () => {
+  const opened: Array<NativeBrowser> = [];
+
+  return {
+    connect: async (url: string) => {
+      const browser = await chromium.connectOverCDP(url);
+
+      opened.push(browser);
+
+      return browser;
+    },
+    disconnect: Effect.promise(async () => opened[0]?.close()),
+  };
+};
 
 /** An address with nothing listening, so each connect fails at once and its session is released. */
 const nowhere = listen(() => undefined).pipe(
@@ -1151,8 +1166,11 @@ describe("Browserbase.attach", () => {
         const found = yield* hosted.browser.page(page);
 
         assert.deepStrictEqual(
-          Option.map(found, (resumed) => resumed.playwright.url()),
-          Option.some(still("Resumed")),
+          yield* Option.match(found, {
+            onNone: () => Effect.void,
+            onSome: (resumed) => resumed.url,
+          }),
+          still("Resumed"),
         );
         assert.strictEqual((yield* hosted.release)._tag, "Settled");
         assert.deepStrictEqual(
@@ -1192,23 +1210,37 @@ const line = ({ number, state }: Supervisor.Generation) =>
     ? `${number} Closed ${state.released?._tag ?? "none"}`
     : `${number} ${state._tag}`;
 
+/** Observe a provider failure through the public supervisor boundary. */
+const down = <A, E>(sessions: Supervisor.Supervisor<A, E>) =>
+  sessions
+    .use(() => Effect.void)
+    .pipe(
+      Effect.flip,
+      Effect.map((error) => {
+        if (error._tag !== "Unavailable")
+          throw new Error(`expected Unavailable, received ${error._tag}`);
+
+        return error;
+      }),
+    );
+
 class BuildSetup extends Context.Service<BuildSetup, { readonly marker: string }>()(
   "test/BuildSetup",
 ) {}
 
-describe("Browserbase.supervise", () => {
-  // #280: a lease's permanent policy refusal must not spend the reopen schedule retrying.
-  it.effect("goes down after one permanent context refusal, retaining its cause", () =>
+describe("Browserbase.generations", () => {
+  // #280: permanent context refusal must not spend the reopen schedule retrying.
+  it.effect("goes down after one permanent context refusal, retaining its typed error", () =>
     Effect.gen(function* () {
       const refusal = new ContextLease.ContextRefused({
         context: "refused-context",
-        detail: "this deployment cannot write this context",
+        detail: "writer forbidden",
       });
 
       let holds = 0;
 
-      const sessions = yield* Browserbase.supervise({
-        session: persisting(refusal.context),
+      const sessions = yield* Supervisor.make({
+        ...Browserbase.generations({ session: persisting(refusal.context), build: Effect.succeed }),
         reopen: Schedule.recurs(2),
       }).pipe(
         Effect.provideService(ContextLease.ContextLease, {
@@ -1221,22 +1253,17 @@ describe("Browserbase.supervise", () => {
         }),
       );
 
-      const unavailable = yield* Effect.flip(sessions.browser);
+      const unavailable = yield* down(sessions);
 
-      const states = yield* sessions.states.pipe(
-        Stream.takeUntil(({ state }) => state._tag === "Down"),
-        Stream.runCollect,
+      assert.deepStrictEqual(
+        [holds, unavailable.reason, unavailable.error?.error],
+        [1, "down", refusal],
       );
-
-      assert.strictEqual(holds, 1);
-      assert.strictEqual(unavailable.reason, "down");
-      assert.strictEqual(unavailable.cause, refusal);
-      assert.deepStrictEqual(states.map(line), ["1 Opening", "1 Down"]);
       assert.deepStrictEqual(yield* asked, []);
     }).pipe(Effect.scoped, Effect.provide(hostedFake())),
   );
 
-  // #280: each public context operation preserves the lease's typed refusal without creating.
+  // #280: every direct context operation still preserves the refusal without creating a session.
   it.effect("passes a permanent refusal through open, verification and reconciliation", () =>
     Effect.gen(function* () {
       const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
@@ -1252,13 +1279,11 @@ describe("Browserbase.supervise", () => {
           }),
       };
 
-      const operations = [
+      for (const operation of [
         Effect.asVoid(Browserbase.open({ session: persisting(id) })),
         Browserbase.verifyContext(id, () => Effect.die("verification must not run")),
         Effect.asVoid(Browserbase.reconcile(id)),
-      ];
-
-      for (const operation of operations) {
+      ]) {
         const error = yield* operation.pipe(
           Effect.scoped,
           Effect.provideService(ContextLease.ContextLease, refusing),
@@ -1273,10 +1298,83 @@ describe("Browserbase.supervise", () => {
     }).pipe(Effect.provide(hostedFake())),
   );
 
-  // #280: transient contention still retries; a later permanent refusal stops a lost generation.
-  it.live("retries a busy lease but stops reopening when that lease refuses permanently", () =>
+  it.effect(
+    "allows application policy to refuse before context acquisition or provider requests",
+    () =>
+      Effect.gen(function* () {
+        const provider = Browserbase.generations({
+          session: persisting("unopened-context"),
+          build: Effect.succeed,
+        });
+
+        const sessions = yield* Supervisor.make({
+          ...provider,
+          open: () => Effect.flatMap(BuildSetup, ({ marker }) => Effect.fail(marker)),
+          definite: () => true,
+        }).pipe(Effect.provideService(BuildSetup, { marker: "account stopped" }));
+
+        const unavailable = yield* down(sessions);
+
+        assert.deepStrictEqual(
+          [unavailable.reason, unavailable.error],
+          ["down", "account stopped"],
+        );
+        assert.deepStrictEqual(yield* asked, []);
+      }).pipe(Effect.scoped, Effect.provide(hostedFake())),
+  );
+
+  it.effect("goes down without retrying a refused provider key", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Supervisor.make(Browserbase.generations({ build: Effect.succeed }));
+      const unavailable = yield* down(sessions);
+      const error = unavailable.error?.error;
+
+      assert.deepStrictEqual(yield* asked, ["POST /v1/sessions"]);
+      assert.deepStrictEqual(
+        [unavailable.reason, Schema.is(BrowserbaseError)(error) && error.reason._tag],
+        ["down", "Unauthorized"],
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(hostedFake({ creates: [{ _tag: "Reject", status: 401 }] })),
+    ),
+  );
+
+  it.effect("tries a held context again without silently creating a second writer", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Supervisor.make({
+        ...Browserbase.generations({ session: persisting("context-held"), build: Effect.succeed }),
+        reopen: Schedule.spaced("1 second"),
+      });
+
+      const ended = yield* sessions.states.pipe(
+        Stream.filter(({ state }) => state._tag === "Down"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* pass(65);
+      assert.deepStrictEqual(
+        (yield* kept).map(({ status, releases }) => [status, releases]),
+        [["RUNNING", 2]],
+      );
+      assert.isUndefined(ended.pollUnsafe());
+      yield* finish(yield* Effect.forkChild(sessions.retire));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        hostedFake({
+          creates: [{ _tag: "Lost" }],
+          releases: [{ _tag: "Pending" }, { _tag: "Pending" }],
+        }),
+      ),
+    ),
+  );
+
+  it.live("retries transient context contention and stops when permission is revoked", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;
+      const native = connections();
 
       yield* Effect.gen(function* () {
         const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
@@ -1290,9 +1388,13 @@ describe("Browserbase.supervise", () => {
         let holds = 0;
         let forbidden = false;
 
-        const sessions = yield* Browserbase.supervise({
-          session: persisting(id),
-          contextSettle: 0,
+        const sessions = yield* Supervisor.make({
+          ...Browserbase.generations({
+            session: persisting(id),
+            connect: native.connect,
+            contextSettle: 0,
+            build: Effect.succeed,
+          }),
           reopen: Schedule.recurs(2),
         }).pipe(
           Effect.provideService(ContextLease.ContextLease, {
@@ -1308,20 +1410,17 @@ describe("Browserbase.supervise", () => {
           }),
         );
 
-        const first = yield* sessions.browser;
+        yield* sessions.use(({ value }) => Effect.succeed(value));
 
         assert.strictEqual(holds, 3);
         forbidden = true;
-        yield* Effect.promise(async () => first.context.browser()?.close());
-        yield* sessions.states.pipe(
-          Stream.filter(({ state }) => state._tag === "Down"),
-          Stream.runHead,
-        );
-        const unavailable = yield* Effect.flip(sessions.browser);
+        yield* native.disconnect;
+        const unavailable = yield* down(sessions);
 
-        assert.strictEqual(unavailable.reason, "down");
-        assert.strictEqual(unavailable.cause, refusal);
-        assert.strictEqual(holds, 4);
+        assert.deepStrictEqual(
+          [unavailable.reason, unavailable.error?.error, holds],
+          ["down", refusal, 4],
+        );
         assert.lengthOf(
           (yield* asked).filter((request) => request === "POST /v1/sessions"),
           1,
@@ -1335,309 +1434,113 @@ describe("Browserbase.supervise", () => {
     }),
   );
 
-  // #281: admission is before the context lease and any provider request, even on the first try.
-  it.effect("applies application admission before holding a context or creating a session", () =>
-    Effect.gen(function* () {
-      let holds = 0;
-      let admissions = 0;
+  // 1d6d7c7: successful generation cleanup disconnected before build resources finalized.
+  for (const broken of [false, true])
+    it.live(
+      broken
+        ? "releases the provider with Unconfirmed evidence when build cleanup defects"
+        : "finalizes build resources while their browser and provider are still available",
+      () =>
+        Effect.gen(function* () {
+          const connectUrl = yield* chromiumEndpoint;
 
-      const options: Browserbase.SuperviseOptions<Session, string, BuildSetup> = {
-        session: persisting("unopened-context"),
-        reopen: Schedule.recurs(2),
-        admit: ({ number, after }) =>
-          Effect.gen(function* () {
-            const { marker } = yield* BuildSetup;
+          yield* Effect.gen(function* () {
+            const atCleanup: Array<readonly [string, string]> = [];
 
-            admissions++;
-            assert.strictEqual(number, 1);
-            assert.isUndefined(after);
+            const sessions = yield* Supervisor.make(
+              Browserbase.generations({
+                build: (hosted) =>
+                  Effect.acquireRelease(Effect.succeed(hosted), () =>
+                    Effect.gen(function* () {
+                      const rows = yield* kept;
+                      const browser = yield* Effect.exit(hosted.browser.newPage("about:blank"));
 
-            return yield* Effect.fail(marker);
-          }),
-        definite: (error) => error === "account stopped",
-      };
+                      atCleanup.push([rows[0]?.status ?? "missing", browser._tag]);
+                      if (broken) return yield* Effect.die("build cleanup defect");
+                    }),
+                  ),
+              }),
+            );
 
-      const sessions = yield* Browserbase.supervise(options).pipe(
-        Effect.provideService(BuildSetup, { marker: "account stopped" }),
-        Effect.provideService(ContextLease.ContextLease, {
-          hold: (context) =>
-            Effect.suspend(() => {
-              holds++;
+            yield* sessions.use(() => Effect.void);
+            yield* sessions.retire;
+            const events = yield* sessions.states.pipe(Stream.runCollect);
 
-              return Effect.fail(
-                new ContextLease.ContextHeld({ context, detail: "must not hold" }),
-              );
-            }),
+            const closed = events.flatMap(({ state }) =>
+              state._tag === "Closed" ? [state.released?._tag] : [],
+            );
+
+            assert.deepStrictEqual(atCleanup, [["RUNNING", "Success"]]);
+            assert.deepStrictEqual(closed, [broken ? "Unconfirmed" : "Settled"]);
+            assert.deepStrictEqual(
+              (yield* kept).map(({ status, releases }) => [status, releases]),
+              [["COMPLETED", 1]],
+            );
+          }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
         }),
-      );
+    );
 
-      const unavailable = yield* Effect.flip(sessions.browser);
-
-      assert.strictEqual(admissions, 1);
-      assert.strictEqual(holds, 0);
-      assert.strictEqual(unavailable.reason, "down");
-      assert.strictEqual(unavailable.cause, "account stopped");
-      assert.deepStrictEqual(yield* asked, []);
-    }).pipe(Effect.scoped, Effect.provide(hostedFake())),
-  );
-
-  // #286: a failed attempt's session is visible to admission even without a stored context.
-  it.effect.each(["connect", "create"] as const)(
-    "refuses retry after a failed %s leaves an unconfirmed session",
-    (failure) =>
-      Effect.gen(function* () {
-        const outcomes: Array<Supervisor.Released | undefined> = [];
-
-        const sessions = yield* Browserbase.supervise({
-          reopen: Schedule.recurs(1),
-          waitTimeout: "5 minutes",
-          admit: ({ after }) =>
-            Effect.gen(function* () {
-              const released = after === undefined ? undefined : yield* after;
-
-              outcomes.push(released);
-              if (released?._tag === "Unconfirmed")
-                return yield* Effect.fail("release unconfirmed");
-            }),
-          definite: (error) => error === "release unconfirmed",
-        });
-
-        const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
-        const rows = yield* kept;
-
-        assert.strictEqual(error.reason, "down");
-        assert.strictEqual(error.cause, "release unconfirmed");
-        assert.deepStrictEqual(
-          outcomes.map((outcome) => outcome?._tag),
-          [undefined, "Unconfirmed"],
-        );
-        assert.deepStrictEqual(
-          rows.map(({ status, releases }) => [status, releases]),
-          [["RUNNING", 1]],
-        );
-        const outcome = outcomes[1];
-
-        assert.strictEqual(outcome?._tag, "Unconfirmed");
-        if (outcome?._tag === "Unconfirmed") assert.include(outcome.detail, rows[0]!.id);
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          hostedFake({
-            ...(failure === "create" ? { creates: [{ _tag: "Lost" }] } : {}),
-            releases: [
-              { _tag: "Refused", status: 403 },
-              { _tag: "Refused", status: 403 },
-            ],
-          }),
-        ),
-      ),
-  );
-
-  it.effect("admits retry after a failed connect's release settles", () =>
-    Effect.gen(function* () {
-      const outcomes: Array<Supervisor.Released | undefined> = [];
-
-      const sessions = yield* Browserbase.supervise({
-        reopen: Schedule.recurs(1),
-        admit: ({ after }) =>
-          Effect.gen(function* () {
-            outcomes.push(after === undefined ? undefined : yield* after);
-          }),
-      });
-
-      const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
-
-      assert.strictEqual(error.reason, "down");
-      assert.isTrue(Schema.is(BrowserbaseError)(error.cause));
-      assert.deepStrictEqual(
-        outcomes.map((outcome) => outcome?._tag),
-        [undefined, "Settled"],
-      );
-      assert.deepStrictEqual(
-        (yield* kept).map(({ status, releases }) => [status, releases]),
-        [
-          ["COMPLETED", 1],
-          ["COMPLETED", 1],
-        ],
-      );
-    }).pipe(Effect.scoped, Effect.provide(hostedFake({ releases: [{ _tag: "Ends" }] }))),
-  );
-
-  it.effect("refuses retry after a failed build leaves an unconfirmed session", () =>
+  it.live("closes failed builder resources before releasing its acquired session", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;
 
       yield* Effect.gen(function* () {
-        const outcomes: Array<Supervisor.Released | undefined> = [];
-        let builds = 0;
+        const atCleanup: Array<string> = [];
 
-        const sessions = yield* Browserbase.supervise({
-          reopen: Schedule.recurs(1),
-          waitTimeout: "5 minutes",
-          build: (hosted) =>
-            Effect.suspend(() =>
-              ++builds === 1 ? Effect.fail("build failed") : Effect.succeed(hosted.session),
-            ),
-          admit: ({ after }) =>
-            Effect.gen(function* () {
-              const released = after === undefined ? undefined : yield* after;
-
-              outcomes.push(released);
-              if (released?._tag === "Unconfirmed")
-                return yield* Effect.fail("release unconfirmed");
-            }),
-          definite: (error) => error === "release unconfirmed",
+        const sessions = yield* Supervisor.make({
+          ...Browserbase.generations({
+            build: () =>
+              Effect.acquireRelease(Effect.void, () =>
+                Effect.map(kept, (rows) => void atCleanup.push(rows[0]?.status ?? "missing")),
+              ).pipe(Effect.andThen(Effect.fail("builder failed"))),
+          }),
+          reopen: Schedule.recurs(0),
         });
 
-        const error = yield* finish(yield* Effect.forkChild(Effect.flip(sessions.browser)));
+        const unavailable = yield* down(sessions);
 
-        assert.strictEqual(error.reason, "down");
-        assert.strictEqual(error.cause, "release unconfirmed");
-        assert.strictEqual(builds, 1);
-        assert.deepStrictEqual(
-          outcomes.map((outcome) => outcome?._tag),
-          [undefined, "Unconfirmed"],
-        );
+        assert.strictEqual(unavailable.error?.error, "builder failed");
+        assert.strictEqual(unavailable.error?.cleanup?._tag, "Settled");
+        assert.deepStrictEqual(atCleanup, ["RUNNING"]);
         assert.deepStrictEqual(
           (yield* kept).map(({ status, releases }) => [status, releases]),
-          [["RUNNING", 1]],
+          [["COMPLETED", 1]],
         );
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(hostedFake({ connectUrl, releases: [{ _tag: "Refused", status: 403 }] })),
-      );
-    }),
-  );
-
-  it.live("gives each generation its provider Session when no builder is supplied", () =>
-    Effect.gen(function* () {
-      const connectUrl = yield* chromiumEndpoint;
-
-      yield* Effect.gen(function* () {
-        const sessions: Supervisor.Supervisor<Session> = yield* Browserbase.supervise();
-
-        const value = yield* sessions.use((lease) =>
-          Effect.succeed({ session: lease.value, browser: lease.browser.id }),
-        );
-
-        assert.strictEqual(value.session.id, value.browser);
-        assert.strictEqual(value.session.id, (yield* ids)[0]);
-        yield* sessions.retire;
       }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
     }),
   );
 
   it.live(
-    "holds an exclusive generation and its built resources before releasing or creating its successor",
-    () =>
-      Effect.gen(function* () {
-        const connectUrl = yield* chromiumEndpoint;
-
-        yield* Effect.gen(function* () {
-          const closed: Array<string> = [];
-
-          const sessions = yield* Browserbase.supervise({
-            session: persisting("context-held-rotation"),
-            contextSettle: "10 millis",
-            handover: "30 seconds",
-            build: (hosted) =>
-              Effect.acquireRelease(
-                Effect.map(BuildSetup, ({ marker }) => ({ id: hosted.session.id, marker })),
-                ({ id }) => Effect.sync(() => void closed.push(id)),
-              ),
-          });
-
-          const first = yield* sessions.use((lease) =>
-            Effect.map(lease.retain, (hold) => ({ value: lease.value, hold })),
-          );
-
-          const rotating = yield* Effect.forkChild(sessions.rotate);
-
-          yield* sessions.states.pipe(
-            Stream.filter(({ state }) => state._tag === "Draining"),
-            Stream.runHead,
-          );
-          assert.deepStrictEqual(closed, []);
-          assert.deepStrictEqual(
-            (yield* kept).map(({ id, status, releases }) => [id, status, releases]),
-            [[first.value.id, "RUNNING", 0]],
-          );
-          assert.isUndefined(rotating.pollUnsafe());
-          assert.strictEqual(first.value.marker, "scoped setup");
-
-          yield* Scope.close(first.hold, Exit.void);
-          const next = yield* Fiber.join(rotating);
-
-          assert.deepStrictEqual(closed, [first.value.id]);
-          assert.notStrictEqual(next.id, first.value.id);
-          assert.isBelow(
-            (yield* asked).indexOf(`GET /v1/sessions/${first.value.id}`),
-            (yield* asked).lastIndexOf("POST /v1/sessions"),
-          );
-          yield* sessions.retire;
-          assert.deepStrictEqual(closed, [first.value.id, next.id]);
-        }).pipe(
-          Effect.scoped,
-          Effect.provideService(BuildSetup, { marker: "scoped setup" }),
-          Effect.provide(hostedFake({ connectUrl })),
-        );
-      }),
-  );
-
-  it.live(
-    "releases a kept session when its builder fails, after closing the builder's resources",
-    () =>
-      Effect.gen(function* () {
-        const connectUrl = yield* chromiumEndpoint;
-
-        yield* Effect.gen(function* () {
-          const atCleanup: Array<string> = [];
-
-          const sessions = yield* Browserbase.supervise({
-            keep: "build-failure",
-            reopen: Schedule.recurs(0),
-            build: () =>
-              Effect.acquireRelease(Effect.void, () =>
-                Effect.map(kept, (rows) => void atCleanup.push(rows[0]?.status ?? "missing")),
-              ).pipe(Effect.andThen(Effect.fail(null))),
-          });
-
-          const error = yield* Effect.flip(sessions.browser);
-
-          assert.strictEqual(error.reason, "down");
-          assert.strictEqual(error.cause, null);
-          assert.deepStrictEqual(atCleanup, ["RUNNING"]);
-          assert.deepStrictEqual(
-            (yield* kept).map(({ status, releases }) => [status, releases]),
-            [["COMPLETED", 1]],
-          );
-        }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
-      }),
-  );
-
-  it.live(
-    "releases a kept session and builder resources when retirement interrupts construction",
+    "finishes construction during retirement and releases its session and application scope",
     () =>
       Effect.gen(function* () {
         const connectUrl = yield* chromiumEndpoint;
 
         yield* Effect.gen(function* () {
           const entered = yield* Deferred.make<void>();
+          const complete = yield* Deferred.make<void>();
           const closed: Array<string> = [];
 
-          const sessions = yield* Browserbase.supervise({
-            keep: "build-interrupted",
-            build: (hosted) =>
-              Effect.acquireRelease(Effect.void, () =>
-                Effect.sync(() => void closed.push(hosted.session.id)),
-              ).pipe(
-                Effect.andThen(Deferred.succeed(entered, undefined)),
-                Effect.andThen(Effect.never),
-              ),
-          });
+          const sessions = yield* Supervisor.make(
+            Browserbase.generations({
+              build: (hosted) =>
+                Effect.acquireRelease(Effect.void, () =>
+                  Effect.sync(() => void closed.push(hosted.session.id)),
+                ).pipe(
+                  Effect.andThen(Deferred.succeed(entered, undefined)),
+                  Effect.andThen(Deferred.await(complete)),
+                ),
+            }),
+          );
 
+          yield* Effect.addFinalizer(() => Deferred.succeed(complete, undefined));
           yield* Deferred.await(entered);
-          yield* sessions.retire;
+          const retiring = yield* Effect.forkChild(sessions.retire);
+
+          yield* Effect.yieldNow;
+          assert.isUndefined(retiring.pollUnsafe());
+          yield* Deferred.succeed(complete, undefined);
+          yield* Fiber.join(retiring);
           assert.deepStrictEqual(closed, [...(yield* ids)]);
           assert.deepStrictEqual(
             (yield* kept).map(({ status, releases }) => [status, releases]),
@@ -1647,93 +1550,34 @@ describe("Browserbase.supervise", () => {
       }),
   );
 
-  it.effect("goes down at once, without trying again, when Browserbase refuses the key", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Browserbase.supervise();
-
-      // Trying again would have asked twice within these seconds.
-      yield* pass(5);
-      assert.deepStrictEqual(yield* asked, ["POST /v1/sessions"]);
-      const unavailable = yield* Effect.flip(sessions.browser);
-      const cause = unavailable.cause;
-
-      assert.deepStrictEqual(
-        [unavailable.reason, Schema.is(BrowserbaseError)(cause) && cause.reason._tag],
-        ["down", "Unauthorized"],
-      );
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(hostedFake({ creates: [{ _tag: "Reject", status: 401 }] })),
-    ),
-  );
-
-  it.effect("tries a held context again on its schedule, asking its session to end each time", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Browserbase.supervise({
-        session: persisting("context-held"),
-        reopen: Schedule.spaced("1 second"),
-      });
-
-      const down = yield* Effect.forkChild(
-        sessions.states.pipe(
-          Stream.filter(({ state }) => state._tag === "Down"),
-          Stream.runHead,
-        ),
-      );
-
-      // The first try's release of the lost create's session runs a minute; the second begins.
-      yield* pass(65);
-      assert.deepStrictEqual(
-        (yield* kept).map(({ status, releases }) => [status, releases]),
-        [["RUNNING", 2]],
-      );
-      // A context held is not definite: each try ends its sessions again, so it is not `Down`.
-      assert.isUndefined(down.pollUnsafe());
-      // Retiring waits for the release under way to finish.
-      yield* finish(yield* Effect.forkChild(sessions.retire));
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        hostedFake({
-          creates: [{ _tag: "Lost" }],
-          releases: [{ _tag: "Pending" }, { _tag: "Pending" }],
-        }),
-      ),
-    ),
-  );
-
-  it.live("reopens a lost session, and releases each one it opened", () =>
+  it.live("reopens a lost session and releases every session it opened", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;
+      const native = connections();
 
       yield* Effect.gen(function* () {
-        const sessions = yield* Browserbase.supervise({ reopen: Schedule.spaced("10 millis") });
+        const sessions = yield* Supervisor.make({
+          ...Browserbase.generations({ connect: native.connect, build: Effect.succeed }),
+          reopen: Schedule.spaced("10 millis"),
+        });
 
-        const states = yield* Effect.forkChild(
-          Stream.runCollect(Stream.map(sessions.states, line)),
-        );
+        yield* sessions.use(({ value }) => Effect.succeed(value));
 
-        const first = yield* sessions.browser;
-
-        // Our side's connection drops, as it would if the network did.
-        yield* Effect.promise(async () => first.context.browser()?.close());
+        yield* native.disconnect;
         yield* sessions.states.pipe(
-          Stream.filter((generation) => line(generation) === "2 Open"),
+          Stream.filter(({ number, state }) => number === 2 && state._tag === "Open"),
           Stream.runHead,
         );
-        assert.strictEqual((yield* sessions.browser).id, (yield* ids)[1]);
+        const second = yield* sessions.use(({ value }) => Effect.succeed(value));
+
+        assert.strictEqual(second.session.id, (yield* ids)[1]);
         yield* sessions.retire;
+        const events = yield* sessions.states.pipe(Stream.runCollect);
 
-        const lines = yield* Fiber.join(states);
-
-        assert.deepStrictEqual(
-          lines.filter((one) => one.startsWith("1 ")),
-          ["1 Opening", "1 Open", "1 Lost", "1 Draining", "1 Closed Settled"],
-        );
-        assert.deepStrictEqual(
-          lines.filter((one) => one.startsWith("2 ")),
-          ["2 Reopening", "2 Open", "2 Draining", "2 Closed Settled"],
-        );
+        assert.deepStrictEqual(events.filter(({ state }) => state._tag === "Closed").map(line), [
+          "1 Closed Settled",
+          "2 Closed Settled",
+        ]);
         assert.deepStrictEqual(
           (yield* kept).map(({ status }) => status),
           ["COMPLETED", "COMPLETED"],
@@ -1742,242 +1586,38 @@ describe("Browserbase.supervise", () => {
     }),
   );
 
-  it.live("rotates sessions that persist to a context by ending the current one first", () =>
+  it.live("releases a persisted generation and its built scope before creating the successor", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;
 
       yield* Effect.gen(function* () {
-        const sessions = yield* Browserbase.supervise({
-          session: persisting("context-rotate"),
-          contextSettle: "50 millis",
-        });
+        const closed: Array<string> = [];
 
-        const first = yield* sessions.browser;
-        const second = yield* sessions.rotate;
+        const sessions = yield* Supervisor.make(
+          Browserbase.generations({
+            session: persisting("context-rotate"),
+            contextSettle: "10 millis",
+            build: ({ session }) =>
+              Effect.acquireRelease(Effect.succeed(session), ({ id }) =>
+                Effect.sync(() => void closed.push(id)),
+              ),
+          }),
+        );
+
+        const first = yield* sessions.use(({ value }) => Effect.succeed(value));
+
+        yield* sessions.rotate();
+        const second = yield* sessions.use(({ value }) => Effect.succeed(value));
 
         assert.deepStrictEqual([first.id, second.id], [...(yield* ids)]);
-        yield* sessions.retire;
-        // The first session's end was confirmed before the next was created.
+        assert.deepStrictEqual(closed, [first.id]);
         assert.isBelow(
           (yield* asked).indexOf(`GET /v1/sessions/${first.id}`),
           (yield* asked).lastIndexOf("POST /v1/sessions"),
         );
-      }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
-    }),
-  );
-
-  it.live(
-    "keeps its session past its scope, for the next under its name to adopt, pages and all",
-    () =>
-      Effect.gen(function* () {
-        const connectUrl = yield* chromiumEndpoint;
-
-        /** Each session as the fake has it: its status, releases asked and what it is kept as. */
-        const rows = Effect.map(kept, (sessions) =>
-          sessions.map(({ status, releases, keepAlive, userMetadata }) => [
-            status,
-            releases,
-            keepAlive,
-            userMetadata?.["keptAs"],
-          ]),
-        );
-
-        /** Run `use` on a supervisor keeping under "air", and give its states as lines too. */
-        const keeping = <A, E>(
-          use: (sessions: Supervisor.Supervisor<Session>) => Effect.Effect<A, E, BrowserbaseClient>,
-        ) =>
-          Effect.gen(function* () {
-            const sessions = yield* Browserbase.supervise({ keep: "air" });
-
-            const states = yield* Effect.forkChild(
-              Stream.runCollect(Stream.map(sessions.states, line)),
-            );
-
-            return [yield* use(sessions), states] as const;
-          }).pipe(
-            Effect.scoped,
-            Effect.flatMap(([value, states]) =>
-              Effect.map(Fiber.join(states), (lines) => [value, lines] as const),
-            ),
-          );
-
-        yield* Effect.gen(function* () {
-          const client = yield* BrowserbaseClient;
-
-          // With nothing kept under its name, it makes a session, kept alive and labelled.
-          yield* keeping((sessions) => Effect.andThen(sessions.browser, sessions.retire));
-          assert.deepStrictEqual(yield* rows, [["COMPLETED", 1, true, "air"]]);
-
-          // Two that earlier processes kept: the newer is adopted, and the older ended.
-          const keptAsAir = { keepAlive: true, userMetadata: { keptAs: "air" } };
-          const older = yield* client.createSession(keptAsAir);
-
-          yield* Effect.sleep("5 millis");
-          const newer = yield* client.createSession(keptAsAir);
-
-          const [page, lines] = yield* keeping((sessions) =>
-            Effect.gen(function* () {
-              const browser = yield* sessions.browser;
-
-              assert.strictEqual(browser.id, newer.id);
-
-              return (yield* browser.newPage(still("Kept"))).id;
-            }),
-          );
-
-          assert.deepStrictEqual(lines, ["1 Opening", "1 Open", "1 Draining", "1 Kept"]);
-          assert.deepStrictEqual((yield* rows).slice(1), [
-            ["COMPLETED", 1, true, "air"],
-            ["RUNNING", 0, true, "air"],
-          ]);
-          assert.strictEqual((yield* ids)[1], older.id);
-
-          // The next adopts it again, its page still there, and retiring releases it.
-          yield* keeping((sessions) =>
-            Effect.gen(function* () {
-              const browser = yield* sessions.browser;
-
-              assert.strictEqual(browser.id, newer.id);
-              assert.isTrue(Option.isSome(yield* browser.page(page)));
-              yield* sessions.retire;
-            }),
-          );
-          assert.deepStrictEqual((yield* rows).slice(2), [["COMPLETED", 1, true, "air"]]);
-        }).pipe(Effect.provide(hostedFake({ connectUrl })));
-      }),
-  );
-
-  it.live("rotates a keeping supervisor onto a new session, not the one it keeps", () =>
-    Effect.gen(function* () {
-      const connectUrl = yield* chromiumEndpoint;
-
-      yield* Effect.gen(function* () {
-        const sessions = yield* Browserbase.supervise({ keep: "air" });
-        const first = yield* sessions.browser;
-        const second = yield* sessions.rotate;
-
-        assert.notStrictEqual(second.id, first.id);
         yield* sessions.retire;
+        assert.deepStrictEqual(closed, [first.id, second.id]);
       }).pipe(Effect.scoped, Effect.provide(hostedFake({ connectUrl })));
     }),
-  );
-
-  it.live("keeps a writer's session running, which only a writer that adopts it does not end", () =>
-    Effect.gen(function* () {
-      const connectUrl = yield* chromiumEndpoint;
-
-      yield* Effect.gen(function* () {
-        const { id } = yield* createContext;
-
-        const options: Browserbase.SuperviseOptions = {
-          keep: "air",
-          session: persisting(id),
-          contextSettle: "10 millis",
-        };
-
-        const statuses = Effect.map(kept, (sessions) => sessions.map(({ status }) => status));
-
-        // Kept, it may still save to the context, so the context is left unsettled.
-        const first = yield* Effect.flatMap(Browserbase.supervise(options), (sessions) =>
-          Effect.map(sessions.browser, ({ id }) => id),
-        ).pipe(Effect.scoped);
-
-        // A supervisor under its name adopts it, and ends nothing.
-        const adopted = yield* Effect.flatMap(Browserbase.supervise(options), (sessions) =>
-          Effect.map(sessions.browser, ({ id }) => id),
-        ).pipe(Effect.scoped);
-
-        assert.strictEqual(adopted, first);
-        assert.deepStrictEqual(yield* statuses, ["RUNNING"]);
-
-        // Any other writer ends it before it writes.
-        yield* Browserbase.open({ session: persisting(id), contextSettle: "10 millis" }).pipe(
-          Effect.scoped,
-        );
-        assert.deepStrictEqual(yield* statuses, ["COMPLETED", "COMPLETED"]);
-        const requests = yield* asked;
-
-        assert.isBelow(
-          requests.indexOf(`POST /v1/sessions/${first}`),
-          requests.lastIndexOf("POST /v1/sessions"),
-        );
-
-        // Retiring releases what it keeps and leaves the context settled: the next writer looks
-        // for none of the context's sessions.
-        yield* Effect.flatMap(Browserbase.supervise(options), (sessions) =>
-          Effect.andThen(sessions.browser, sessions.retire),
-        ).pipe(Effect.scoped);
-        const searched = (yield* asked).filter((request) => request.includes("persistsContext"));
-
-        yield* Browserbase.open({ session: persisting(id), contextSettle: "10 millis" }).pipe(
-          Effect.scoped,
-        );
-        assert.deepStrictEqual(
-          (yield* asked).filter((request) => request.includes("persistsContext")),
-          searched,
-        );
-      }).pipe(Effect.provide(hostedFake({ connectUrl })));
-    }),
-  );
-
-  it.live(
-    "ends a writer kept beside the one it adopts, as it would any writer of the context",
-    () =>
-      Effect.gen(function* () {
-        const connectUrl = yield* chromiumEndpoint;
-
-        yield* Effect.gen(function* () {
-          const client = yield* BrowserbaseClient;
-          const { id } = yield* createContext;
-
-          // Two writers kept under the name, as a process that ended mid-rotation leaves them.
-          const writer = {
-            ...persisting(id),
-            keepAlive: true,
-            userMetadata: { keptAs: "air", persistsContext: id },
-          };
-
-          const older = yield* client.createSession(writer);
-
-          yield* Effect.sleep("5 millis");
-          const newer = yield* client.createSession(writer);
-
-          const adopted = yield* Effect.flatMap(
-            Browserbase.supervise({
-              keep: "air",
-              session: persisting(id),
-              contextSettle: "10 millis",
-            }),
-            (sessions) => Effect.map(sessions.browser, (browser) => browser.id),
-          ).pipe(Effect.scoped);
-
-          const requests = yield* asked;
-
-          assert.strictEqual(adopted, newer.id);
-          assert.deepStrictEqual(
-            (yield* kept).map(({ status }) => status),
-            ["COMPLETED", "RUNNING"],
-          );
-          // The older was confirmed ended before the newer was taken on.
-          assert.isBelow(
-            requests.lastIndexOf(`GET /v1/sessions/${older.id}`),
-            requests.indexOf(`GET /v1/sessions/${newer.id}`),
-          );
-        }).pipe(Effect.provide(hostedFake({ connectUrl })));
-      }),
-  );
-
-  it.effect("goes down at once on a name it cannot keep sessions under", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Browserbase.supervise({ keep: "on air" });
-      const unavailable = yield* Effect.flip(sessions.browser);
-      const cause = unavailable.cause;
-
-      assert.deepStrictEqual(
-        [unavailable.reason, Schema.is(BrowserbaseError)(cause) && cause.reason._tag],
-        ["down", "InvalidRequest"],
-      );
-      assert.deepStrictEqual(yield* asked, []);
-    }).pipe(Effect.scoped, Effect.provide(hostedFake())),
   );
 });

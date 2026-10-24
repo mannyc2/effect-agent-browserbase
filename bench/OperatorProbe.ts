@@ -3,6 +3,7 @@ import { Effect, Schema, Stream } from "effect";
 import type * as Browser from "effect-browser/Browser";
 
 import { refuse } from "./Budget.ts";
+import * as Fixtures from "./FixtureRoutes.ts";
 
 export const Settings = Schema.Struct({
   startUrl: Schema.String.check(
@@ -45,22 +46,22 @@ export const make = <E, R>(
     let since: number | undefined;
 
     const run = Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        browser.context.route("https://h3.browser.test/**", (route) =>
-          route.fulfill({
-            contentType: "text/html",
-            body: '<title>H3 operator handoff</title><a target="_blank" rel="noopener">Open sign-in page</a><p>Sign in manually in the new tab. Automated browser input is suspended.</p>',
-          }),
-        ),
-      );
+      yield* Fixtures.serve("https://h3.browser.test/", () => ({
+        _tag: "Fulfilled",
+        status: 200,
+        contentType: "text/html",
+        body: '<title>H3 operator handoff</title><a target="_blank" rel="noopener">Open sign-in page</a><p>Sign in manually in the new tab. Automated browser input is suspended.</p>',
+      }));
       const scratch = yield* browser.newPage("https://h3.browser.test/");
+      const mark = yield* scratch.state;
 
-      yield* Effect.promise(() =>
-        scratch.playwright.evaluate((url) => {
+      yield* scratch.act(
+        (url) => {
           const link = document.querySelector("a");
 
           if (link !== null) link.href = url;
-        }, settings.startUrl),
+        },
+        { arg: settings.startUrl, document: mark.document, result: Schema.Void },
       );
 
       yield* Effect.scoped(

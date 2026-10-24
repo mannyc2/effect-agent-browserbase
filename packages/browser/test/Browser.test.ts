@@ -3,7 +3,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   Arbitrary,
+  Cause,
   DateTime,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -15,15 +17,16 @@ import {
   Stream,
 } from "effect";
 
+import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import type * as Browser from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
-import * as Cdp from "../src/Cdp.ts";
-import * as Chromium from "../src/Chromium.ts";
-import * as Url from "../src/internal/page/url.ts";
 import { type Page, redacted } from "../src/Page.ts";
+import * as Cdp from "../src/providers/Cdp.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
+import * as Url from "../src/Url.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
-import { behindProxy } from "./protocol.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 const still = (title: string) =>
   `data:text/html,${encodeURIComponent(`<title>${title}</title><h1>${title}</h1>`)}`;
@@ -42,7 +45,7 @@ const connect = (endpoint: string, options: Partial<Cdp.Options> = {}) =>
 const found = (browser: Browser.Service, id: string) =>
   Effect.map(
     browser.page(id),
-    Option.map((page) => page.playwright.url()),
+    Option.map((page) => TestCdp.nativePage(page).url()),
   );
 
 /** A page's failure: its reason, and why the page is gone. */
@@ -65,7 +68,7 @@ const losses = (events: ReadonlyArray<BrowserEvent>) =>
 /** A page that keeps its renderer busy for a while, so a call to it is still waiting. */
 const holdRenderer = (page: Page, millis: number) =>
   Effect.promise(() =>
-    page.playwright.evaluate((busy) => {
+    TestCdp.nativePage(page).evaluate((busy) => {
       setTimeout(() => {
         const end = Date.now() + busy;
 
@@ -76,156 +79,244 @@ const holdRenderer = (page: Page, millis: number) =>
 
 /** Hold the owner's actual popup registration, after Playwright has announced that exact tab. */
 const holdPopupRegistration = Effect.fnUntraced(function* (browser: Browser.Service, opener: Page) {
-  const createSession = browser.context.newCDPSession.bind(browser.context);
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
+  void browser;
+  void opener;
+  const faults = yield* TestCdp.TestCdp;
+  const entered = yield* Deferred.make<void>();
+  const gate = yield* Deferred.make<void, TestCdp.Fault>();
 
-  browser.context.newCDPSession = async (target) => {
-    if (target !== opener.playwright) {
-      entered.resolve();
-      await release.promise;
-    }
-
-    return createSession(target);
-  };
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      release.resolve();
-      browser.context.newCDPSession = createSession;
-    }),
-  );
+  faults.rule({ method: "$open" }, { _tag: "Hold", gate: Deferred.await(gate) }, { times: 1 });
+  faults.observe((call, phase) => {
+    if (phase === "before" && call.method === "$open") Deferred.doneUnsafe(entered, Effect.void);
+  });
+  yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
 
   return {
-    entered: Effect.promise(() => entered.promise),
-    release: Effect.sync(() => release.resolve()),
-    fail: Effect.sync(() => release.reject(new Error("popup registration refused"))),
+    entered: Deferred.await(entered),
+    release: Deferred.succeed(gate, undefined),
+    fail: Deferred.fail(
+      gate,
+      new TestCdp.Fault({ cause: new Error("popup registration refused") }),
+    ),
   };
 });
 
 describe("a tab opened by input", () => {
   it.live("is tracked before the input ends, even with slow registration and evicted events", () =>
-    Effect.gen(function* () {
-      const browser = yield* Chromium.open({ eventHistory: 1 });
-      const page = yield* browser.firstPage;
-
-      yield* page.goto((yield* Site).url("/form"));
-      const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
-      const registration = yield* holdPopupRegistration(browser, page);
-      const clicking = yield* Effect.forkChild(page.click(link?.ref ?? ""));
-
-      yield* registration.entered;
-
-      // The previous implementation returned here before registration. A real popup taking over
-      // a second must still use the input's remaining deadline, regardless of event retention.
-      const ended = yield* Fiber.await(clicking).pipe(
-        Effect.asSome,
-        Effect.timeoutOrElse({
-          duration: "1250 millis",
-          orElse: () => Effect.succeedNone,
-        }),
-      );
-
-      assert.isTrue(Option.isNone(ended));
-      assert.strictEqual((yield* browser.pages).length, 1);
-      yield* registration.release;
-      yield* Fiber.join(clicking);
-      assert.strictEqual((yield* browser.pages).length, 2);
-      assert.strictEqual(
-        yield* (yield* browser.pages)[1]?.url ?? Effect.succeed(""),
-        (yield* Site).url("/next"),
-      );
-      assert.strictEqual((yield* browser.recentEvents).length, 1);
-    }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
-  );
-
-  for (const outcome of ["failure", "timeout", "closed"] as const)
-    it.live(`reports registration ${outcome} after dispatched input, without replaying it`, () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
-        const owner = yield* Scope.make();
-
-        yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
-
-        const browser = yield* Chromium.open({ actionTimeout: "2 seconds" }).pipe(
-          Scope.provide(owner),
-        );
-
+        const browser = yield* Chromium.open({ eventHistory: 1 });
         const page = yield* browser.firstPage;
 
         yield* page.goto((yield* Site).url("/form"));
         const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
         const registration = yield* holdPopupRegistration(browser, page);
-        const clicking = yield* Effect.forkChild(Effect.flip(page.click(link?.ref ?? "")));
+        const clicking = yield* Effect.forkChild(page.click(link?.ref ?? ""));
 
         yield* registration.entered;
-        if (outcome === "failure") yield* registration.fail;
-        if (outcome === "closed") yield* page.close;
 
-        const error = yield* Fiber.join(clicking).pipe(
-          Effect.timeout(outcome === "closed" ? "1 second" : "3 seconds"),
+        // The previous implementation returned here before registration. A real popup taking over
+        // a second must still use the input's remaining deadline, regardless of event retention.
+        const ended = yield* Fiber.await(clicking).pipe(
+          Effect.asSome,
+          Effect.timeoutOrElse({
+            duration: "1250 millis",
+            orElse: () => Effect.succeedNone,
+          }),
         );
 
-        assert.strictEqual(
-          error.reason._tag,
-          { failure: "Failed", timeout: "Timeout", closed: "Closed" }[outcome],
-        );
-        assert.strictEqual(
-          error.reason._tag === "Closed" ? error.reason.cause : undefined,
-          outcome === "closed" ? "page" : undefined,
-        );
-        assert.isTrue(error.dispatched);
-        assert.strictEqual(browser.context.pages().length, outcome === "closed" ? 1 : 2);
-
-        const native = page.playwright as typeof page.playwright & {
-          readonly listenerCount: (event: string) => number;
-        };
-
+        assert.isTrue(Option.isNone(ended));
+        assert.strictEqual((yield* browser.pages).length, 1);
         yield* registration.release;
-        // Native input can fail Closed before the queued page cleanup. Scope closure is the
-        // ownership guarantee for listeners, regardless of which operation observed the loss.
-        yield* Scope.close(owner, Exit.void);
-        assert.strictEqual(native.listenerCount("popup"), 0);
+        yield* Fiber.join(clicking);
+        assert.strictEqual((yield* browser.pages).length, 2);
+        assert.strictEqual(
+          yield* (yield* browser.pages)[1]?.url ?? Effect.succeed(""),
+          (yield* Site).url("/next"),
+        );
+        assert.strictEqual((yield* browser.recentEvents).length, 1);
       }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+    ),
+  );
+
+  it.live("registers another tab while one popup registration is held", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const browser = yield* Chromium.open();
+        const page = yield* browser.firstPage;
+        const registration = yield* holdPopupRegistration(browser, page);
+        const context = TestCdp.nativeContext(browser);
+
+        yield* Effect.promise(() => context.newPage());
+        yield* registration.entered;
+        const other = yield* Effect.promise(() => context.newPage());
+
+        const registered = yield* browser.events({ after: 0 }).pipe(
+          Stream.filter(({ event }) => event._tag === "PageOpened" && event.page !== page.id),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.timeout("2 seconds"),
+        );
+
+        const event = registered[0]?.event;
+
+        assert.strictEqual(event?._tag, "PageOpened");
+        if (event?._tag !== "PageOpened") return yield* Effect.die("missing registration");
+        assert.strictEqual(TestCdp.nativePage({ id: event.page }), other);
+        assert.strictEqual((yield* browser.pages).length, 2);
+        yield* registration.release;
+      }).pipe(Effect.scoped),
+    ),
+  );
+
+  it.live("registers every opening in a burst without revoking authority", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const browser = yield* Chromium.open();
+
+        yield* browser.firstPage;
+        const context = TestCdp.nativeContext(browser);
+        const faults = yield* TestCdp.TestCdp;
+        const gate = yield* Deferred.make<void>();
+        const baseline = faults.calls.filter((call) => call.method === "$open").length;
+
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+        faults.rule({ method: "$open" }, { _tag: "Hold", gate });
+        // Hold native registration so a burst exceeds the previous eight active + 32 queued cap.
+        for (let index = 0; index < 41; index++) yield* Effect.promise(() => context.newPage());
+        assert.isFalse(
+          (yield* browser.recentEvents).some((event) => event._tag === "Disconnected"),
+        );
+        assert.strictEqual(
+          faults.calls.filter((call) => call.method === "$open").length - baseline,
+          8,
+        );
+        yield* Deferred.succeed(gate, undefined);
+
+        const opened = yield* browser.events({ after: 0 }).pipe(
+          Stream.filter(({ event }) => event._tag === "PageOpened"),
+          Stream.take(42),
+          Stream.runCollect,
+          Effect.timeout("10 seconds"),
+        );
+
+        assert.strictEqual((yield* browser.pages).length, 42);
+        assert.strictEqual(
+          new Set(opened.map(({ event }) => (event._tag === "PageOpened" ? event.page : ""))).size,
+          42,
+        );
+        assert.strictEqual(
+          faults.calls.filter((call) => call.method === "$open").length - baseline,
+          41,
+        );
+        assert.isFalse(
+          (yield* browser.recentEvents).some(
+            (event) => event._tag === "PageUntracked" || event._tag === "Disconnected",
+          ),
+        );
+      }).pipe(Effect.scoped),
+    ),
+  );
+
+  for (const outcome of ["failure", "timeout", "closed"] as const)
+    it.live(`reports registration ${outcome} after dispatched input, without replaying it`, () =>
+      TestCdp.withCdp(
+        Effect.gen(function* () {
+          const owner = yield* Scope.make();
+
+          yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
+
+          const browser = yield* Chromium.open({ actionTimeout: "2 seconds" }).pipe(
+            Scope.provide(owner),
+          );
+
+          const page = yield* browser.firstPage;
+
+          yield* page.goto((yield* Site).url("/form"));
+          const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
+          const registration = yield* holdPopupRegistration(browser, page);
+          const clicking = yield* Effect.forkChild(Effect.flip(page.click(link?.ref ?? "")));
+
+          yield* registration.entered;
+          if (outcome === "failure") yield* registration.fail;
+          if (outcome === "closed") yield* page.close;
+
+          const error = yield* Fiber.join(clicking).pipe(
+            Effect.timeout(outcome === "closed" ? "1 second" : "3 seconds"),
+          );
+
+          assert.strictEqual(
+            error.reason._tag,
+            { failure: "Failed", timeout: "Timeout", closed: "Closed" }[outcome],
+          );
+          assert.strictEqual(
+            error.reason._tag === "Closed" ? error.reason.cause : undefined,
+            outcome === "closed" ? "page" : undefined,
+          );
+          assert.isTrue(error.dispatched);
+          assert.strictEqual(
+            TestCdp.nativeContext(browser).pages().length,
+            outcome === "closed" ? 1 : 2,
+          );
+
+          const native = TestCdp.nativePage(page) as ReturnType<typeof TestCdp.nativePage> & {
+            readonly listenerCount: (event: string) => number;
+          };
+
+          yield* registration.release;
+          // Native input can fail Closed before the queued page cleanup. Scope closure is the
+          // ownership guarantee for listeners, regardless of which operation observed the loss.
+          yield* Scope.close(owner, Exit.void);
+          assert.strictEqual(native.listenerCount("popup"), 0);
+        }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+      ),
     );
 });
 
 describe("a page's name", () => {
   // Positional ids would shift here: the page after the one closed would take its number.
   it.live("is its target id, the same on every connection, closing one in between", () =>
-    Effect.gen(function* () {
-      const proxy = yield* behindProxy();
-      const first = yield* connect(proxy.endpoint);
-      const titles = ["one", "two", "three"];
-      const opened = yield* Effect.forEach(titles, (title) => first.browser.newPage(still(title)));
-      const all = (yield* first.browser.pages).map((page) => page.id);
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const proxy = yield* behindProxy();
+        const first = yield* connect(proxy.endpoint);
+        const titles = ["one", "two", "three"];
 
-      yield* first.end;
-      // The owner's scope closing the browser loses it, as released.
-      assert.strictEqual(yield* first.browser.disconnected, "released");
-
-      const second = yield* connect(proxy.endpoint);
-
-      for (const [index, page] of opened.entries())
-        assert.deepStrictEqual(
-          yield* found(second.browser, page.id),
-          Option.some(still(titles[index] ?? "")),
+        const opened = yield* Effect.forEach(titles, (title) =>
+          first.browser.newPage(still(title)),
         );
-      const two = Option.getOrThrow(yield* second.browser.page(opened[1]?.id ?? ""));
 
-      yield* two.close;
-      yield* second.end;
+        const all = (yield* first.browser.pages).map((page) => page.id);
 
-      const third = yield* connect(proxy.endpoint);
+        yield* first.end;
+        // The owner's scope closing the browser loses it, as released.
+        assert.strictEqual(yield* first.browser.disconnected, "released");
 
-      assert.sameMembers(
-        (yield* third.browser.pages).map((page) => page.id),
-        all.filter((id) => id !== two.id),
-      );
-      assert.isTrue(Option.isNone(yield* third.browser.page(two.id)));
-      assert.deepStrictEqual(
-        yield* found(third.browser, opened[2]?.id ?? ""),
-        Option.some(still("three")),
-      );
-    }).pipe(Effect.scoped),
+        const second = yield* connect(proxy.endpoint);
+
+        for (const [index, page] of opened.entries())
+          assert.deepStrictEqual(
+            yield* found(second.browser, page.id),
+            Option.some(still(titles[index] ?? "")),
+          );
+        const two = Option.getOrThrow(yield* second.browser.page(opened[1]?.id ?? ""));
+
+        yield* two.close;
+        yield* second.end;
+
+        const third = yield* connect(proxy.endpoint);
+
+        assert.sameMembers(
+          (yield* third.browser.pages).map((page) => page.id),
+          all.filter((id) => id !== two.id),
+        );
+        assert.isTrue(Option.isNone(yield* third.browser.page(two.id)));
+        assert.deepStrictEqual(
+          yield* found(third.browser, opened[2]?.id ?? ""),
+          Option.some(still("three")),
+        );
+      }).pipe(Effect.scoped),
+    ),
   );
 });
 
@@ -234,204 +325,217 @@ describe("a loss", () => {
   // Playwright never answers the read, on the library's own session, and fails the navigation
   // as each page closes, before the context does.
   it.live("of the connection fails each page Closed by the connection, as one Disconnected", () =>
-    Effect.gen(function* () {
-      const site = yield* Site;
-      const proxy = yield* behindProxy();
-      const { browser } = yield* connect(proxy.endpoint);
-      const page = yield* browser.newPage(still("one"));
-      const other = yield* browser.newPage(still("two"));
-      const from = (yield* browser.recentEvents).length;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const site = yield* Site;
+        const proxy = yield* behindProxy();
+        const { browser } = yield* connect(proxy.endpoint);
+        const page = yield* browser.newPage(still("one"));
+        const other = yield* browser.newPage(still("two"));
+        const from = (yield* browser.recentEvents).length;
 
-      const watching = yield* other
-        .screencast()
-        .pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
+        const watching = yield* other
+          .screencast()
+          .pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
 
-      const requested = Promise.withResolvers<void>();
+        const requested = Promise.withResolvers<void>();
 
-      // Leave this real request pending until the connection drops; no elapsed delay proves that
-      // navigation has started, or that another native request has already been acknowledged.
-      yield* Effect.promise(() =>
-        browser.context.route(site.url("/late"), () => requested.resolve()),
-      );
-      yield* holdRenderer(page, 2000);
-      const reading = yield* Effect.forkChild(Effect.flip(page.text()));
+        // Leave this real request pending until the connection drops; no elapsed delay proves that
+        // navigation has started, or that another native request has already been acknowledged.
+        yield* Effect.promise(() =>
+          TestCdp.nativeContext(browser).route(site.url("/late"), () => requested.resolve()),
+        );
+        yield* holdRenderer(page, 2000);
+        const reading = yield* Effect.forkChild(Effect.flip(page.text()));
 
-      proxy.hold = (command) => (command.method === "Page.getNavigationHistory" ? 250 : 0);
-      // The browser answers a title while the renderer is busy, but transport can exceed 100 ms.
-      // Wait for its actual answer before cutting the connection.
-      assert.strictEqual(yield* page.title.pipe(Effect.timeout("1 second")), "one");
-      assert.isUndefined(reading.pollUnsafe());
-      const navigating = yield* Effect.forkChild(Effect.flip(other.goto(site.url("/late"))));
+        proxy.hold = (command) => (command.method === "Page.getNavigationHistory" ? 250 : 0);
+        // The browser answers a title while the renderer is busy, but transport can exceed 100 ms.
+        // Wait for its actual answer before cutting the connection.
+        assert.strictEqual(yield* page.title.pipe(Effect.timeout("1 second")), "one");
+        assert.isUndefined(reading.pollUnsafe());
+        const navigating = yield* Effect.forkChild(Effect.flip(other.goto(site.url("/late"))));
 
-      yield* Effect.promise(() => requested.promise).pipe(Effect.timeout("1 second"));
-      proxy.drop();
-      assert.strictEqual(yield* browser.disconnected, "connection");
+        yield* Effect.promise(() => requested.promise).pipe(Effect.timeout("1 second"));
+        proxy.drop();
+        assert.strictEqual(yield* browser.disconnected, "connection");
 
-      for (const [error, dispatched] of [
-        [yield* Fiber.join(reading), false],
-        [yield* Fiber.join(navigating), true],
-        [yield* Fiber.join(watching), false],
-        [yield* Effect.flip(page.snapshot()), false],
-      ] as const) {
-        assert.deepStrictEqual(lossOf(error), { reason: "Closed", cause: "connection" });
-        assert.strictEqual(error.dispatched, dispatched);
-      }
-      // The browser ran on, so a new connection finds the page under its name. By then the first
-      // connection has published whatever its pages' closes would.
-      const again = yield* connect(proxy.endpoint);
+        for (const [error, dispatched] of [
+          [yield* Fiber.join(reading), false],
+          [yield* Fiber.join(navigating), true],
+          [yield* Fiber.join(watching), false],
+          [yield* Effect.flip(page.snapshot()), false],
+        ] as const) {
+          assert.deepStrictEqual(lossOf(error), { reason: "Closed", cause: "connection" });
+          assert.strictEqual(error.dispatched, dispatched);
+        }
+        // The browser ran on, so a new connection finds the page under its name. By then the first
+        // connection has published whatever its pages' closes would.
+        const again = yield* connect(proxy.endpoint);
 
-      assert.deepStrictEqual(yield* found(again.browser, page.id), Option.some(still("one")));
-      assert.deepStrictEqual(losses(yield* since(browser, from)), ["Disconnected connection"]);
-    }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+        assert.deepStrictEqual(yield* found(again.browser, page.id), Option.some(still("one")));
+        assert.deepStrictEqual(losses(yield* since(browser, from)), ["Disconnected connection"]);
+      }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+    ),
   );
 
   it.live("of the session, at its end, is the session's, which the browser announced", () =>
-    Effect.gen(function* () {
-      const proxy = yield* behindProxy();
-      const expiresAt = yield* DateTime.now;
-      const { browser } = yield* connect(proxy.endpoint, { expiresAt });
-      const page = yield* browser.newPage(still("one"));
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const proxy = yield* behindProxy();
+        const expiresAt = yield* DateTime.now;
+        const { browser } = yield* connect(proxy.endpoint, { expiresAt });
+        const page = yield* browser.newPage(still("one"));
 
-      assert.strictEqual(browser.expiresAt, expiresAt);
-      assert.deepStrictEqual(
-        (yield* browser.recentEvents).flatMap((event) =>
-          event._tag === "SessionEnding" ? [DateTime.toEpochMillis(event.expiresAt)] : [],
-        ),
-        [DateTime.toEpochMillis(expiresAt)],
-      );
-      proxy.drop();
-      assert.strictEqual(yield* browser.disconnected, "session");
-      assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
-        reason: "Closed",
-        cause: "session",
-      });
-      assert.deepStrictEqual(losses(yield* browser.recentEvents), ["Disconnected session"]);
-    }).pipe(Effect.scoped),
+        assert.strictEqual(browser.expiresAt, expiresAt);
+        assert.deepStrictEqual(
+          (yield* browser.recentEvents).flatMap((event) =>
+            event._tag === "SessionEnding" ? [DateTime.toEpochMillis(event.expiresAt)] : [],
+          ),
+          [DateTime.toEpochMillis(expiresAt)],
+        );
+        proxy.drop();
+        assert.strictEqual(yield* browser.disconnected, "session");
+        assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
+          reason: "Closed",
+          cause: "session",
+        });
+        assert.deepStrictEqual(losses(yield* browser.recentEvents), ["Disconnected session"]);
+      }).pipe(Effect.scoped),
+    ),
   );
 
   // A crashed page's calls never return, so the browser closes it and they fail at once.
   it.live("of a crashed page closes it, failing its calls Closed as crashed", () =>
-    Effect.gen(function* () {
-      const browser = yield* Chromium.open({ actionTimeout: Duration.seconds(3) });
-      const page = yield* browser.newPage(still("doomed"));
-      const from = (yield* browser.recentEvents).length;
-      const session = yield* Effect.promise(() => browser.context.newCDPSession(page.playwright));
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const browser = yield* Chromium.open({ actionTimeout: Duration.seconds(3) });
+        const page = yield* browser.newPage(still("doomed"));
+        const from = (yield* browser.recentEvents).length;
 
-      void session.send("Page.crash").catch(() => undefined);
-      assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
-        reason: "Closed",
-        cause: "crashed",
-      });
-      assert.isTrue(page.playwright.isClosed());
+        const session = yield* Effect.promise(() =>
+          TestCdp.nativeContext(browser).newCDPSession(TestCdp.nativePage(page)),
+        );
 
-      const events = yield* since(browser, from).pipe(
-        Effect.repeat({
-          schedule: Schedule.spaced("20 millis"),
-          until: (recent) => losses(recent).length > 0,
-        }),
-        Effect.timeout("5 seconds"),
-      );
+        void session.send("Page.crash").catch(() => undefined);
+        assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
+          reason: "Closed",
+          cause: "crashed",
+        });
+        assert.isTrue(TestCdp.nativePage(page).isClosed());
 
-      assert.deepStrictEqual(losses(events), ["PageClosed crashed"]);
-      assert.notInclude(yield* browser.pages, page);
-    }).pipe(Effect.scoped),
+        const events = yield* since(browser, from).pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("20 millis"),
+            until: (recent) => losses(recent).length > 0,
+          }),
+          Effect.timeout("5 seconds"),
+        );
+
+        assert.deepStrictEqual(losses(events), ["PageClosed crashed"]);
+        assert.notInclude(yield* browser.pages, page);
+      }).pipe(Effect.scoped),
+    ),
   );
 });
 
 describe("a page's documents", () => {
   it.live("are counted as it moves, apart from moves within one, and tag each frame", () =>
-    Effect.gen(function* () {
-      const site = yield* Site;
-      const browser = yield* Chromium.open();
-      const page = yield* browser.newPage(site.url("/form"));
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const site = yield* Site;
+        const browser = yield* Chromium.open();
+        const page = yield* browser.newPage(site.url("/form"));
 
-      yield* Effect.promise(() =>
-        page.playwright.evaluate(() =>
-          history.pushState({}, "", "/form?ticker=ETH&access_token=s3cret#top"),
-        ),
-      );
-      yield* page.goto(site.url("/next"));
-      const frame = yield* page.frame({ maxAge: 0 });
+        yield* Effect.promise(() =>
+          TestCdp.nativePage(page).evaluate(() =>
+            history.pushState({}, "", "/form?ticker=ETH&access_token=s3cret#top"),
+          ),
+        );
+        yield* page.goto(site.url("/next"));
+        const frame = yield* page.frame({ maxAge: 0 });
 
-      const captured = yield* page
-        .screencast()
-        .pipe(Stream.take(1), Stream.runHead, Effect.map(Option.getOrThrow));
+        const captured = yield* page
+          .screencast()
+          .pipe(Stream.take(1), Stream.runHead, Effect.map(Option.getOrThrow));
 
-      // A document's `load` can follow the navigation's return.
-      const loadedSince = (events: ReadonlyArray<BrowserEvent>) =>
-        events
-          .slice(events.findLastIndex((event) => event._tag === "Navigated"))
-          .flatMap((event) => (event._tag === "PageLoaded" ? [event.state] : []));
+        // A document's `load` can follow the navigation's return.
+        const loadedSince = (events: ReadonlyArray<BrowserEvent>) =>
+          events
+            .slice(events.findLastIndex((event) => event._tag === "Navigated"))
+            .flatMap((event) => (event._tag === "PageLoaded" ? [event.state] : []));
 
-      const events = yield* page.recentEvents.pipe(
-        Effect.repeat({
-          schedule: Schedule.spaced("20 millis"),
-          until: (recent) => loadedSince(recent).includes("load"),
-        }),
-        Effect.timeout("5 seconds"),
-      );
+        const events = yield* page.recentEvents.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("20 millis"),
+            until: (recent) => loadedSince(recent).includes("load"),
+          }),
+          Effect.timeout("5 seconds"),
+        );
 
-      assert.deepStrictEqual(
-        events.flatMap((event) =>
-          event._tag === "Navigated" ? [[event.document, event.sameDocument, event.url]] : [],
-        ),
-        [
-          [1, false, site.url("/form")],
-          [1, true, site.url(`/form?ticker=ETH&access_token=${redacted}#top`)],
-          [2, false, site.url("/next")],
-        ],
-      );
-      assert.deepStrictEqual(loadedSince(events), ["domcontentloaded", "load"]);
-      for (const shown of [frame, captured])
-        assert.deepStrictEqual([shown.document, shown.url], [2, site.url("/next")]);
-      assert.notInclude(JSON.stringify(events), "s3cret");
-    }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+        assert.deepStrictEqual(
+          events.flatMap((event) =>
+            event._tag === "Navigated" ? [[event.document, event.sameDocument, event.url]] : [],
+          ),
+          [
+            [1, false, site.url("/form")],
+            [1, true, site.url(`/form?ticker=ETH&access_token=${redacted}#top`)],
+            [2, false, site.url("/next")],
+          ],
+        );
+        assert.deepStrictEqual(loadedSince(events), ["domcontentloaded", "load"]);
+        for (const shown of [frame, captured])
+          assert.deepStrictEqual([shown.document, shown.url], [2, site.url("/next")]);
+        assert.notInclude(JSON.stringify(events), "s3cret");
+      }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+    ),
   );
 });
 
 describe("init scripts", () => {
   // The site serves both loopback names, two origins; the popup is the form's link to `/next`.
   it.live("run where their match allows, in a popup's first document too", () =>
-    Effect.gen(function* () {
-      const site = yield* Site;
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const site = yield* Site;
 
-      const browser = yield* Chromium.open({
-        initScripts: [
-          {
-            match: /^http:\/\/localhost:/,
-            source: "const origin = 'localhost'; window.marked = origin;",
-          },
-          { source: "window.everywhere = true;" },
-        ],
-      });
+        const browser = yield* Chromium.open({
+          initScripts: [
+            {
+              match: /^http:\/\/localhost:/,
+              source: "const origin = 'localhost'; window.marked = origin;",
+            },
+            { source: "window.everywhere = true;" },
+          ],
+        });
 
-      const marks = (page: Page) =>
-        Effect.promise(() =>
-          page.playwright.evaluate(() => {
-            const marked = window as unknown as { marked?: string; everywhere?: boolean };
+        const marks = (page: Page) =>
+          Effect.promise(() =>
+            TestCdp.nativePage(page).evaluate(() => {
+              const marked = window as unknown as { marked?: string; everywhere?: boolean };
 
-            return [marked.marked ?? null, marked.everywhere ?? null];
-          }),
-        );
+              return [marked.marked ?? null, marked.everywhere ?? null];
+            }),
+          );
 
-      const loopback = yield* browser.newPage(site.url("/form"));
-      const named = yield* browser.newPage(site.url("/form").replace("127.0.0.1", "localhost"));
+        const loopback = yield* browser.newPage(site.url("/form"));
+        const named = yield* browser.newPage(site.url("/form").replace("127.0.0.1", "localhost"));
 
-      assert.deepStrictEqual(yield* marks(loopback), [null, true]);
-      assert.deepStrictEqual(yield* marks(named), ["localhost", true]);
+        assert.deepStrictEqual(yield* marks(loopback), [null, true]);
+        assert.deepStrictEqual(yield* marks(named), ["localhost", true]);
 
-      const [link] = yield* named.find({ role: "link", name: "Open in a new tab" });
+        const [link] = yield* named.find({ role: "link", name: "Open in a new tab" });
 
-      yield* named.click(link?.ref ?? "");
+        yield* named.click(link?.ref ?? "");
 
-      // The click is done once the browser tracks the tab it opened.
-      const popup = (yield* browser.pages).at(-1) as Page;
+        // The click is done once the browser tracks the tab it opened.
+        const popup = (yield* browser.pages).at(-1) as Page;
 
-      assert.notStrictEqual(popup, named);
-      yield* Effect.promise(() => popup.playwright.waitForLoadState("domcontentloaded"));
-      assert.match(popup.playwright.url(), /^http:\/\/localhost:\d+\/next$/);
-      assert.deepStrictEqual(yield* marks(popup), ["localhost", true]);
-    }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+        assert.notStrictEqual(popup, named);
+        yield* Effect.promise(() => TestCdp.nativePage(popup).waitForLoadState("domcontentloaded"));
+        assert.match(TestCdp.nativePage(popup).url(), /^http:\/\/localhost:\d+\/next$/);
+        assert.deepStrictEqual(yield* marks(popup), ["localhost", true]);
+      }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+    ),
   );
 });
 
@@ -633,21 +737,93 @@ describe("an address", () => {
   // The page's own outline gives each link's address, a model reads it, and the page shortens a
   // link on its own site to its path: the rule applies first.
   it.live("of a link in the outline is reported by the same rule", () =>
-    Effect.gen(function* () {
-      const site = yield* Site;
-      const browser = yield* Chromium.open();
-      const page = yield* browser.newPage(site.url("/links"));
-      const links = (yield* page.snapshot()).text.split("\n").filter((line) => line.includes("->"));
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const site = yield* Site;
+        const browser = yield* Chromium.open();
+        const page = yield* browser.newPage(site.url("/links"));
 
-      assert.deepStrictEqual(
-        links.map((line) => line.slice(line.indexOf("-> ") + 3)),
-        [
-          `/download?verification_code=${redacted}&format=pdf`,
-          `https://partner.example/?token=${redacted}&ticker=ETH`,
-          "/chart?code=BTC",
-          `/cart;jsessionid=${redacted}`,
-        ],
-      );
-    }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+        const links = (yield* page.snapshot()).text
+          .split("\n")
+          .filter((line) => line.includes("->"));
+
+        assert.deepStrictEqual(
+          links.map((line) => line.slice(line.indexOf("-> ") + 3)),
+          [
+            `/download?verification_code=${redacted}&format=pdf`,
+            `https://partner.example/?token=${redacted}&ticker=ETH`,
+            "/chart?code=BTC",
+            `/cart;jsessionid=${redacted}`,
+          ],
+        );
+      }).pipe(Effect.scoped, Effect.provide(SiteLayer)),
+    ),
   );
 });
+
+// Requested audit minor fix: simultaneous initial readers must agree on one first page.
+it.live("concurrent firstPage calls open exactly one initial page", () =>
+  TestCdp.withCdp(
+    Effect.gen(function* () {
+      const browser = yield* Chromium.open();
+
+      const pages = yield* Effect.all(
+        Array.from({ length: 12 }, () => browser.firstPage),
+        { concurrency: 12 },
+      );
+
+      assert.strictEqual(new Set(pages.map((page) => page.id)).size, 1);
+      assert.strictEqual((yield* browser.pages).length, 1);
+    }).pipe(Effect.scoped),
+  ),
+);
+
+it.live("publishes a failed dialog answer and closes only the affected page", () =>
+  TestCdp.isolated((faults) =>
+    Effect.gen(function* () {
+      const browser = yield* Chromium.open();
+      const page = yield* browser.newPage();
+
+      faults.rule(
+        { method: "Page.handleJavaScriptDialog" },
+        { _tag: "Fail", error: new Error("answer lost") },
+        { times: 1 },
+      );
+
+      const action = yield* page
+        .act(() => alert("confirm response"), {
+          document: (yield* page.state).document,
+          arg: undefined,
+          result: Schema.Void,
+        })
+        .pipe(Effect.forkChild);
+
+      yield* browser.events({ after: 0 }).pipe(
+        Stream.filter(({ event }) => event._tag === "PageClosed" && event.page === page.id),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.timeout("1 second"),
+      );
+      const survivor = yield* browser.newPage(still("survivor"));
+
+      assert.strictEqual(yield* survivor.title, "survivor");
+      const events = yield* browser.recentEvents;
+
+      assert.isFalse(events.some((event) => event._tag === "Disconnected"));
+
+      assert.deepStrictEqual(
+        events.flatMap((event) => (event._tag === "DialogShown" ? [event.answer] : [])),
+        ["failed"],
+      );
+      const exit = yield* Fiber.await(action);
+
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        const error = Cause.findErrorOption(exit.cause);
+
+        assert.isTrue(Option.isSome(error));
+        if (Option.isSome(error)) assert.strictEqual(error.value.reason._tag, "Closed");
+      }
+    }),
+  ),
+);

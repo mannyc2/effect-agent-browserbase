@@ -1,12 +1,13 @@
 import { assert, layer } from "@effect/vitest";
 import { Clock, Deferred, Duration, Effect, Fiber, Random, Stream } from "effect";
-import type { BrowserContext, CDPSession } from "playwright-core";
+import type { BrowserContext } from "playwright-core";
 
 import { Browser, make as makeBrowser, type Service as BrowserService } from "../src/Browser.ts";
-import * as Chromium from "../src/Chromium.ts";
 import type { Page } from "../src/Page.ts";
-import * as Presentation from "../src/Presentation.ts";
+import * as Presentation from "../src/presentation/Presentation.ts";
+import * as Chromium from "../src/providers/Chromium.ts";
 import { unpaused } from "./fixtures.ts";
+import * as TestCdp from "./support/TestCdp.ts";
 
 interface NativeInput {
   readonly type?: string;
@@ -40,7 +41,7 @@ interface RecordedWindow {
 
 // Each page opened performed has a presenter of its own, so its pointer is its own.
 const setup = Effect.fnUntraced(function* (performed = true) {
-  const native = (yield* Browser).context.browser();
+  const native = TestCdp.nativeContext(yield* Browser).browser();
   const clock = yield* Clock.Clock;
 
   if (native === null) return yield* Effect.die("the fixture requires a launched Chromium");
@@ -50,54 +51,50 @@ const setup = Effect.fnUntraced(function* (performed = true) {
     (context) => Effect.promise(() => context.close()),
   );
 
-  const createSession = context.newCDPSession.bind(context);
+  const faults = yield* TestCdp.make();
   const dispatches: Array<Dispatch> = [];
   const moved = Promise.withResolvers<void>();
   const pressed = Promise.withResolvers<void>();
 
-  // Observe actual protocol dispatch without replacing Chromium or the provider's page registry.
-  context.newCDPSession = async (target) => {
-    const session = await createSession(target);
-    const send = session.send.bind(session);
+  faults.observe(({ session, method, params }, phase) => {
+    const input = params as NativeInput | undefined;
 
-    const observed: CDPSession["send"] = (method, params) => {
-      const input = params as NativeInput | undefined;
-
-      if (method.startsWith("Input."))
-        dispatches.push({
-          target,
-          method,
-          input: input ?? {},
-          at: Number(clock.monotonicTimeNanosUnsafe()) / 1e6,
-        });
-
-      return send(method, params).then((result) => {
-        if (method === "Input.dispatchMouseEvent" && input?.type === "mouseMoved") moved.resolve();
-        if (method === "Input.dispatchMouseEvent" && input?.type === "mousePressed")
-          pressed.resolve();
-
-        return result;
+    if (phase === "before" && method.startsWith("Input."))
+      dispatches.push({
+        target: session.nativePage!,
+        method,
+        input: input ?? {},
+        at: Number(clock.monotonicTimeNanosUnsafe()) / 1e6,
       });
-    };
+    if (
+      phase === "received" &&
+      method === "Input.dispatchMouseEvent" &&
+      input?.type === "mouseMoved"
+    )
+      moved.resolve();
+    if (
+      phase === "received" &&
+      method === "Input.dispatchMouseEvent" &&
+      input?.type === "mousePressed"
+    )
+      pressed.resolve();
+  });
 
-    session.send = observed;
-
-    return session;
-  };
-
-  const browser = yield* makeBrowser(context, { id: "track-test", provider: "test" });
+  const browser = yield* faults.provide(
+    makeBrowser(context, { id: "track-test", provider: "test" }),
+  );
 
   const open = Effect.gen(function* () {
     const plain = yield* browser.newPage();
     const page = performed ? (yield* Presentation.make({ pacing: unpaused })).view(plain) : plain;
 
     yield* Effect.promise(() =>
-      page.playwright.setContent(
+      TestCdp.nativePage(page).setContent(
         '<body style="margin:0;height:1800px"><button style="position:absolute;left:80px;top:80px;width:160px;height:50px;cursor:crosshair">Count</button><input aria-label="Text" style="position:absolute;left:80px;top:220px;width:240px;height:40px;cursor:text"></body>',
       ),
     );
     yield* Effect.promise(() =>
-      page.playwright.evaluate(() => {
+      TestCdp.nativePage(page).evaluate(() => {
         const recorded = window as unknown as RecordedWindow;
 
         Object.assign(recorded, { inputEvents: [], clicks: 0 });
@@ -123,7 +120,7 @@ const setup = Effect.fnUntraced(function* (performed = true) {
 
 const nativeEvents = (page: Page) =>
   Effect.promise(() =>
-    page.playwright.evaluate(() => (window as unknown as RecordedWindow).inputEvents),
+    TestCdp.nativePage(page).evaluate(() => (window as unknown as RecordedWindow).inputEvents),
   );
 
 const replay = Effect.fnUntraced(function* (browser: BrowserService) {
@@ -135,14 +132,16 @@ const replay = Effect.fnUntraced(function* (browser: BrowserService) {
 // The consumer needs one coherent track, including interrupted prefixes, to draw a cursor without
 // inventing motion or leaving a pressed state onscreen. These checks pair that public track with
 // real protocol dispatch and native DOM outcomes.
-layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
-  "Track",
-  (it) => {
-    // Each page has its own pointer, which its input moves in turn: a page's glide starts where its
-    // last one ended, whatever another page does meanwhile.
-    it.effect(
-      "replays each page's pointer track, with pages at once, and the input that actually ran",
-      () =>
+layer(TestCdp.provideLayer(Chromium.layer()), {
+  excludeTestServices: true,
+  timeout: Duration.seconds(60),
+})("Track", (it) => {
+  // Each page has its own pointer, which its input moves in turn: a page's glide starts where its
+  // last one ended, whatever another page does meanwhile.
+  it.effect(
+    "replays each page's pointer track, with pages at once, and the input that actually ran",
+    () =>
+      TestCdp.withCdp(
         Effect.gen(function* () {
           const fixture = yield* setup();
           const first = yield* fixture.open;
@@ -159,7 +158,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             fixture.dispatches.filter(
               (dispatch) =>
                 dispatch.input.type === "mouseMoved" &&
-                dispatch.target === (page === first.id ? first : second).playwright,
+                dispatch.target === TestCdp.nativePage(page === first.id ? first : second),
             );
 
           const watching = yield* fixture.browser.events({ after: 0 }).pipe(
@@ -194,7 +193,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           yield* Fiber.join(firstHover);
           yield* Fiber.join(secondHover);
           yield* first.click(button).pipe(Random.withSeed("track-click"));
-          yield* Effect.promise(() => first.playwright.locator("input").focus());
+          yield* Effect.promise(() => TestCdp.nativePage(first).locator("input").focus());
           yield* first.type("Aé").pipe(Random.withSeed("track-type"));
           yield* first.press("ArrowLeft");
 
@@ -345,24 +344,28 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             ["é"],
           );
           assert.strictEqual(
-            yield* Effect.promise(() => first.playwright.locator("input").inputValue()),
+            yield* Effect.promise(() => TestCdp.nativePage(first).locator("input").inputValue()),
             "Aé",
           );
           assert.strictEqual(
             yield* Effect.promise(() =>
-              first.playwright.evaluate(() => (window as unknown as RecordedWindow).clicks),
+              TestCdp.nativePage(first).evaluate(
+                () => (window as unknown as RecordedWindow).clicks,
+              ),
             ),
             1,
           );
           assert.isAbove(
-            yield* Effect.promise(() => first.playwright.evaluate(() => window.scrollY)),
+            yield* Effect.promise(() => TestCdp.nativePage(first).evaluate(() => window.scrollY)),
             0,
           );
           assert.isTrue((yield* nativeEvents(first)).every((event) => event.trusted));
         }),
-    );
+      ),
+  );
 
-    it.effect("ends an interrupted glide at its submitted prefix and resumes from that point", () =>
+  it.effect("ends an interrupted glide at its submitted prefix and resumes from that point", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const fixture = yield* setup();
         const page = yield* fixture.open;
@@ -397,9 +400,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         if (next === undefined || next._tag !== "TrackPlanned") return;
         assert.deepStrictEqual(next.from, { x: terminal.x, y: terminal.y });
       }),
-    );
+    ),
+  );
 
-    it.effect("rejects nonfinite input values before creating a track or dispatching input", () =>
+  it.effect("rejects nonfinite input values before creating a track or dispatching input", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const fixture = yield* setup(false);
         const page = yield* fixture.open;
@@ -420,9 +425,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           (yield* fixture.browser.recentEvents).filter((event) => event._tag === "TrackPlanned"),
         );
       }),
-    );
+    ),
+  );
 
-    it.effect("records interrupted mouse and key releases exactly once", () =>
+  it.effect("records interrupted mouse and key releases exactly once", () =>
+    TestCdp.withCdp(
       Effect.gen(function* () {
         const fixture = yield* setup(false);
         const page = yield* fixture.open;
@@ -433,14 +440,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         yield* Effect.promise(() => fixture.pressed);
         yield* Fiber.interrupt(clicking);
-        yield* Effect.promise(() => page.playwright.locator("input").focus());
+        yield* Effect.promise(() => TestCdp.nativePage(page).locator("input").focus());
 
         const pressing = yield* page
           .press("Shift+ArrowLeft", { holdMillis: 5000 })
           .pipe(Effect.forkChild);
 
         yield* Effect.promise(() =>
-          page.playwright.waitForFunction(() =>
+          TestCdp.nativePage(page).waitForFunction(() =>
             (window as unknown as RecordedWindow).inputEvents.some(
               (event) => event.type === "keydown" && event.key === "ArrowLeft",
             ),
@@ -494,10 +501,10 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         );
         assert.isTrue(observed.every((event) => event.trusted));
         assert.strictEqual(
-          yield* Effect.promise(() => page.playwright.locator("input").inputValue()),
+          yield* Effect.promise(() => TestCdp.nativePage(page).locator("input").inputValue()),
           "x",
         );
       }),
-    );
-  },
-);
+    ),
+  );
+});

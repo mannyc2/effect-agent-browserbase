@@ -30,7 +30,7 @@ export interface Visitor<S> {
 }
 
 export const walk = (names: Names) => {
-  const { interactiveRoles, isElement, isFrame, parentOf, roleOf } = names;
+  const { interactiveRoles, isElement, isFrame, isInput, parentOf, roleOf } = names;
 
   const skipped = new Set("SCRIPT STYLE NOSCRIPT TEMPLATE HEAD META LINK SVG".split(" "));
 
@@ -39,16 +39,24 @@ export const walk = (names: Names) => {
     rect.right > 0 && rect.bottom > 0 && rect.left < width && rect.top < height;
 
   /** Whether an element reached on its own shows, by the walk's rule and its ancestors'. */
-  const visible = (element: Element): boolean =>
-    element.checkVisibility({ opacityProperty: true, visibilityProperty: true }) &&
-    element.closest("[aria-hidden=true]") === null;
+  const visible = (element: Element): boolean => {
+    if (element.closest("[aria-hidden=true]") !== null) return false;
+    if (element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return true;
+    // A contents element has no box of its own, but its text and descendants can paint.
+    if (getComputedStyle(element).display !== "contents") return false;
+    for (let node: Element | null = element; node !== null; node = parentOf(node)) {
+      const style = getComputedStyle(node);
 
-  const isVisible = (element: Element, style: CSSStyleDeclaration, rect: DOMRect): boolean =>
-    style.display !== "none" &&
-    style.visibility === "visible" &&
-    style.opacity !== "0" &&
-    element.getAttribute("aria-hidden") !== "true" &&
-    (rect.width > 0 || rect.height > 0 || style.display === "contents");
+      if (
+        style.display === "none" ||
+        style.opacity === "0" ||
+        (node === element && style.visibility !== "visible")
+      )
+        return false;
+    }
+
+    return true;
+  };
 
   // Coordinate subtraction is valid only for an untransformed frame. Report the frame itself
   // otherwise: the real pixel input still works, and its receipt must not name a guessed child.
@@ -102,6 +110,7 @@ export const walk = (names: Names) => {
 
   /** Whether its role or a click handler makes an element a control. */
   const acts = (element: Element, role: string | null): boolean =>
+    (isInput(element) && element.type !== "hidden") ||
     (role !== null && (interactiveRoles.has(role) || role === "canvas" || role === "iframe")) ||
     element.hasAttribute("onclick");
 
@@ -162,8 +171,7 @@ export const walk = (names: Names) => {
    * a subtree outside the viewport is skipped, as described above.
    */
   const visit = <S>(root: Element | null, viewport: boolean, state: S, visitor: Visitor<S>) => {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
+    const { innerWidth: width, innerHeight: height } = window;
     let keep: Set<Element> | undefined;
 
     const children = (parent: ParentNode, inner: S, dx: number, dy: number) => {
@@ -195,7 +203,19 @@ export const walk = (names: Names) => {
       }
       const style = getComputedStyle(element);
 
-      if (!isVisible(element, style, local)) return;
+      if (
+        style.display === "none" ||
+        style.opacity === "0" ||
+        element.getAttribute("aria-hidden") === "true"
+      )
+        return;
+      // Visibility can be overridden by a child, and zero-size wrappers can hold painted
+      // descendants. Traverse those wrappers without attributing their hidden text to a read.
+      if (!visible(element)) {
+        for (const child of Array.from(element.children)) one(child, outer, dx, dy);
+
+        return;
+      }
       const inner = visitor.enter(element, style, rect, outer);
 
       if (inner === undefined) return;

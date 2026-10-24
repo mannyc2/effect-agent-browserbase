@@ -6,8 +6,9 @@
 import { Duration, Effect, MutableRef, Option, Schema } from "effect";
 
 import { CursorChanged, TrackPerformed, TrackPlanned } from "../../BrowserEvent.ts";
-import * as Motion from "../../Motion.ts";
+import * as Motion from "../../Geometry.ts";
 import type { Point } from "../../Page.ts";
+import type { WheelStep } from "../../Style.ts";
 import { type PageContext, refuse } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import type { Dispatch } from "./dispatch.ts";
@@ -126,8 +127,9 @@ export const make = (page: PageContext, dispatch: Dispatch, viewport: Viewport) 
     point: Point,
     dx: number,
     dy: number,
+    planned?: ReadonlyArray<WheelStep>,
   ) {
-    const steps = yield* marks.style.wheel(dx, dy);
+    const steps = planned ?? (yield* marks.style.wheel(dx, dy));
     const at = now();
 
     yield* marks.present(steps.at(-1)?.afterMillis ?? 0);

@@ -2,11 +2,11 @@
 // changes the graded values, and the page shows what its truth says. The gates run every task's
 // scripted solution.
 import { assert, describe, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
 
 import { MarketTruth, origin, QuoteTruth, routes, serve, truth } from "../Sites.ts";
+import * as Chromium from "./browser.ts";
 
 /** Read the visible cells independently of the fixture's grading values. */
 const quotePage = (path: string, seed: number) =>
@@ -18,15 +18,34 @@ const quotePage = (path: string, seed: number) =>
 
     yield* page.goto(origin + path);
     const expected = yield* truth(page, QuoteTruth);
-    const table = page.playwright.getByRole("table", { name: expected.table, exact: true });
-    const headers = yield* Effect.promise(() => table.getByRole("columnheader").allTextContents());
 
-    const cells = yield* Effect.promise(() =>
-      table
-        .getByRole("row")
-        .filter({ hasText: expected.focus })
-        .getByRole("cell")
-        .allTextContents(),
+    const {
+      value: { headers, cells },
+    } = yield* page.read(
+      (expected) => {
+        const table = Array.from(document.querySelectorAll("table")).find(
+          (table) => table.getAttribute("aria-label") === expected.table,
+        );
+
+        const row = Array.from(table?.querySelectorAll("tr") ?? []).find((row) =>
+          row.textContent?.includes(expected.focus),
+        );
+
+        return {
+          headers: Array.from(
+            table?.querySelectorAll("th") ?? [],
+            (cell) => cell.textContent ?? "",
+          ),
+          cells: Array.from(row?.querySelectorAll("td") ?? [], (cell) => cell.textContent ?? ""),
+        };
+      },
+      {
+        arg: expected,
+        result: Schema.Struct({
+          headers: Schema.Array(Schema.String),
+          cells: Schema.Array(Schema.String),
+        }),
+      },
     );
 
     return { expected, headers, cells };
