@@ -1,6 +1,6 @@
 {
   "name": "effect-browser-tradingview",
-  "version": "0.3.0-beta.21",
+  "version": "0.3.0-beta.22",
   "description": "TradingView charts for effect-browser: their bars and studies, exact screen points, changes made with visible input, and tools for a Yielded agent.",
   "license": "MIT",
   "repository": {
@@ -61,7 +61,7 @@
     "@yielded/agent": "0.1.0-beta.189",
     "effect": "~4.0.3",
     "effect-agent-browser": "^0.3.0-beta.21",
-    "effect-browser": "^0.3.0-beta.20"
+    "effect-browser": "^0.3.0-beta.22"
   },
   "peerDependenciesMeta": {
     "@yielded/agent": {

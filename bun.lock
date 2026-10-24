@@ -44,7 +44,7 @@
     },
     "packages/agent-browser": {
       "name": "effect-agent-browser",
-      "version": "0.3.0-beta.21",
+      "version": "0.3.0-beta.22",
       "devDependencies": {
         "@effect/vitest": "4.0.3",
         "@types/node": "26.1.2",
@@ -60,12 +60,12 @@
       "peerDependencies": {
         "@yielded/agent": "0.1.0-beta.189",
         "effect": "~4.0.3",
-        "effect-browser": "^0.3.0-beta.20",
+        "effect-browser": "^0.3.0-beta.22",
       },
     },
     "packages/browser": {
       "name": "effect-browser",
-      "version": "0.3.0-beta.21",
+      "version": "0.3.0-beta.22",
       "devDependencies": {
         "@effect/vitest": "4.0.3",
         "@types/node": "26.1.2",
@@ -84,7 +84,7 @@
     },
     "packages/browserbase": {
       "name": "effect-browserbase",
-      "version": "0.3.0-beta.21",
+      "version": "0.3.0-beta.22",
       "devDependencies": {
         "@effect/vitest": "4.0.3",
         "@types/node": "26.1.2",
@@ -98,13 +98,13 @@
       },
       "peerDependencies": {
         "effect": "~4.0.3",
-        "effect-browser": "^0.3.0-beta.21",
+        "effect-browser": "^0.3.0-beta.22",
         "playwright-core": "^1.63.0",
       },
     },
     "packages/human-strokes": {
       "name": "effect-browser-human-strokes",
-      "version": "0.3.0-beta.21",
+      "version": "0.3.0-beta.22",
       "devDependencies": {
         "@effect/vitest": "4.0.3",
         "@types/node": "26.1.2",
@@ -118,12 +118,12 @@
       },
       "peerDependencies": {
         "effect": "~4.0.3",
-        "effect-browser": "^0.3.0-beta.20",
+        "effect-browser": "^0.3.0-beta.22",
       },
     },
     "packages/tradingview": {
       "name": "effect-browser-tradingview",
-      "version": "0.3.0-beta.21",
+      "version": "0.3.0-beta.22",
       "devDependencies": {
         "@effect/vitest": "4.0.3",
         "@types/node": "26.1.2",
@@ -141,7 +141,7 @@
         "@yielded/agent": "0.1.0-beta.189",
         "effect": "~4.0.3",
         "effect-agent-browser": "^0.3.0-beta.21",
-        "effect-browser": "^0.3.0-beta.20",
+        "effect-browser": "^0.3.0-beta.22",
       },
       "optionalPeers": [
         "@yielded/agent",
