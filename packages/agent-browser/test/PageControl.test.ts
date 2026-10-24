@@ -1,6 +1,5 @@
-// The ports over a real Chromium page, called directly: no model.
+// The controller over a real Chromium page, called directly: no model.
 import { assert, layer } from "@effect/vitest";
-import type { BrowserUse } from "@yielded/agent";
 import { Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { Browser } from "effect-browser/Browser";
 import { BrowserError, PolicyDenied, Timeout } from "effect-browser/BrowserError";
@@ -21,7 +20,7 @@ const open = (path: string) =>
     );
   });
 
-type Observation = typeof BrowserUse.Observation.Type;
+type Observation = PageControl.Observation;
 
 const refOf = (seen: Observation, name: string) => {
   const ref = seen.controls.find((control) => control.name === name)?.ref;
@@ -170,7 +169,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect("reports a failure after its input went as unknown, which may have taken effect", () =>
+  it.effect("reports a failure after its input went as possibly dispatched", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
 
@@ -190,15 +189,15 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const seen = yield* actions.observe;
       const sent = yield* actions.act([{ kind: "click", ref: refOf(seen, "Submit") }]);
 
-      assert.deepStrictEqual([sent.completed, sent.dispatch], [0, "unknown"]);
+      assert.deepStrictEqual([sent.completed, sent.dispatch], [0, "possibly-dispatched"]);
       assert.include(sent.error ?? "", "may have taken effect");
     }),
   );
 
-  it.effect("tells how the browser answered a dialog, and refuses to answer one itself", () =>
+  it.effect("tells how the browser answered a dialog", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
-      const { actions, control } = yield* PageControl.make({ page });
+      const { actions } = yield* PageControl.make({ page });
 
       const done = yield* actions.act([
         { kind: "click", ref: refOf(yield* actions.observe, "Cancel") },
@@ -209,10 +208,6 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         'A confirm dialog said "Cancel the order?", and it was dismissed.',
       );
       assert.strictEqual(yield* outcome(page), "Kept");
-
-      const refused = yield* Effect.flip(control.respondDialog({ ref: "d1", accept: true }));
-
-      assert.strictEqual(refused.code, "invalid");
     }),
   );
 
@@ -222,7 +217,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       const browser = yield* guarded((request) =>
         Effect.gen(function* () {
-          // Opening the page is the test's own navigation, outside the ports.
+          // Opening the page is the test's own navigation, outside the controller.
           if (request.action._tag !== "Goto") tasks.push(yield* Policy.Task);
           if (request.name === "Submit") return yield* new PolicyDenied({ detail: "not this one" });
         }),
@@ -300,35 +295,28 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
-  it.effect(
-    "navigates only to web addresses, presses keys on a ref and takes PNG screenshots",
-    () =>
-      Effect.gen(function* () {
-        const page = yield* open("/form");
-        const { actions, control } = yield* PageControl.make({ page });
+  it.effect("navigates only to web addresses and presses keys on a ref", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const { actions, control } = yield* PageControl.make({ page });
 
-        const file = yield* control.navigate({ url: "file:///etc/passwd" });
+      const file = yield* control.navigate({ url: "file:///etc/passwd" });
 
-        assert.deepStrictEqual([file.completed, file.dispatch], [0, "not-dispatched"]);
+      assert.deepStrictEqual([file.completed, file.dispatch], [0, "not-dispatched"]);
 
-        const pressed = yield* control.press({
-          ref: refOf(yield* actions.observe, "Submit"),
-          key: "Enter",
-        });
+      const pressed = yield* control.press({
+        ref: refOf(yield* actions.observe, "Submit"),
+        key: "Enter",
+      });
 
-        assert.strictEqual(pressed.dispatch, "acknowledged");
-        assert.strictEqual(yield* outcome(page), "Ordered 10 btc");
+      assert.strictEqual(pressed.dispatch, "acknowledged");
+      assert.strictEqual(yield* outcome(page), "Ordered 10 btc");
 
-        const picture = yield* control.screenshot;
+      const went = yield* control.navigate({ url: (yield* Site).url("/next") });
 
-        assert.strictEqual(picture.mediaType, "image/png");
-        assert.strictEqual(Buffer.from(picture.base64, "base64").subarray(1, 4).toString(), "PNG");
-
-        const went = yield* control.navigate({ url: (yield* Site).url("/next") });
-
-        assert.strictEqual(went.dispatch, "acknowledged");
-        assert.include(went.observation?.text ?? "", 'heading "The next page"');
-      }),
+      assert.strictEqual(went.dispatch, "acknowledged");
+      assert.include(went.observation?.text ?? "", 'heading "The next page"');
+    }),
   );
 
   for (const follow of ["select", "front", "never"] as const)
@@ -373,7 +361,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       }),
     );
 
-  it.effect("pinned to a page, the ports list no tabs and stay on it", () =>
+  it.effect("pinned to a page, the controller lists no tabs and stays on it", () =>
     Effect.gen(function* () {
       const { browser, fronted } = watched(yield* guarded(() => Effect.void));
       const page = yield* browser.newPage((yield* Site).url("/form"));

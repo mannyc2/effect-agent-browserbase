@@ -331,18 +331,28 @@ the answer said, so an order placed and then reported inside a sentence counts t
 grade. Each record keeps it as `onPage`, so a report counts format-only failures both ways until
 answers are judged rather than matched.
 
-| Arm | Operate tasks                                                                                                                                | Understand tasks                               |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 1   | Yielded's tools alone: `observe`, one action per `act` with the next outline, and its control tools; no pictures and no pointer tools        | The moment with its outline                    |
-| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits | As arm 5                                       |
-| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                          | `Moment.capture` as it is: frames and timeline |
+| Arm | Operate tasks                                                                                                                                                  | Understand tasks                               |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools | The moment with its outline                    |
+| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                   | As arm 5                                       |
+| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                            | `Moment.capture` as it is: frames and timeline |
+| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                   | As arm 5                                       |
+| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                | As arm 5                                       |
+| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                           | As arm 5                                       |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
 `maxSteps` turns and eight tool calls a turn, and calls run one at a time. The tools are pinned to
 the task's page, so none offers `select_tab`. A run's steps come from its events. A streamed model
 request is sent and charged as one completion, so the budget sees every call. Arms 3 (parsed
-frames), 4 (a local grounder) and 6 (vision-native computer use) are not built.
+frames) and 4 (a local grounder) are not built.
+
+A program in arms 7 and 8 is one tool call. Its calls to the tools run one at a time, in order, at
+most 64 of them in 90 seconds, and only what it returns or logs reaches the model, besides the
+screenshot before its next turn. Yielded's in-process executor (`@yielded/agent-testing`) runs it
+in the bench's own process with its globals shadowed: enough for the bench's pages, not a sandbox
+for untrusted code. Yielded Agent's own browser tool is a program too, over raw CDP; these arms
+keep effect-browser's tools, their input policy and their receipts under every call.
 
 ```sh
 EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
@@ -373,6 +383,32 @@ action acted on and leave the outline out by default, and arm 1 adds it. The gra
   where model calls were 95% of it, and 1.03 times on Browserbase.
 - **Prompts:** the arms' system prompts differ beyond what they show: only arm 2 has the
   drop-down hint, only arm 5 the input-policy lines, and arm 1 no batching hint.
+
+The first run of arms 7 and 8, on 2026-10-22, used `openai/gpt-6-luna` with medium reasoning in
+local Chromium. Each arm ran 5 trials of each of six operate tasks on the `eval` split
+(`casino-play`, `chart-trade`, `checkout`, `board-move`, `policy-find` and `catalog-buy`) and 2 of
+each of the TradingView demo's six tasks. With a one-trial check before it, the run cost $0.59 in
+all.
+
+| Arm | Operate | On the page | Median s | $ per trial | TradingView demo |
+| --- | ------- | ----------- | -------- | ----------- | ---------------- |
+| 5   | 24/30   | 29/30       | 23.6     | 0.0017      | 9/12             |
+| 7   | 25/30   | 26/30       | 26.8     | 0.0021      | 10/12            |
+| 8   | 26/30   | 30/30       | 27.5     | 0.0022      | 8/12             |
+
+- **No winner:** no pair of arms differs beyond chance (stratified exact p 1, after Holm, for each
+  pair over all operate tasks). Every arm took a median of 4 turns, so a program had few turns to
+  save.
+- **Canvas:** arm 7 passed `casino-play` once in 5, and the other four ran out of turns. A program
+  gets no picture between its calls, only before the next turn. Arms 5 and 8 passed 5 of 5.
+- **Answers:** every `checkout` trial in every arm left the right order. The exact-match grader
+  failed those that gave the number inside a sentence: 5 in arm 5, 1 in arm 7 and 4 in arm 8. Arm
+  5's other miss bought the wrong tent in `catalog-buy`.
+- **Charts:** given both, arm 8 never called `browser_program` on TradingView and used arm 5's tools.
+  The operate run did not record which tools arm 8 called. The trend line missed in 5 of 6 trials
+  across arms: its low end landed 2.0 to 2.6 above the chart's low of 325.81. Zoom passed 2 of 6.
+- **Cost:** programs cost a fifth to a quarter more per trial than arm 5. Model requests took 98%
+  of every arm's mean trial time.
 
 ## Outcomes
 

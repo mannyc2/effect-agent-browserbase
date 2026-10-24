@@ -11,7 +11,7 @@ settings.
 ## The Yielded dependency
 
 `effect-agent-browser` peers on the published npm artifact of `@yielded/agent`
-`0.1.0-beta.168` exactly. The workspace and consumer instructions use that registry dependency
+`0.1.0-beta.189` exactly. The workspace and consumer instructions use that registry dependency
 without an archive override. `tools/check-packed.sh` installs it in an npm project and a Bun
 workspace with the isolated linker, with no `--force` or `--legacy-peer-deps`. Both lockfiles must
 record the registry artifact's integrity and hold one copy each of `effect`, `effect-browser`,
