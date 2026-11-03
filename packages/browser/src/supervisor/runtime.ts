@@ -58,6 +58,9 @@ export const opening =
   (number: number) => {
     let attempt = 0;
     let began = false;
+    // The last attempt's typed failure. Since Effect 4.0.6, `Effect.retry` rethrows a cause that
+    // also holds a defect with its failures made defects, so its exit no longer carries it.
+    let failed: Option.Option<E> = Option.none();
 
     const once: Effect.Effect<boolean, E> = Effect.uninterruptible(
       Effect.gen(function* () {
@@ -92,6 +95,7 @@ export const opening =
         const cause = Exit.isFailure(closed) ? Cause.combine(exit.cause, closed.cause) : exit.cause;
         const error = Cause.findErrorOption(cause);
 
+        failed = error;
         if (Option.isSome(error))
           yield* apply({ _tag: "Failed", number, attempt, error: error.value });
 
@@ -117,7 +121,7 @@ export const opening =
             ? apply({
                 _tag: "GaveUp",
                 number,
-                error: Option.getOrUndefined(Cause.findErrorOption(exit.cause)),
+                error: Option.getOrUndefined(failed),
                 detail: describe(exit.cause),
               })
             : apply({ _tag: "Stopped", number, began }),
