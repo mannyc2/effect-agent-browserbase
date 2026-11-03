@@ -1,5 +1,25 @@
 # Status
 
+## 0.3.0-beta.23
+
+The `0.3.0-beta.23` release moves the packages to Effect 4.1.2 and `@yielded/agent`
+`0.1.0-beta.191`. Effect 4.1 removed the root `Crypto` module, which `0.3.0-beta.22` imports, so
+beta.22 fails to load on 4.1; every package now peers on `effect` `~4.1.2`. The site moves to
+Foldkit 0.170 and Alchemy 2.0.0-beta.85, since the versions before them imported the removed module
+too.
+
+Since Effect 4.0.6, a typed failure combined with a defect becomes a defect. A supervisor whose open
+failed and whose scope then failed to close lost the open's typed refusal in `Effect.retry`'s exit,
+so `GaveUp` carried no error; it now reads the refusal from the attempt's own cause. When the open's
+own finalizer dies, Effect erases the refusal inside the open, before the supervisor sees it, and
+the supervisor's test expects that.
+
+Before the release every workspace's tests passed but one, in effect-browser (586 of 587): a
+`Budget.test.ts` read-cost check that fails on `main` at Effect 4.0.3 too. Archives packed from
+#314, in a consumer on Effect 4.1.2, ran a Yielded agent with Claude Haiku 5.5 inside local workerd,
+against local Chromium and against a Browserbase session: it read a page, followed a link and
+answered from both pages.
+
 ## 0.3.0-beta.22
 
 The `0.3.0-beta.22` release ships the October audit replacement. Root exports contain the

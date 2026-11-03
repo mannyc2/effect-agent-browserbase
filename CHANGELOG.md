@@ -4,6 +4,21 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.23
+
+- **Breaking:** every package peers on `effect` `~4.1.2`, where it peered on `~4.0.3`, and
+  `effect-agent-browser` on `@yielded/agent` `0.1.0-beta.191` exactly, the first Yielded release on
+  Effect 4.1 (#314). Effect 4.1 removed the root `Crypto` module, which `0.3.0-beta.22` imports, so
+  beta.22 fails to load on it. `effect-browser` names a connection with `SecureRandom` from
+  `effect/crypto` when the context holds one, and with the host's Web Crypto otherwise. The other
+  packages require `effect-browser` from this release.
+- A supervisor that gives up reports the last attempt's typed refusal again (#314). Since Effect
+  4.0.6, `Effect.retry` rethrows a cause that holds a defect with its failures made defects too, so
+  when an open failed and its scope then failed to close, `GaveUp`, and the `Unavailable` a borrower
+  gets, carried no error. `GaveUp` now reads it from that attempt's own cause. When the open's own
+  `Effect.ensuring` finalizer dies, Effect makes the refusal a defect inside the open, so `GaveUp`
+  still has none.
+
 ## 0.3.0-beta.22
 
 - **Breaking:** `effect-browser` replaces its kernel and lifecycle contracts (#308). `Page.perform`
