@@ -1,5 +1,5 @@
 // The H2 budget and evidence boundary are verified without a hosted session or model call.
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Clock, ConfigProvider, DateTime, Deferred, Effect, Fiber } from "effect";
 import { BrowserbaseClient } from "effect-browserbase/BrowserbaseClient";
@@ -23,6 +23,8 @@ describe("H2 hosted admission", () => {
         ]).pipe(
           Effect.provide([
             NodeServices.layer,
+            NodeCrypto.layerDigest,
+            NodeCrypto.layerSecureRandom,
             ConfigProvider.layer(
               ConfigProvider.fromUnknown({ EFFECT_BROWSER_BENCH_HOSTED: "yes" }),
             ),

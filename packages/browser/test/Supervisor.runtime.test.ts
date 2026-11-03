@@ -533,11 +533,14 @@ it.effect.each(["effect", "scope"] as const)(
       });
 
       const unavailable = yield* Effect.flip(supervisor.use(() => Effect.void));
+      // Since Effect 4.0.6, a finalizer that dies under `Effect.ensuring` makes the failure it
+      // finalizes a defect too, so only the scope variant's open hands over a typed refusal.
+      const refused = cleanup === "scope" ? "typed refusal" : undefined;
 
       assert.strictEqual(unavailable._tag, "Unavailable");
       if (unavailable._tag !== "Unavailable") return;
       assert.strictEqual(unavailable.reason, "down");
-      assert.strictEqual(unavailable.error, "typed refusal");
+      assert.strictEqual(unavailable.error, refused);
       assert.include(unavailable.detail, "typed refusal");
       assert.include(unavailable.detail, "cleanup boom");
       assert.strictEqual(attempts, 1);
@@ -546,7 +549,7 @@ it.effect.each(["effect", "scope"] as const)(
 
       assert.deepStrictEqual(
         events.filter(({ state }) => state._tag === "Failed").map(({ state }) => state),
-        [{ _tag: "Failed", attempt: 1, error: "typed refusal" }],
+        refused === undefined ? [] : [{ _tag: "Failed", attempt: 1, error: refused }],
       );
     }),
 );

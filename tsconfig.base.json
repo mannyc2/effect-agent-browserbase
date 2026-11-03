@@ -21,14 +21,14 @@
       {
         "name": "@effect/language-service",
         // Effect 4 marks its AI, HTTP and observability modules unstable, and these packages are
-        // built on them. Property tests use Arbitrary, as CONTRIBUTING.md asks. The packages' `~4.0.3`
+        // built on them. Property tests use Arbitrary, as CONTRIBUTING.md asks. The packages' `~4.1.2`
         // peer range holds them still; docs/RELEASING.md says why. Any other unstable or experimental
-        // API still warns. Effect 4.0.3 also marks Crypto and PlatformError unstable; the browser's
+        // API still warns. Effect 4.1 also marks effect/crypto and PlatformError unstable; the browser's
         // connection identity adapter deliberately uses those platform contracts.
         "allowedUnstableApis": [
           "effect/ai",
           "effect/Arbitrary",
-          "effect/Crypto",
+          "effect/crypto",
           "effect/http",
           "effect/observability",
           "effect/PlatformError",
@@ -60,7 +60,7 @@
               "allowedUnstableApis": [
                 "effect/ai",
                 "effect/Arbitrary",
-                "effect/Crypto",
+                "effect/crypto",
                 "effect/http",
                 "effect/observability",
                 "effect/PlatformError",
@@ -89,7 +89,7 @@
                 "effect/ai",
                 "effect/Arbitrary",
                 "effect/cli",
-                "effect/Crypto",
+                "effect/crypto",
                 "effect/FileSystem",
                 "effect/http",
                 "effect/observability",
@@ -98,6 +98,7 @@
                 "effect/process",
                 "@effect/ai-openrouter",
                 "@effect/ai-typesafe",
+                "@effect/platform-node-shared/NodeCrypto",
                 "@effect/platform-node/NodeServices",
                 "@effect/platform-node/NodeRuntime",
                 "@effect/vitest"
@@ -114,7 +115,7 @@
                 "effect/ai",
                 "effect/Arbitrary",
                 "effect/cli",
-                "effect/Crypto",
+                "effect/crypto",
                 "effect/encoding",
                 "effect/FileSystem",
                 "effect/http",

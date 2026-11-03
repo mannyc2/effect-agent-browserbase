@@ -5,11 +5,11 @@
 policy, budgets, approval, context and run events. This package gives that agent a browser.
 
 ```sh
-npm install effect-agent-browser@beta effect-browser@beta @yielded/agent@0.1.0-beta.189 effect@4.0.3 playwright-core@1.63.0
+npm install effect-agent-browser@beta effect-browser@beta @yielded/agent@0.1.0-beta.191 effect@4.1.2 playwright-core@1.63.0
 ```
 
-The package peers on the published npm release of `@yielded/agent` `0.1.0-beta.189` exactly and
-on Effect `~4.0.3`. Remove any `@yielded/agent` archive override from an earlier release before
+The package peers on the published npm release of `@yielded/agent` `0.1.0-beta.191` exactly and
+on Effect `~4.1.2`. Remove any `@yielded/agent` archive override from an earlier release before
 installing, then refresh your lockfile so it records the registry artifact. The previous archive
 was an upstream release candidate with the same version, not the npm artifact.
 

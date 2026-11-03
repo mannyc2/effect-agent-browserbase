@@ -216,7 +216,7 @@ and insertion typing replacing existing text. Local Chromium regressions reprodu
 before the fixes. The Browserbase fake also serves Live View and retains session create settings;
 these tests establish the fake/client contract, not hosted behavior.
 
-0.3 is a rewrite of the 0.2 set on stable Effect 4 and `effect/ai`, currently pinned to `4.0.3`,
+0.3 is a rewrite of the 0.2 set on stable Effect 4 and `effect/ai`, currently pinned to `4.1.2`,
 with agents on Yielded Agent, the renamed Effect Agent:
 
 - `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
@@ -286,7 +286,7 @@ with agents on Yielded Agent, the renamed Effect Agent:
   README shows. `wait_still` waits for
   foreground stillness. Yielded runs the agent: its loop,
   policy and budgets, approval, context and run events. The package pins the published npm
-  artifact of `@yielded/agent` `0.1.0-beta.189`. The packed
+  artifact of `@yielded/agent` `0.1.0-beta.191`. The packed
   check installs it from the registry with npm and with Bun's isolated linker, holding each to
   the registry integrity and to one copy of each runtime package. Earlier releases used a
   commit-pinned release-candidate archive from `vendor/yielded-agent`; it remains available for

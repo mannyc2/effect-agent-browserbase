@@ -1,5 +1,5 @@
 // H1/H3 cannot reach provider configuration without exact opt-in, and each admits one attempt.
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { ConfigProvider, Effect } from "effect";
 import { BrowserbaseClient } from "effect-browserbase/BrowserbaseClient";
@@ -25,6 +25,8 @@ describe("H1/H3 hosted admission", () => {
         const error = yield* invoke.pipe(
           Effect.provide([
             NodeServices.layer,
+            NodeCrypto.layerDigest,
+            NodeCrypto.layerSecureRandom,
             ConfigProvider.layer(
               ConfigProvider.fromUnknown({ EFFECT_BROWSER_BENCH_HOSTED: "yes" }),
             ),

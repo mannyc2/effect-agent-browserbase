@@ -9,9 +9,9 @@ Open a focused PR against `main` that explains the change and how it was checked
 | -------------------- | ----------------------------- |
 | Node                 | 24.14.1 (`.node-version`)     |
 | Bun                  | 1.4.2                         |
-| Effect               | 4.0.3                         |
+| Effect               | 4.1.2                         |
 | Playwright           | playwright-core 1.63.0        |
-| Yielded Agent        | @yielded/agent 0.1.0-beta.189 |
+| Yielded Agent        | @yielded/agent 0.1.0-beta.191 |
 | TypeScript / Vite+   | 7.0.2 / 1.1.0                 |
 | Vitest               | 5.0.3, as Vite+ 1.1.0 ships   |
 | Effect tsgo / Oxlint | 0.51.0 / 1.82.0               |

@@ -1,7 +1,7 @@
 // The bench's command line: `run` runs tasks, `report` summarizes results files, `judges` grades
 // input judges and `contract` holds Browserbase to what the package's fake does. Model calls and
 // hosted browsers cost money, so each command asks for its opt-in.
-import { NodeRuntime, NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Cause, Console, Effect } from "effect";
 import { CliError, Command } from "effect/cli";
 
@@ -38,6 +38,6 @@ Command.make("bench").pipe(
       ? Effect.void
       : Console.error(Run.errorText(cause)),
   ),
-  Effect.provide(NodeServices.layer),
+  Effect.provide([NodeServices.layer, NodeCrypto.layerDigest, NodeCrypto.layerSecureRandom]),
   NodeRuntime.runMain({ disableErrorReporting: true }),
 );

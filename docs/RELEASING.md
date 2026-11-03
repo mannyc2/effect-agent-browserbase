@@ -11,7 +11,7 @@ settings.
 ## The Yielded dependency
 
 `effect-agent-browser` peers on the published npm artifact of `@yielded/agent`
-`0.1.0-beta.189` exactly. The workspace and consumer instructions use that registry dependency
+`0.1.0-beta.191` exactly. The workspace and consumer instructions use that registry dependency
 without an archive override. `tools/check-packed.sh` installs it in an npm project and a Bun
 workspace with the isolated linker, with no `--force` or `--legacy-peer-deps`. Both lockfiles must
 record the registry artifact's integrity and hold one copy each of `effect`, `effect-browser`,
@@ -68,12 +68,12 @@ The owner does this once, in npm and GitHub settings.
 
 ## Peer ranges
 
-- **`effect` is `~4.0.3` in every package:** 4.0's patch releases from 4.0.3, and never 4.1. The packages are
+- **`effect` is `~4.1.2` in every package:** 4.1's patch releases from 4.1.2, and never 4.2. The packages are
   built on modules that Effect 4 marks `@stability unstable`: `effect/ai`, `effect/http` and
   `effect/observability`. Semver does not hold those, and a minor release may change them. A caret
   range would let a consumer install an Effect the packages were never checked against.
   - Widen the range to the next minor in the release that is checked against it.
-  - Widen it to `^4.0.3` once those modules are stable.
+  - Widen it to `^4.1.2` once those modules are stable.
 - **`effect-browser`** is a caret range in the other three packages, from the version each needs.
   Move it in the release that needs a newer one.
 - **`@yielded/agent`** is one exact version in `effect-agent-browser`, because each Yielded beta may

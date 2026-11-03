@@ -18,6 +18,7 @@ const Reason = Schema.Literals([
   "AuthenticationError",
   "ContentPolicyError",
   "InvalidRequestError",
+  "InvalidResponseError",
   "InternalProviderError",
   "NetworkError",
   "InvalidOutputError",

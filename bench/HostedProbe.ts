@@ -1,21 +1,11 @@
 /** Private evidence and one-session admission for the H1/H3 experiments; no autonomous retries. */
-import {
-  Cause,
-  Clock,
-  Console,
-  Crypto,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Path,
-  Schema,
-} from "effect";
+import { Cause, Clock, Console, Effect, Exit, FileSystem, Layer, Path, Schema } from "effect";
 import { BrowserError } from "effect-browser/BrowserError";
 import * as Browserbase from "effect-browserbase/Browserbase";
 import * as Client from "effect-browserbase/BrowserbaseClient";
 import { BrowserbaseError, InvalidRequest } from "effect-browserbase/BrowserbaseError";
 import * as ContextLease from "effect-browserbase/ContextLease";
+import { Digest, SecureRandom } from "effect/crypto";
 import { FetchHttpClient } from "effect/http";
 
 import { BenchError, optedIn, refuse } from "./Budget.ts";
@@ -34,7 +24,8 @@ export const prepare = Effect.fnUntraced(function* (kind: "h1" | "h3", allowance
     );
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
 
   const allowance = yield* fs.readFileString(allowanceFile).pipe(
     Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))),
@@ -59,8 +50,8 @@ export const prepare = Effect.fnUntraced(function* (kind: "h1" | "h3", allowance
 
   if (verification.length === 0)
     return yield* refuse("Retain nonempty private dashboard verification evidence before running");
-  const hash = yield* crypto.digest("SHA-256", verification);
-  const runId = yield* crypto.randomUUIDv4();
+  const verificationSha256 = yield* digest.digestHex(Digest.sha256, verification);
+  const runId = yield* random.uuidV4();
   const directory = path.join(import.meta.dirname, "..", ".work", kind, runId);
   const versions: Record<string, string> = {};
 
@@ -97,7 +88,7 @@ export const prepare = Effect.fnUntraced(function* (kind: "h1" | "h3", allowance
     kind,
     source,
     versions,
-    allowance: { ...verified, verificationSha256: Buffer.from(hash).toString("hex") },
+    allowance: { ...verified, verificationSha256 },
     usageDeltaMinutes: null,
   };
 
