@@ -1,8 +1,9 @@
 /** The opt-in H2 command. Only closed, aliased evidence reaches its private output directory. */
-import { Console, Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Console, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
 import * as ContextLease from "effect-browserbase/ContextLease";
 import { Command, Flag } from "effect/cli";
+import { Digest, SecureRandom } from "effect/crypto";
 import { FetchHttpClient } from "effect/http";
 
 import { BenchError, optedIn, refuse } from "./Budget.ts";
@@ -45,7 +46,8 @@ export const command = Command.make(
         return yield* refuse(
           "H2 requires a clean tested commit; commit the reviewed probe before running it",
         );
-      const crypto = yield* Crypto.Crypto;
+      const digest = yield* Digest.Digest;
+      const random = yield* SecureRandom.SecureRandom;
 
       const verification = yield* fs
         .readFile(allowance.verificationFile)
@@ -53,8 +55,8 @@ export const command = Command.make(
 
       if (verification.length === 0)
         return yield* refuse("H2 requires the retained private dashboard verification evidence");
-      const verificationHash = yield* crypto.digest("SHA-256", verification);
-      const runId = yield* crypto.randomUUIDv4();
+      const verificationSha256 = yield* digest.digestHex(Digest.sha256, verification);
+      const runId = yield* random.uuidV4();
       const directory = path.join(import.meta.dirname, "..", ".work", "h2", runId);
       const versions: Record<string, string> = {};
 
@@ -94,7 +96,7 @@ export const command = Command.make(
         versions,
         allowance: {
           ...verifiedAllowance,
-          verificationSha256: Buffer.from(verificationHash).toString("hex"),
+          verificationSha256,
         },
         usageDeltaMinutes: null,
       };

@@ -218,7 +218,7 @@ try {
       (clean) =>
         JSON.stringify({
           ...JSON.parse(clean),
-          dependencies: { "@yielded/agent": "0.1.0-beta.189" },
+          dependencies: { "@yielded/agent": "0.1.0-beta.191" },
         }),
       /forbidden runtime dependency/,
     ],

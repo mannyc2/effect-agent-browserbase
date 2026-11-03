@@ -196,7 +196,7 @@ describe("safe provider diagnostics", () => {
         assert.deepStrictEqual(result.diagnostic, {
           kind: "AiError",
           origin: "OpenRouterClient/createChatCompletion",
-          reason: "InvalidOutputError",
+          reason: "InvalidResponseError",
           objectDecode: null,
           httpStatus: null,
         });
@@ -276,13 +276,6 @@ describe("safe provider diagnostics", () => {
         description: secret,
         metadata: { provider: { private: secret } },
         http: {
-          request: {
-            method: "POST",
-            url: "https://" + secret,
-            urlParams: [["account", secret]],
-            hash: secret,
-            headers: { authorization: secret },
-          },
           response: { status: 429, headers: { "x-request-id": secret } },
           body: secret,
         },
