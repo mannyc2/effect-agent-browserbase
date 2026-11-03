@@ -1,6 +1,6 @@
 {
   "name": "effect-agent-browser",
-  "version": "0.3.0-beta.22",
+  "version": "0.3.0-beta.23",
   "description": "effect-browser pages as Yielded Agent's browser ports and tools.",
   "license": "MIT",
   "repository": {
@@ -69,7 +69,7 @@
   "peerDependencies": {
     "@yielded/agent": "0.1.0-beta.191",
     "effect": "~4.1.2",
-    "effect-browser": "^0.3.0-beta.22"
+    "effect-browser": "^0.3.0-beta.23"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"
