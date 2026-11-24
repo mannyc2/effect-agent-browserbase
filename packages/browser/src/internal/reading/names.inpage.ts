@@ -45,6 +45,19 @@ export const elements = () => {
     isTextArea(element) ||
     (isHtml(element) && element.isContentEditable);
 
+  // What the library itself puts in the page, such as its overlay's host. A reader that selects by
+  // CSS leaves it out; the walk finds nothing in it, since it never enters a closed shadow root.
+  const own = new WeakSet<Node>();
+
+  const adopt = (node: Node) => own.add(node);
+
+  /** Whether a node is the library's own, or inside a shadow root of one of its own. */
+  const isOwn = (node: Node): boolean => {
+    const root = node.getRootNode();
+
+    return own.has(node) || (root instanceof ShadowRoot && own.has(root.host));
+  };
+
   const clean = (value: string | null | undefined, max = 160): string => {
     const text = (value ?? "").replace(/\s+/g, " ").trim();
 
@@ -52,6 +65,7 @@ export const elements = () => {
   };
 
   return {
+    adopt,
     clean,
     isInput,
     isTextArea,
@@ -63,6 +77,7 @@ export const elements = () => {
     textOf,
     isElement,
     isDocument,
+    isOwn,
     textEntry,
   };
 };

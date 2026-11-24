@@ -34,6 +34,7 @@ import { marks } from "../timeline/marks.inpage.ts";
 import { record, type Recorder } from "../timeline/record.inpage.ts";
 import { sight } from "../timeline/sight.inpage.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "./context.ts";
+import { overlay, type Overlay } from "./overlay.inpage.ts";
 import { Script } from "./port.ts";
 
 /** What the script installs: a version, and a function of one of its parts for each call. */
@@ -44,6 +45,7 @@ export interface PageApi {
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
   layout: Layouts["read"];
+  overlay: Overlay["draw"];
   until: Expectations["until"];
   text: Texts["read"];
   record: Recorder["start"];
@@ -94,6 +96,7 @@ export const parts = {
   evidence,
   guard,
   edit,
+  overlay,
   addresses: Url.addresses,
 };
 
@@ -143,6 +146,7 @@ export function install(parts: Parts): PageApi {
     snapshot: read.snapshot,
     find: subjected.find,
     layout: parts.layout(named, walked, subjected, matching, placing).read,
+    overlay: parts.overlay(named).draw,
     until: parts.expectations(named, subjected, matching).until,
     text: texts.read,
     record: recorder.start,

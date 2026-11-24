@@ -33,6 +33,7 @@ import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
 import type { Layout, Picks } from "./Layout.ts";
+import type { Overlay } from "./Overlay.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 import * as Url from "./Url.ts";
 import type { Window } from "./Window.ts";
@@ -247,6 +248,8 @@ export class State extends Schema.Class<State>("effect-browser/PageState")({
   load: Schema.optional(PageLoaded),
   /** The newest screencast frame, of whichever document it names. */
   frame: Schema.optional(Frame),
+  /** Where the overlay's drawing was last drawn, in viewport CSS pixels; absent with none shown. */
+  overlay: Schema.optional(Schema.Array(Box)),
   /** The viewport's text as it was last read, with the page's title then. */
   text: Schema.optional(Text),
 }) {}
@@ -475,6 +478,11 @@ export interface Page {
    * pick that finds nothing is listed as missing, not a failure. See `Layout`.
    */
   readonly layout: (picks: Picks) => Effect.Effect<Layout, BrowserError>;
+  /**
+   * A layer over the page to draw into, for the scope, that the library's readers never read.
+   * One at a time: a second while one is open fails `InvalidRequest`. See `Overlay`.
+   */
+  readonly overlay: Effect.Effect<Overlay, BrowserError, Scope.Scope>;
   /**
    * The text the viewport shows, or one element whole, in one call to the page. Field values read
    * `••••` unless `unmask`, and a secret field's always do, as does one that was secret when the

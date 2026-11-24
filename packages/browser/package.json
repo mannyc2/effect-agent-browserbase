@@ -135,6 +135,11 @@
       "types": "./dist/Layout.d.mts",
       "default": "./dist/Layout.mjs"
     },
+    "./Overlay": {
+      "@effect-browser/source": "./src/Overlay.ts",
+      "types": "./dist/Overlay.d.mts",
+      "default": "./dist/Overlay.mjs"
+    },
     "./Style": {
       "@effect-browser/source": "./src/Style.ts",
       "types": "./dist/Style.d.mts",

@@ -2,6 +2,7 @@
 import { Clock, Duration, Effect, Option, Schedule, Stream } from "effect";
 
 import { Failed, refuse, Timeout, undispatched } from "../BrowserError.ts";
+import type { Box } from "../BrowserEvent.ts";
 import { monotonicMillis } from "../Clock.ts";
 import type { Frame } from "../Frame.ts";
 import type { Page } from "../Page.ts";
@@ -60,21 +61,36 @@ const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
 
         const sampled = before.filter((_, index) => index % Math.ceil(before.length / 8) === 0);
         const mask = Motion.background(yield* Effect.forEach(sampled, decoded));
+        // Where the page's overlay draws is not the page's motion: while it shows, frames are
+        // compared, as in the foreground, outside everywhere it has drawn during the wait.
+        let width: number | undefined;
+        const covered = new Set(mask);
+
+        const outside = (seen: Motion.Picture, overlay: ReadonlyArray<Box> | undefined) =>
+          Effect.gen(function* () {
+            if (overlay === undefined) return covered;
+            width ??= (yield* page.viewport).width;
+            for (const block of Motion.covering(overlay, seen.width / width, seen))
+              covered.add(block);
+
+            return covered;
+          });
 
         // How long the screen has been still: since a frame, or an unanswered acknowledgement. In
         // the foreground, since a frame moved outside the background, or acknowledgements went
         // unanswered with no frame coming.
         const look = Effect.gen(function* () {
           const stats = yield* capture.stats();
-          const latest = (yield* page.state).frame;
+          const { frame: latest, overlay } = yield* page.state;
+          const comparing = foreground || overlay !== undefined;
           const arrived = stats.received !== counts.received;
           const unseen = stats.accepted - counts.accepted;
 
           counts = stats;
           if (latest === undefined || !capture.isCurrent(latest)) stirred = now();
-          else if (!foreground ? arrived || stats.ackBacklog > 0 : !arrived && stats.ackBacklog > 0)
+          else if (!comparing ? arrived || stats.ackBacklog > 0 : !arrived && stats.ackBacklog > 0)
             stirred = now();
-          else if (foreground && (unseen > 0 || reference === undefined)) {
+          else if (comparing && (unseen > 0 || reference === undefined)) {
             // A move and its return between looks both count. Bound decoding; any frames lost
             // from history, or beyond this batch, deny a quiet spell rather than hiding motion.
             const frames = (yield* page.recentFrames).slice(-Math.max(1, Math.min(8, unseen)));
@@ -83,7 +99,10 @@ const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
             for (const frame of frames) {
               const seen = yield* decoded(frame);
 
-              if (reference === undefined || Motion.stirs(reference, seen, mask)) {
+              if (
+                reference === undefined ||
+                Motion.stirs(reference, seen, yield* outside(seen, overlay))
+              ) {
                 reference = seen;
                 stirred = now();
               }
@@ -105,7 +124,13 @@ const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
             const before = counts.received;
 
             yield* Effect.all([settled(), capture.sync], { concurrency: 2, discard: true });
-            if ((yield* look) >= millis && (foreground || counts.received === before)) return;
+            if (
+              (yield* look) >= millis &&
+              (foreground ||
+                (yield* page.state).overlay !== undefined ||
+                counts.received === before)
+            )
+              return;
           }
         });
 

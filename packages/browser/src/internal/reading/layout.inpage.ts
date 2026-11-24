@@ -25,7 +25,7 @@ export const layout = (
   matching: Match,
   placing: ContextReader,
 ) => {
-  const { isDisabled, nameOf, refFor, roleOf, textOf } = names;
+  const { isDisabled, isOwn, nameOf, refFor, roleOf, textOf } = names;
   const { boxOf, inView, visible } = walked;
   // A pick's words are bounded, as a page's text is not.
   const most = 200;
@@ -121,6 +121,7 @@ export const layout = (
       const box = boxOf(element);
 
       return (
+        !isOwn(element) &&
         box.width * box.height > 0 &&
         visible(element) &&
         (pick.scope === "document" || inView(new DOMRect(box.x, box.y, box.width, box.height))) &&
