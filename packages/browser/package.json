@@ -130,6 +130,11 @@
       "types": "./dist/Geometry.d.mts",
       "default": "./dist/Geometry.mjs"
     },
+    "./Layout": {
+      "@effect-browser/source": "./src/Layout.ts",
+      "types": "./dist/Layout.d.mts",
+      "default": "./dist/Layout.mjs"
+    },
     "./Style": {
       "@effect-browser/source": "./src/Style.ts",
       "types": "./dist/Style.d.mts",

@@ -20,6 +20,7 @@ import { targets, type Targets } from "../input/targets.inpage.ts";
 import { context } from "../reading/context.inpage.ts";
 import { controls } from "../reading/controls.inpage.ts";
 import { expectations, type Expectations } from "../reading/expect.inpage.ts";
+import { layout, type Layouts } from "../reading/layout.inpage.ts";
 import { elements, names } from "../reading/names.inpage.ts";
 import { outline, type Outline } from "../reading/outline.inpage.ts";
 import { ready } from "../reading/ready.inpage.ts";
@@ -42,6 +43,7 @@ export interface PageApi {
   dispose: () => void;
   snapshot: Outline["snapshot"];
   find: Subjects["find"];
+  layout: Layouts["read"];
   until: Expectations["until"];
   text: Texts["read"];
   record: Recorder["start"];
@@ -78,6 +80,7 @@ export const parts = {
   states,
   expectations,
   text,
+  layout,
   controls,
   fold,
   history,
@@ -139,6 +142,7 @@ export function install(parts: Parts): PageApi {
     dispose: () => recorder.stop(),
     snapshot: read.snapshot,
     find: subjected.find,
+    layout: parts.layout(named, walked, subjected, matching, placing).read,
     until: parts.expectations(named, subjected, matching).until,
     text: texts.read,
     record: recorder.start,

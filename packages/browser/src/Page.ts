@@ -32,6 +32,7 @@ import * as Motion from "./Geometry.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
+import type { Layout, Picks } from "./Layout.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 import * as Url from "./Url.ts";
 import type { Window } from "./Window.ts";
@@ -468,6 +469,12 @@ export interface Page {
    * empty result, not a failure.
    */
   readonly find: (query?: FindQuery) => Effect.Effect<ReadonlyArray<Found>, BrowserError>;
+  /**
+   * Where each pick is, in one call to the page: its box unrounded, in the viewport and in the
+   * document, the boxes of words in it, and the viewport, scroll and scale they were read at. A
+   * pick that finds nothing is listed as missing, not a failure. See `Layout`.
+   */
+  readonly layout: (picks: Picks) => Effect.Effect<Layout, BrowserError>;
   /**
    * The text the viewport shows, or one element whole, in one call to the page. Field values read
    * `••••` unless `unmask`, and a secret field's always do, as does one that was secret when the

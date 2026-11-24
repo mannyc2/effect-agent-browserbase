@@ -13,6 +13,7 @@ import { type Page, State } from "../../Page.ts";
 import * as Url from "../../Url.ts";
 import * as Actions from "../input/actions.ts";
 import * as Pictures from "../pictures/pictures.ts";
+import * as Layouts from "../reading/layout.ts";
 import * as Reading from "../reading/reading.ts";
 import * as Ready from "../reading/ready.ts";
 import * as Changes from "../timeline/changes.ts";
@@ -113,6 +114,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       owned,
     ),
     find: reading.find,
+    layout: Layouts.make(page, bridge),
     text: reading.text,
     changes,
     window: Window.make(page, changes, capture.recent),
