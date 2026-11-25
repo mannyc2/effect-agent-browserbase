@@ -100,6 +100,7 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
 
       if (place === undefined) return assert.fail("the box");
       const clip = { x: 95, y: 95, width: 90, height: 50 };
+
       const inked = (data: Uint8Array) =>
         PNG.sync
           .read(Buffer.from(data))
