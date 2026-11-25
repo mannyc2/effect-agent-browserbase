@@ -8,6 +8,7 @@ import { type Clock, Deferred, Duration, Effect, MutableRef, Option, Semaphore }
 
 import { methods } from "../ActionPort.ts";
 import { Busy, refuse, undispatched } from "../BrowserError.ts";
+import type { ActionAnnounced } from "../BrowserEvent.ts";
 import { monotonicMillis } from "../Clock.ts";
 import type { Page, Point } from "../Page.ts";
 import * as Style from "../Style.ts";
@@ -32,6 +33,12 @@ export const human: Pacing = {
 export interface Options {
   readonly pacing?: Pacing | undefined;
   readonly motion?: Motion.Planner | undefined;
+  /**
+   * After a view's action has announced its target, and before its pointer travels there, wait
+   * for this: time for whatever is shown performing the input, such as a character, to arrive. It
+   * comes after the reaction's wait, holds the page's turn and spends the action's deadline.
+   */
+  readonly lead?: ((announced: ActionAnnounced) => Effect.Effect<void>) | undefined;
 }
 
 export type View = Page;
@@ -75,6 +82,8 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
     wordsPerMinute: pacing.wordsPerMinute,
   });
 
+  const { lead } = options;
+
   const views = new WeakMap<Page, View>();
 
   let last:
@@ -94,6 +103,10 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
 
     const style: Style.Style = {
       ...planned,
+      lead:
+        lead === undefined
+          ? undefined
+          : (announced) => lead(announced).pipe(Effect.withSpan("Presentation.lead")),
       withInput:
         ({ operation, wait, failFast }) =>
         (effect) =>

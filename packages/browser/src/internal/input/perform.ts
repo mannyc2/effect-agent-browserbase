@@ -6,7 +6,7 @@ import { Deferred, Duration, Effect, Exit, Option, Ref } from "effect";
 
 import { recorded, nameOf, type Action as ActionValue } from "../../Action.ts";
 import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
-import { Action, Subject } from "../../BrowserEvent.ts";
+import { Action, ActionAnnounced, Subject } from "../../BrowserEvent.ts";
 import type * as BrowserClock from "../../Clock.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
 import { Current, type Style, validated } from "../../Style.ts";
@@ -32,6 +32,11 @@ export interface InputMarks {
   readonly at: (point: Point) => Effect.Effect<void>;
   /** What the input acts on, and for a drag where it ends, as the page names them now. */
   readonly on: (subject: Named, to?: Named) => Effect.Effect<void>;
+  /**
+   * The pointer is about to travel to the action's target at `to`: announce what the action acts
+   * on, and wait for the style's lead.
+   */
+  readonly announce: (to: Point) => Effect.Effect<void>;
   /** The action's text is not bound for a secret field, so its record may keep it. */
   readonly reveal: Effect.Effect<void>;
   readonly input: Replies.Run;
@@ -145,6 +150,29 @@ const admission = (page: PageContext, pending: Set<Deferred.Deferred<void>>, nam
   };
 };
 
+/** Announce an action from what it has found, then wait for its style's lead. */
+const announcing =
+  (
+    page: PageContext,
+    name: Action["name"],
+    style: Style,
+    acted: Ref.Ref<Pick<Action, "subject" | "to" | "box">>,
+  ) =>
+  (to: Point) =>
+    Effect.gen(function* () {
+      const event = new ActionAnnounced({
+        at: page.now(),
+        page: page.id,
+        name,
+        correlation: yield* Correlation,
+        ...(yield* Ref.get(acted)),
+        ...to,
+      });
+
+      page.publish(event);
+      if (style.lead !== undefined) yield* style.lead(event);
+    });
+
 /** Close a run on every exit while preserving its native replies for the page's next input. */
 const useRun = <A>(
   page: PageContext,
@@ -219,6 +247,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
         touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
         on: (subject: Named, to?: Named) => Ref.set(acted, actedOn(subject, to)),
+        announce: announcing(page, name, style, acted),
         reveal: Effect.sync(() => {
           revealed = true;
         }),
@@ -362,8 +391,7 @@ export const make = (page: PageContext, sender: Dispatch) => {
               box,
               text:
                 info.text === undefined ? undefined : revealed ? info.text.slice(0, 200) : redacted,
-              x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
-              y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
+              ...Option.match(point, { onNone: () => ({}), onSome: ({ x, y }) => ({ x, y }) }),
               ok: Exit.isSuccess(exit),
               dispatched,
               error: Option.match(failure, {

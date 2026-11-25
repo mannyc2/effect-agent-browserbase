@@ -15,6 +15,7 @@ import {
 } from "effect";
 
 import { undispatched, type BrowserError, InvalidRequest, refuse } from "./BrowserError.ts";
+import type { ActionAnnounced } from "./BrowserEvent.ts";
 import type * as Motion from "./Geometry.ts";
 import { normal } from "./Geometry.ts";
 import * as Keys from "./internal/input/keys.ts";
@@ -43,6 +44,12 @@ export interface Style {
         readonly failFast: boolean;
       }) => <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E | BrowserError, R>)
     | undefined;
+  /**
+   * Wait for this once an action has announced its target, before its pointer travels there. It
+   * holds the page's turn and spends the action's deadline, which bounds it; the target is not
+   * found again after it.
+   */
+  readonly lead?: ((announced: ActionAnnounced) => Effect.Effect<void>) | undefined;
   /**
    * Whether viewers watch the input: then the pointer clicks into a field before typing, finds
    * what lies under it as it scrolls, and scrolls to a target out of view with the wheel.

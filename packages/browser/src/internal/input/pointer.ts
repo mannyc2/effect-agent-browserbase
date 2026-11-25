@@ -18,18 +18,21 @@ export const make = (page: PageContext, dispatch: Dispatch, viewport: Viewport) 
   const { id, pointer, publish, now, span } = page;
   const { inputClocks, inputCall, dispatchMouse, sendMouse } = dispatch;
 
-  // Travel toward a press only prepares the action; a hover is its travel, and a drag holds the
-  // button it has already pressed.
+  // Travel toward a press only prepares the action, as does travel that reveals a target out of
+  // view before it is found; a hover is its travel, and a drag holds the button it has already
+  // pressed. Travel to the action's own target announces it first.
   const moveTo = (
     operation: string,
     marks: InputMarks,
     to: Point,
     cursor?: string,
-    travel: "approach" | "hover" | "drag" = "approach",
+    travel: "approach" | "reveal" | "hover" | "drag" = "approach",
   ) =>
     Effect.gen(function* () {
       const dragging = travel === "drag";
       const { style } = marks;
+
+      if (travel === "approach" || travel === "hover") yield* marks.announce(to);
       const drawn = style.pointer ?? pointer;
       const size = yield* viewport.viewportFor(operation);
 
@@ -80,7 +83,7 @@ export const make = (page: PageContext, dispatch: Dispatch, viewport: Viewport) 
               const remaining = at + sample.afterMillis - now();
 
               if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
-              yield* travel === "approach" ? marks.touched : marks.sent;
+              yield* travel === "approach" || travel === "reveal" ? marks.touched : marks.sent;
               yield* inputCall(
                 operation,
                 run.send(() =>

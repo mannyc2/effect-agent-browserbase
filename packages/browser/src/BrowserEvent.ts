@@ -160,6 +160,24 @@ export class Action extends Schema.TaggedClass<Action>()("Action", {
 
 const Sequence = Schema.Int.check(Schema.isGreaterThan(0));
 
+/**
+ * An action found its target and is about to send input there: published once, before its pointer
+ * travels to the target, with what its `Action` will record of it. A glide that only scrolls the
+ * target into view comes before. `x` and `y` are where the pointer goes, in viewport CSS pixels; for
+ * a drag, its start. Input with no pointer travel, such as keys or typing into the focused field,
+ * announces nothing.
+ */
+export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>()("ActionAnnounced", {
+  at: Schema.Finite,
+  page: Schema.String,
+  name: Name,
+  correlation: Schema.optional(Schema.String),
+  subject: Schema.optional(Subject),
+  to: Schema.optional(Subject),
+  box: Schema.optional(Box),
+  ...Motion.Point.fields,
+}) {}
+
 /** One whole glide, published before its first input. Offsets use the host monotonic clock. */
 export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlanned", {
   at: Schema.Finite,
@@ -228,6 +246,7 @@ export class CursorChanged extends Schema.TaggedClass<CursorChanged>()("CursorCh
 }) {}
 
 export const TrackEvent = Schema.Union([
+  ActionAnnounced,
   TrackPlanned,
   TrackPerformed,
   PointerPressed,

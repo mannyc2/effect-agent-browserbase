@@ -15,8 +15,8 @@ import {
 } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
-import type { Action, BrowserEvent } from "../src/BrowserEvent.ts";
-import type { Page } from "../src/Page.ts";
+import type { Action, ActionAnnounced, BrowserEvent } from "../src/BrowserEvent.ts";
+import { correlate, type Page } from "../src/Page.ts";
 import * as Motion from "../src/presentation/Motion.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
@@ -244,6 +244,24 @@ const eventsOf = (browser: Browser["Service"], page: Page) =>
     ),
   );
 
+// A browser on a local Chromium context of its own whose actions each have `actionTimeout`.
+const timed = (actionTimeout: Duration.Input) =>
+  Effect.gen(function* () {
+    const native = TestCdp.nativeContext(yield* Browser).browser();
+
+    if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+    const context = yield* Effect.acquireRelease(
+      Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+      (context) => Effect.promise(() => context.close()),
+    );
+
+    return yield* makeBrowser(context, { id: "timed", provider: "test" }, { actionTimeout });
+  });
+
+// What an action sends, in order, from its announcement to its press.
+const leading = ["ActionAnnounced", "TrackPlanned", "PointerPressed"];
+
 /**
  * A field named Search the page replaces as it takes focus, as Wikipedia's typeahead does, with a
  * field of this name, focused or not.
@@ -403,21 +421,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
   it.effect("gives presentation a budget of its own, outside the action timeout", () =>
     Effect.gen(function* () {
-      const native = TestCdp.nativeContext(yield* Browser).browser();
-
-      if (native === null) return yield* Effect.die("the fixture requires local Chromium");
-
-      const context = yield* Effect.acquireRelease(
-        Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
-        (context) => Effect.promise(() => context.close()),
-      );
-
-      const browser = yield* makeBrowser(
-        context,
-        { id: "budget", provider: "test" },
-        { actionTimeout: "1 second" },
-      );
-
+      const browser = yield* timed("1 second");
       const page = yield* browser.newPage((yield* Site).url("/form"));
       const presenter = yield* Presentation.make({ motion: straight(1500), pacing: unpaused });
       const asked = yield* browser.now;
@@ -425,6 +429,100 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       // Two glides of 1.5 s each, in an action with 1 s to do its own work.
       yield* presenter.view(page).drag({ x: 100, y: 500 }, { x: 600, y: 300 });
       assert.isAbove((yield* browser.now) - asked, 2900);
+    }),
+  );
+
+  it.effect(
+    "announces a target before its pointer travels, once an action, then waits a lead",
+    () =>
+      Effect.gen(function* () {
+        const browser = yield* Browser;
+        const page = yield* browser.newPage((yield* Site).url("/form"));
+        const leads: Array<ActionAnnounced> = [];
+
+        const presenter = yield* Presentation.make({
+          pacing: unpaused,
+          motion: straight(100),
+          lead: (announced) =>
+            Effect.sync(() => leads.push(announced)).pipe(
+              Effect.andThen(Effect.sleep("300 millis")),
+            ),
+        });
+
+        const view = presenter.view(page);
+
+        yield* view
+          .click(refOf(yield* page.snapshot(), "button", "Submit"))
+          .pipe(correlate("call-1"));
+        yield* view.drag({ x: 100, y: 500 }, { x: 300, y: 500 });
+        const events = yield* eventsOf(browser, page);
+        const click = events.find((event) => event._tag === "Action" && event.name === "click");
+        const plan = events.find((event) => event._tag === "TrackPlanned");
+        const announced = leads[0];
+
+        // The click is announced before its glide; the drag once, before the glide to its start.
+        assert.deepStrictEqual(
+          events.map((event) => event._tag).filter((tag) => leading.includes(tag)),
+          [...leading, ...leading, "TrackPlanned"],
+        );
+        assert.deepStrictEqual(
+          leads,
+          events.filter((event) => event._tag === "ActionAnnounced"),
+        );
+        assert.strictEqual(announced?.name, "click");
+        assert.strictEqual(announced?.correlation, "call-1");
+        assert.strictEqual(announced?.subject?.name, "Submit");
+        assert.deepStrictEqual(click?._tag === "Action" ? [click.x, click.y] : [], [
+          announced?.x,
+          announced?.y,
+        ]);
+        assert.isAtLeast((plan?.at ?? 0) - (announced?.at ?? Infinity), 290, "the glide waits");
+      }),
+  );
+
+  it.effect(
+    "announces a target out of view once it is found, after the glide that reveals it",
+    () =>
+      Effect.gen(function* () {
+        const browser = yield* Browser;
+
+        const page = yield* browser.newPage(
+          `data:text/html,<div style="height: 2000px"></div><button>Far</button>`,
+        );
+
+        const presenter = yield* Presentation.make({ pacing: unpaused, motion: straight(50) });
+
+        const [far] = yield* page.find({ role: "button", name: "Far", scope: "document" });
+
+        yield* presenter.view(page).click(far?.ref ?? "missing");
+        const events = yield* eventsOf(browser, page);
+        const announced = events.filter((event) => event._tag === "ActionAnnounced");
+        const tags = events.map((event) => event._tag).filter((tag) => leading.includes(tag));
+
+        // As many glides as revealing it takes, then its own.
+        assert.deepStrictEqual(tags.slice(-3), leading);
+        assert.isTrue(tags.length > 3 && tags.slice(0, -3).every((tag) => tag === "TrackPlanned"));
+        assert.lengthOf(announced, 1);
+        assert.strictEqual(
+          announced[0]?._tag === "ActionAnnounced" && announced[0].subject?.name,
+          "Far",
+        );
+      }),
+  );
+
+  it.effect("ends a lead that never ends at its action's deadline, with nothing sent", () =>
+    Effect.gen(function* () {
+      const browser = yield* timed("500 millis");
+      const page = yield* browser.newPage((yield* Site).url("/form"));
+      const presenter = yield* Presentation.make({ pacing: unpaused, lead: () => Effect.never });
+      const error = yield* Effect.flip(presenter.view(page).click({ x: 100, y: 100 }));
+      const events = yield* eventsOf(browser, page);
+
+      assert.deepStrictEqual([error.reason._tag, error.dispatched], ["Timeout", false]);
+      assert.deepStrictEqual(
+        events.map((event) => event._tag).filter((tag) => leading.includes(tag)),
+        ["ActionAnnounced"],
+      );
     }),
   );
 

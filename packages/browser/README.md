@@ -529,6 +529,24 @@ At most 2,112 input commands and reservations are owned at once; ordinary input 
 64-command admission limit. Actions still await their replies before succeeding, and interruption
 stops the unsent suffix and releases held input.
 
+An action announces its target before its pointer travels there. Once it has found the target, it
+publishes `ActionAnnounced`, with the action's name and `correlation`, the target's `subject` and
+`box`, and the point the pointer goes to. A glide that only scrolls a target into view comes
+before the target is found, so it is not announced. Input with no pointer travel announces
+nothing, for example keys, or typing into the focused field.
+
+A presenter's `lead` runs after the announcement and before the glide:
+
+```ts
+const presenter = yield * Presentation.make({ lead: (announced) => performer.arrive(announced) });
+```
+
+Use it to give whatever is shown performing the input, such as a character, time to arrive. It
+runs after the reaction's wait. It holds the page's turn, and it counts against the action's
+deadline: a lead that has not finished by then fails the action with `Timeout`, and no input is
+sent. The target is not found again after the lead, so a page that moves meanwhile is pressed
+where the target was.
+
 Typing sends key pairs for printable US characters, plainly and in a view; other text uses
 Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
 link or change a select, so `type` refuses before any input when its `into` ref is not a text field
@@ -851,8 +869,8 @@ event has expired fails with `EventHistoryExpired`; it never skips events silent
 stream promptly and size retention for the consumer’s delay. Closing the browser scope wakes and
 ends idle readers.
 
-The presentation track uses the same channel. `TrackPlanned` publishes a whole glide before
-input, with `from` and samples whose `afterMillis` are offsets from `at`. Its sequence identifies
+The presentation track uses the same channel. `ActionAnnounced` comes first, as above.
+`TrackPlanned` publishes a whole glide before input, with `from` and samples whose `afterMillis` are offsets from `at`. Its sequence identifies
 the plan. `TrackPerformed` ends that plan, names it in `plan`, and records the number of samples
 actually submitted plus the last submitted point. The consumer must trim the planned suffix to
 that count after interruption or failure. `complete` means all samples were submitted; it does
