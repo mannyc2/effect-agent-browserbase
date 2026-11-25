@@ -57,8 +57,11 @@ export const make = (page: PageContext, bridge: Bridge, overlays: Overlays) => {
       return yield* refuse("hold", "holding page time needs the browser's pageTime option");
     if (holding) return yield* refuse("hold", "the page's time is held already");
     holding = true;
+    let ended = false;
+
     yield* Effect.addFinalizer(() =>
-      step("release", { clock, op: "release", by: 0, scroll: null }).pipe(
+      Effect.sync(() => (ended = true)).pipe(
+        Effect.andThen(step("release", { clock, op: "release", by: 0, scroll: null })),
         Effect.ignore,
         Effect.ensuring(Effect.sync(() => (holding = false))),
       ),
@@ -74,6 +77,7 @@ export const make = (page: PageContext, bridge: Bridge, overlays: Overlays) => {
           Option.getOrElse(() => Number.NaN),
         );
 
+        if (ended) return yield* refuse("advance", "the hold has ended");
         if (!Number.isFinite(millis) || millis < 0)
           return yield* refuse("advance", "page time moves on by a finite, nonnegative duration");
         if (options.scroll !== undefined && !Number.isFinite(options.scroll))

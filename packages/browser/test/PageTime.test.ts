@@ -209,14 +209,14 @@ layer(
 
       yield* show(page, motion);
 
-      const page0 = yield* Effect.scoped(
+      const [page0, stale] = yield* Effect.scoped(
         Effect.gen(function* () {
           const held = yield* page.hold;
 
           yield* page.click({ x: 30, y: 15 });
           yield* held.advance("10 seconds");
 
-          return yield* evaluate(page, () => performance.now());
+          return [yield* evaluate(page, () => performance.now()), held] as const;
         }),
       );
 
@@ -228,6 +228,11 @@ layer(
 
       assert.isTrue(later.perf - after.perf >= 300);
       assert.isTrue(later.ticks - after.ticks >= 2);
+      // A hold that has ended never holds the page again.
+      assert.strictEqual(
+        (yield* Effect.flip(stale.advance("1 second"))).reason._tag,
+        "InvalidRequest",
+      );
     }),
   );
 
