@@ -263,6 +263,7 @@ export const track = (events: ReadonlyArray<RecordedEvent>): Track => {
         keyframes.push({ ...event, glide: undefined });
         break;
       }
+      case "ActionAnnounced":
       case "Action":
       case "KeyChanged":
       case "TextInserted":
