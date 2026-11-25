@@ -13,6 +13,7 @@ import { Schema } from "effect";
 import { Change } from "../../Change.ts";
 import type { Known, ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
+import type { Walk } from "../reading/walk.inpage.ts";
 import type { Folded } from "./fold.inpage.ts";
 import type { History } from "./history.inpage.ts";
 import type { Marks } from "./marks.inpage.ts";
@@ -41,6 +42,7 @@ export type ChangesResult = typeof ChangesResultSchema.Encoded;
 
 export const changes = (
   names: Names,
+  walked: Walk,
   placing: ContextReader,
   kept: History,
   seeing: Sight,
@@ -151,6 +153,8 @@ export const changes = (
     const { track, kind, before, after, lowest, highest, ...times } = one;
     const element = track.key instanceof Element ? track.key : null;
     const where = element?.isConnected === true ? element : (marking.placeOf(track.key) ?? null);
+    // What is hidden is drawn nowhere, so it has no box.
+    const box = where === null ? undefined : walked.boxOf(where);
     const role = element === null ? null : roleOf(element);
     const field = kind === "value";
 
@@ -176,6 +180,7 @@ export const changes = (
         tag: element === null ? "title" : element.tagName.toLowerCase(),
         context: kind === "title" || where === null ? {} : placing.contextOf(where, known),
       },
+      box: box === undefined || (box.width === 0 && box.height === 0) ? undefined : box,
       before: masked(before),
       after: masked(after),
       lowest: field ? undefined : lowest,

@@ -18,7 +18,7 @@
  */
 import { Schema } from "effect";
 
-import { Subject } from "./BrowserEvent.ts";
+import { Box, Subject } from "./BrowserEvent.ts";
 
 /**
  * `text` changed; `appeared` and `disappeared`, whether added or removed or shown or hidden;
@@ -35,6 +35,12 @@ export class Change extends Schema.Class<Change>("effect-browser/Change")({
    * changed, so its name is empty unless something else names it, as a field's label does.
    */
   subject: Subject,
+  /**
+   * Where it is as the changes are read, in viewport CSS pixels, unrounded; for what went, where
+   * what it sat in is. A caller can frame what an input did beside the input. Absent for the title
+   * and for what is drawn nowhere, as what was hidden is.
+   */
+  box: Schema.optional(Box),
   /** When it first changed in the window, in host monotonic milliseconds on the browser's clock. */
   startedAt: Schema.Finite,
   /** When it last changed in the window. */

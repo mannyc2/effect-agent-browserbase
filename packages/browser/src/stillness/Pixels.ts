@@ -13,6 +13,7 @@
 /// <reference path="./utilsBundle.d.ts" />
 import { jpegjs } from "playwright-core/lib/utilsBundle";
 
+import type { Box } from "../BrowserEvent.ts";
 import type { Frame } from "../Frame.ts";
 
 /** A decoded frame: RGBA, `width` pixels a row. */
@@ -58,6 +59,31 @@ export const background = (pictures: ReadonlyArray<Picture>): ReadonlySet<number
   return new Set(
     pictures.flatMap((to, index) => moved(pictures[index - 1] ?? to, to).flatMap(around)),
   );
+};
+
+/**
+ * The blocks a picture's boxes cover, and those around them, for boxes in CSS pixels and `scale`
+ * picture pixels to a CSS pixel: where an overlay draws, which is not the page's motion.
+ */
+export const covering = (boxes: ReadonlyArray<Box>, scale: number, picture: Picture) => {
+  const columns = Math.ceil(picture.width / 16);
+  const rows = Math.ceil(picture.height / 16);
+  const blocks = new Set<number>();
+
+  const block = (at: number, count: number) =>
+    Math.min(count - 1, Math.max(0, Math.floor(at / 16)));
+
+  for (const { x, y, width, height } of boxes)
+    for (let row = block(y * scale, rows) - 1; row <= block((y + height) * scale, rows) + 1; row++)
+      for (
+        let column = block(x * scale, columns) - 1;
+        column <= block((x + width) * scale, columns) + 1;
+        column++
+      )
+        if (row >= 0 && row < rows && column >= 0 && column < columns)
+          blocks.add(row * columns + column);
+
+  return blocks;
 };
 
 /** Whether anything moved from one picture to another outside the background. */

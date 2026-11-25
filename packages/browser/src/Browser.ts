@@ -37,6 +37,7 @@ import {
 import * as Events from "./BrowserEvent.ts";
 import * as BrowserClock from "./Clock.ts";
 import * as Gate from "./internal/input/gate.ts";
+import { documentScripts } from "./internal/page/bridge.ts";
 import { call, failWith, type Settings, undispatched } from "./internal/page/context.ts";
 import { listen } from "./internal/page/dialogs.ts";
 import * as Identity from "./internal/page/identity.ts";
@@ -114,6 +115,12 @@ export interface Options {
   readonly policyTimeout?: Duration.Input | undefined;
   /** Scripts that new documents run before their own, each where its `match` allows. */
   readonly initScripts?: ReadonlyArray<InitScript> | undefined;
+  /**
+   * Run a page clock in each top document before its own scripts, so `Page.hold` can hold and
+   * step its time. It keeps real time until held, but replaces the page's timers, animation
+   * frames, `Date` and `performance.now`, which a page script can notice. See `PageTime`.
+   */
+  readonly pageTime?: boolean | undefined;
   /**
    * The most pages the browser keeps open, those a site opens included, which are never refused. At
    * it, `newPage` waits for one to close, within the action timeout, then fails `Limit`; under
@@ -237,6 +244,8 @@ const settingsOf = Effect.fnUntraced(function* (options: Options) {
     frameHistory: yield* bound("frameHistory", options.frameHistory, Duration.seconds(5)),
     guard: options.guard,
     policyTimeout: yield* bound("policyTimeout", options.policyTimeout, Duration.minutes(5)),
+    // An event name the page's own scripts cannot guess, which only the clock listens for.
+    pageTime: options.pageTime === true ? `effect-browser-time-${yield* Identity.make}` : undefined,
   };
 
   if (
@@ -396,10 +405,6 @@ const eventsOf = (recent: Effect.Effect<ReadonlyArray<Events.RecordedEvent>>, pa
         : [],
     ),
   );
-
-/** A script as its documents run it: everywhere, or as a block where its `match` allows. */
-const scoped = ({ match, source }: InitScript) =>
-  match === undefined ? source : `if (${String(match)}.test(location.href)) {\n${source}\n}`;
 
 /**
  * At most `maxPages` open pages, those a site opened included, which are never refused: an open
@@ -783,8 +788,8 @@ export const make = Effect.fn("Browser.make")(function* (
 
   // Playwright registers its init scripts as it sets up each page, before a popup's first document
   // runs, and they cost no call per document.
-  for (const script of options.initScripts ?? [])
-    yield* native("initScripts", () => context.addInitScript({ content: scoped(script) }));
+  for (const content of documentScripts(settings.pageTime, options.initScripts ?? []))
+    yield* native("initScripts", () => context.addInitScript({ content }));
   const register = yield* followOpened(context, registrations, registerPage, publish, now);
 
   for (const existing of context.pages()) yield* register(existing);

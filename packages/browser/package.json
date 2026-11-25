@@ -130,6 +130,26 @@
       "types": "./dist/Geometry.d.mts",
       "default": "./dist/Geometry.mjs"
     },
+    "./Layout": {
+      "@effect-browser/source": "./src/Layout.ts",
+      "types": "./dist/Layout.d.mts",
+      "default": "./dist/Layout.mjs"
+    },
+    "./Overlay": {
+      "@effect-browser/source": "./src/Overlay.ts",
+      "types": "./dist/Overlay.d.mts",
+      "default": "./dist/Overlay.mjs"
+    },
+    "./Pose": {
+      "@effect-browser/source": "./src/Pose.ts",
+      "types": "./dist/Pose.d.mts",
+      "default": "./dist/Pose.mjs"
+    },
+    "./PageTime": {
+      "@effect-browser/source": "./src/PageTime.ts",
+      "types": "./dist/PageTime.d.mts",
+      "default": "./dist/PageTime.mjs"
+    },
     "./Style": {
       "@effect-browser/source": "./src/Style.ts",
       "types": "./dist/Style.d.mts",
@@ -139,6 +159,11 @@
       "@effect-browser/source": "./src/Window.ts",
       "types": "./dist/Window.d.mts",
       "default": "./dist/Window.mjs"
+    },
+    "./Film": {
+      "@effect-browser/source": "./src/film/Film.ts",
+      "types": "./dist/film/Film.d.mts",
+      "default": "./dist/film/Film.mjs"
     },
     "./Stillness": {
       "@effect-browser/source": "./src/stillness/Stillness.ts",

@@ -21,7 +21,12 @@ export const make =
       Effect.suspend(() =>
         bridge.evaluate(
           "ready",
-          scriptCall("ready", Math.max(0, Math.round(until - page.now())), quietMillis),
+          scriptCall(
+            "ready",
+            Math.max(0, Math.round(until - page.now())),
+            quietMillis,
+            page.settings.pageTime ?? null,
+          ),
         ),
       ).pipe(
         Effect.retry({ while: contextGone, schedule: Schedule.spaced(Duration.millis(10)) }),

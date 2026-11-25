@@ -6,18 +6,26 @@ import { rolldown } from "vite/rolldown";
 import { parseSync } from "vite/rolldown/utils";
 
 const bridge = fileURLToPath(new URL("./src/internal/page/bridge.ts", import.meta.url));
+const clock = fileURLToPath(new URL("./src/internal/page/clock.inpage.ts", import.meta.url));
 
-const installExpression = (code: string, id: string) => {
+// Each source the bridge exports, and what its frozen expression evaluates to: the installed API,
+// and the page clock's function.
+const sources = {
+  installSource: `import { install, parts } from ${JSON.stringify(bridge)}; export default install(parts);`,
+  clockSource: `import { clock } from ${JSON.stringify(clock)}; import { clockParts } from ${JSON.stringify(bridge)}; export default clock(clockParts);`,
+};
+
+const exported = (code: string, id: string, name: string) => {
   const declaration = parseSync(id, code)
     .program.body.flatMap((node) =>
       node.type === "ExportNamedDeclaration" && node.declaration?.type === "VariableDeclaration"
         ? node.declaration.declarations
         : [],
     )
-    .find(({ id: binding }) => binding.type === "Identifier" && binding.name === "installSource");
+    .find(({ id: binding }) => binding.type === "Identifier" && binding.name === name);
 
   if (declaration?.init === undefined || declaration.init === null)
-    throw new Error("The bridge must export its installSource expression.");
+    throw new Error(`The bridge must export its ${name} expression.`);
 
   return declaration.init;
 };
@@ -43,7 +51,7 @@ const pageDefinitions = (code: string, id: string) => {
             ({ id: binding, init }) =>
               binding.type === "Identifier" &&
               (id === bridge
-                ? binding.name === "install" || binding.name === "parts"
+                ? ["install", "parts", "clockParts"].includes(binding.name)
                 : id.endsWith("/Url.ts")
                   ? binding.name === "addresses"
                   : init?.type === "ArrowFunctionExpression"),
@@ -56,51 +64,63 @@ const pageDefinitions = (code: string, id: string) => {
   return definitions;
 };
 
+// One closed JavaScript expression that evaluates to what `entry` exports by default.
+const closed = async (entry: string) => {
+  const name = "\0effect-browser-page-script";
+
+  const bundle = await rolldown({
+    input: name,
+    treeshake: { moduleSideEffects: false },
+    plugins: [
+      {
+        name: "effect-browser-page-definitions",
+        resolveId: (asked) => (asked === name ? name : undefined),
+        load: (asked) => (asked === name ? entry : undefined),
+        transform: (source, asked) =>
+          asked === bridge ||
+          asked.endsWith(".inpage.ts") ||
+          asked.endsWith("/Url.ts") ||
+          asked.endsWith("/Matching.ts")
+            ? pageDefinitions(source, asked)
+            : undefined,
+      },
+    ],
+  });
+
+  try {
+    const { output } = await bundle.generate({ format: "iife", name: "pageScript" });
+    const [chunk] = output;
+
+    if (output.length !== 1 || chunk?.type !== "chunk" || chunk.imports.length !== 0)
+      throw new Error("The page script must be one closed JavaScript expression.");
+
+    return `(() => {${chunk.code}\nreturn pageScript;})()`;
+  } finally {
+    await bundle.close();
+  }
+};
+
 export const pageScript = (): Plugin => ({
   name: "effect-browser-page-script",
   enforce: "pre",
   async transform(code, id) {
     if (id !== bridge) return;
-    const entry = "\0effect-browser-page-script";
+    let frozen = code;
 
-    const bundle = await rolldown({
-      input: entry,
-      treeshake: { moduleSideEffects: false },
-      plugins: [
-        {
-          name: "effect-browser-page-definitions",
-          resolveId: (name) => (name === entry ? entry : undefined),
-          load: (name) =>
-            name === entry
-              ? `import { install, parts } from ${JSON.stringify(bridge)}; export default install(parts);`
-              : undefined,
-          transform: (source, name) =>
-            name === bridge ||
-            name.endsWith(".inpage.ts") ||
-            name.endsWith("/Url.ts") ||
-            name.endsWith("/Matching.ts")
-              ? pageDefinitions(source, name)
-              : undefined,
-        },
-      ],
-    });
+    // The later expression first, so the earlier one's offsets still hold.
+    const replacements = await Promise.all(
+      Object.entries(sources).map(async ([name, entry]) => ({
+        expression: exported(code, id, name),
+        source: await closed(entry),
+      })),
+    );
 
-    try {
-      const { output } = await bundle.generate({ format: "iife", name: "pageScript" });
-      const [chunk] = output;
+    for (const { expression, source } of replacements.toSorted(
+      (one, other) => other.expression.start - one.expression.start,
+    ))
+      frozen =
+        frozen.slice(0, expression.start) + JSON.stringify(source) + frozen.slice(expression.end);
 
-      if (output.length !== 1 || chunk?.type !== "chunk" || chunk.imports.length !== 0)
-        throw new Error("The page script must be one closed JavaScript expression.");
-      const source = `(() => {${chunk.code}\nreturn pageScript;})()`;
-
-      const expression = installExpression(code, id);
-
-      return {
-        code: code.slice(0, expression.start) + JSON.stringify(source) + code.slice(expression.end),
-        map: null,
-      };
-    } finally {
-      await bundle.close();
-    }
+    return { code: frozen, map: null };
   },
 });

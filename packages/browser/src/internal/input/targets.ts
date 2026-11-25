@@ -91,7 +91,7 @@ export const make = (
       const point = { x: plan.x, y: plan.y };
 
       yield* marks.at(point);
-      yield* moveTo(operation, marks, point);
+      yield* moveTo(operation, marks, point, undefined, "reveal");
       const before = settling.mark();
 
       yield* wheel(

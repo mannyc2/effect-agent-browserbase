@@ -96,6 +96,21 @@ setInterval(() => { green = !green; context.fillStyle = green ? 'rgb(0,255,0)' :
       yield* page.click({ x: 20, y: 20 });
       const oldRef = yield* page.click(note).pipe(Effect.result);
 
+      // The frozen page clock: a held second passes in one step.
+      yield* page.goto(
+        "data:text/html,<p id=late>Waiting</p><script>setTimeout(() => late.textContent = 'Fired', 1000)</script>",
+      );
+
+      const fired = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const held = yield* page.hold;
+
+          yield* held.advance("1 second");
+
+          return (yield* page.text()).text;
+        }),
+      );
+
       return {
         seededAction: seededAction?._tag === "Action" ? seededAction.value?._tag : undefined,
         outline: snapshot.text,
@@ -112,6 +127,10 @@ setInterval(() => { green = !green; context.fillStyle = green ? 'rgb(0,255,0)' :
         saved: saved.text,
         moving: Result.isFailure(moving) ? moving.failure.reason._tag : "Ready",
         next: next.text,
+        fired,
       };
-    }).pipe(Effect.provide(Chromium.layer({ guard: () => Effect.void })), Effect.scoped),
+    }).pipe(
+      Effect.provide(Chromium.layer({ guard: () => Effect.void, pageTime: true })),
+      Effect.scoped,
+    ),
   );

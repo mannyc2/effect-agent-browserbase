@@ -38,6 +38,8 @@ export interface Settings {
   /** How long screencast frames stay in `recentFrames`, measured back from the newest. */
   readonly frameHistory: Duration.Duration;
   readonly guard: InputGuard | undefined;
+  /** The page clock's event name, when the browser runs one in each document. */
+  readonly pageTime?: string | undefined;
 }
 
 export interface MakeOptions {

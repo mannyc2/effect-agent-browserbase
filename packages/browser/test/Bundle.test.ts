@@ -149,5 +149,6 @@ it.each([
     assert.include(result.saved, "Saved");
     assert.strictEqual(result.moving, "Timeout");
     assert.include(result.next, 'heading "Next document"');
+    assert.include(result.fired, "Fired");
   },
 );

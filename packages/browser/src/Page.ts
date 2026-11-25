@@ -32,6 +32,10 @@ import * as Motion from "./Geometry.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
+import type { Layout, Picks } from "./Layout.ts";
+import type { Overlay } from "./Overlay.ts";
+import type { Held } from "./PageTime.ts";
+import type { Poses } from "./Pose.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 import * as Url from "./Url.ts";
 import type { Window } from "./Window.ts";
@@ -106,6 +110,14 @@ export interface ScreenshotOptions {
    * many to a CSS pixel as its device scale factor, which is always a new picture.
    */
   readonly scale?: "css" | "device" | undefined;
+}
+
+/** How a page paints for a scope; see `Page.paint`. */
+export interface Paint {
+  /** Device pixels to each CSS pixel, more than 0 and at most 4. The layout keeps its size. */
+  readonly scale?: number | undefined;
+  /** False hides the page's scrollbars from its next document on, and its layout takes their room. */
+  readonly scrollbars?: boolean | undefined;
 }
 
 /**
@@ -246,6 +258,8 @@ export class State extends Schema.Class<State>("effect-browser/PageState")({
   load: Schema.optional(PageLoaded),
   /** The newest screencast frame, of whichever document it names. */
   frame: Schema.optional(Frame),
+  /** Where the overlay's drawing was last drawn, in viewport CSS pixels; absent with none shown. */
+  overlay: Schema.optional(Schema.Array(Box)),
   /** The viewport's text as it was last read, with the page's title then. */
   text: Schema.optional(Text),
 }) {}
@@ -469,6 +483,28 @@ export interface Page {
    */
   readonly find: (query?: FindQuery) => Effect.Effect<ReadonlyArray<Found>, BrowserError>;
   /**
+   * Where each pick is, in one call to the page: its box unrounded, in the viewport and in the
+   * document, the boxes of words in it, and the viewport, scroll and scale they were read at. A
+   * pick that finds nothing is listed as missing, not a failure. See `Layout`.
+   */
+  readonly layout: (picks: Picks) => Effect.Effect<Layout, BrowserError>;
+  /**
+   * A layer over the page to draw into, for the scope, that the library's readers never read.
+   * One at a time: a second while one is open fails `InvalidRequest`. See `Overlay`.
+   */
+  readonly overlay: Effect.Effect<Overlay, BrowserError, Scope.Scope>;
+  /**
+   * Pose the page's own elements for the scope, moved, turned and scaled as a caller says, and put
+   * back when the scope closes. One lease at a time: a second while one is open fails
+   * `InvalidRequest`. See `Pose`.
+   */
+  readonly poses: Effect.Effect<Poses, BrowserError, Scope.Scope>;
+  /**
+   * Hold the page's own time for the scope, to step it on with `advance`; real time resumes when
+   * the scope closes. Needs the browser's `pageTime` option; one hold at a time. See `PageTime`.
+   */
+  readonly hold: Effect.Effect<Held, BrowserError, Scope.Scope>;
+  /**
    * The text the viewport shows, or one element whole, in one call to the page. Field values read
    * `••••` unless `unmask`, and a secret field's always do, as does one that was secret when the
    * library saw it.
@@ -491,6 +527,15 @@ export interface Page {
    * its document and how far it has loaded, its newest frame, and its text and title as last read.
    */
   readonly state: Effect.Effect<State>;
+  /**
+   * Paint the page at `scale` device pixels to each CSS pixel, or without its scrollbars, for a
+   * scope: a screenshot with `scale: "device"` then has that many more pixels, while the layout,
+   * its boxes and input keep their CSS pixels. Scrollbars go from the next document on, and come
+   * back from the next after the scope, so paint, then load the page, then measure it. One at a
+   * time. A browser this library launched paints at the scale of its launch (Chromium's
+   * `deviceScaleFactor`), and refuses another.
+   */
+  readonly paint: (options: Paint) => Effect.Effect<void, BrowserError, Scope.Scope>;
 
   readonly click: (
     target: Target,

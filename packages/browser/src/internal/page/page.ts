@@ -13,6 +13,7 @@ import { type Page, State } from "../../Page.ts";
 import * as Url from "../../Url.ts";
 import * as Actions from "../input/actions.ts";
 import * as Pictures from "../pictures/pictures.ts";
+import * as Layouts from "../reading/layout.ts";
 import * as Reading from "../reading/reading.ts";
 import * as Ready from "../reading/ready.ts";
 import * as Changes from "../timeline/changes.ts";
@@ -20,7 +21,10 @@ import * as Window from "../timeline/window.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
+import * as Overlay from "./overlay.ts";
+import * as Poses from "./pose.ts";
 import * as Scripts from "./scripts.ts";
+import * as Time from "./time.ts";
 import * as Viewport from "./viewport.ts";
 
 export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
@@ -34,6 +38,8 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const navigation = Navigation.make(page, input.perform, input.preparePolicy);
   const { capture } = pictures;
   const changes = Changes.make(page, bridge, pictures.estimate);
+  const overlay = Overlay.make(page, bridge);
+  const poses = Poses.make(page, bridge);
   const titles = lane.shared<string>("title", true);
   const viewports = lane.shared<Effect.Success<Page["viewport"]>>("viewport", true);
 
@@ -52,6 +58,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       committedAt: Number.isFinite(committedAt) ? committedAt : undefined,
       load: bridge.loaded(),
       frame: Option.getOrUndefined(latest),
+      overlay: overlay.drawn(),
       text: reading.viewedSince(committedAt),
     });
   });
@@ -108,11 +115,16 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     screenshot: pictures.screenshot,
     frame: pictures.frame,
     zoom: pictures.zoom,
+    paint: pictures.paint,
     viewport: viewports("", viewport.viewportFor("viewport").pipe(within("viewport"))).pipe(
       span("Page.viewport"),
       owned,
     ),
     find: reading.find,
+    layout: Layouts.make(page, bridge),
+    overlay: overlay.lease,
+    poses: poses.lease,
+    hold: Time.make(page, bridge, overlay, poses).hold,
     text: reading.text,
     changes,
     window: Window.make(page, changes, capture.recent),

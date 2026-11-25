@@ -15,6 +15,7 @@ import {
 } from "effect";
 
 import { undispatched, type BrowserError, InvalidRequest, refuse } from "./BrowserError.ts";
+import type { ActionAnnounced } from "./BrowserEvent.ts";
 import type * as Motion from "./Geometry.ts";
 import { normal } from "./Geometry.ts";
 import * as Keys from "./internal/input/keys.ts";
@@ -43,6 +44,12 @@ export interface Style {
         readonly failFast: boolean;
       }) => <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E | BrowserError, R>)
     | undefined;
+  /**
+   * Wait for this once an action has announced its target, before its pointer travels there. It
+   * holds the page's turn and spends the action's deadline, which bounds it; the target is not
+   * found again after it.
+   */
+  readonly lead?: ((announced: ActionAnnounced) => Effect.Effect<void>) | undefined;
   /**
    * Whether viewers watch the input: then the pointer clicks into a field before typing, finds
    * what lies under it as it scrolls, and scrolls to a target out of view with the wheel.
@@ -261,6 +268,35 @@ const bursts = Effect.fnUntraced(function* (dx: number, dy: number) {
 
   return steps;
 });
+
+/**
+ * A wheel that eases over `durationMillis`: a step each frame, sixty a second, slow at first and
+ * last, so a scroll that viewers watch glides to where it goes. A style takes it as its `wheel`;
+ * a film scrolls on its own time instead.
+ */
+export const eased =
+  (durationMillis: number): Style["wheel"] =>
+  (dx, dy) => {
+    if (!Number.isFinite(durationMillis) || durationMillis < 0)
+      return refuse("scroll", "an eased scroll lasts a finite, nonnegative time");
+    if (durationMillis > maximumDurationMillis) return Effect.fail(overBudget("scroll"));
+    const count = Math.max(1, Math.round((durationMillis * 60) / 1000));
+
+    // How far along the scroll is at the end of `index` steps, smoothly in and out.
+    const along = (index: number) => {
+      const x = index / count;
+
+      return x * x * (3 - 2 * x);
+    };
+
+    return Effect.succeed(
+      Array.from({ length: count }, (_, index) => {
+        const share = along(index + 1) - along(index);
+
+        return { dx: dx * share, dy: dy * share, afterMillis: (index * durationMillis) / count };
+      }),
+    );
+  };
 
 /** Input performed for viewers, with this pointer and pace. */
 export const performed = (options: {

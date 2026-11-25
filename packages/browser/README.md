@@ -34,6 +34,11 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `Motion`       | A bounded pointer planner, as a value, and the tuned sigma-lognormal one          |
 | `Presentation` | Input performed for viewers: a presenter, and its views of pages                  |
 | `Stage`        | The source of a live output, switched between pages and stamped                   |
+| `Layout`       | Where picked things and their words are on a page, as data, and rehearsals        |
+| `Overlay`      | A layer over a page that the library draws a caller's SVG into and never reads    |
+| `PageTime`     | A page's own time, held and stepped, with its scroll, poses and overlay           |
+| `Pose`         | A page's own elements moved, turned and scaled about a point                      |
+| `Film`         | A page filmed as a function of time: frames, inputs on their frames, passages     |
 | `BrowserError` | Typed failures, whether input reached the page first, and what each leaves        |
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended    |
 | `Change`       | What visibly changed on a page over a window, element by element                  |
@@ -261,7 +266,8 @@ the page, element by element, as a `Change`: text that changed, appeared, disapp
 went (`brief`), a field's value, or the title. Each says what it showed at the window's start and
 end, how often that changed, the lowest and highest of a number that changed more than once, when
 it last changed before the window, so news stands apart from what keeps changing, and its
-`subject` with the context that binds it: a price under its row and column. A field's value reads
+`subject` with the context that binds it: a price under its row and column, and its `box`, where it
+is as the changes are read, or for what went, where what it sat in is. A field's value reads
 `••••` unless `unmask` is set, and a secret field's always does. A change names its `cause`, the
 trusted input it followed, only where it was that input's doing. It must not have been in flux: in
 the 10 s before the input it had not changed, and nothing had come into or left what it sits in, so
@@ -528,6 +534,24 @@ its published clock starts, so delayed replies cannot stretch a dense stroke thr
 At most 2,112 input commands and reservations are owned at once; ordinary input retains its
 64-command admission limit. Actions still await their replies before succeeding, and interruption
 stops the unsent suffix and releases held input.
+
+An action announces its target before its pointer travels there. Once it has found the target, it
+publishes `ActionAnnounced`, with the action's name and `correlation`, the target's `subject` and
+`box`, and the point the pointer goes to. A glide that only scrolls a target into view comes
+before the target is found, so it is not announced. Input with no pointer travel announces
+nothing, for example keys, or typing into the focused field.
+
+A presenter's `lead` runs after the announcement and before the glide:
+
+```ts
+const presenter = yield * Presentation.make({ lead: (announced) => performer.arrive(announced) });
+```
+
+Use it to give whatever is shown performing the input, such as a character, time to arrive. It
+runs after the reaction's wait. It holds the page's turn, and it counts against the action's
+deadline: a lead that has not finished by then fails the action with `Timeout`, and no input is
+sent. The target is not found again after the lead, so a page that moves meanwhile is pressed
+where the target was.
 
 Typing sends key pairs for printable US characters, plainly and in a view; other text uses
 Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
@@ -851,8 +875,8 @@ event has expired fails with `EventHistoryExpired`; it never skips events silent
 stream promptly and size retention for the consumer’s delay. Closing the browser scope wakes and
 ends idle readers.
 
-The presentation track uses the same channel. `TrackPlanned` publishes a whole glide before
-input, with `from` and samples whose `afterMillis` are offsets from `at`. Its sequence identifies
+The presentation track uses the same channel. `ActionAnnounced` comes first, as above.
+`TrackPlanned` publishes a whole glide before input, with `from` and samples whose `afterMillis` are offsets from `at`. Its sequence identifies
 the plan. `TrackPerformed` ends that plan, names it in `plan`, and records the number of samples
 actually submitted plus the last submitted point. The consumer must trim the planned suffix to
 that count after interruption or failure. `complete` means all samples were submitted; it does
@@ -928,6 +952,63 @@ Each page has its own pointer, where its last move left it, which is also where 
 its first glide starts mid-viewport, and each later one where the one before ended, whatever
 input on another tab does meanwhile. Every sent move updates the position, including a partially
 cancelled glide. A later viewport clamps the starting point to its bounds if necessary.
+
+## Filming a page
+
+A browser opened with `pageTime` can film a page frame by frame, each frame showing the page at its
+film time however long the last one took to picture. Each part is a module of its own:
+
+- `page.layout(picks)` reads where things are, as data: a box for each pick in the viewport and the
+  document, the boxes of its words, and the viewport, scroll and scale, in one call.
+  `Layout.rehearse` measures what exists only after an interaction, such as an open menu, and puts
+  the page back.
+- `page.overlay` is a layer over the page for a scope that shows a caller's SVG. Screenshots and
+  live views show it; `find`, `layout`, `changes`, `ready` and stillness never read it.
+- `page.hold` holds the page's timers, animation frames, clocks and animations for a scope.
+  `advance(by, { scroll, poses, overlay })` steps them and, in the same call, scrolls, poses and
+  draws.
+- `page.poses` moves, turns and scales the page's own elements about a point, as data, through
+  CSS `translate`, `rotate` and `scale`. Readers and clicks see a posed element where it is drawn,
+  and the change record does not report a pose. The scope's end takes every pose off.
+- `page.paint({ scale, scrollbars })` sets an attached browser's device pixels to each CSS pixel,
+  and hides scrollbars from the next document on. `Chromium.layer` takes its `deviceScaleFactor`
+  at launch.
+- `Film.frames(page, options)` is a stream of `Shot`s. At each film time it asks `at` for the
+  scroll, poses and overlay, sends the `inputs` due on that frame, and takes a screenshot. A
+  document that replaces the page is a `Passage`: the film holds its time while it loads, measures
+  its layout with the film's `picks`, and passes it to `at` from then on.
+
+```ts
+const film = Effect.gen(function* () {
+  const time = yield* page.hold;
+  const overlay = yield* page.overlay;
+
+  yield* page.poses;
+
+  return yield* Film.frames(page, {
+    times: { fps: 30, to: 8000 },
+    time,
+    overlay,
+    image: { format: "png" },
+    inputs: [{ t: 1200, label: "tab", action: { _tag: "Click", target: usage.ref } }],
+    at: (t) =>
+      Effect.succeed({
+        scroll: scrollAt(t),
+        poses: squashAt(t),
+        overlay: { _tag: "Svg", markup: ringAt(t) },
+      }),
+  }).pipe(Stream.tap(write), Film.summary);
+});
+```
+
+The frames are pictures; encoding them is the caller's. What an input changed is
+`page.changes({ since })` read after it. Each `Change` has the `box` to frame it by, and `at`, on
+the same clock as a `Shot`'s `at`, so on held time the first shot at or after it is the first to
+show it. To lift an element off the page, take its picture with a clipped screenshot at
+`scale: "device"`, then pose it to `sx: 0, sy: 0`, which hides it and leaves the page laid out as
+it was. `examples/film.ts` films a small site this way: a hover, a tab, a selected word, a copy,
+a search typed a key at a time, an eased scroll and a link to the next page, with what changed
+framed after each.
 
 ## Supervising resource generations
 
