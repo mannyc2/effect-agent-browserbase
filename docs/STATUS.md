@@ -1,5 +1,36 @@
 # Status
 
+## Unreleased
+
+`main` films pages, and gives its in-page readers to a site that owns its page.
+
+- **Filming (#318).** `Page.layout` reads where things and their words are, as data.
+  - `Page.overlay` draws a caller's SVG above the page, which no reader reads.
+  - `Page.hold`, with `pageTime`, holds the page's own time and steps it.
+  - `Page.poses` moves, turns and scales the page's own elements.
+  - `Page.paint` sets an attached browser's device scale and hides scrollbars.
+  - `Film.frames` takes a frame at each film time and sends each input on its frame; a new
+    document is a passage.
+  - `ActionAnnounced` and `Style.lead` let a live presenter's character arrive before the pointer.
+  - `Change.box` and `Shot.at` frame what an input changed, on the frame that first shows it.
+- **A site's own page (#319).** `effect-browser/Site` runs the readers, the change record, the
+  overlay and poses in a site's own bundle, with no protocol and no `effect`: 16,360 bytes
+  gzipped, minified.
+  - The change record's `note` credits what a site does through its own app as a change's cause.
+  - The four readers' result schemas moved to the host modules that decode them.
+- **The film example (#320).** It serves its site through the browser's request policy and films a
+  drag that selects a row.
+
+**Evidence.** Each of these is tested on local Chromium, including the example's frames, pixel by
+pixel. One hosted run filmed the example on Browserbase at 0cfee5b, on 2026-11-25:
+
+- **Session:** one session at 1280×720, open about 47 s, released and confirmed.
+- **Frames:** all 240, taken in 44.0 s, with all 11 inputs on their frames.
+- **Passage:** to `/docs`, which loaded in 629 ms.
+- **What changed:** 25 changes recorded after the contacts, each with its box.
+
+That run is the only hosted evidence for these features. Nothing here is released.
+
 ## 0.3.0-beta.23
 
 The `0.3.0-beta.23` release moves the packages to Effect 4.1.2 and `@yielded/agent`
