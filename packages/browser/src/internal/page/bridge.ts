@@ -38,6 +38,7 @@ import { animations, clock, timers } from "./clock.inpage.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "./context.ts";
 import { overlay, type Overlay } from "./overlay.inpage.ts";
 import { Script } from "./port.ts";
+import { pose, type Posing } from "./pose.inpage.ts";
 import { time, type Time } from "./time.inpage.ts";
 
 /** What the script installs: a version, and a function of one of its parts for each call. */
@@ -49,6 +50,8 @@ export interface PageApi {
   find: Subjects["find"];
   layout: Layouts["read"];
   overlay: Overlay["draw"];
+  pose: Posing["set"];
+  unpose: Posing["clear"];
   step: Time["step"];
   until: Expectations["until"];
   text: Texts["read"];
@@ -105,6 +108,7 @@ export const parts = {
   guard,
   edit,
   overlay,
+  pose,
   time,
   addresses: Url.addresses,
 };
@@ -148,6 +152,7 @@ export function install(parts: Parts): PageApi {
   const edited = parts.edit(named, guarded, placing);
   const readiness = parts.ready(walked, texts, kept);
   const overlaid = parts.overlay(named);
+  const posing = parts.pose(named);
 
   const api: PageApi = {
     version,
@@ -157,7 +162,9 @@ export function install(parts: Parts): PageApi {
     find: subjected.find,
     layout: parts.layout(named, walked, subjected, matching, placing).read,
     overlay: overlaid.draw,
-    step: parts.time(overlaid).step,
+    pose: posing.set,
+    unpose: posing.clear,
+    step: parts.time(overlaid, posing).step,
     until: parts.expectations(named, subjected, matching).until,
     text: texts.read,
     record: recorder.start,

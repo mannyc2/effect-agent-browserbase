@@ -11,15 +11,17 @@ import type { Held, Step } from "../../PageTime.ts";
 import { type Bridge, scriptCall } from "./bridge.ts";
 import { decodeWith, failWith, type PageContext, refuse } from "./context.ts";
 import type { Overlays } from "./overlay.ts";
+import { Posed, type Posing } from "./pose.ts";
 import type { StepRequest } from "./time.inpage.ts";
 
 const Stepped = Schema.Struct({
+  ...Posed.fields,
   told: Schema.Boolean,
   drawn: Schema.NullOr(Schema.Array(Box)),
   scroll: Point,
 });
 
-export const make = (page: PageContext, bridge: Bridge, overlays: Overlays) => {
+export const make = (page: PageContext, bridge: Bridge, overlays: Overlays, posing: Posing) => {
   const { lane, owned, span, within } = page;
   let holding = false;
 
@@ -84,6 +86,13 @@ export const make = (page: PageContext, bridge: Bridge, overlays: Overlays) => {
           return yield* refuse("advance", "the scroll must be finite");
         if (options.overlay !== undefined && !overlays.open())
           return yield* refuse("advance", "drawing needs the page's overlay open");
+        if (options.poses !== undefined && !posing.open())
+          return yield* refuse("advance", "posing needs the page's poses open");
+
+        const poses =
+          options.poses === undefined
+            ? undefined
+            : yield* posing.requests("advance", options.poses);
 
         const stepped = yield* step("advance", {
           clock,
@@ -96,8 +105,10 @@ export const make = (page: PageContext, bridge: Bridge, overlays: Overlays) => {
               : options.overlay._tag === "Svg"
                 ? options.overlay.markup
                 : null,
+          poses,
         });
 
+        yield* posing.answered("advance", stepped);
         if (!stepped.told) return yield* unclocked("advance");
         elapsed += millis;
 

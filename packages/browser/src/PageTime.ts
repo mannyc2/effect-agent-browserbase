@@ -24,11 +24,14 @@ import type { Duration, Effect } from "effect";
 import type { BrowserError } from "./BrowserError.ts";
 import type { Point } from "./Geometry.ts";
 import type { Content } from "./Overlay.ts";
+import type { Pose } from "./Pose.ts";
 
 /** What else changes with page time in the same call to the page. */
 export interface Step {
   /** Scroll the document to this many CSS pixels down it first, at once. */
   readonly scroll?: number | undefined;
+  /** Then pose these elements and take the pose off any other, as `Poses.set` does; the page's poses must be open. */
+  readonly poses?: ReadonlyArray<Pose> | undefined;
   /** Then show this in the page's overlay, which must be open. */
   readonly overlay?: Content | undefined;
 }

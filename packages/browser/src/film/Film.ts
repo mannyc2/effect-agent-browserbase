@@ -23,7 +23,10 @@ import type { Content, Overlay } from "../Overlay.ts";
 import { type Page, ResolvedTarget, type ScreenshotOptions } from "../Page.ts";
 import type { Held, Step } from "../PageTime.ts";
 
-/** What a frame shows over the page, and, on held time, where the page is scrolled to then. */
+/**
+ * What a frame shows over the page, and, on held time, where the page is scrolled to then and how
+ * its elements are posed, with the page's poses open.
+ */
 export type At = Step;
 
 /** Frames at `fps` from `from` (0 by default) until before `to`, or at these times, in ms. */
@@ -177,14 +180,20 @@ const mover = (page: Page, time: Time, overlay: Overlay | undefined): Mover => {
   if (typeof time === "object" && "advance" in time) {
     let now = 0;
 
-    const move: Mover["move"] = (t, { scroll, overlay: content }, drawn) =>
-      time.advance(Duration.millis(t - now), { scroll, overlay: drawn ? content : undefined }).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            now = t;
-          }),
-        ),
-      );
+    const move: Mover["move"] = (t, { scroll, poses, overlay: content }, drawn) =>
+      time
+        .advance(Duration.millis(t - now), {
+          scroll,
+          poses,
+          overlay: drawn ? content : undefined,
+        })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              now = t;
+            }),
+          ),
+        );
 
     return { move, skip: () => undefined };
   }
@@ -205,7 +214,7 @@ const mover = (page: Page, time: Time, overlay: Overlay | undefined): Mover => {
       : time.seek;
 
   const move: Mover["move"] = (t, at, drawn) =>
-    at.scroll === undefined
+    at.scroll === undefined && at.poses === undefined
       ? arrive(t).pipe(
           Effect.andThen(
             drawn && at.overlay !== undefined && overlay !== undefined
@@ -214,7 +223,7 @@ const mover = (page: Page, time: Time, overlay: Overlay | undefined): Mover => {
           ),
           Effect.as(undefined),
         )
-      : refuse(operation, "a film scrolls the page only on held time");
+      : refuse(operation, "a film scrolls and poses the page only on held time");
 
   return {
     move,

@@ -140,6 +140,11 @@
       "types": "./dist/Overlay.d.mts",
       "default": "./dist/Overlay.mjs"
     },
+    "./Pose": {
+      "@effect-browser/source": "./src/Pose.ts",
+      "types": "./dist/Pose.d.mts",
+      "default": "./dist/Pose.mjs"
+    },
     "./PageTime": {
       "@effect-browser/source": "./src/PageTime.ts",
       "types": "./dist/PageTime.d.mts",

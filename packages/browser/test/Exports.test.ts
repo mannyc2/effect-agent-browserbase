@@ -42,6 +42,7 @@ it("the root exposes the portable kernel without importing optional features or 
     "Overlay",
     "Page",
     "PageTime",
+    "Pose",
     "Snapshot",
     "Style",
     "Url",

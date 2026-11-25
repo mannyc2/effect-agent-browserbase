@@ -322,6 +322,7 @@ export const makeIn = Effect.fnUntraced(function* (
     zoom: () => unsupported("zoom"),
     layout: () => unsupported("layout"),
     overlay: unsupported("overlay"),
+    poses: unsupported("poses"),
     hold: unsupported("hold"),
     paint: () => unsupported("paint"),
     ready: () =>

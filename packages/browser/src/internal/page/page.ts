@@ -22,6 +22,7 @@ import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
 import * as Overlay from "./overlay.ts";
+import * as Poses from "./pose.ts";
 import * as Scripts from "./scripts.ts";
 import * as Time from "./time.ts";
 import * as Viewport from "./viewport.ts";
@@ -38,6 +39,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const { capture } = pictures;
   const changes = Changes.make(page, bridge, pictures.estimate);
   const overlay = Overlay.make(page, bridge);
+  const poses = Poses.make(page, bridge);
   const titles = lane.shared<string>("title", true);
   const viewports = lane.shared<Effect.Success<Page["viewport"]>>("viewport", true);
 
@@ -121,7 +123,8 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     find: reading.find,
     layout: Layouts.make(page, bridge),
     overlay: overlay.lease,
-    hold: Time.make(page, bridge, overlay).hold,
+    poses: poses.lease,
+    hold: Time.make(page, bridge, overlay, poses).hold,
     text: reading.text,
     changes,
     window: Window.make(page, changes, capture.recent),
