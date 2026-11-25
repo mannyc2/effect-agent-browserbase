@@ -9,12 +9,13 @@
  */
 import { Clock, Duration, Effect, Schema, Stream } from "effect";
 
+import { Action } from "../Action.ts";
 import { type BrowserError, refuse } from "../BrowserError.ts";
 import { monotonicMillis } from "../Clock.ts";
 import { Image } from "../Frame.ts";
 import { Point } from "../Geometry.ts";
 import type { Content, Overlay } from "../Overlay.ts";
-import type { Page, ScreenshotOptions } from "../Page.ts";
+import { type Page, ResolvedTarget, type ScreenshotOptions } from "../Page.ts";
 import type { Held, Step } from "../PageTime.ts";
 
 /** What a frame shows over the page, and, on held time, where the page is scrolled to then. */
@@ -37,8 +38,14 @@ export type Time =
 export interface Options<E = never> {
   readonly times: Times;
   readonly time: Time;
-  /** What each frame shows, from its film time. */
+  /** What the page shows at a film time: each frame's, and each input's. */
   readonly at?: ((t: number) => Effect.Effect<At, E>) | undefined;
+  /**
+   * Inputs sent at their film times, in time order, each before the first frame at or after it:
+   * the page is moved to its time, and on held time it answers as its time is stepped on. One that
+   * fails fails the film.
+   */
+  readonly inputs?: ReadonlyArray<Contact> | undefined;
   /** The page's overlay, open, that `at`'s drawings go to. */
   readonly overlay?: Overlay | undefined;
   readonly image?: Pick<ScreenshotOptions, "format" | "quality" | "scale"> | undefined;
@@ -48,6 +55,26 @@ export interface Options<E = never> {
 
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const Millis = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+
+/** An input to send at film time `t`, in ms, with the caller's name for it. */
+export const Contact = Schema.Struct({
+  t: Millis,
+  action: Action,
+  label: Schema.optional(Schema.String),
+});
+
+export type Contact = typeof Contact.Type;
+
+/** An input as it was sent, at its film time. */
+export class Sent extends Schema.Class<Sent>("effect-browser/Sent")({
+  t: Millis,
+  label: Schema.optional(Schema.String),
+  action: Action,
+  /** What a click resolved its target to, before its input. */
+  target: Schema.optional(ResolvedTarget),
+  /** The page's document after it. */
+  document: Count,
+}) {}
 
 /** One frame: its picture at film time `t`, in ms, and what taking it cost in real time. */
 export class Shot extends Schema.Class<Shot>("effect-browser/Shot")({
@@ -59,6 +86,8 @@ export class Shot extends Schema.Class<Shot>("effect-browser/Shot")({
   url: Schema.String,
   /** Where the document was scrolled to, in CSS pixels, on held time. */
   scroll: Schema.optional(Point),
+  /** The inputs sent since the frame before. */
+  sent: Schema.Array(Sent),
   /** Screenshots that timed out before this one. */
   retries: Count,
   /** Real milliseconds from the frame's start to its picture. */
@@ -72,6 +101,8 @@ export class Summary extends Schema.Class<Summary>("effect-browser/FilmSummary")
   /** Real milliseconds, all frames' and the slowest one's. */
   took: Millis,
   slowest: Millis,
+  /** Every input sent, in order. */
+  sent: Schema.Array(Sent),
 }) {}
 
 const operation = "Film.frames";
@@ -165,14 +196,37 @@ export const frames = <E = never>(
 
       if (!Number.isSafeInteger(retries) || retries < 0)
         return yield* refuse(operation, "retries must be a nonnegative safe integer");
+      const inputs = (options.inputs ?? []).toSorted((one, other) => one.t - other.t);
+
+      if (!inputs.every(({ t }) => Number.isFinite(t) && t >= 0))
+        return yield* refuse(operation, "an input's time is finite and nonnegative");
+      let next = 0;
       const move = mover(page, options.time, options.overlay);
       const at = options.at ?? ((): Effect.Effect<At, E> => Effect.succeed({}));
       const now = () => monotonicMillis(page.clock);
       let shown: string | undefined;
 
+      const send = ({ t, action, label }: Contact) =>
+        Effect.gen(function* () {
+          yield* move(t, yield* at(t), false);
+          const done = yield* page.perform(action);
+          const { document } = yield* page.state;
+          const target = Schema.is(ResolvedTarget)(done) ? done : undefined;
+
+          return new Sent({ t, label, action, target, document });
+        });
+
       const shoot = (t: number, index: number) =>
         Effect.gen(function* () {
           const started = now();
+          const sent: Array<Sent> = [];
+
+          for (
+            let input = inputs[next];
+            input !== undefined && input.t <= t;
+            input = inputs[++next]
+          )
+            sent.push(yield* send(input));
           const showing = yield* at(t);
           const key = keyOf(showing.overlay);
 
@@ -199,6 +253,7 @@ export const frames = <E = never>(
             document,
             url,
             scroll,
+            sent,
             retries: timedOut,
             took: now() - started,
           });
@@ -215,12 +270,13 @@ export const frames = <E = never>(
 export const summary = <E, R>(shots: Stream.Stream<Shot, E, R>): Effect.Effect<Summary, E, R> =>
   Stream.runFold(
     shots,
-    () => new Summary({ frames: 0, retries: 0, took: 0, slowest: 0 }),
+    () => new Summary({ frames: 0, retries: 0, took: 0, slowest: 0, sent: [] }),
     (sum, shot) =>
       new Summary({
         frames: sum.frames + 1,
         retries: sum.retries + shot.retries,
         took: sum.took + shot.took,
         slowest: Math.max(sum.slowest, shot.took),
+        sent: [...sum.sent, ...shot.sent],
       }),
   );

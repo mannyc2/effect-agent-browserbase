@@ -93,6 +93,80 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
     }),
   );
 
+  it.effect("sends inputs at their film times, answered as held time steps on", () =>
+    Effect.gen(function* () {
+      const page = yield* blank;
+
+      yield* show(
+        page,
+        `${slide}<button id=copy style="position: fixed; left: 300px; top: 40px; width: 60px; height: 30px" onclick="copy.textContent = '✓'; setTimeout(() => copy.textContent = 'copy', 1500)">copy</button>`,
+      );
+      const held = yield* page.hold;
+      const go = (yield* page.find({ role: "button", name: "go" }))[0]?.ref ?? "";
+
+      const copied = page
+        .read(() => document.getElementById("copy")?.textContent, {
+          arg: null,
+          result: Schema.String,
+        })
+        .pipe(Effect.map(({ value }) => value));
+
+      const shots = yield* Stream.runCollect(
+        Film.frames(page, {
+          times: { fps: 10, to: 2000 },
+          time: held,
+          inputs: [
+            { t: 240, action: { _tag: "Click", target: { x: 330, y: 55 } }, label: "copy" },
+            { t: 40, action: { _tag: "Click", target: go }, label: "go" },
+          ],
+        }).pipe(Stream.mapEffect((shot) => Effect.map(copied, (text) => ({ shot, text })))),
+      );
+
+      // Pressed at 40 ms, between frames, the box moves from there.
+      for (const { shot } of shots)
+        assert.closeTo(
+          column(shot.image, 125, red),
+          Math.min(100, Math.max(0, shot.t - 40) / 10),
+          1.5,
+        );
+      assert.deepStrictEqual(
+        shots.map(({ text }) => text),
+        shots.map(({ shot }) => (shot.t >= 300 && shot.t < 1740 ? "✓" : "copy")),
+      );
+      assert.deepStrictEqual(
+        shots.flatMap(({ shot }) => shot.sent.map((sent) => [shot.t, sent.t, sent.label])),
+        [
+          [100, 40, "go"],
+          [300, 240, "copy"],
+        ],
+      );
+      assert.strictEqual(shots[1]?.shot.sent[0]?.target?.name, "go");
+    }),
+  );
+
+  it.effect("fails the film with an input that fails, after the frames before it", () =>
+    Effect.gen(function* () {
+      const page = yield* blank;
+
+      yield* show(page, slide);
+      const held = yield* page.hold;
+      let frames = 0;
+
+      const failed = yield* Effect.flip(
+        Stream.runDrain(
+          Film.frames(page, {
+            times: [0, 100, 200],
+            time: held,
+            inputs: [{ t: 150, action: { _tag: "Click", target: "e999" } }],
+          }).pipe(Stream.tap(() => Effect.sync(() => frames++))),
+        ),
+      );
+
+      assert.strictEqual(frames, 2);
+      assert.strictEqual(failed.operation, "click");
+    }),
+  );
+
   it.effect("films a page that seeks itself, and real time, and sums what a film cost", () =>
     Effect.gen(function* () {
       const page = yield* blank;
@@ -127,6 +201,7 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
 
       assert.strictEqual(summary.frames, 10);
       assert.strictEqual(summary.retries, 0);
+      assert.deepStrictEqual(summary.sent, []);
       assert.isAtLeast(Date.now() - started, 450);
       assert.isAbove(summary.took, 0);
       assert.isAtMost(summary.slowest, summary.took);
@@ -197,6 +272,14 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
       assert.strictEqual(yield* refused({ times: [100, 50], time: "real" }), "InvalidRequest");
       assert.strictEqual(
         yield* refused({ times: [0], time: "real", retries: -1 }),
+        "InvalidRequest",
+      );
+      assert.strictEqual(
+        yield* refused({
+          times: [0],
+          time: "real",
+          inputs: [{ t: Number.NaN, action: { _tag: "Back" } }],
+        }),
         "InvalidRequest",
       );
       assert.strictEqual(
