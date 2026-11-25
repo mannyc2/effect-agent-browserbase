@@ -8,12 +8,12 @@
  * the input's own doing, by `Change.cause`'s rule. See `names.inpage.ts` for what a page-side part
  * may use.
  */
-import { Schema } from "effect";
 
-import { Change } from "../../Change.ts";
+import type { Change } from "../../Change.ts";
 import type { Known, ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import type { Walk } from "../reading/walk.inpage.ts";
+import type { ChangesResult } from "./changes.ts";
 import type { Folded } from "./fold.inpage.ts";
 import type { History } from "./history.inpage.ts";
 import type { Marks } from "./marks.inpage.ts";
@@ -26,19 +26,6 @@ export interface ChangesRequest {
   readonly until: number | null;
   readonly unmask: boolean;
 }
-
-/**
- * What a read sends back: its window and the record's state, and each change as `Change` encodes
- * it, all on the page's clock.
- */
-export const ChangesResultSchema = Schema.Struct({
-  until: Schema.Finite,
-  from: Schema.Finite,
-  dropped: Schema.Int,
-  records: Schema.Array(Change),
-});
-
-export type ChangesResult = typeof ChangesResultSchema.Encoded;
 
 export const changes = (
   names: Names,

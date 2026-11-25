@@ -4,8 +4,9 @@
  * nobody has read for two minutes. While it runs, a MutationObserver hands each batch to
  * `marks.inpage.ts`, and an IntersectionObserver judges as the page renders whether what was marked
  * was in view (`sight.inpage.ts`). A field reports its value as it is edited, a secret one only as
- * `••••`, and trusted pointer and key input is kept, for a read to name causes by. Nothing unmarked
- * is read: no walk, no words, no layout. See `names.inpage.ts` for what a page-side part may use.
+ * `••••`, and trusted pointer and key input is kept, or input noted as such, for a read to name
+ * causes by. Nothing unmarked is read: no walk, no words, no layout. See `names.inpage.ts` for what
+ * a page-side part may use.
  */
 import type { Names } from "../reading/names.inpage.ts";
 import type { Texts } from "../reading/text.inpage.ts";
@@ -63,13 +64,16 @@ export const record = (
     if (sample !== undefined) seeing.look(field, sample);
   };
 
+  // Protocol timestamps are mapped estimates; observation and mutations share this clock.
+  const note = (target: Element) => {
+    inputs.push({ at: epoch(), target });
+    if (inputs.length > 8) inputs.shift();
+  };
+
   const onInput = (event: Event) => {
     const target = targetOf(event);
 
-    if (!event.isTrusted || target === undefined) return;
-    // Protocol timestamps are mapped estimates; observation and mutations share this clock.
-    inputs.push({ at: epoch(), target });
-    if (inputs.length > 8) inputs.shift();
+    if (event.isTrusted && target !== undefined) note(target);
   };
 
   const listeners = [
@@ -129,6 +133,11 @@ export const record = (
         document.addEventListener("DOMContentLoaded", begin, { once: true });
       else begin();
     },
+    /**
+     * Keep an input at `target` now, as a trusted one is kept: what a site does through its own
+     * app, whose events the page sees as untrusted, so its changes can name their cause.
+     */
+    note,
     inputs: (): ReadonlyArray<{ readonly at: number; readonly target: Element }> => inputs,
   };
 };

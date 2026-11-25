@@ -1,11 +1,26 @@
 /** Document readiness and content quiet, independent of screen-capture features. */
-import { Duration, Effect, Schedule } from "effect";
+import { Duration, Effect, Schedule, Schema } from "effect";
 
 import { Timeout, failWith, refuse } from "../../BrowserError.ts";
 import type { ReadyOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, type PageContext } from "../page/context.ts";
-import { ReadinessSchema } from "./ready.inpage.ts";
+
+/** What the page is still waiting for; none when it is ready. */
+const ReadinessSchema = Schema.Array(
+  Schema.Literals([
+    "load",
+    "paint",
+    "animations",
+    "images",
+    "fonts",
+    "busy",
+    "content",
+    "changing",
+  ]),
+);
+
+export type Readiness = typeof ReadinessSchema.Type;
 
 export const make =
   (page: PageContext, bridge: Bridge) =>

@@ -17,7 +17,20 @@ import type { Frame } from "../../Frame.ts";
 import type { ChangesOptions } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, type PageContext } from "../page/context.ts";
-import { type ChangesRequest, ChangesResultSchema } from "./changes.inpage.ts";
+import type { ChangesRequest } from "./changes.inpage.ts";
+
+/**
+ * What a read sends back: its window and the record's state, and each change as `Change` encodes
+ * it, all on the page's clock.
+ */
+const ChangesResultSchema = Schema.Struct({
+  until: Schema.Finite,
+  from: Schema.Finite,
+  dropped: Schema.Int,
+  records: Schema.Array(Change),
+});
+
+export type ChangesResult = typeof ChangesResultSchema.Encoded;
 
 const isChanges = Schema.is(Changes);
 
