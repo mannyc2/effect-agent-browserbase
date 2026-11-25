@@ -4,12 +4,12 @@ effect-browser is browser automation for [Effect](https://effect.website) agents
 
 ## What's in the box
 
-| Package                        | What it is                                                          |
-| ------------------------------ | ------------------------------------------------------------------- |
-| `effect-browser`               | The browser, its pages, frames, events and moments, over Playwright |
-| `effect-agent-browser`         | Its pages as Yielded Agent's browser ports, with the agent's tools  |
-| `effect-browserbase`           | Browserbase sessions as a `Browser`, and a client for its REST API  |
-| `effect-browser-human-strokes` | Optional recorded pointer motion, as a presenter's planner          |
+| Package                        | What it is                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `effect-browser`               | The browser, its pages, frames, events, moments and films, over Playwright |
+| `effect-agent-browser`         | Its pages as Yielded Agent's browser ports, with the agent's tools         |
+| `effect-browserbase`           | Browserbase sessions as a `Browser`, and a client for its REST API         |
+| `effect-browser-human-strokes` | Optional recorded pointer motion, as a presenter's planner                 |
 
 ## The demo
 
@@ -23,4 +23,5 @@ An agent explores [Polymarket](https://polymarket.com) on its own while a second
 - [Run the demo yourself](/docs/run-the-demo): record your own narrated take, on your machine.
 - [Moments and narration](/docs/moments-and-narration): how an agent sees what a page did, in its thread.
 - [Watched browsing](/docs/watched-browsing): input performed at a person's pace, and clean cuts between pages.
+- [Filming a page](/docs/filming): a page filmed frame by frame on its own held time, with input on its frame.
 - [For AI agents](/docs/for-agents): every page here is also plain markdown.

@@ -12,7 +12,7 @@ evidence; applications own their decisions and durable business records.
 
 | Package                                                  | What it is                                                         |
 | -------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`effect-browser`](packages/browser)                     | The browser, its pages and moments, over Playwright                |
+| [`effect-browser`](packages/browser)                     | The browser, its pages, moments and films, over Playwright         |
 | [`effect-agent-browser`](packages/agent-browser)         | Its pages as a Yielded agent's browser tools                       |
 | [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
 | [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
@@ -31,6 +31,15 @@ show watched preparation and event-driven presentation, plus a separate operator
 runner that refuses unresolved consequential input. Connection identity and one host clock keep
 frame and generation evidence interpretable across reattachment. [STATUS.md](docs/STATUS.md)
 distinguishes released capabilities from remaining hosted checks.
+
+Pages can also be filmed. `Page.layout` reads where things and their words are, as data.
+`Page.overlay` draws a caller's SVG above the page, which no reader reads. `Page.hold` holds the
+page's own time and steps it. `Page.poses` moves, turns and scales the page's own elements.
+`Film.frames` takes a frame at each film time and sends each input on the frame it belongs to;
+[Filming a page](packages/browser/README.md#filming-a-page) puts them together. A site that owns its
+page runs the same readers, change record, overlay and poses in its own bundle through
+`effect-browser/Site`, with no protocol and no `effect`
+([A site that owns its page](packages/browser/README.md#a-site-that-owns-its-page)).
 
 ## An agent in a local Chromium
 

@@ -52,6 +52,13 @@ export const pages: ReadonlyArray<Page> = [
     section: "Guides",
   },
   {
+    slug: "filming",
+    title: "Filming a page",
+    summary:
+      "Layout as data, an overlay, the page's own time held, input on its frame, element poses, and the readers a site runs on its own page.",
+    section: "Guides",
+  },
+  {
     slug: "agent-tools",
     title: "Agent tools",
     summary: "effect-agent-browser: issued pages as Yielded Agent's browser ports and tools.",

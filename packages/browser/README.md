@@ -3,8 +3,10 @@
 Browser automation for [Effect](https://effect.website) agents, over Playwright: page control, a
 compact page outline for models, screencast frames, a record of what visibly changed on a page,
 windows over a page's events, changes and frames, and moments, an account in pictures and words of
-what a page showed and what changed on it. An agent drives its pages through
-[`effect-agent-browser`](../agent-browser), with Yielded Agent's browser tools.
+what a page showed and what changed on it. It films pages on their own held time, with layout as
+data, an overlay, element poses and input on its frame, and gives its in-page readers to a site that
+owns its page. An agent drives its pages through [`effect-agent-browser`](../agent-browser), with
+Yielded Agent's browser tools.
 
 ```sh
 npm install effect-browser@beta effect playwright-core
