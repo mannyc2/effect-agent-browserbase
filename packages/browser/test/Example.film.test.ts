@@ -1,10 +1,11 @@
 // The film example, run on local Chromium: the page answers each contact on the frame it is sent,
-// what changed is read back with its box and time, and a link click is a passage.
+// what changed is read back with its box and time, and a link click is a passage. The site is
+// served through the request policy, as a hosted browser would be served it.
 import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { PNG } from "playwright-core/lib/utilsBundle";
 
-import { film, serve } from "../examples/film.ts";
+import { film, origin, requests } from "../examples/film.ts";
 import type { Box } from "../src/BrowserEvent.ts";
 import type * as Film from "../src/film/Film.ts";
 import * as Layout from "../src/Layout.ts";
@@ -35,12 +36,9 @@ const contains = (box: Box | undefined, { x, y }: { x: number; y: number }) =>
 
 it.live("films the page answering each contact on its frame, what changed, and a passage", () =>
   Effect.gen(function* () {
-    const url = yield* serve;
     const shots: Array<Film.Shot> = [];
 
-    const { summary, changed, layout } = yield* film(url, (shot) =>
-      Effect.sync(() => shots.push(shot)),
-    );
+    const { summary, changed, layout } = yield* film((shot) => Effect.sync(() => shots.push(shot)));
 
     assert.strictEqual(summary.frames, 240);
     assert.isTrue(shots.every(({ image }) => image.mediaType === "image/png"));
@@ -57,6 +55,7 @@ it.live("films the page answering each contact on its frame, what changed, and a
         [3570, "t"],
         [3690, "r"],
         [4100, "close"],
+        [5700, "drag"],
         [6000, "docs"],
       ],
     );
@@ -64,7 +63,7 @@ it.live("films the page answering each contact on its frame, what changed, and a
       summary.passages.map(({ t, url: to }) => [t, new URL(to).pathname]),
       [[6000, "/docs"]],
     );
-    assert.strictEqual(new URL(shots.at(-1)?.url ?? url).pathname, "/docs");
+    assert.strictEqual(new URL(shots.at(-1)?.url ?? origin).pathname, "/docs");
 
     const docs = Layout.place(layout, "docs")?.box;
     const usage = Layout.place(layout, "usage")?.box;
@@ -74,7 +73,9 @@ it.live("films the page answering each contact on its frame, what changed, and a
       text.startsWith("concurrency"),
     )?.box;
 
-    if (!docs || !usage || !copy || !word) return assert.fail("the example's places");
+    const [rowWord] = Layout.place(layout, "row")?.words ?? [];
+
+    if (!docs || !usage || !copy || !word || !rowWord) return assert.fail("the example's places");
 
     // Frames are 1/30 s apart, so frame 18 is at 600 ms. The link's underline eases in over
     // 300 ms from the frame the pointer reaches it: none there, a part 100 ms on, all of it later.
@@ -101,11 +102,18 @@ it.live("films the page answering each contact on its frame, what changed, and a
 
     // The double click on frame 72 selects the word: its highlight, above letters that rise no
     // higher than an x, where glyphs' coloured edges cannot pass for it.
-    const selected = (index: number) =>
-      median(row(shots[index], word.y + 4, word.x + 2, word.x + 12).map(({ r, b }) => b - r)) > 80;
+    const selected = (index: number, { x, y }: Box) =>
+      median(row(shots[index], y + 4, x + 2, x + 12).map(({ r, b }) => b - r)) > 80;
 
-    assert.isFalse(selected(71));
-    assert.isTrue(selected(72));
+    assert.isFalse(selected(71, word));
+    assert.isTrue(selected(72, word));
+
+    // The drag released on frame 171 selects the row, scrolled 150 px up by then: its "ow", past
+    // the capital R, whose selected glyph is drawn white.
+    const across = { ...rowWord.page, x: rowWord.page.x + 12, y: rowWord.page.y - 150 };
+
+    assert.isFalse(selected(170, across));
+    assert.isTrue(selected(171, across));
 
     // What each contact changed, where it is, and the first frame that shows it.
     const texts = changed.filter(({ kind }) => kind === "text");
@@ -139,7 +147,9 @@ it.live("films the page answering each contact on its frame, what changed, and a
     assert.isTrue(closed !== undefined && closed.box === undefined, "the closed search");
   }).pipe(
     Effect.scoped,
-    Effect.provide(Chromium.layer({ viewport: { width: 640, height: 360 }, pageTime: true })),
+    Effect.provide(
+      Chromium.layer({ viewport: { width: 640, height: 360 }, pageTime: true, requests }),
+    ),
     Effect.timeout("60 seconds"),
   ),
 );
