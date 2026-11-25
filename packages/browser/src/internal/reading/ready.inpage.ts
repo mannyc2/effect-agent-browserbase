@@ -6,7 +6,9 @@
  * frame. So a canvas mounted blank, or a spinner alone, is still loading. A screen that only says
  * "Loading…" in words reads as ready, and a WebGL canvas drawn once, without keeping its drawing,
  * reads as blank. Asked for a quiet spell, where the page's changes are recorded, nothing in view
- * may have changed for that long either. After input, it waits a task and a frame. See `names.inpage.ts` for what a page-side part may use.
+ * may have changed for that long either. On a page whose time is held (see `clock.inpage.ts`), an
+ * animation paused part way is still animating: held time has yet to finish it. After input, it
+ * waits a task and a frame. See `names.inpage.ts` for what a page-side part may use.
  */
 import { Schema } from "effect";
 
@@ -85,9 +87,15 @@ export const ready = (walked: Walk, texts: Texts, kept: History) => {
   };
 
   // In a frame, before it is drawn: a canvas drawn every frame still holds its drawing then.
-  const check = (quietMillis: number): Promise<Readiness> =>
+  const check = (quietMillis: number, clock: string | null): Promise<Readiness> =>
     painted().then((paints) => {
       const waiting: Array<Readiness[number]> = [];
+
+      const held =
+        clock !== null &&
+        !document.dispatchEvent(
+          new CustomEvent(clock, { detail: { op: "holds" }, cancelable: true }),
+        );
 
       if (document.readyState === "loading") waiting.push("load");
       if (!paints) waiting.push("paint");
@@ -97,7 +105,7 @@ export const ready = (walked: Walk, texts: Texts, kept: History) => {
           const effect = animation.effect;
 
           return (
-            animation.playState === "running" &&
+            (animation.playState === "running" || (held && animation.playState === "paused")) &&
             effect !== null &&
             Number.isFinite(effect.getComputedTiming().endTime) &&
             "target" in effect &&
@@ -122,11 +130,15 @@ export const ready = (walked: Walk, texts: Texts, kept: History) => {
    * Check until the page is ready, or for `millis`, and say what it is still waiting for; with
    * `quietMillis`, until nothing the record saw in view has changed for that long, too.
    */
-  const wait = async (millis: number, quietMillis = 0): Promise<Readiness> => {
+  const wait = async (
+    millis: number,
+    quietMillis = 0,
+    clock: string | null = null,
+  ): Promise<Readiness> => {
     const until = performance.now() + millis;
 
     for (;;) {
-      const waiting = await check(quietMillis);
+      const waiting = await check(quietMillis, clock);
 
       if (waiting.length === 0 || performance.now() >= until) return waiting;
       const { promise, resolve } = Promise.withResolvers<void>();

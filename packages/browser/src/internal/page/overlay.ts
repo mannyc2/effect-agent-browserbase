@@ -21,18 +21,19 @@ export const make = (page: PageContext, bridge: Bridge) => {
   let shown: string | null = null;
   let drawn: ReadonlyArray<Box> = [];
 
+  // What a call to the page drew, wherever it was drawn from.
+  const record = (markup: string | null, boxes: ReadonlyArray<Box>) => {
+    shown = markup;
+    drawn = boxes;
+    page.noteInput();
+  };
+
   const send = (markup: string | null) =>
     turns.withPermit(
       lane.read("overlay")(
         bridge.evaluate("overlay", scriptCall("overlay", markup)).pipe(
           Effect.flatMap(decodeWith("overlay", Drawn)),
-          Effect.tap((boxes) =>
-            Effect.sync(() => {
-              shown = markup;
-              drawn = boxes;
-              page.noteInput();
-            }),
-          ),
+          Effect.tap((boxes) => Effect.sync(() => record(markup, boxes))),
           within("overlay"),
         ),
       ),
@@ -75,5 +76,14 @@ export const make = (page: PageContext, bridge: Bridge) => {
     return { draw };
   });
 
-  return { lease, drawn: () => (shown === null ? undefined : drawn) };
+  return {
+    lease,
+    drawn: () => (shown === null ? undefined : drawn),
+    open: () => open,
+    record,
+    /** Run a call that draws in the overlay's turn, so no other drawing overtakes it. */
+    turn: <A, E, R>(effect: Effect.Effect<A, E, R>) => turns.withPermit(effect),
+  };
 };
+
+export type Overlays = ReturnType<typeof make>;

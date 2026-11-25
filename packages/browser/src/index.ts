@@ -11,6 +11,7 @@ export * as Geometry from "./Geometry.ts";
 export * as Layout from "./Layout.ts";
 export * as Overlay from "./Overlay.ts";
 export * as Page from "./Page.ts";
+export * as PageTime from "./PageTime.ts";
 export * as Snapshot from "./Snapshot.ts";
 export * as Style from "./Style.ts";
 export * as Window from "./Window.ts";

@@ -23,6 +23,7 @@ import * as Context from "./context.ts";
 import * as Navigation from "./navigation.ts";
 import * as Overlay from "./overlay.ts";
 import * as Scripts from "./scripts.ts";
+import * as Time from "./time.ts";
 import * as Viewport from "./viewport.ts";
 
 export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
@@ -119,6 +120,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     find: reading.find,
     layout: Layouts.make(page, bridge),
     overlay: overlay.lease,
+    hold: Time.make(page, bridge, overlay).hold,
     text: reading.text,
     changes,
     window: Window.make(page, changes, capture.recent),

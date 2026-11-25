@@ -34,6 +34,7 @@ import * as Guard from "./internal/input/guard.inpage.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
 import type { Layout, Picks } from "./Layout.ts";
 import type { Overlay } from "./Overlay.ts";
+import type { Held } from "./PageTime.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 import * as Url from "./Url.ts";
 import type { Window } from "./Window.ts";
@@ -483,6 +484,11 @@ export interface Page {
    * One at a time: a second while one is open fails `InvalidRequest`. See `Overlay`.
    */
   readonly overlay: Effect.Effect<Overlay, BrowserError, Scope.Scope>;
+  /**
+   * Hold the page's own time for the scope, to step it on with `advance`; real time resumes when
+   * the scope closes. Needs the browser's `pageTime` option; one hold at a time. See `PageTime`.
+   */
+  readonly hold: Effect.Effect<Held, BrowserError, Scope.Scope>;
   /**
    * The text the viewport shows, or one element whole, in one call to the page. Field values read
    * `••••` unless `unmask`, and a secret field's always do, as does one that was secret when the

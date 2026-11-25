@@ -322,6 +322,7 @@ export const makeIn = Effect.fnUntraced(function* (
     zoom: () => unsupported("zoom"),
     layout: () => unsupported("layout"),
     overlay: unsupported("overlay"),
+    hold: unsupported("hold"),
     ready: () =>
       model.get().ready === true ? read("ready", () => undefined) : unsupported("ready"),
     capture: evidence.capture,

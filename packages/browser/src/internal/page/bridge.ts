@@ -9,6 +9,7 @@
  */
 import { Deferred, Effect, Schema, SynchronizedRef } from "effect";
 
+import type { InitScript } from "../../Browser.ts";
 import { type BrowserError, Failed } from "../../BrowserError.ts";
 import { Navigated, PageLoaded } from "../../BrowserEvent.ts";
 import { match } from "../../Matching.ts";
@@ -33,9 +34,11 @@ import { history } from "../timeline/history.inpage.ts";
 import { marks } from "../timeline/marks.inpage.ts";
 import { record, type Recorder } from "../timeline/record.inpage.ts";
 import { sight } from "../timeline/sight.inpage.ts";
+import { animations, clock, timers } from "./clock.inpage.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "./context.ts";
 import { overlay, type Overlay } from "./overlay.inpage.ts";
 import { Script } from "./port.ts";
+import { time, type Time } from "./time.inpage.ts";
 
 /** What the script installs: a version, and a function of one of its parts for each call. */
 export interface PageApi {
@@ -46,6 +49,7 @@ export interface PageApi {
   find: Subjects["find"];
   layout: Layouts["read"];
   overlay: Overlay["draw"];
+  step: Time["step"];
   until: Expectations["until"];
   text: Texts["read"];
   record: Recorder["start"];
@@ -97,6 +101,7 @@ export const parts = {
   guard,
   edit,
   overlay,
+  time,
   addresses: Url.addresses,
 };
 
@@ -138,6 +143,7 @@ export function install(parts: Parts): PageApi {
   const guarded = parts.guard(named, located, parts.evidence(named, placing));
   const edited = parts.edit(named, guarded, placing);
   const readiness = parts.ready(walked, texts, kept);
+  const overlaid = parts.overlay(named);
 
   const api: PageApi = {
     version,
@@ -146,7 +152,8 @@ export function install(parts: Parts): PageApi {
     snapshot: read.snapshot,
     find: subjected.find,
     layout: parts.layout(named, walked, subjected, matching, placing).read,
-    overlay: parts.overlay(named).draw,
+    overlay: overlaid.draw,
+    step: parts.time(overlaid).step,
     until: parts.expectations(named, subjected, matching).until,
     text: texts.read,
     record: recorder.start,
@@ -171,10 +178,39 @@ export function install(parts: Parts): PageApi {
   return api;
 }
 
+const encodeString = Schema.encodeSync(Schema.fromJsonString(Schema.String));
+
+export const clockParts = { timers, animations };
+
+// A factory applied to its parts, as one expression of their sources.
+const applied = (factory: { toString(): string }, given: Record<string, { toString(): string }>) =>
+  `(${factory.toString()})({${Object.entries(given)
+    .map(([name, part]) => `${name}: ${part.toString()}`)
+    .join(", ")}})`;
+
+/**
+ * The expression of the page clock, a function of its event name, which the page's main world runs
+ * before its own scripts; packaging freezes it.
+ */
+export const clockSource = applied(clock, clockParts);
+
 /** The expression that installs the script and evaluates to its API; packaging freezes it. */
-export const installSource = `(${install.toString()})({${Object.entries(parts)
-  .map(([name, factory]) => `${name}: ${factory.toString()}`)
-  .join(", ")}})`;
+export const installSource = applied(install, parts);
+
+/**
+ * What new documents run before their own scripts: the page clock under its event name, first, so
+ * a caller's script that keeps a timer keeps the clock's, and then the caller's scripts, each
+ * everywhere or as a block where its `match` allows.
+ */
+export const documentScripts = (
+  clockName: string | undefined,
+  scripts: ReadonlyArray<InitScript>,
+): ReadonlyArray<string> => [
+  ...(clockName === undefined ? [] : [`${clockSource}(${encodeString(clockName)})`]),
+  ...scripts.map(({ match, source }) =>
+    match === undefined ? source : `if (${String(match)}.test(location.href)) {\n${source}\n}`,
+  ),
+];
 
 const worldName = "effect-browser";
 
@@ -184,7 +220,7 @@ const recorderSource = `if (globalThis === globalThis.top) globalThis.__effectBr
 // What a call reads in a world without the script's API. A context id can name another world once
 // the page has moved to a new process, so a cached id that reads this is not the library's world.
 const missing = "effect-browser: no __effectBrowser in this world";
-const missingSource = Schema.encodeSync(Schema.fromJsonString(Schema.String))(missing);
+const missingSource = encodeString(missing);
 
 const isMissing = (error: BrowserError) =>
   error.reason._tag === "Failed" && error.reason.detail === missing;
