@@ -1,7 +1,18 @@
 // Performed input: what a presenter's style plans, and what its views do on real Chromium, beside
 // plain input on other pages.
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Duration, Effect, Exit, Fiber, Layer, MutableRef, Option, Random, Schedule } from "effect";
+import {
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  MutableRef,
+  Option,
+  Random,
+  Schedule,
+  Schema,
+} from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import type { Action, BrowserEvent } from "../src/BrowserEvent.ts";
@@ -141,6 +152,29 @@ describe("Presentation's style", () => {
       for (const [index, gap] of gaps.entries())
         if ((index + 1) % 9 === 0) assert.isTrue(gap >= 600 && gap <= 2600, `burst gap ${gap}`);
         else assert.isTrue(gap >= 30 && gap <= 140, `notch gap ${gap}`);
+    }),
+  );
+
+  it.effect("eases a wheel in over a frame-a-step schedule, slow at first and last", () =>
+    Effect.gen(function* () {
+      const steps = yield* Style.eased(500)(0, 1000);
+      const middle = steps[Math.floor(steps.length / 2)]?.dy ?? 0;
+
+      assert.lengthOf(steps, 30);
+      assert.closeTo(
+        steps.reduce((total, step) => total + step.dy, 0),
+        1000,
+        1e-9,
+      );
+      assert.strictEqual(steps[0]?.afterMillis, 0);
+      assert.closeTo(steps.at(-1)?.afterMillis ?? 0, 500 - 500 / 30, 1e-9);
+      assert.isBelow(steps[0]?.dy ?? 0, middle / 10);
+      assert.isBelow(steps.at(-1)?.dy ?? 0, middle / 10);
+      for (const duration of [Number.NaN, -1, Style.maximumDurationMillis + 1])
+        assert.strictEqual(
+          (yield* Effect.flip(Style.eased(duration)(0, 100))).reason._tag,
+          "InvalidRequest",
+        );
     }),
   );
 
@@ -341,6 +375,29 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       // Another click on the page, a link's, a click on the document it reached, another page's.
       for (const [index, median] of [150, 150, 400, 800].entries())
         assert.closeTo(gaps[index] ?? 0, median, 100, `wait ${index + 1}: ${gaps.join(", ")}`);
+    }),
+  );
+
+  it.effect("scrolls a page all the way with an eased wheel", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+
+      const page = yield* Effect.acquireRelease(
+        browser.newPage(`data:text/html,<div style="height: 5000px">Tall</div>`),
+        (page) => Effect.ignore(page.close),
+      );
+
+      const started = Date.now();
+
+      yield* page
+        .scroll({ at: { x: 100, y: 100 }, dy: 1000 })
+        .pipe(Style.provide({ ...Style.plain, wheel: Style.eased(400) }));
+      assert.isAtLeast(Date.now() - started, 350);
+      assert.closeTo(
+        (yield* page.read(() => scrollY, { arg: null, result: Schema.Finite })).value,
+        1000,
+        1,
+      );
     }),
   );
 
