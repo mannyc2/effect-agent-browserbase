@@ -4,6 +4,35 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
 `effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
 
+## 0.3.0-beta.24
+
+- `effect-browser` films pages (#318). Each part is its own subpath or page method:
+  - `Layout` and `Page.layout` read where picked things and their words are, as data, unrounded, in
+    the viewport and the document. `Layout.rehearse` measures a state and puts the page back.
+  - `Overlay` and `Page.overlay` lease a layer over the page that draws a caller's SVG. No reader
+    reads it.
+  - `PageTime`, `Page.hold` and `Browser.Options.pageTime` hold a page's timers, animation frames,
+    clocks and animations, and step them with the frame's scroll, poses and overlay in one call.
+  - `Film.frames` is a stream of shots on held time, on a seek or on real time. It sends each input
+    on its frame. A new document is a `Passage`, and each `Shot` has the host time `at` of its
+    picture.
+  - `Pose` and `Page.poses` move, turn and scale the page's own elements, and put them back when
+    their scope ends. Readers and clicks see a posed element where it is drawn.
+  - `Page.paint` sets an attached browser's device pixels per CSS pixel and hides scrollbars.
+  - `ActionAnnounced` is published once an action has its target and before its pointer travels.
+    `Style.lead` and `Presentation.Options.lead` run then, and `Style.eased` is a wheel that eases.
+  - `Change.box` is where a changed element is as the changes are read.
+- `effect-browser/Site` runs the readers, the change record, the overlay and poses in a site's own
+  bundle, on its own page, with no protocol and no runtime `effect`: about 16 KB gzipped (#319). The
+  change record's `note` credits what a site does through its own app as a change's cause. Results
+  are unchanged over the protocol; the readers' result schemas moved to the host modules that
+  decode them. `Matching.pickRequests` is new.
+- The film example serves its site through the browser's request policy, so a hosted browser films
+  it too, and films a drag that selects a row (#320). The READMEs and a docs-site guide describe
+  filming and the site entry (#321).
+
+The other packages are unchanged and still require `effect-browser` `^0.3.0-beta.23`.
+
 ## 0.3.0-beta.23
 
 - **Breaking:** every package peers on `effect` `~4.1.2`, where it peered on `~4.0.3`, and

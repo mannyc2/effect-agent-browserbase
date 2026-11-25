@@ -1,8 +1,10 @@
 # Status
 
-## Unreleased
+## 0.3.0-beta.24
 
-`main` films pages, and gives its in-page readers to a site that owns its page.
+The `0.3.0-beta.24` release films pages, and gives `effect-browser`'s in-page readers to a site
+that owns its page. Only `effect-browser` changed; the other packages move to the same version and
+still require `effect-browser` `^0.3.0-beta.23`.
 
 - **Filming (#318).** `Page.layout` reads where things and their words are, as data.
   - `Page.overlay` draws a caller's SVG above the page, which no reader reads.
@@ -29,7 +31,8 @@ pixel. One hosted run filmed the example on Browserbase at 0cfee5b, on 2026-11-2
 - **Passage:** to `/docs`, which loaded in 629 ms.
 - **What changed:** 25 changes recorded after the contacts, each with its box.
 
-That run is the only hosted evidence for these features. Nothing here is released.
+That run is the only hosted evidence for these features. No real site has run `effect-browser/Site`
+yet.
 
 ## 0.3.0-beta.23
 
