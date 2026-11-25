@@ -14,6 +14,7 @@ export default defineConfig({
       "src/providers/{Chromium,Cdp,Released}.ts",
       "src/supervisor/Supervisor.ts",
       "src/presentation/*.ts",
+      "src/film/Film.ts",
       "src/moment/Moment.ts",
       "src/policy/Policy.ts",
       "src/stillness/Stillness.ts",

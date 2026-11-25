@@ -155,6 +155,11 @@
       "types": "./dist/Window.d.mts",
       "default": "./dist/Window.mjs"
     },
+    "./Film": {
+      "@effect-browser/source": "./src/film/Film.ts",
+      "types": "./dist/film/Film.d.mts",
+      "default": "./dist/film/Film.mjs"
+    },
     "./Stillness": {
       "@effect-browser/source": "./src/stillness/Stillness.ts",
       "types": "./dist/stillness/Stillness.d.mts",

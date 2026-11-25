@@ -16,6 +16,7 @@ const within = (directory, target) => {
   return path !== ".." && !path.startsWith("../");
 };
 const featureNames = new Set([
+  "film",
   "moment",
   "plan",
   "policy",
