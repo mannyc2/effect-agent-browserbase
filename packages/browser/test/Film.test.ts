@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Schema, Stream } from "effect";
 import { jpegjs } from "playwright-core/lib/utilsBundle";
@@ -14,6 +16,47 @@ const blank = Effect.gen(function* () {
 
   return yield* Effect.acquireRelease(browser.newPage(), (page) => Effect.ignore(page.close));
 });
+
+// /a links to /b, and /leaves goes there by itself at 300 ms of its time; /b answers 300 ms late
+// and finishes 300 ms after that.
+const site = Effect.acquireRelease(
+  Effect.callback<{ readonly url: (path: string) => string; readonly close: () => void }>(
+    (resume) => {
+      const server = createServer((request, response) => {
+        const answer = (html: string) => {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          response.end(`<!doctype html><meta charset=utf-8>${html}`);
+        };
+
+        if (request.url === "/b")
+          setTimeout(() => {
+            response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+            response.write("<!doctype html><meta charset=utf-8><h1 id=title>Arrived</h1>");
+            setTimeout(() => response.end("<p id=bottom>Loaded</p>"), 300);
+          }, 300);
+        else if (request.url === "/leaves")
+          answer(`<script>setTimeout(() => (location.href = "/b"), 300)</script>`);
+        else
+          answer(
+            `<a id=next href=/b style="position: fixed; left: 0; top: 0; width: 100px; height: 30px">next</a>`,
+          );
+      });
+
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address !== null ? address.port : 0;
+
+        resume(
+          Effect.succeed({
+            url: (path: string) => `http://127.0.0.1:${port}${path}`,
+            close: () => server.close(),
+          }),
+        );
+      });
+    },
+  ),
+  ({ close }) => Effect.sync(close),
+);
 
 const show = (page: Page, html: string) =>
   page.goto("data:text/html," + encodeURIComponent(`<!doctype html><meta charset=utf-8>${html}`));
@@ -164,6 +207,115 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
 
       assert.strictEqual(frames, 2);
       assert.strictEqual(failed.operation, "click");
+    }),
+  );
+
+  it.effect("holds film time while a new document loads, and says where it arrived", () =>
+    Effect.gen(function* () {
+      const { url } = yield* site;
+      const page = yield* blank;
+
+      yield* page.goto(url("/a"));
+      const held = yield* page.hold;
+      const seen: Array<[number, number]> = [];
+
+      const film = (inputs: ReadonlyArray<Film.Contact>) =>
+        Stream.runCollect(
+          Film.frames(page, {
+            times: { fps: 10, to: 1200 },
+            time: held,
+            inputs,
+            picks: { title: { selector: "#title" } },
+            at: (t, { passages }) => Effect.sync(() => (seen.push([t, passages.length]), {})),
+          }),
+        );
+
+      const went = yield* film([{ t: 200, action: { _tag: "Goto", url: url("/b") } }]);
+      const passage = went[2]?.passage;
+
+      assert.strictEqual(passage?.t, 200);
+      assert.isTrue(passage?.left.endsWith("/a"));
+      assert.isTrue(passage?.url.endsWith("/b"));
+      assert.isAtLeast(passage?.loadedAfter ?? 0, 250);
+      assert.deepStrictEqual(
+        passage?.layout.places.map(({ id }) => id),
+        ["title"],
+      );
+      assert.deepStrictEqual(
+        went.map(({ document }) => document === passage?.document),
+        went.map(({ t }) => t >= 200),
+      );
+      // The input at 200 ms is sent before its document is found, and the frame there after.
+      assert.deepStrictEqual(
+        seen.map(([t, count]) => [t, count > 0]),
+        went.flatMap(({ t }) =>
+          t === 200
+            ? [
+                [200, false],
+                [200, true],
+              ]
+            : [[t, t > 200]],
+        ),
+      );
+
+      // A link the page follows when it will: the first frame to find the new document says so.
+      yield* page.goto(url("/a"));
+
+      const followed = yield* Film.summary(
+        Film.frames(page, {
+          times: { fps: 10, to: 1500 },
+          time: held,
+          inputs: [{ t: 100, action: { _tag: "Click", target: { x: 50, y: 15 } } }],
+          picks: { bottom: { selector: "#bottom" } },
+        }),
+      );
+
+      assert.strictEqual(followed.passages.length, 1);
+      assert.isAtLeast(followed.passages[0]?.t ?? 0, 100);
+      assert.isTrue(followed.passages[0]?.url.endsWith("/b"));
+      assert.deepStrictEqual(followed.passages[0]?.layout.missing, []);
+
+      // A page that leaves by itself, at a time of its own, is found as the document begins, and
+      // measured once it has loaded.
+      yield* page.goto(url("/leaves"));
+
+      const left = yield* Film.summary(
+        Film.frames(page, {
+          times: { fps: 10, to: 3000 },
+          time: held,
+          picks: { bottom: { selector: "#bottom" } },
+        }),
+      );
+
+      assert.strictEqual(left.passages.length, 1);
+      assert.isAtLeast(left.passages[0]?.t ?? 0, 300);
+      assert.deepStrictEqual(left.passages[0]?.layout.missing, []);
+    }),
+  );
+
+  it.effect("on real time, moves the film's start on by a load, so no frame comes early", () =>
+    Effect.gen(function* () {
+      const { url } = yield* site;
+      const page = yield* blank;
+
+      yield* page.goto(url("/a"));
+      const arrived: Array<[number, number]> = [];
+      const begun = performance.now();
+
+      const summary = yield* Film.summary(
+        Film.frames(page, {
+          times: { fps: 20, to: 600 },
+          time: "real",
+          inputs: [{ t: 100, action: { _tag: "Goto", url: url("/b") } }],
+        }).pipe(Stream.tap(({ t }) => Effect.sync(() => arrived.push([t, performance.now()])))),
+      );
+
+      const loadedAfter = summary.passages[0]?.loadedAfter ?? 0;
+
+      assert.isAtLeast(loadedAfter, 500);
+      // Each frame after the load comes at its film time on a start the load moved on.
+      for (const [t, at] of arrived.filter(([t]) => t > 100))
+        assert.isAtLeast(at - begun, t + loadedAfter - 5, `frame at ${t}`);
     }),
   );
 
