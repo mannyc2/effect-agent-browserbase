@@ -4,9 +4,8 @@
  * that was secret when the library saw it, such as a password its page now reveals. Text, and the
  * outline, are cut at a line. See `names.inpage.ts` for what a page-side part may use.
  */
-import { Schema } from "effect";
-
 import type { Names } from "./names.inpage.ts";
+import type { TextResult } from "./reading.ts";
 import type { Walk } from "./walk.inpage.ts";
 
 export interface TextRequest {
@@ -15,18 +14,6 @@ export interface TextRequest {
   readonly maxChars: number;
   readonly unmask: boolean;
 }
-
-/** What `read` sends back, or null when its ref no longer names an element. */
-export const TextResultSchema = Schema.NullOr(
-  Schema.Struct({
-    text: Schema.String,
-    truncated: Schema.Boolean,
-    url: Schema.String,
-    title: Schema.String,
-  }),
-);
-
-export type TextResult = typeof TextResultSchema.Type;
 
 export const text = (names: Names, walked: Walk) => {
   const { isHtml, isInput, isSecret, isSelect, isTextArea, lookup } = names;

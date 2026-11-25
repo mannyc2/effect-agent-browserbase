@@ -13,8 +13,28 @@ import * as Url from "../../Url.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
 import type { Want } from "./expect.inpage.ts";
-import { type SnapshotRequest, SnapshotResultSchema } from "./outline.inpage.ts";
-import { type TextRequest, TextResultSchema } from "./text.inpage.ts";
+import type { SnapshotRequest } from "./outline.inpage.ts";
+import type { TextRequest } from "./text.inpage.ts";
+
+/** The outline as a `Snapshot` reads it, or why `within` is not a selector. */
+const SnapshotResultSchema = Schema.Union([
+  Schema.Struct({ snapshot: Snapshot }),
+  Schema.Struct({ invalid: Schema.String }),
+]);
+
+export type SnapshotResult = typeof SnapshotResultSchema.Encoded;
+
+/** What `text` sends back, or null when its ref no longer names an element. */
+const TextResultSchema = Schema.NullOr(
+  Schema.Struct({
+    text: Schema.String,
+    truncated: Schema.Boolean,
+    url: Schema.String,
+    title: Schema.String,
+  }),
+);
+
+export type TextResult = typeof TextResultSchema.Type;
 
 // What `find` reads back. The bridge envelope owns ref allocation across documents.
 const FindResults = Schema.Union([

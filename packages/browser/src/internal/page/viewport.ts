@@ -4,11 +4,12 @@
  * pixel. Pointer bounds, page scrolls, crops, capture size and frame reuse all read this one
  * source; the latest answer serves checks that cannot wait for the page.
  */
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 
-import { ViewportResultSchema } from "../reading/outline.inpage.ts";
 import { type Bridge, scriptCall } from "./bridge.ts";
 import { decodeWith, type PageContext } from "./context.ts";
+
+const ViewportResultSchema = Schema.Struct({ width: Schema.Finite, height: Schema.Finite });
 
 export const make = (page: PageContext, bridge: Bridge) => {
   const { playwright } = page;

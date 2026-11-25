@@ -2,12 +2,12 @@
  * In the page: the outline a model reads, with a ref for each control. See `names.inpage.ts` for
  * what a page-side part may use.
  */
-import { Schema } from "effect";
 
-import { type Control, Snapshot } from "../../Snapshot.ts";
+import type { Control } from "../../Snapshot.ts";
 import type { addresses } from "../../Url.ts";
 import type { Controls } from "./controls.inpage.ts";
 import type { Names } from "./names.inpage.ts";
+import type { SnapshotResult } from "./reading.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
 import type { Walk } from "./walk.inpage.ts";
@@ -21,12 +21,6 @@ export interface SnapshotRequest {
   /** Give every control's box, not only a canvas's or a frame's. */
   readonly boxes: boolean;
 }
-
-/**
- * The outline as a `Snapshot` reads it, and the next ref the page may give, or why `within` is not
- * a selector.
- */
-export type SnapshotResult = typeof SnapshotResultSchema.Encoded;
 
 /** The rule every address the library reports goes by, which a link's address goes by too. */
 type Url = ReturnType<typeof addresses>;
@@ -250,13 +244,3 @@ export const outline = (
 };
 
 export type Outline = ReturnType<typeof outline>;
-
-export const SnapshotResultSchema = Schema.Union([
-  Schema.Struct({ snapshot: Snapshot }),
-  Schema.Struct({ invalid: Schema.String }),
-]);
-
-export const ViewportResultSchema = Schema.Struct({
-  width: Schema.Finite,
-  height: Schema.Finite,
-});

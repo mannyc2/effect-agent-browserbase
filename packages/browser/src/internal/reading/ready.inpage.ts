@@ -10,27 +10,10 @@
  * animation paused part way is still animating: held time has yet to finish it. After input, it
  * waits a task and a frame. See `names.inpage.ts` for what a page-side part may use.
  */
-import { Schema } from "effect";
-
 import type { History } from "../timeline/history.inpage.ts";
+import type { Readiness } from "./ready.ts";
 import type { Texts } from "./text.inpage.ts";
 import type { Walk } from "./walk.inpage.ts";
-
-/** What the page is still waiting for; none when it is ready. */
-export const ReadinessSchema = Schema.Array(
-  Schema.Literals([
-    "load",
-    "paint",
-    "animations",
-    "images",
-    "fonts",
-    "busy",
-    "content",
-    "changing",
-  ]),
-);
-
-export type Readiness = typeof ReadinessSchema.Type;
 
 export const ready = (walked: Walk, texts: Texts, kept: History) => {
   const { inView, visible } = walked;
