@@ -169,7 +169,7 @@ export function install(parts: Parts): PageApi {
     text: texts.read,
     record: recorder.start,
     stopRecord: recorder.stop,
-    changes: parts.changes(named, placing, kept, seeing, marking, recorder).read,
+    changes: parts.changes(named, walked, placing, kept, seeing, marking, recorder).read,
     ready: readiness.wait,
     settle: readiness.settle,
     point: located.point,

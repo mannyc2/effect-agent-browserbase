@@ -123,6 +123,12 @@ export class Shot extends Schema.Class<Shot>("effect-browser/Shot")({
   retries: Count,
   /** Real milliseconds from the frame's start to its picture. */
   took: Millis,
+  /**
+   * When its picture was taken, in host monotonic milliseconds on the browser's clock, as a
+   * `Change`'s times are. On held time, the first shot at or after a change's `at` is the first
+   * that shows it; on real time, the page may change while it is pictured.
+   */
+  at: Schema.Finite,
 }) {}
 
 /** What a film cost, from its shots. */
@@ -336,6 +342,7 @@ export const frames = <E = never>(
 
           shown = key ?? shown;
           const taken = yield* picture(page, options.image, retries);
+          const pictured = now();
           const { document, url } = yield* page.state;
 
           return new Shot({
@@ -348,7 +355,8 @@ export const frames = <E = never>(
             sent,
             passage,
             retries: taken.retries,
-            took: now() - started,
+            took: pictured - started,
+            at: pictured,
           });
         });
 
