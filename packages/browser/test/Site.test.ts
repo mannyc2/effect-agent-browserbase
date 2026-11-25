@@ -120,7 +120,7 @@ it("reads, poses, draws and records on a page that loaded it itself", async () =
         save,
         lede: read.layout.places.find(({ id }) => id === "lede"),
         posed,
-        moved: "layout" in moved ? moved.layout.places.find(({ id }) => id === "save") : undefined,
+        moved: moved.layout?.places.find(({ id }) => id === "save"),
         refused,
         stale: site.pose([{ ref: "e999" }]),
         drawn,
@@ -155,7 +155,7 @@ it("reads, poses, draws and records on a page that loaded it itself", async () =
     assert.deepStrictEqual(result.drawn, [{ x: 10, y: 12, width: 30, height: 20 }]);
     assert.deepStrictEqual(result.found, { found: [] });
     assert.deepStrictEqual(
-      "found" in result.buttons ? result.buttons.found.map(({ subject }) => subject.name) : [],
+      result.buttons.found?.map(({ subject }) => subject.name),
       ["Save", "Count"],
     );
     assert.include(JSON.stringify(result.snapshot), 'button \\"Save\\"');
