@@ -61,7 +61,11 @@ export interface PageApi {
   scrollPlan: Targets["scrollPlan"];
   viewport: Outline["viewport"];
   /** The screen as the page reads it, which another session may emulate. */
-  screenSize: () => { readonly width: number; readonly height: number };
+  screenSize: () => {
+    readonly width: number;
+    readonly height: number;
+    readonly ratio: number;
+  };
   prepareInput: Guard["prepareInput"];
   validateInput: Guard["validateInput"];
   typeable: Edit["typeable"];
@@ -164,7 +168,7 @@ export function install(parts: Parts): PageApi {
     point: located.point,
     scrollPlan: located.scrollPlan,
     viewport: read.viewport,
-    screenSize: () => ({ width: screen.width, height: screen.height }),
+    screenSize: () => ({ width: screen.width, height: screen.height, ratio: devicePixelRatio }),
     prepareInput: guarded.prepareInput,
     validateInput: guarded.validateInput,
     typeable: edited.typeable,

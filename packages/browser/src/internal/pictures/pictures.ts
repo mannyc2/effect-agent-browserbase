@@ -4,14 +4,14 @@
  * one call where a device pixel is a CSS pixel and nothing is cropped, and two otherwise, unless
  * Playwright emulates the viewport. The page's first clipped picture also holds the screen it reads.
  */
-import { Duration, Effect, Option, Result, Schedule, Schema } from "effect";
+import { Duration, Effect, Option, Result, Schedule, Schema, type Scope } from "effect";
 import { Base64 } from "effect/encoding";
 
 import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
 import * as BrowserClock from "../../Clock.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
 import type { Point } from "../../Geometry.ts";
-import { type FrameOptions, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
+import { type FrameOptions, type Paint, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import {
   decodeWith,
@@ -163,8 +163,80 @@ const calibrator = (page: PageContext, bridge: Bridge) => {
   );
 };
 
-// The screen as the page reads it.
-const ScreenSize = Schema.Struct({ width: Schema.Int, height: Schema.Int });
+// The screen as the page reads it, and its device pixels to a CSS pixel.
+const ScreenSize = Schema.Struct({ width: Schema.Int, height: Schema.Int, ratio: Schema.Finite });
+
+// The device as the page's own session emulates it: the screen held for crops (see `camera`), and
+// the device scale factor a paint asks for, 0 for the device's own, in one override that keeps the
+// view's size. Playwright emulates the viewport of a browser this library launched, at the scale of
+// its launch, and puts that back over any other, so there a paint keeps that scale.
+const device = (page: PageContext, bridge: Bridge) => {
+  const { playwright, native, within } = page;
+  const { send } = page.protocol;
+  let screen: Size | undefined;
+  let scaled = 0;
+  let painting = false;
+
+  const metrics = (operation: string) =>
+    native(operation, () =>
+      send("Emulation.setDeviceMetricsOverride", {
+        width: 0,
+        height: 0,
+        deviceScaleFactor: scaled,
+        mobile: false,
+        ...(screen === undefined ? {} : { screenWidth: screen.width, screenHeight: screen.height }),
+      }),
+    );
+
+  const screenOf = (operation: string) =>
+    bridge
+      .evaluate(operation, scriptCall("screenSize"))
+      .pipe(Effect.flatMap(decodeWith(operation, ScreenSize)));
+
+  // The copy has the screen alone: the view keeps its own size, and the device its pixel ratio.
+  const holdScreen = Effect.fnUntraced(function* (operation: string) {
+    if (screen !== undefined) return;
+    const { width, height } = yield* screenOf(operation);
+
+    screen = { width, height };
+    yield* metrics(operation).pipe(Effect.onError(() => Effect.sync(() => (screen = undefined))));
+  });
+
+  const scrollbarsHidden = (hidden: boolean) =>
+    native("paint", () => send("Emulation.setScrollbarsHidden", { hidden }));
+
+  const paint = (options: Paint): Effect.Effect<void, BrowserError, Scope.Scope> =>
+    Effect.gen(function* () {
+      const { scale, scrollbars = true } = options;
+      const launched = playwright.viewportSize() !== null;
+
+      if (scale !== undefined && !(Number.isFinite(scale) && scale > 0 && scale <= 4))
+        return yield* refuse("paint", "a page paints at more than 0 and at most 4 device pixels");
+      if (painting) return yield* refuse("paint", "the page is painted for another scope already");
+      if (scale !== undefined && launched && (yield* screenOf("paint")).ratio !== scale)
+        return yield* refuse(
+          "paint",
+          "this browser paints at the scale it was launched with, as Chromium's deviceScaleFactor sets",
+        );
+      const rescaled = scale !== undefined && !launched;
+
+      painting = true;
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          scaled = 0;
+          if (!scrollbars) yield* scrollbarsHidden(false);
+          if (rescaled) yield* metrics("paint");
+        }).pipe(Effect.ignore, Effect.ensuring(Effect.sync(() => (painting = false)))),
+      );
+      if (!scrollbars) yield* scrollbarsHidden(true);
+      if (rescaled) {
+        scaled = scale;
+        yield* metrics("paint");
+      }
+    }).pipe(within("paint"));
+
+  return { holdScreen, paint, scaled: () => scaled };
+};
 
 // A new picture in CSS pixels. Where a device pixel is not a CSS pixel, or for a crop, it is
 // Playwright's clip over fresh layout metrics: document coordinates from the visual viewport's
@@ -179,37 +251,20 @@ const ScreenSize = Schema.Struct({ width: Schema.Int, height: Schema.Int });
 // one at a time.
 const camera = (
   page: PageContext,
-  bridge: Bridge,
   viewport: Viewport,
   capture: Capture.Controller,
+  { holdScreen, scaled }: Pick<ReturnType<typeof device>, "holdScreen" | "scaled">,
 ) => {
   const { playwright, native, within } = page;
   const { send } = page.protocol;
   // Device pixels per CSS pixel, as the page's layout metrics last gave it. A picture taken in one
   // call is checked by its size, so a page whose ratio changes is measured again.
   let ratio = 1;
-  let screenHeld = false;
 
-  // The copy has the screen alone: the view keeps its own size, and the device its pixel ratio.
-  const holdScreen = Effect.fnUntraced(function* (operation: string) {
-    if (screenHeld) return;
-
-    const { width, height } = yield* bridge
-      .evaluate(operation, scriptCall("screenSize"))
-      .pipe(Effect.flatMap(decodeWith(operation, ScreenSize)));
-
-    yield* native(operation, () =>
-      send("Emulation.setDeviceMetricsOverride", {
-        width: 0,
-        height: 0,
-        deviceScaleFactor: 0,
-        mobile: false,
-        screenWidth: width,
-        screenHeight: height,
-      }),
+  const layoutMetrics = (operation: string) =>
+    native(operation, () => send("Page.getLayoutMetrics")).pipe(
+      Effect.flatMap(decodeWith(operation, LayoutMetrics)),
     );
-    screenHeld = true;
-  });
 
   const decoded = (operation: string, data: Uint8Array, format: Format) => {
     const size = format === "png" ? pngSize(data) : jpegSize(data);
@@ -292,14 +347,19 @@ const camera = (
         return yield* emulatedShot(operation, format, quality, pixels, crop);
       }
 
-      const [metrics] = yield* native(operation, () => send("Page.getLayoutMetrics")).pipe(
-        Effect.flatMap(decodeWith(operation, LayoutMetrics)),
+      const [measured] = yield* layoutMetrics(operation).pipe(
         Effect.zip(crop === undefined ? Effect.void : holdScreen(operation), { concurrent: true }),
       );
 
-      const measured = metrics.contentSize.width / metrics.cssContentSize.width;
+      const measuredRatio = measured.contentSize.width / measured.cssContentSize.width;
 
-      ratio = Number.isFinite(measured) && measured > 0 ? measured : 1;
+      // The layout metrics report the device's own ratio, never the one a paint emulates.
+      ratio =
+        scaled() > 0
+          ? scaled()
+          : Number.isFinite(measuredRatio) && measuredRatio > 0
+            ? measuredRatio
+            : 1;
       if (crop === undefined && ratio === 1) {
         const image = whole ?? (yield* shot(operation, format, quality));
 
@@ -308,7 +368,7 @@ const camera = (
         return image;
       }
       const rect = crop ?? { x: 0, y: 0, ...(known ?? (yield* viewport.viewportFor(operation))) };
-      const { pageX, pageY, scale } = metrics.cssVisualViewport;
+      const { pageX, pageY, scale } = measured.cssVisualViewport;
 
       yield* holdScreen(operation);
 
@@ -412,7 +472,8 @@ export const make = Effect.fnUntraced(function* (
     error,
   });
 
-  const picture = camera(page, bridge, viewport, capture);
+  const emulated = device(page, bridge);
+  const picture = camera(page, viewport, capture, emulated);
   const reusable = reuse(page, bridge, viewport, capture);
   // Pictures in flight are shared, never kept: their callers say how old one may be.
   const screenshots = lane.shared<Image>("screenshot", false);
@@ -533,5 +594,5 @@ export const make = Effect.fnUntraced(function* (
   // change record's times need it.
   const estimate = mapping.current(calibrateClock);
 
-  return { capture, screenshot, frame, zoom, captureStats, estimate };
+  return { capture, screenshot, frame, zoom, captureStats, estimate, paint: emulated.paint };
 });

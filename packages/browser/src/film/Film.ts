@@ -57,6 +57,10 @@ export interface Options<E = never> {
   readonly inputs?: ReadonlyArray<Contact> | undefined;
   /** The page's overlay, open, that `at`'s drawings go to. */
   readonly overlay?: Overlay | undefined;
+  /**
+   * How each frame is taken. For frames with more pixels than the layout, paint the page first
+   * (`Page.paint`) and take them at `scale: "device"`.
+   */
   readonly image?: Pick<ScreenshotOptions, "format" | "quality" | "scale"> | undefined;
   /** How many times a frame's screenshot is taken again after it times out. Defaults to 2. */
   readonly retries?: number | undefined;

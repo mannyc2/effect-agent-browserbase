@@ -111,6 +111,14 @@ export interface ScreenshotOptions {
   readonly scale?: "css" | "device" | undefined;
 }
 
+/** How a page paints for a scope; see `Page.paint`. */
+export interface Paint {
+  /** Device pixels to each CSS pixel, more than 0 and at most 4. The layout keeps its size. */
+  readonly scale?: number | undefined;
+  /** False hides the page's scrollbars from its next document on, and its layout takes their room. */
+  readonly scrollbars?: boolean | undefined;
+}
+
 /**
  * What `find` looks for. Every rule given must hold; with none, it finds every element in scope
  * that has a role or is a control.
@@ -512,6 +520,15 @@ export interface Page {
    * its document and how far it has loaded, its newest frame, and its text and title as last read.
    */
   readonly state: Effect.Effect<State>;
+  /**
+   * Paint the page at `scale` device pixels to each CSS pixel, or without its scrollbars, for a
+   * scope: a screenshot with `scale: "device"` then has that many more pixels, while the layout,
+   * its boxes and input keep their CSS pixels. Scrollbars go from the next document on, and come
+   * back from the next after the scope, so paint, then load the page, then measure it. One at a
+   * time. A browser this library launched paints at the scale of its launch (Chromium's
+   * `deviceScaleFactor`), and refuses another.
+   */
+  readonly paint: (options: Paint) => Effect.Effect<void, BrowserError, Scope.Scope>;
 
   readonly click: (
     target: Target,

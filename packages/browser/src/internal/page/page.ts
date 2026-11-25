@@ -113,6 +113,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     screenshot: pictures.screenshot,
     frame: pictures.frame,
     zoom: pictures.zoom,
+    paint: pictures.paint,
     viewport: viewports("", viewport.viewportFor("viewport").pipe(within("viewport"))).pipe(
       span("Page.viewport"),
       owned,
