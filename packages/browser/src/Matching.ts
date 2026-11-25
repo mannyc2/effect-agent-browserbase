@@ -11,6 +11,8 @@
  */
 import type { SubjectContext } from "./BrowserEvent.ts";
 import type { Point } from "./Geometry.ts";
+import type { PickRequest } from "./internal/reading/layout.inpage.ts";
+import type { Picks } from "./Layout.ts";
 import type { FindQuery } from "./Page.ts";
 
 /** A string, or a pattern sent to the page as its source and flags. */
@@ -27,22 +29,29 @@ export interface FindRequest {
   readonly scope: "viewport" | "document";
 }
 
-/** A public query in its serializable, fully specified form. */
-export const request = (query: FindQuery, scope: FindRequest["scope"]): FindRequest => {
-  const wanted = (value: string | RegExp | undefined): Wanted | null =>
-    value instanceof RegExp ? { source: value.source, flags: value.flags } : (value ?? null);
+const wanted = (value: string | RegExp | undefined): Wanted | null =>
+  value instanceof RegExp ? { source: value.source, flags: value.flags } : (value ?? null);
 
-  return {
-    selector: query.selector ?? null,
-    state: query.state ?? "visible",
-    role: query.role ?? null,
-    name: wanted(query.name),
-    text: wanted(query.text),
-    near: query.near ?? null,
-    at: query.at ?? null,
-    scope: query.scope ?? scope,
-  };
-};
+/** A public query in its serializable, fully specified form. */
+export const request = (query: FindQuery, scope: FindRequest["scope"]): FindRequest => ({
+  selector: query.selector ?? null,
+  state: query.state ?? "visible",
+  role: query.role ?? null,
+  name: wanted(query.name),
+  text: wanted(query.text),
+  near: query.near ?? null,
+  at: query.at ?? null,
+  scope: query.scope ?? scope,
+});
+
+/** Layout picks in their serializable form. */
+export const pickRequests = (picks: Picks): ReadonlyArray<PickRequest> =>
+  Object.entries(picks).map(([id, pick]) => ({
+    ...request(pick, "document"),
+    id,
+    choose: pick.choose ?? "first",
+    words: wanted(pick.words),
+  }));
 
 /** What a query is matched against, read only when a rule needs it. */
 export interface Candidate {

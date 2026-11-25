@@ -9,11 +9,10 @@ import { NotActionable } from "../../BrowserError.ts";
 import { Box, Subject } from "../../BrowserEvent.ts";
 import { Point } from "../../Geometry.ts";
 import { Layout, type Picks, Place, Word } from "../../Layout.ts";
-import { request as askedOf } from "../../Matching.ts";
+import { pickRequests } from "../../Matching.ts";
 import * as Url from "../../Url.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
-import type { PickRequest } from "./layout.inpage.ts";
 
 // What `layout` reads back, before its document boxes are added.
 const LayoutResult = Schema.Union([
@@ -45,15 +44,7 @@ export const make = (page: PageContext, bridge: Bridge) => {
   const layouts = lane.shared<Layout>("layout", true);
 
   const layout = (picks: Picks) => {
-    const asked: ReadonlyArray<PickRequest> = Object.entries(picks).map(([id, pick]) => ({
-      ...askedOf(pick, "document"),
-      id,
-      choose: pick.choose ?? "first",
-      words:
-        pick.words instanceof RegExp
-          ? { source: pick.words.source, flags: pick.words.flags }
-          : (pick.words ?? null),
-    }));
+    const asked = pickRequests(picks);
 
     // The boxes and the scroll describe the document the call ran in, which is the one current
     // before and after it; a document that replaced it meanwhile is read again, once.

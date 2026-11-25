@@ -9,7 +9,7 @@ import { type BrowserError, StaleRef } from "../../BrowserError.ts";
 import { Pose, type Poses } from "../../Pose.ts";
 import { type Bridge, scriptCall } from "./bridge.ts";
 import { decodeWith, failWith, type PageContext, refuse } from "./context.ts";
-import type { PoseRequest } from "./pose.inpage.ts";
+import { poseRequest } from "./pose.inpage.ts";
 
 /** What posing answered: nothing, or the ref it could not pose and why. */
 export const Posed = Schema.Struct({
@@ -30,15 +30,7 @@ export const make = (page: PageContext, bridge: Bridge) => {
     if (decoded.length > 256)
       return yield* refuse(operation, "at most 256 elements are posed at once");
 
-    return decoded.map((pose): PoseRequest => ({
-      ref: pose.ref,
-      dx: pose.dx ?? 0,
-      dy: pose.dy ?? 0,
-      sx: pose.sx ?? 1,
-      sy: pose.sy ?? 1,
-      rotate: pose.rotate ?? 0,
-      origin: pose.origin ?? null,
-    }));
+    return decoded.map(poseRequest);
   });
 
   /** Fail as the page's answer says, if it posed nothing. */

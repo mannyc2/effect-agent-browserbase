@@ -39,6 +39,7 @@ with it, since its pipe closes, but leaves Playwright's temporary profile behind
 | `PageTime`     | A page's own time, held and stepped, with its scroll, poses and overlay           |
 | `Pose`         | A page's own elements moved, turned and scaled about a point                      |
 | `Film`         | A page filmed as a function of time: frames, inputs on their frames, passages     |
+| `Site`         | The readers, change record, overlay and poses, run by a site on its own page      |
 | `BrowserError` | Typed failures, whether input reached the page first, and what each leaves        |
 | `Policy`       | Judges that read what an input means, and a guard that acts on them unattended    |
 | `Change`       | What visibly changed on a page over a window, element by element                  |
@@ -1009,6 +1010,40 @@ show it. To lift an element off the page, take its picture with a clipped screen
 it was. `examples/film.ts` films a small site this way: a hover, a tab, a selected word, a copy,
 a search typed a key at a time, an eased scroll and a link to the next page, with what changed
 framed after each.
+
+## A site that owns its page
+
+`effect-browser/Site` is the same composition the library installs in a page over the protocol,
+for a site to call in its own bundle on its own document. It holds no protocol and loads no
+`effect`: about 16 KB gzipped, minified. A site reads the same refs, subjects, outline, text,
+layout and changes as an agent does, draws in the same overlay, and poses its elements the same
+way.
+
+```ts
+import * as Site from "effect-browser/Site";
+
+const site = Site.make();
+const read = site.layout({
+  save: { role: "button", name: "Save" },
+  lede: { selector: "p", words: "postal" },
+});
+
+site.record();
+site.note(saveButton); // the site acts through its own app, and says so
+app.dispatch(Save());
+await site.settle();
+const { records } = site.changes({ since: null, until: null, unmask: false }); // each with its box and cause
+site.layer().append(character); // a closed shadow root no reader reads
+```
+
+What needs the protocol stays out: trusted input and its checks, screenshots and `Film`, held page
+time, and a record that starts before the page's own scripts. In their place, the site acts through
+its own app and `note`s each act, so the changes it brings name it as their `cause`, as a trusted
+input's would. Time is real, so a pose or a drawing is set again on each animation frame. The
+record starts when the site calls `record`. Requests and results are the page script's plain data,
+with boxes in viewport CSS pixels and times in epoch milliseconds, and an unservable request
+answers `{ invalid }` rather than throwing. The parts run in the site's own world, so they share
+any globals the site's code patches.
 
 ## Supervising resource generations
 

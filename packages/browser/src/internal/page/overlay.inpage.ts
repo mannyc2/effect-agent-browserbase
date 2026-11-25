@@ -5,7 +5,9 @@
  * the page, and undoes the zoom the page sets on its root. Its styles are set through the CSSOM,
  * which a strict `style-src` allows, and with priority, so the page's styles cannot reach it. The
  * host is the library's own (see `names.inpage.ts`), so no reader reads it; the page's scripts can
- * find the host, never what it holds. See `names.inpage.ts` for what a page-side part may use.
+ * find the host, never what it holds. A site that owns its page can `mount` a layer of its own,
+ * whose root it renders into and whose parts may take the pointer. See `names.inpage.ts` for what a
+ * page-side part may use.
  */
 import type { Names } from "../reading/names.inpage.ts";
 
@@ -88,7 +90,7 @@ export const overlay = (names: Names) => {
     return boxes(shown);
   };
 
-  return { draw };
+  return { draw, mount };
 };
 
 export type Overlay = ReturnType<typeof overlay>;

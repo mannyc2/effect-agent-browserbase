@@ -7,6 +7,7 @@
  * animations that end. Taking poses off cancels them. See `names.inpage.ts` for what a page-side
  * part may use.
  */
+import type { Pose } from "../../Pose.ts";
 import type { Names } from "../reading/names.inpage.ts";
 
 export interface PoseRequest {
@@ -20,6 +21,17 @@ export interface PoseRequest {
   /** In the viewport, or null for the middle of where the page draws it. */
   readonly origin: { readonly x: number; readonly y: number } | null;
 }
+
+/** A pose as the page takes it, each part left out made the one that changes nothing. */
+export const poseRequest = (pose: Pose): PoseRequest => ({
+  ref: pose.ref,
+  dx: pose.dx ?? 0,
+  dy: pose.dy ?? 0,
+  sx: pose.sx ?? 1,
+  sy: pose.sy ?? 1,
+  rotate: pose.rotate ?? 0,
+  origin: pose.origin ?? null,
+});
 
 type Prepared =
   | { readonly stale: string }
@@ -144,8 +156,12 @@ export const pose = (names: Names) => {
     for (const request of requests) {
       const element = names.lookup(request.ref);
 
+      const { dx, dy, sx, sy, rotate, origin } = request;
+
       if (element === undefined) return { stale: request.ref };
       if (!isHtml(element)) return { invalid: `${request.ref} is not an HTML element` };
+      if (![dx, dy, sx, sy, rotate, origin?.x ?? 0, origin?.y ?? 0].every(Number.isFinite))
+        return { invalid: `${request.ref}'s pose is not finite numbers` };
       elements.push(element);
     }
 
