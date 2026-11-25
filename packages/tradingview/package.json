@@ -1,6 +1,6 @@
 {
   "name": "effect-browser-tradingview",
-  "version": "0.3.0-beta.23",
+  "version": "0.3.0-beta.24",
   "description": "TradingView charts for effect-browser: their bars and studies, exact screen points, changes made with visible input, and tools for a Yielded agent.",
   "license": "MIT",
   "repository": {
