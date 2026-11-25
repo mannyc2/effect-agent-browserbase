@@ -35,6 +35,7 @@ import { marks } from "../timeline/marks.inpage.ts";
 import { record, type Recorder } from "../timeline/record.inpage.ts";
 import { sight } from "../timeline/sight.inpage.ts";
 import { animations, clock, timers } from "./clock.inpage.ts";
+import { compose } from "./compose.inpage.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "./context.ts";
 import { overlay, type Overlay } from "./overlay.inpage.ts";
 import { Script } from "./port.ts";
@@ -84,6 +85,7 @@ declare global {
 
 /** Named factories make the composition contract independent of their declaration order. */
 export const parts = {
+  compose,
   elements,
   names,
   walk,
@@ -133,48 +135,23 @@ export function install(parts: Parts): PageApi {
 
   if (installed !== undefined && installed.version === version) return installed;
   installed?.dispose?.();
-  const named = parts.names(parts.elements());
 
-  if (installed?.refs !== undefined) named.refs.next = installed.refs.next;
-  const walked = parts.walk(named);
-  const placing = parts.context(named, walked);
-  const matching = parts.match();
-  const subjected = parts.subjects(named, walked, matching, placing, parts.states(named));
-  const texts = parts.text(named, walked);
-  const controlled = parts.controls(named, subjected, texts);
-  const kept = parts.history(parts.fold());
-  const seeing = parts.sight(named, walked, texts, kept);
-  const marking = parts.marks(named, kept, seeing);
-  const recorder = parts.record(named, texts, kept, seeing, marking);
-  const read = parts.outline(named, walked, subjected, texts, controlled, parts.addresses());
+  const { named, walked, placing, overlaid, posing, reads } = parts.compose(
+    parts,
+    installed?.refs?.next,
+  );
+
   const located = parts.targets(named, walked, placing);
   const guarded = parts.guard(named, located, parts.evidence(named, placing));
   const edited = parts.edit(named, guarded, placing);
-  const readiness = parts.ready(walked, texts, kept);
-  const overlaid = parts.overlay(named);
-  const posing = parts.pose(named);
 
   const api: PageApi = {
+    ...reads,
     version,
-    refs: named.refs,
-    dispose: () => recorder.stop(),
-    snapshot: read.snapshot,
-    find: subjected.find,
-    layout: parts.layout(named, walked, subjected, matching, placing).read,
-    overlay: overlaid.draw,
-    pose: posing.set,
-    unpose: posing.clear,
+    dispose: reads.stopRecord,
     step: parts.time(overlaid, posing).step,
-    until: parts.expectations(named, subjected, matching).until,
-    text: texts.read,
-    record: recorder.start,
-    stopRecord: recorder.stop,
-    changes: parts.changes(named, walked, placing, kept, seeing, marking, recorder).read,
-    ready: readiness.wait,
-    settle: readiness.settle,
     point: located.point,
     scrollPlan: located.scrollPlan,
-    viewport: read.viewport,
     screenSize: () => ({ width: screen.width, height: screen.height, ratio: devicePixelRatio }),
     prepareInput: guarded.prepareInput,
     validateInput: guarded.validateInput,
