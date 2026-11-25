@@ -1,23 +1,24 @@
 /**
  * Film a page on held time with a plain drawing over it, the page answering at every contact. It
- * serves a small site, opens it, reads its layout, and films eight seconds at 30 frames a second.
+ * serves a small site through the browser's request policy, so a hosted browser can film it too,
+ * opens it, reads its layout, and films eight seconds at 30 frames a second.
  * A ring hovers a link and its underline eases in. It presses a tab, which squashes as the bar
  * slides under it, and walks along the top of a line of text. It double-clicks a word, which the
  * page selects, and presses the copy button, whose box dips. It opens the search with Ctrl K and
- * types into it a key at a time, then rides an eased scroll and follows a link to the next page,
- * landing on its heading. After each contact, what changed is framed by its box. Each frame is
- * written as a numbered PNG; encoding them is the caller's, for instance
- * `ffmpeg -framerate 30 -i %05d.png film.mp4`.
+ * types into it a key at a time, then rides an eased scroll, drags across a row to select it, and
+ * follows a link to the next page, landing on its heading. After each contact, what changed is
+ * framed by its box. Each frame is written as a numbered PNG; encoding them is the caller's, for
+ * instance `ffmpeg -framerate 30 -i %05d.png film.mp4`.
  *
  * bun --conditions=@effect-browser/source packages/browser/examples/film.ts [out directory]
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Data, Effect, Stream } from "effect";
 import { Browser } from "effect-browser";
+import type { RequestPolicy } from "effect-browser/Browser";
 import type { Box } from "effect-browser/BrowserEvent";
 import type { Change } from "effect-browser/Change";
 import * as Chromium from "effect-browser/Chromium";
@@ -76,28 +77,23 @@ const docs = `<!doctype html><meta charset=utf-8><title>Docs</title><style>
 body { margin: 0; font: 18px/1.5 system-ui } main { padding: 120px 48px }</style>
 <main><h1>Docs</h1><p>The page the film arrives on.</p></main>`;
 
-/** The site, served on a free local port for the scope: its address. */
-export const serve = Effect.acquireRelease(
-  Effect.callback<ReturnType<typeof createServer>>((resume) => {
-    const server = createServer((request, response) => {
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      response.end(request.url === "/docs" ? docs : home);
-    });
+/** Where the site is: no host has it, so only the request policy answers it. */
+export const origin = "https://film.test";
 
-    server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
-  }),
-  (server) =>
-    Effect.callback<void>((resume) => {
-      server.closeAllConnections();
-      server.close(() => resume(Effect.void));
-    }),
-).pipe(
-  Effect.map((server) => {
-    const address = server.address();
+/** The site, as the browser's answers to requests for it. */
+export const requests: RequestPolicy = {
+  patterns: [`${origin}/*`],
+  decide: ({ url }) => {
+    const { pathname } = new URL(url);
+    const body = pathname === "/" ? home : pathname === "/docs" ? docs : undefined;
 
-    return `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`;
-  }),
-);
+    return Effect.succeed(
+      body === undefined
+        ? { _tag: "Fulfilled", status: 404, contentType: "text/plain", body: "" }
+        : { _tag: "Fulfilled", status: 200, contentType: "text/html; charset=utf-8", body },
+    );
+  },
+};
 
 const picks = {
   docs: { role: "link", name: "Docs" },
@@ -105,6 +101,8 @@ const picks = {
   lede: { selector: ".lede", words: /\S+/u },
   command: { selector: ".command" },
   copy: { role: "button", name: "Copy" },
+  // The first of the rows that show it, which is Row 1.
+  row: { text: "Row 1", words: /\S+/u },
 } satisfies Layout.Picks;
 
 export class NotOnPage extends Data.TaggedError("NotOnPage")<{ readonly pick: string }> {}
@@ -179,10 +177,10 @@ const along = (path: ReadonlyArray<readonly [number, Spot]>, t: number, scroll: 
 };
 
 /**
- * Film the site at `url`, handing each frame to `write`: what it cost, what changed, and the layout
- * it read before filming.
+ * Film the site, which the browser must be serving through `requests`, handing each frame to
+ * `write`: what it cost, what changed, and the layout it read before filming.
  */
-export const film = <E>(url: string, write: (shot: Film.Shot) => Effect.Effect<void, E>) =>
+export const film = <E>(write: (shot: Film.Shot) => Effect.Effect<void, E>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const browser = yield* Browser.Browser;
@@ -190,7 +188,7 @@ export const film = <E>(url: string, write: (shot: Film.Shot) => Effect.Effect<v
 
       // Scrollbars go from the next document on, so paint before loading it.
       yield* page.paint({ scrollbars: false });
-      yield* page.goto(`${url}/`);
+      yield* page.goto(`${origin}/`);
       yield* page.ready();
       const layout = yield* page.layout(picks);
       const docs = Layout.place(layout, "docs");
@@ -198,13 +196,20 @@ export const film = <E>(url: string, write: (shot: Film.Shot) => Effect.Effect<v
       const lede = Layout.place(layout, "lede");
       const command = Layout.place(layout, "command");
       const copy = Layout.place(layout, "copy");
+      const row = Layout.place(layout, "row");
 
-      if (!docs || !usage || !lede || !command || !copy)
+      if (!docs || !usage || !lede || !command || !copy || !row)
         return yield* new NotOnPage({ pick: layout.missing.join(", ") });
       const [line] = lines(lede);
+      const [across] = lines(row);
       const word = lede.words?.find(({ text }) => text.startsWith("concurrency"));
 
       if (line === undefined || word === undefined) return yield* new NotOnPage({ pick: "lede" });
+      if (across === undefined) return yield* new NotOnPage({ pick: "row" });
+      // The row's text, from just before its first letter to its last, along its middle.
+      const y = middle(row.page).y;
+      const start = { x: across.left - 2, y };
+      const end = { x: across.right, y };
       const { width, height } = layout.viewport;
       const searching = onScreen({ x: width - 48 - 130, y: 100 });
 
@@ -222,6 +227,8 @@ export const film = <E>(url: string, write: (shot: Film.Shot) => Effect.Effect<v
         [4100, searching],
         [4300, onPage(middle(copy.page))],
         [5300, onPage(middle(copy.page))],
+        [5400, onPage(start)],
+        [5700, onPage(end)],
         [6000, onScreen(middle(docs.box))],
       ];
 
@@ -241,6 +248,16 @@ export const film = <E>(url: string, write: (shot: Film.Shot) => Effect.Effect<v
           action: { _tag: "Type", text: key, options: { replace: false } },
         })),
         { t: 4100, label: "close", action: { _tag: "Press", keys: "Escape" } },
+        // Released as the ring reaches the row's end; the scroll has ended, so it is still.
+        {
+          t: 5700,
+          label: "drag",
+          action: {
+            _tag: "Drag",
+            from: onPage(start)(scrollAt(5700)),
+            to: onPage(end)(scrollAt(5700)),
+          },
+        },
         { t: 6000, label: "docs", action: { _tag: "Click", target: docs.ref } },
       ];
 
@@ -341,9 +358,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   const program = Effect.gen(function* () {
     yield* Effect.promise(() => mkdir(out, { recursive: true }));
-    const url = yield* serve;
 
-    const { summary, changed } = yield* film(url, (shot) =>
+    const { summary, changed } = yield* film((shot) =>
       Effect.promise(() =>
         writeFile(join(out, `${String(shot.index).padStart(5, "0")}.png`), shot.image.data),
       ),
@@ -355,6 +371,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
 
   await Effect.runPromise(
-    program.pipe(Effect.scoped, Effect.provide(Chromium.layer({ pageTime: true }))),
+    program.pipe(Effect.provide(Chromium.layer({ pageTime: true, requests }))),
   );
 }

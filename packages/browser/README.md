@@ -1008,8 +1008,9 @@ the same clock as a `Shot`'s `at`, so on held time the first shot at or after it
 show it. To lift an element off the page, take its picture with a clipped screenshot at
 `scale: "device"`, then pose it to `sx: 0, sy: 0`, which hides it and leaves the page laid out as
 it was. `examples/film.ts` films a small site this way: a hover, a tab, a selected word, a copy,
-a search typed a key at a time, an eased scroll and a link to the next page, with what changed
-framed after each.
+a search typed a key at a time, an eased scroll, a row selected by a drag and a link to the next
+page, with what changed framed after each. It serves the site through the browser's request
+policy (`Browser.Options.requests`), so a hosted browser films it as a local one does.
 
 ## A site that owns its page
 
