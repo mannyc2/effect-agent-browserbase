@@ -6,6 +6,13 @@ import { playwrightJpeg } from "./playwright-jpeg.ts";
 export default defineConfig({
   plugins: [pageScript()],
   resolve: { conditions: ["@effect-browser/source"] },
+  // The package's own subpaths, as an example imports them, from source rather than its dist.
+  ssr: {
+    resolve: {
+      conditions: ["@effect-browser/source"],
+      externalConditions: ["@effect-browser/source"],
+    },
+  },
   pack: {
     plugins: [pageScript(), playwrightJpeg()],
     entry: [
