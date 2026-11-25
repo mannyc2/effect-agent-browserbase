@@ -2,6 +2,7 @@
 // what is put back, refused and stepped on held time.
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Stream } from "effect";
+import { PNG } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
 import * as Film from "../src/film/Film.ts";
@@ -41,7 +42,7 @@ const near = (
     assert.closeTo(actual?.[key] ?? Number.NaN, expected[key], 0.01, `${what}: ${key}`);
 };
 
-layer(Chromium.layer({ pageTime: true }), {
+layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
 })("Page.poses", (it) => {
@@ -85,6 +86,37 @@ layer(Chromium.layer({ pageTime: true }), {
       near(after.centred, { x: 370, y: 100, width: 60, height: 60 }, "centred, put back");
       assert.deepStrictEqual((yield* tab.changes({ since: recorded })).changes, []);
     }),
+  );
+
+  // Lifting an element off the page is a picture of it at the screen's pixels and a pose that
+  // scales it to nothing, which, as any transform, leaves the page laid out as it was.
+  it.effect("lifts an element: its picture at device pixels, then posed to nothing", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const tab = yield* browser.newPage(page);
+
+      const place = Layout.place(yield* tab.layout(picks), "box");
+      const recorded = yield* tab.changes();
+
+      if (place === undefined) return assert.fail("the box");
+      const clip = { x: 95, y: 95, width: 90, height: 50 };
+      const inked = (data: Uint8Array) =>
+        PNG.sync
+          .read(Buffer.from(data))
+          .data.some((value, index) => index % 4 !== 3 && value < 200);
+
+      const picture = yield* tab.screenshot({ clip, format: "png", scale: "device" });
+
+      assert.deepStrictEqual([picture.width, picture.height], [180, 100]);
+      assert.isTrue(inked(picture.data), "the box's picture");
+      const poses = yield* tab.poses;
+
+      yield* poses.set([{ ref: place.ref, sx: 0, sy: 0 }]);
+      const lifted = yield* tab.screenshot({ clip, format: "png", scale: "device" });
+
+      assert.isFalse(inked(lifted.data), "nothing where the box was");
+      assert.deepStrictEqual((yield* tab.changes({ since: recorded })).changes, []);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("refuses a second lease, a stale ref, a drawing, and numbers that are not finite", () =>
