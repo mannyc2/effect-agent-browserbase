@@ -2,12 +2,12 @@
 
 Each release lists what changed since the release before it. From 0.3 on, `effect-browser`,
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
-`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them. From the release after
-`0.3.0-beta.24` they are `effect-browser` and the `@effect-browser` scope's `chromium`,
-`browserbase`, `human-strokes` and `yielded`. Where a release was checked beyond `bun run ready`,
-its entry ends with how. Entries before 0.3 are short summaries drawn from the release tags.
+`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them. From `0.3.0-beta.25` they are
+`effect-browser` and the `@effect-browser` scope's `chromium`, `browserbase`, `human-strokes` and
+`yielded`. Where a release was checked beyond `bun run ready`, its entry ends with how. Entries
+before 0.3 are short summaries drawn from the release tags.
 
-## Unreleased
+## 0.3.0-beta.25
 
 **Breaking.** The packages move into the `@effect-browser` scope, Chromium becomes a package of its
 own, the core's features become subpaths, and an agent's browser tools move into the core as

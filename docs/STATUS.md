@@ -8,8 +8,8 @@ November 2026. [CHANGELOG.md](../CHANGELOG.md) lists what each release changed.
 The latest release is `0.3.0-beta.24`, published on 25 November 2026 to npm's `beta` dist-tag as
 `effect-browser`, `effect-browserbase`, `effect-browser-human-strokes` and `effect-agent-browser`.
 
-`main` holds the next release, which is breaking and not yet published; the changelog's
-"Unreleased" entry describes it. It moves the packages into the `@effect-browser` scope, adds
+`main` holds the next release, `0.3.0-beta.25`, which is breaking and not yet published; its
+changelog entry describes it. It moves the packages into the `@effect-browser` scope, adds
 `@effect-browser/chromium`, makes the core's features subpaths of their own and moves the agent's
 tools into `effect-browser/ai`. None of the scoped names is on npm yet, so until that release the
 READMEs' and the docs site's install commands fail for them. The owner reserves the names before
@@ -223,9 +223,9 @@ moments without `Moment.account` and in 29 with it. The site's two demos are rec
 
 ## Known not to work, or not yet checked
 
-- **The scoped packages are not on npm.** Their install commands fail until the unreleased release
-  is published. The other packages still peer on `effect-browser` `^0.3.0-beta.23`, which lacks the
-  subpaths they import; the release raises that range.
+- **The scoped packages are not on npm.** Their install commands fail until `0.3.0-beta.25` is
+  published, and they peer on `effect-browser` `^0.3.0-beta.25`, the first version with the subpaths
+  they import.
 - **Not rebuilt from 0.2:** recording to video files, and file uploads into a page.
 - **Hosted checks prepared but not run** ([HOSTED_CHECKS.md](HOSTED_CHECKS.md)): two captures held
   for five minutes with cued switches (H1), a supervisor's rotation with a persisted context read

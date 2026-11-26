@@ -144,6 +144,6 @@ assumption in the deferred-frame readiness test. The tag is retained.
 resize-frame trigger in the same fixture after its dry run passed. The corrected release is
 `0.3.0-beta.19`.
 
-`effect-browserbase` and `effect-browser-human-strokes` ended at `0.3.0-beta.24`; the release after
-it publishes them as `@effect-browser/browserbase` and `@effect-browser/human-strokes`, beside the
+`effect-browserbase` and `effect-browser-human-strokes` ended at `0.3.0-beta.24`; `0.3.0-beta.25`
+publishes them as `@effect-browser/browserbase` and `@effect-browser/human-strokes`, beside the
 new `@effect-browser/chromium`.

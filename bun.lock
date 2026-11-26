@@ -45,7 +45,7 @@
     },
     "packages/browser": {
       "name": "effect-browser",
-      "version": "0.3.0-beta.24",
+      "version": "0.3.0-beta.25",
       "devDependencies": {
         "@effect-browser/chromium": "workspace:*",
         "@effect/vitest": "4.1.2",
@@ -65,7 +65,7 @@
     },
     "packages/browserbase": {
       "name": "@effect-browser/browserbase",
-      "version": "0.3.0-beta.24",
+      "version": "0.3.0-beta.25",
       "devDependencies": {
         "@effect/vitest": "4.1.2",
         "@types/node": "26.1.2",
@@ -79,13 +79,13 @@
       },
       "peerDependencies": {
         "effect": "~4.1.2",
-        "effect-browser": "^0.3.0-beta.23",
+        "effect-browser": "^0.3.0-beta.25",
         "playwright-core": "^1.63.0",
       },
     },
     "packages/chromium": {
       "name": "@effect-browser/chromium",
-      "version": "0.3.0-beta.24",
+      "version": "0.3.0-beta.25",
       "devDependencies": {
         "@effect/vitest": "4.1.2",
         "@types/node": "26.1.2",
@@ -99,13 +99,13 @@
       },
       "peerDependencies": {
         "effect": "~4.1.2",
-        "effect-browser": "^0.3.0-beta.23",
+        "effect-browser": "^0.3.0-beta.25",
         "playwright-core": "^1.63.0",
       },
     },
     "packages/human-strokes": {
       "name": "@effect-browser/human-strokes",
-      "version": "0.3.0-beta.24",
+      "version": "0.3.0-beta.25",
       "devDependencies": {
         "@effect-browser/chromium": "workspace:*",
         "@effect/vitest": "4.1.2",
@@ -120,7 +120,7 @@
       },
       "peerDependencies": {
         "effect": "~4.1.2",
-        "effect-browser": "^0.3.0-beta.23",
+        "effect-browser": "^0.3.0-beta.25",
       },
     },
     "packages/tradingview": {
@@ -145,7 +145,7 @@
     },
     "packages/yielded": {
       "name": "@effect-browser/yielded",
-      "version": "0.3.0-beta.24",
+      "version": "0.3.0-beta.25",
       "devDependencies": {
         "@effect-browser/chromium": "workspace:*",
         "@effect/vitest": "4.1.2",
@@ -162,7 +162,7 @@
       "peerDependencies": {
         "@yielded/agent": "0.1.0-beta.191",
         "effect": "~4.1.2",
-        "effect-browser": "^0.3.0-beta.23",
+        "effect-browser": "^0.3.0-beta.25",
       },
     },
     "site": {

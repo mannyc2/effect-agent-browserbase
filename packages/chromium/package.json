@@ -1,6 +1,6 @@
 {
   "name": "@effect-browser/chromium",
-  "version": "0.3.0-beta.24",
+  "version": "0.3.0-beta.25",
   "description": "A local Chromium for effect-browser, launched through playwright-core.",
   "license": "MIT",
   "repository": {
@@ -51,7 +51,7 @@
   },
   "peerDependencies": {
     "effect": "~4.1.2",
-    "effect-browser": "^0.3.0-beta.23",
+    "effect-browser": "^0.3.0-beta.25",
     "playwright-core": "^1.63.0"
   },
   "engines": {
