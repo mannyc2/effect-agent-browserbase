@@ -24,6 +24,7 @@ import {
   Schema,
 } from "effect";
 import { Browser } from "effect-browser/Browser";
+import { isBrowserError } from "effect-browser/BrowserError";
 import type * as BrowserEvent from "effect-browser/BrowserEvent";
 import { Presentation } from "effect-browser/presentation";
 import { Walk } from "effect-browser/walk";
@@ -112,9 +113,7 @@ const flags = {
 const stopped = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
 
-  return error instanceof Error && ["BrowserError", "ReplayError"].includes(error.name)
-    ? error.message
-    : errorText(cause);
+  return isBrowserError(error) || Walk.isReplayError(error) ? error.message : errorText(cause);
 };
 
 /**

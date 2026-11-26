@@ -41,7 +41,7 @@ import {
   isTransient,
   NotFound,
   RateLimited,
-  type Reason,
+  type BrowserbaseErrorReason,
   Status,
   Transport,
   Unauthorized,
@@ -257,7 +257,7 @@ const ErrorBody = Schema.fromJsonString(Schema.Struct({ message: Schema.String }
 const SearchResponse = Schema.Struct({ results: Schema.Array(SearchResult) });
 const CreatedId = Schema.Struct({ id: Schema.String.check(Schema.isPattern(ids)) });
 
-const statusReason = (status: number, detail: string): Reason => {
+const statusReason = (status: number, detail: string): BrowserbaseErrorReason => {
   if (status < 200 || (status >= 300 && status < 400)) {
     return new Status({
       status,
@@ -305,7 +305,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
     ),
   );
 
-  const failure = (operation: string, reason: Reason) =>
+  const failure = (operation: string, reason: BrowserbaseErrorReason) =>
     new BrowserbaseError({ operation, reason });
 
   const requestTimeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(60));

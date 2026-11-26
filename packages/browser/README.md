@@ -378,9 +378,10 @@ A press recorded on a subject resolves and focuses it before sending keys. Text 
 typed into a secret field is typed only into one. An element step never falls back to coordinates.
 A step recorded at a point presses the same place within the element found, brought into view
 first, and only when a press there reaches that element, not something over it. Replay stops at
-the first step it cannot take, with a `ReplayError` naming the step and why: `Missing`,
-`Ambiguous`, `Drifted` (nothing with the subject's role and name repeats its context, or the walk
-did not arrive at the recorded site), the step's `BrowserError`, or `Uncertain`. Arrival waits
+the first step it cannot take, with a `ReplayError` naming the step and why, its
+`ReplayErrorReason`: `Missing`, `Ambiguous`, `Drifted` (nothing with the subject's role and name
+repeats its context, or the walk did not arrive at the recorded site), the step's `BrowserError`,
+or `Uncertain`; `Walk.isReplayError` tells one from other failures. Arrival waits
 are bounded by `arrival` (five seconds by default), including redirects after an action. A zero
 wait makes one read without polling; that read retains the page operation's own timeout.
 Each `Action` now records its ending address, so a bounded event history can still record the site
@@ -847,7 +848,9 @@ A failure on a page that is gone is `Closed` with its cause: `page`, `crashed`, 
 `page`, or the `session` with its pages), and whether to `repeat` the call: `safe`, as nothing
 reached the browser; `check` its effect first, as it may have taken place; `pointless` as it is,
 such as with a stale ref; or `resume` reading events from a newer cursor. `message` is a sentence
-for operators, and the browser tools tell a model what to do about the failure.
+for operators, and the browser tools tell a model what to do about the failure. The reasons make up
+`BrowserErrorReason`, and `isBrowserError` and `isBrowserErrorReason` tell them from other values.
+As Effect's do, each error names itself by its path, such as `effect-browser/BrowserError/Timeout`.
 
 `Walk.step` checks an authored expected effect before input and after a dispatched failure.
 Unknown consequential input requires positive durable evidence before continuation; the `Walk`

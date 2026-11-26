@@ -20,8 +20,10 @@ npm install @effect-browser/browserbase@beta effect-browser@beta effect playwrig
   `open`, `verifyContext` and `reconcile` preserve that error, and supervision stops retrying it.
 - `BrowserbaseClient`: sessions, Live View, stored contexts, extensions, Search and Fetch.
   `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
-- `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
-  `Transport`, `Decode` or `InvalidRequest`. A request Browserbase refuses as malformed, such as a
+- `BrowserbaseError`: one error with a reason, a `BrowserbaseErrorReason`: `Unauthorized`,
+  `NotFound`, `RateLimited`, `Status`, `Transport`, `Decode` or `InvalidRequest`;
+  `isBrowserbaseError` and `isBrowserbaseErrorReason` tell them from other values, including the
+  core's own `NotFound` and `InvalidRequest`. A request Browserbase refuses as malformed, such as a
   session id that is not a UUID, is `InvalidRequest`, as is one this client refuses before sending.
   A create whose answer named its session but did not decode is `Decode` with `released`, whether
   the client released that session.

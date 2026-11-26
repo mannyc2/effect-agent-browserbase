@@ -14,9 +14,12 @@ import { DisconnectCause } from "./BrowserEvent.ts";
 import * as Url from "./internal/url.ts";
 
 /** The operation did not finish in time. */
-export class Timeout extends Schema.TaggedError<Timeout>()("Timeout", {
-  millis: Schema.Finite,
-}) {
+export class Timeout extends Schema.TaggedError<Timeout>("effect-browser/BrowserError/Timeout")(
+  "Timeout",
+  {
+    millis: Schema.Finite,
+  },
+) {
   override get message() {
     return `timed out after ${this.millis} ms`;
   }
@@ -26,7 +29,7 @@ export class Timeout extends Schema.TaggedError<Timeout>()("Timeout", {
  * The operation waited its turn behind others on its page and was not given one in time, or was
  * asked to fail fast: the page may be well, only busy.
  */
-export class Busy extends Schema.TaggedError<Busy>()("Busy", {
+export class Busy extends Schema.TaggedError<Busy>("effect-browser/BrowserError/Busy")("Busy", {
   waitedMillis: Schema.Finite,
   /** The operations ahead of it: those holding the page and those asked before it. */
   ahead: Schema.Int,
@@ -39,14 +42,16 @@ export class Busy extends Schema.TaggedError<Busy>()("Busy", {
 }
 
 /** Input is withheld by a scoped suspension; nothing was dispatched. */
-export class Suspended extends Schema.TaggedError<Suspended>()("Suspended", {}) {
+export class Suspended extends Schema.TaggedError<Suspended>(
+  "effect-browser/BrowserError/Suspended",
+)("Suspended", {}) {
   override get message() {
     return "browser input is suspended";
   }
 }
 
 /** The browser has as many pages open as `maxPages` allows, and none closed in time. */
-export class Limit extends Schema.TaggedError<Limit>()("Limit", {
+export class Limit extends Schema.TaggedError<Limit>("effect-browser/BrowserError/Limit")("Limit", {
   maxPages: Schema.Int,
 }) {
   override get message() {
@@ -55,25 +60,33 @@ export class Limit extends Schema.TaggedError<Limit>()("Limit", {
 }
 
 /** A ref from an earlier snapshot no longer names an element on the page. */
-export class StaleRef extends Schema.TaggedError<StaleRef>()("StaleRef", {
-  ref: Schema.String,
-}) {
+export class StaleRef extends Schema.TaggedError<StaleRef>("effect-browser/BrowserError/StaleRef")(
+  "StaleRef",
+  {
+    ref: Schema.String,
+  },
+) {
   override get message() {
     return `${this.ref} is not on the page any more`;
   }
 }
 
 /** What the operation looked for is not on the page. */
-export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
-  target: Schema.String,
-}) {
+export class NotFound extends Schema.TaggedError<NotFound>("effect-browser/BrowserError/NotFound")(
+  "NotFound",
+  {
+    target: Schema.String,
+  },
+) {
   override get message() {
     return `${this.target} was not found`;
   }
 }
 
 /** The element exists but cannot take this input: covered, disabled, hidden or the wrong kind. */
-export class NotActionable extends Schema.TaggedError<NotActionable>()("NotActionable", {
+export class NotActionable extends Schema.TaggedError<NotActionable>(
+  "effect-browser/BrowserError/NotActionable",
+)("NotActionable", {
   detail: Schema.String,
 }) {
   override get message() {
@@ -82,7 +95,9 @@ export class NotActionable extends Schema.TaggedError<NotActionable>()("NotActio
 }
 
 /** A navigation failed, for example on a DNS error or a refused connection. */
-export class NavigationFailed extends Schema.TaggedError<NavigationFailed>()("NavigationFailed", {
+export class NavigationFailed extends Schema.TaggedError<NavigationFailed>(
+  "effect-browser/BrowserError/NavigationFailed",
+)("NavigationFailed", {
   url: Schema.String,
   detail: Schema.String,
 }) {
@@ -103,16 +118,21 @@ const closedBy = {
  * The page is gone: it was closed (`page`) or crashed, or its browser was lost for one of the
  * browser's `DisconnectCause`s.
  */
-export class Closed extends Schema.TaggedError<Closed>()("Closed", {
-  cause: Schema.Literals(["page", "crashed", ...DisconnectCause.literals]),
-}) {
+export class Closed extends Schema.TaggedError<Closed>("effect-browser/BrowserError/Closed")(
+  "Closed",
+  {
+    cause: Schema.Literals(["page", "crashed", ...DisconnectCause.literals]),
+  },
+) {
   override get message() {
     return closedBy[this.cause];
   }
 }
 
 /** The request itself is invalid, such as a ref that is not a ref or a point off the screen. */
-export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("InvalidRequest", {
+export class InvalidRequest extends Schema.TaggedError<InvalidRequest>(
+  "effect-browser/BrowserError/InvalidRequest",
+)("InvalidRequest", {
   detail: Schema.String,
 }) {
   override get message() {
@@ -121,7 +141,9 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("Invali
 }
 
 /** The input policy refused the action before any input was sent. */
-export class PolicyDenied extends Schema.TaggedError<PolicyDenied>()("PolicyDenied", {
+export class PolicyDenied extends Schema.TaggedError<PolicyDenied>(
+  "effect-browser/BrowserError/PolicyDenied",
+)("PolicyDenied", {
   detail: Schema.String,
   /** What made the policy deny, such as the failure of the judge it asked. */
   cause: Schema.optional(Schema.Defect()),
@@ -132,7 +154,9 @@ export class PolicyDenied extends Schema.TaggedError<PolicyDenied>()("PolicyDeni
 }
 
 /** The input policy did not release its hold within its own bound. */
-export class PolicyTimeout extends Schema.TaggedError<PolicyTimeout>()("PolicyTimeout", {
+export class PolicyTimeout extends Schema.TaggedError<PolicyTimeout>(
+  "effect-browser/BrowserError/PolicyTimeout",
+)("PolicyTimeout", {
   millis: Schema.Finite,
 }) {
   override get message() {
@@ -141,36 +165,42 @@ export class PolicyTimeout extends Schema.TaggedError<PolicyTimeout>()("PolicyTi
 }
 
 /** The requested event cursor fell behind the browser's bounded replay history. */
-export class EventHistoryExpired extends Schema.TaggedError<EventHistoryExpired>()(
-  "EventHistoryExpired",
-  {
-    after: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    oldest: Schema.Int.check(Schema.isGreaterThan(0)),
-    latest: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  },
-) {
+export class EventHistoryExpired extends Schema.TaggedError<EventHistoryExpired>(
+  "effect-browser/BrowserError/EventHistoryExpired",
+)("EventHistoryExpired", {
+  after: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  oldest: Schema.Int.check(Schema.isGreaterThan(0)),
+  latest: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+}) {
   override get message() {
     return `event history after ${this.after} expired; retained sequences are ${this.oldest}–${this.latest}`;
   }
 }
 
 /** The browser, the connection or the provider failed in a way the other reasons do not cover. */
-export class Failed extends Schema.TaggedError<Failed>()("Failed", {
-  detail: Schema.String,
-}) {
+export class Failed extends Schema.TaggedError<Failed>("effect-browser/BrowserError/Failed")(
+  "Failed",
+  {
+    detail: Schema.String,
+  },
+) {
   override get message() {
     return this.detail;
   }
 }
 
 /** Caller code threw in the page's main world. Its source and payload stay private. */
-export class Threw extends Schema.TaggedError<Threw>()("Threw", {}) {
+export class Threw extends Schema.TaggedError<Threw>("effect-browser/BrowserError/Threw")(
+  "Threw",
+  {},
+) {
   override get message() {
     return "the page script threw";
   }
 }
 
-export const Reason = Schema.Union([
+/** What went wrong, as `BrowserError`'s `reason`. */
+export const BrowserErrorReason = Schema.Union([
   Timeout,
   Busy,
   Suspended,
@@ -188,17 +218,27 @@ export const Reason = Schema.Union([
   Threw,
 ]);
 
-export type Reason = typeof Reason.Type;
+export type BrowserErrorReason = typeof BrowserErrorReason.Type;
 
-export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserError", {
-  operation: Schema.String,
-  reason: Reason,
-  dispatched: Schema.Boolean,
-}) {
+export class BrowserError extends Schema.TaggedError<BrowserError>("effect-browser/BrowserError")(
+  "BrowserError",
+  {
+    operation: Schema.String,
+    reason: BrowserErrorReason,
+    dispatched: Schema.Boolean,
+  },
+) {
   override get message() {
     return `${this.operation} failed${this.dispatched ? " after it was sent" : ""}: ${this.reason.message}`;
   }
 }
+
+/** Whether a value is a `BrowserError`. */
+export const isBrowserError: (u: unknown) => u is BrowserError = Schema.is(BrowserError);
+
+/** Whether a value is one of `BrowserError`'s reasons. */
+export const isBrowserErrorReason: (u: unknown) => u is BrowserErrorReason =
+  Schema.is(BrowserErrorReason);
 
 /**
  * What a failure leaves. `lost` is `"page"` when the page is gone and its browser stands, and
@@ -244,11 +284,11 @@ export const consequence = ({ reason, dispatched }: BrowserError): Consequence =
 };
 
 /** A failure before any of the operation's input reached the page. */
-export const undispatched = (operation: string, reason: Reason) =>
+export const undispatched = (operation: string, reason: BrowserErrorReason) =>
   new BrowserError({ operation, reason, dispatched: false });
 
 /** Fail an operation before dispatch, preserving its typed reason. */
-export const failWith = (operation: string, reason: Reason) =>
+export const failWith = (operation: string, reason: BrowserErrorReason) =>
   Effect.fail(undispatched(operation, reason));
 
 /** Refuse an invalid request before sending anything. */
@@ -261,7 +301,7 @@ export const reasonOf = (
   timeoutMillis?: number,
   closed: Closed["cause"] = "connection",
   redact: (message: string) => string = Url.redactWithin,
-): Reason => {
+): BrowserErrorReason => {
   const message =
     cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "unknown error";
 

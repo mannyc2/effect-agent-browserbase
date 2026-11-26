@@ -5,7 +5,9 @@ import { Effect, Result, Schema } from "effect";
 import { Motion } from "effect-browser/presentation";
 
 /** The fixed bundled recording could not be read or validated. */
-export class DataError extends Schema.TaggedError<DataError>()("HumanStrokesDataError", {
+export class DataError extends Schema.TaggedError<DataError>(
+  "@effect-browser/human-strokes/HumanStrokes/DataError",
+)("DataError", {
   reason: Schema.Literals(["Read", "Compression", "Format"]),
   detail: Schema.String,
 }) {}

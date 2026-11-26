@@ -55,12 +55,13 @@ it("the root holds every root module but Cdp, which loads playwright-core, and S
   );
 });
 
+const featureIndex = (folder: string) =>
+  Effect.promise(() => import(`../src/${folder}/index.ts`) as Promise<Record<string, unknown>>);
+
 it.effect("each feature folder's index holds every module in the folder", () =>
   Effect.gen(function* () {
     for (const folder of folders) {
-      const index = yield* Effect.promise(
-        () => import(`../src/${folder}/index.ts`) as Promise<Record<string, unknown>>,
-      );
+      const index = yield* featureIndex(folder);
 
       assert.deepStrictEqual(
         Object.keys(index).toSorted(),
@@ -68,5 +69,36 @@ it.effect("each feature folder's index holds every module in the folder", () =>
         folder,
       );
     }
+  }),
+);
+
+// As Effect's `effect/sql/SqlError/ConnectionError`: the package, the feature folder, the module
+// and the error's own name, which a module's own error leaves out.
+it.effect("every public error's identifier is its path", () =>
+  Effect.gen(function* () {
+    const entries: Array<readonly [string, Record<string, unknown>]> = [["", Root]];
+
+    for (const folder of folders) entries.push([`${folder}/`, yield* featureIndex(folder)]);
+
+    const errors = entries.flatMap(([folder, index]) =>
+      Object.entries(index).flatMap(([module, exports]) =>
+        Object.entries(exports as Record<string, unknown>).flatMap(([name, value]) =>
+          typeof value === "function" && value.prototype instanceof Error && "identifier" in value
+            ? [
+                {
+                  value,
+                  path: `effect-browser/${folder}${module}${name === module ? "" : `/${name}`}`,
+                },
+              ]
+            : [],
+        ),
+      ),
+    );
+
+    assert.isNotEmpty(errors);
+    assert.deepStrictEqual(
+      errors.map(({ value }) => value.identifier),
+      errors.map(({ path }) => path),
+    );
   }),
 );

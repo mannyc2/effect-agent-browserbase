@@ -65,7 +65,9 @@ export class Unavailable<E = unknown> extends Data.TaggedError("Unavailable")<{
 }
 
 /** Revoked work still uses its input receipt to determine whether input reached the site. */
-export class Superseded extends Schema.TaggedError<Superseded>()("Superseded", {
+export class Superseded extends Schema.TaggedError<Superseded>(
+  "effect-browser/supervisor/Supervisor/Superseded",
+)("Superseded", {
   generation: Schema.Int,
   reason: StopReason,
 }) {}
@@ -79,7 +81,9 @@ export interface Lease<A> {
 }
 
 /** A public admission budget must be finite and nonnegative. */
-export class InvalidWait extends Data.TaggedError("InvalidWait")<{ readonly detail: string }> {}
+export class InvalidWait extends Schema.TaggedError<InvalidWait>(
+  "effect-browser/supervisor/Supervisor/InvalidWait",
+)("InvalidWait", { detail: Schema.String }) {}
 
 export interface UseOptions {
   /** Finite nonnegative admission budget on the owner's clock. Zero peeks; absent waits. */

@@ -20,7 +20,19 @@
  *
  * @since 0.3.0
  */
-export { Expected, Step, Walk, Receipt, Stopped, Uncertain, ReplayError } from "./internal/data.ts";
+export {
+  Expected,
+  Step,
+  Walk,
+  Receipt,
+  Stopped,
+  Uncertain,
+  ReplayError,
+  ReplayErrorReason,
+  isReplayError,
+  isReplayErrorReason,
+} from "./internal/data.ts";
+
 export { fromEvents } from "./internal/record.ts";
 export { locate } from "./internal/targets.ts";
 
