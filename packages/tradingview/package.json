@@ -2,7 +2,7 @@
   "name": "@effect-browser/tradingview",
   "version": "0.3.0-beta.24",
   "private": true,
-  "description": "TradingView charts for effect-browser: their bars and studies, exact screen points, changes made with visible input, and tools for a Yielded agent.",
+  "description": "TradingView charts for effect-browser: their bars and studies, exact screen points, changes made with visible input, and an agent's tools for them.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -40,9 +40,7 @@
     "@effect-browser/chromium": "workspace:*",
     "@effect/vitest": "4.1.2",
     "@types/node": "26.1.2",
-    "@yielded/agent": "0.1.0-beta.191",
     "effect": "4.1.2",
-    "effect-agent-browser": "workspace:*",
     "effect-browser": "workspace:*",
     "playwright-core": "1.63.0",
     "typescript": "7.0.2",
@@ -51,18 +49,8 @@
     "vitest": "5.0.3"
   },
   "peerDependencies": {
-    "@yielded/agent": "0.1.0-beta.191",
     "effect": "~4.1.2",
-    "effect-agent-browser": "^0.3.0-beta.21",
     "effect-browser": "^0.3.0-beta.23"
-  },
-  "peerDependenciesMeta": {
-    "@yielded/agent": {
-      "optional": true
-    },
-    "effect-agent-browser": {
-      "optional": true
-    }
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

@@ -14,8 +14,8 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as PromptCache from "effect-agent-browser/PromptCache";
-import { HttpCassette } from "effect-agent-browser/testing";
+import { PromptCache } from "effect-browser/ai";
+import { HttpCassette } from "effect-browser/testing";
 import { AiError, type LanguageModel, Model } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 

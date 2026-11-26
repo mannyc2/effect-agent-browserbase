@@ -5,8 +5,8 @@ compact page outline for models, screencast frames, a record of what visibly cha
 windows over a page's events, changes and frames, and moments, an account in pictures and words of
 what a page showed and what changed on it. It films pages on their own held time, with layout as
 data, an overlay, element poses and input on its frame, and gives its in-page readers to a site that
-owns its page. An agent drives its pages through [`effect-agent-browser`](../agent-browser), with
-Yielded Agent's browser tools.
+owns its page. An agent drives its pages with the browser tools of `effect-browser/ai`, in any
+`effect/ai` loop, or through [`@effect-browser/yielded`](../yielded) in a Yielded Agent run.
 
 ```sh
 npm install effect-browser@beta @effect-browser/chromium@beta effect playwright-core
@@ -48,6 +48,14 @@ README says what that risks and how signals end the browser.
 | `Release`      | `effect-browser/supervisor`   | What a provider said of a release: `Confirmed` or `Unconfirmed`                   |
 | `TestBrowser`  | `effect-browser/testing`      | A seeded browser over the production lane, suspension gate and event timeline     |
 | `TestPage`     | `effect-browser/testing`      | A deterministic page seeded from data, without page code                          |
+| `TestModel`    | `effect-browser/testing`      | A model that answers from a script, prompt by prompt, and fails when it runs out  |
+| `HttpCassette` | `effect-browser/testing`      | HTTP exchanges recorded once and replayed, with every live request reserved       |
+| `Story`        | `effect-browser/testing`      | Ports released in a scripted order, with one end check for unfinished work        |
+| `BrowserTools` | `effect-browser/ai`           | An agent's browser tools, the pictures before each turn and their layer           |
+| `PageControl`  | `effect-browser/ai`           | The controller the tools act through, and its observations and results' schemas   |
+| `Tabs`         | `effect-browser/ai`           | The tabs the tools follow, as data to save and resume                             |
+| `ToolError`    | `effect-browser/ai`           | What a failed tool tells the model, and whether its input went                    |
+| `PromptCache`  | `effect-browser/ai`           | An HTTP client layer that keeps OpenRouter's prompt cache across pictured turns   |
 
 The root, `effect-browser`, exports the kernel, and each of its modules also has a path of its own,
 such as `effect-browser/Page`. `effect-browser/Cdp` and `effect-browser/Site` are reached only by
@@ -484,7 +492,7 @@ const browser = Layer.unwrap(
 );
 ```
 
-The task comes from `Policy.Task`, which `effect-agent-browser`'s tools provide to their inputs
+The task comes from `Policy.Task`, which `effect-browser/ai`'s tools provide to their inputs
 from the run's `task`; elsewhere, provide it yourself, or risky input is denied for want of one. A judge sees the task, the action, the typed
 text and the facts as trusted, and the page's text only as evidence. It never sees the agent's own
 words. A judgement only adds to structure: a `secret` fact counts whatever the judge reads. A judge
@@ -1122,6 +1130,148 @@ The published build embeds the complete page script as a closed JavaScript sourc
 bundlers can preserve function names or minify the library without changing that script's dependencies.
 The `@effect-browser/source` export condition is for this workspace's development tools; consumer
 bundles should use the default built exports, which also supply the Workers-specific packaging.
+
+## An agent's tools
+
+`effect-browser/ai` gives an agent in any `effect/ai` loop a browser: the tools it calls, what it
+sees of the page before each turn, and the controller the tools act through.
+[`@effect-browser/yielded`](../yielded) gives the same tools to a
+[Yielded Agent](https://github.com/yielded-dev/agent) run.
+
+```ts
+import { Effect } from "effect";
+import { Browser } from "effect-browser";
+import { BrowserTools } from "effect-browser/ai";
+import { LanguageModel, Prompt } from "effect/ai";
+
+const tools = BrowserTools.make();
+
+const solve = (task: string) =>
+  Effect.gen(function* () {
+    const pictures = yield* BrowserTools.Pictures;
+    let thread = Prompt.make(task);
+
+    for (let turn = 0; turn < 20; turn++) {
+      const response = yield* LanguageModel.generateText({
+        // The pictures are for this request alone: the thread never keeps them.
+        prompt: Prompt.concat(thread, yield* pictures.next),
+        toolkit: tools.toolkit,
+        // One call at a time: a turn's calls act on one page, in the order the model made them.
+        concurrency: 1,
+      });
+
+      thread = Prompt.concat(thread, Prompt.fromResponseParts(response.content));
+      if (response.toolCalls.length === 0) return response.text;
+    }
+
+    return "Out of turns.";
+  });
+
+const program = Effect.gen(function* () {
+  const page = yield* (yield* Browser.Browser).firstPage;
+  const task = "Report the title and points of the top story.";
+
+  yield* page.goto("https://news.ycombinator.com");
+
+  // The tools act on this page, and the input policy's judge reads the task.
+  return yield* solve(task).pipe(Effect.provide(tools.layer({ page }, { task })));
+});
+```
+
+Provide a `Browser` and a `LanguageModel`, as the repository's
+[README](https://github.com/mannyc2/effect-agent-browserbase#readme) does. A failed tool does not
+fail the loop: the model reads a `ToolError`, `invalid` for a request the tools cannot carry out or
+`browser` for a browser failure, with `dispatch` saying whether its input may have gone.
+
+`BrowserTools.make()` gives the ref and control tools, with the names, parameters and descriptions
+Yielded Agent gave them until `0.1.0-beta.174` moved its browser tools to Code Mode over CDP:
+
+| Tool         | What it does                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `observe`    | Reads the viewport as an outline whose controls carry refs such as `e12`, and lists them |
+| `act`        | Clicks, fills or selects up to eight refs in order, then observes                        |
+| `inspect`    | Reads inside a CSS selector, or narrows a select's options                               |
+| `navigate`   | Opens an http or https address, a `data:` URL or `about:blank`, then observes            |
+| `scroll`     | Scrolls the page, or what a ref names, by pixels, then observes                          |
+| `wait`       | Waits for what a selector matches to show, hide, enable or hold some text                |
+| `press`      | Presses a key on the element a ref names, focusing it first                              |
+| `select_tab` | Makes another tab current, where the tools follow a browser's tabs                       |
+
+and pointer tools of their own, for what has no ref, such as a canvas game or a chart:
+
+| Tool         | What it does                                                         |
+| ------------ | -------------------------------------------------------------------- |
+| `click_at`   | Clicks a point of the screenshot                                     |
+| `hover`      | Moves the pointer over a ref or a point                              |
+| `drag`       | Drags from a ref or point to another, as a slider or a chart's range |
+| `type_text`  | Types into whatever has focus                                        |
+| `press_keys` | Presses a key or chord, held or repeated, on whatever has focus      |
+| `zoom`       | Crops a region of the viewport, shown before the next turn           |
+| `wait_still` | Waits for the screen to stop moving, as reels coming to rest         |
+| `back`       | Goes back in the tab                                                 |
+
+`BrowserTools.Control` and `BrowserTools.Pointer` are the two groups, to build an agent with fewer;
+the layer serves every tool either way. `make({ mode: "single" })` lets `act` take one action.
+
+- `Pictures`' `next` holds a screenshot of the current tab and the crops `zoom` took since the
+  last turn. Its pixel coordinates are viewport coordinates, which the pointer tools take.
+  `vision: false` leaves the pictures out, and `zoom` then refuses. A queued crop is discarded if another tab
+  becomes current before the next turn, so its coordinates never describe that other tab.
+- `vision: "ask"` shows the screenshot only before a turn after the model called `look`, a tool in
+  `BrowserTools.Look` to merge into the toolkit; crops still follow `zoom`. `vision: "page"`
+  also shows it after pointer input, and while the viewport shows a canvas, a video or another
+  site's frame, where the outline cannot say what is there.
+- `BrowserTools.Find` holds `find`, which lists the whole page's outline lines that hold a text,
+  in view or not, with their refs. Merge it into the toolkit; the layer serves it either way.
+- The layer also provides `BrowserTools.Controller`, the tools' controller, for an application's
+  own tools on the same tabs, as `@effect-browser/tradingview`'s chart tools are: they act on the tab
+  the model sees now, with the run's task, and say what followed.
+- `boxes: true` ends each control's line in the outline with its box, `WxH at (x,y)` in viewport
+  CSS pixels, so the model can match a ref to what the screenshot shows there. `changes: true`
+  gives, after an action, only the outline's lines gone and new since the tab's last whole look,
+  when those are fewer; `observe` reads the whole outline again.
+- `placement: "crop"` makes `click_at` and `drag` first show a crop of the viewport around each
+  point and act only once called at points inside crops already shown, which costs a turn per
+  placement. A ref needs no crop.
+- An observation after an action begins with what followed it: a dialog and how the browser
+  answered it, where the page went, a tab it opened and up to three changes its input caused,
+  such as `"Full" became "Kept"`. A pointer tool's result says the same in `followed`.
+- Every action result says whether input reached the browser: `acknowledged`; `not-dispatched`,
+  when it was refused first, by a stale ref or the input policy; or `possibly-dispatched`, when it failed after.
+  An observation after an action that fails is still returned, and nothing is ever retried.
+- The input policy's judge reads `task`, the agent's task, as what authorizes a risky input.
+- The browser answers dialogs itself, as `effect-browser` does, so no tool answers one. The model
+  sees a screenshot before each turn rather than calling for one.
+- Frames from the same origin are read inline, and none is listed, so `inspect` and `wait` refuse
+  a `frame`.
+
+Only the current pictures are ever in a request, so a provider's prompt cache keeps the thread.
+A turn's picture is dropped on the next call, so a provider that caches up to a breakpoint at the
+end of the prompt, as OpenAI's models do on OpenRouter, caches nothing a later call can use.
+`PromptCache.layer` marks the end of each chat completion's history instead: its last tool result
+or, before there is one, its system message. Provide it to the OpenRouter client:
+
+```ts
+import { OpenRouterClient } from "@effect/ai-openrouter";
+import { Config, Layer } from "effect";
+import { PromptCache } from "effect-browser/ai";
+import { FetchHttpClient } from "effect/http";
+
+const openRouter = OpenRouterClient.layerConfig({
+  apiKey: Config.Redacted("OPENROUTER_API_KEY"),
+}).pipe(Layer.provide(PromptCache.layer), Layer.provide(FetchHttpClient.layer));
+```
+
+`tools.layer({ page })` pins the tools to one page: they list no tabs, and a tab the page opens stays where
+it is. `tools.layer({ browser, follow })` acts on the tab the model last saw and lists the others; a tab an
+action opens is shown at the next look as `follow` says: `"select"`, the default, makes it current
+without bringing it to front, so the page on air and an operator's view stay where they are;
+`"front"` also brings it to front; `"never"` keeps the current tab.
+
+`PageControl.make(target, options)` gives the controller the tools act through, for a host that
+drives a page without a model: `actions.observe` and `actions.act`, and `control.inspect`,
+`navigate`, `scroll`, `wait`, `press` and `selectTab`. Their results are `PageControl.Observation`
+and `PageControl.ActionResult`.
 
 ## Tracing
 

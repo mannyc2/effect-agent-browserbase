@@ -1,9 +1,10 @@
 # Repository guide
 
-Six packages and a bench in one Bun workspace: `packages/browser` (`effect-browser`),
-`packages/chromium` (`@effect-browser/chromium`, a local Chromium as a `Browser`),
-`packages/browserbase` (`@effect-browser/browserbase`), `packages/agent-browser` (`effect-agent-browser`, its pages
-as a Yielded agent's browser tools), the optional `packages/human-strokes`
+Six packages and a bench in one Bun workspace: `packages/browser` (`effect-browser`, with an
+agent's browser tools at `effect-browser/ai`), `packages/chromium` (`@effect-browser/chromium`, a
+local Chromium as a `Browser`), `packages/browserbase` (`@effect-browser/browserbase`),
+`packages/yielded` (`@effect-browser/yielded`, those tools for a Yielded agent's run), the optional
+`packages/human-strokes`
 (`@effect-browser/human-strokes`, MIT code with CC BY 4.0 stroke data), the optional
 `packages/tradingview` (`@effect-browser/tradingview`, TradingView charts and their agent tools) and the
 private `bench`. Read
@@ -22,8 +23,9 @@ current state.
   cleanup in a finalizer. Concurrent work belongs to a scope and has a bound; no module-level
   state. A lifecycle's state is one tagged union changed in one place, not a set of flags.
 - `effect-browser` depends on `effect` and `playwright-core` only; the other packages reach it
-  only through its public entry points. Agents run on Yielded Agent (`@yielded/agent`), which only
-  `effect-agent-browser`, `@effect-browser/tradingview`'s tools and the bench depend on. Tests stay in their package's `test/`.
+  only through its public entry points. Its agent tools run in any `effect/ai` loop. Of the
+  packages, only `@effect-browser/yielded` depends on Yielded Agent (`@yielded/agent`), pinned
+  exactly; the bench's agents run on it. Tests stay in their package's `test/`.
 - Fix a lint finding or Effect diagnostic rather than suppress it. `bun run fmt` formats;
   `oxlint -c lint/.oxlintrc.json --fix <files>` fixes the stylistic rules `fmt` leaves alone.
 - `bun run ready` is the gate CI runs. Check its exit code, not piped output.
