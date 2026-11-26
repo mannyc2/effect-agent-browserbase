@@ -28,14 +28,14 @@ if [ $# -gt 0 ]; then
   archives="$(cd "$1" && pwd)"
 else
   archives="$work/archives"
-  for dir in browser chromium browserbase agent-browser human-strokes; do
+  for dir in browser chromium browserbase yielded human-strokes; do
     (cd "$root/packages/$dir" && bun run build > /dev/null && bun pm pack --destination "$archives" --quiet > /dev/null)
   done
 fi
-names=(effect-browser @effect-browser/chromium @effect-browser/browserbase effect-agent-browser @effect-browser/human-strokes)
+names=(effect-browser @effect-browser/chromium @effect-browser/browserbase @effect-browser/yielded @effect-browser/human-strokes)
 runtimes=(effect effect-browser @yielded/agent playwright-core)
 
-yielded="$(node -p "require('$root/packages/agent-browser/package.json').peerDependencies['@yielded/agent']")"
+yielded="$(node -p "require('$root/packages/yielded/package.json').peerDependencies['@yielded/agent']")"
 quiet() { # runs an install, failing on any word of a peer it could not satisfy
   local log
   log="$("$@" 2>&1)" || { printf '%s\n' "$log" >&2; return 1; }

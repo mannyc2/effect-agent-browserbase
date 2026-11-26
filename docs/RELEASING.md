@@ -1,7 +1,7 @@
 # Releasing
 
 `effect-browser`, `@effect-browser/chromium`, `@effect-browser/browserbase`,
-`@effect-browser/human-strokes` and `effect-agent-browser` are released together, at one version, by
+`@effect-browser/human-strokes` and `@effect-browser/yielded` are released together, at one version, by
 `.github/workflows/publish.yml`. `@effect-browser/tradingview` is private and never published. The
 workflow runs on a `v<version>` tag on `main`, runs `bun run ready`, packs the five packages, checks the archives in a clean consumer and
 publishes them through npm trusted publishing: no npm token, and npm signs provenance for each
@@ -11,7 +11,7 @@ settings.
 
 ## The Yielded dependency
 
-`effect-agent-browser` peers on the published npm artifact of `@yielded/agent`
+`@effect-browser/yielded` peers on the published npm artifact of `@yielded/agent`
 `0.1.0-beta.191` exactly. The workspace and consumer instructions use that registry dependency
 without an archive override. `tools/check-packed.sh` installs it in an npm project and a Bun
 workspace with the isolated linker, with no `--force` or `--legacy-peer-deps`. Both lockfiles must
@@ -35,9 +35,9 @@ with integrity
 The owner does this once, in npm and GitHub settings.
 
 1. **Reserve the names.** npm can only trust a publisher for a name that exists, so each name is
-   published by hand once as a placeholder, `0.0.0-reserved.0`. `effect-browser` and
-   `effect-agent-browser` are done. `@effect-browser/chromium`, `@effect-browser/browserbase` and
-   `@effect-browser/human-strokes` are not: only members of the `effect-browser` npm organization
+   published by hand once as a placeholder, `0.0.0-reserved.0`. `effect-browser` is done.
+   `@effect-browser/chromium`, `@effect-browser/browserbase`, `@effect-browser/human-strokes` and
+   `@effect-browser/yielded` are not: only members of the `effect-browser` npm organization
    can publish under its scope, so the owner reserves them before the first release that carries
    them. npm points `latest` at a name's first version, so `latest` stays on the placeholder until a
    stable release.
@@ -54,9 +54,9 @@ The owner does this once, in npm and GitHub settings.
    | Allowed actions      | `npm publish`              |
 
    The workflow publishes with `npm publish`, so tick it under allowed actions: an entry created
-   after 3 September 2026 allows only `npm stage publish` until you do. `effect-browser`,
-   and `effect-agent-browser` have this entry: the workflow published them in `0.3.0-beta.5`. The
-   three scoped names need it once they are reserved.
+   after 3 September 2026 allows only `npm stage publish` until you do. `effect-browser` has this
+   entry: the workflow published it in `0.3.0-beta.5`. The four scoped names need it once they are
+   reserved.
 
 3. **Protect the `npm` environment.** In the repository's **Settings → Environments**, the `npm`
    environment (it exists from 0.2) should have the owner as a required reviewer, and its
@@ -78,8 +78,8 @@ The owner does this once, in npm and GitHub settings.
   - Widen it to `^4.1.2` once those modules are stable.
 - **`effect-browser`** is a caret range in the other four packages, from the version each needs.
   Move it in the release that needs a newer one.
-- **`@yielded/agent`** is one exact version in `effect-agent-browser`, because each Yielded beta may
-  change the ports that `effect-agent-browser` implements. Its README's install line names that
+- **`@yielded/agent`** is one exact version in `@effect-browser/yielded`, because each Yielded beta
+  may change the run options that `@effect-browser/yielded` implements. Its README's install line names that
   version. It becomes a caret range once Yielded Agent leaves beta.
 - **`playwright-core`** is `^1.63.0`.
 
@@ -135,7 +135,8 @@ from tag `v0.2.0-beta.9` (`976d316`). Before that, `effect-browserbase` and
 `effect-agent-browserbase` ended at `0.1.0-beta.104`. The code is in Git history at `1ed8259`.
 
 0.3 publishes from this workflow. Its first release, `0.3.0-beta.5`, went out from tag
-`v0.3.0-beta.5` (`3af967f`). `v0.3.0-beta.4` (`312ecf8`) is tagged but was never published, and
+`v0.3.0-beta.5` (`3af967f`). `effect-agent-browser` ended at `0.3.0-beta.24`; its tools are now
+`effect-browser/ai`, and their Yielded binding `@effect-browser/yielded`. `v0.3.0-beta.4` (`312ecf8`) is tagged but was never published, and
 the repository's rulesets keep `v*` tags from moving or being deleted.
 
 `v0.3.0-beta.17` (`0b1e583`) was tagged but never published: its dry run exposed a timing

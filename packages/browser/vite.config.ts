@@ -18,7 +18,7 @@ export default defineConfig({
     // Every public module is an entry, at its subpath; shared chunks go under the closed internal/.
     entry: [
       "src/*.ts",
-      "src/{timeline,presentation,walk,policy,supervisor,testing}/*.ts",
+      "src/{timeline,presentation,walk,policy,supervisor,testing,ai}/*.ts",
       "src/internal/cdp/workerd.ts",
     ],
     outputOptions: { chunkFileNames: "internal/[name]-[hash].mjs" },
