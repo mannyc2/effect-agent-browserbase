@@ -7,6 +7,7 @@ import { Effect, Option, Result, Schema } from "effect";
 
 import { BrowserError, consequence, InvalidRequest } from "../../BrowserError.ts";
 import { DialogShown, Navigated, PageOpened } from "../../BrowserEvent.ts";
+import * as Change from "../../Change.ts";
 import type * as Page from "../../Page.ts";
 import * as Moment from "../../timeline/Moment.ts";
 
@@ -71,7 +72,7 @@ const isOpened = Schema.is(PageOpened);
 export const followed = (page: Page.Page, since: number) =>
   Effect.gen(function* () {
     const events = (yield* page.recentEvents).filter((event) => event.at > since);
-    const changes = yield* Effect.result(page.changes({ since }));
+    const changes = yield* Effect.result(Change.read(page, { since }));
     const navigated = events.findLast(isNavigated);
 
     const caused = Option.match(Result.getSuccess(changes), {

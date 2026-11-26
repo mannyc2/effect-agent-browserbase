@@ -15,12 +15,13 @@ import {
   Subject,
   TrackEvent,
 } from "../../src/BrowserEvent.ts";
-import { Change, Changes } from "../../src/Change.ts";
+import * as Change from "../../src/Change.ts";
 import { BrowserPaint, Frame, Screenshot } from "../../src/Frame.ts";
 import { boundsOf, within } from "../../src/internal/timeline/window.ts";
 import type { Page } from "../../src/Page.ts";
-import { Snapshot } from "../../src/Snapshot.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 import * as Moment from "../../src/timeline/Moment.ts";
+import * as Window from "../../src/Window.ts";
 import { Site, SiteLayer } from "../fixtures.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
@@ -58,7 +59,7 @@ it("lays a moment out as one message: the outline, a timeline and captioned fram
     since: 5000,
     until: 10_000,
     frames: [shot(7000, 1), shot(10_000, 2)],
-    snapshot: new Snapshot({
+    snapshot: new Snapshot.Snapshot({
       url: "https://shop.example/cart",
       title: "Cart",
       text: '- button "Pay" [ref=e3]',
@@ -219,7 +220,7 @@ it("names what each action acted on, never by a ref", () => {
 });
 
 it("tells no event, and no outline, where the moment has none", () => {
-  const empty = (changes?: Changes) =>
+  const empty = (changes?: Change.Changes) =>
     texts(
       Moment.toPrompt(
         new Moment.Moment({
@@ -238,7 +239,7 @@ it("tells no event, and no outline, where the moment has none", () => {
 
   for (const changes of [
     undefined,
-    new Changes({ document: 1, from: 0, until: 10_000, cursor: 0, dropped: 0, changes: [] }),
+    new Change.Changes({ document: 1, from: 0, until: 10_000, cursor: 0, dropped: 0, changes: [] }),
   ]) {
     const [text = "", ...captions] = empty(changes);
 
@@ -427,7 +428,7 @@ describe("a window", () => {
       const changes =
         from === undefined
           ? undefined
-          : new Changes({
+          : new Change.Changes({
               document: 1,
               from,
               until,
@@ -435,7 +436,7 @@ describe("a window", () => {
               dropped: 0,
               changes: stirs.map(
                 (at) =>
-                  new Change({
+                  new Change.Change({
                     kind: "text",
                     subject: new Subject({ role: null, name: "", tag: "span", context: {} }),
                     startedAt: at,
@@ -490,7 +491,7 @@ describe("a window", () => {
 
       if (first === undefined || last === undefined) return;
 
-      const change = new Change({
+      const change = new Change.Change({
         kind: "text",
         subject: new Subject({ role: null, name: "", tag: "span", context: {} }),
         startedAt: first,
@@ -508,7 +509,7 @@ describe("a window", () => {
           until,
           events: [],
           frames: [],
-          changes: new Changes({
+          changes: new Change.Changes({
             document: 0,
             from: 0,
             until,
@@ -648,12 +649,12 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* start("/form");
-        const before = yield* page.snapshot();
+        const before = yield* Snapshot.read(page);
         const ref = /link "Next page" \[ref=(e\d+)\]/.exec(before.text)?.[1];
 
         if (ref === undefined) return yield* Effect.die("the form has no Next page link");
         yield* page.click(ref);
-        yield* page.until({ text: "The next page" }, "some", 5000);
+        yield* Snapshot.until(page, { text: "The next page" }, "some", 5000);
         const moment = yield* Moment.capture(page, { snapshot: true });
 
         const click = moment.events.find(
@@ -685,7 +686,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* start("/form");
         const first = yield* Moment.capture(page);
-        const [link] = yield* page.find({ role: "link", name: "Next page" });
+        const [link] = yield* Snapshot.find(page, { role: "link", name: "Next page" });
 
         if (link === undefined) return yield* Effect.die("missing navigation link");
         yield* page.click(link.ref);
@@ -712,7 +713,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
         // A narrator's earlier window can end while the click is in flight. The completed Action
         // belongs to the following window even though its startedAt falls in the earlier one.
-        const during = yield* page.window({
+        const during = yield* Window.read(page, {
           since: first,
           until: (action.startedAt + navigation.at) / 2,
         });
@@ -799,7 +800,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const browser = yield* Browser;
         const page = yield* start("/desk");
-        const [menu] = yield* page.find({ role: "button", name: "Menu" });
+        const [menu] = yield* Snapshot.find(page, { role: "button", name: "Menu" });
 
         const price = (shown: string) =>
           Effect.promise(() =>
@@ -809,7 +810,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           );
 
         yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-        yield* page.changes();
+        yield* Change.read(page);
         yield* price("$1");
         yield* Effect.sleep(Duration.millis(300));
         const until = yield* browser.now;
@@ -819,7 +820,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         yield* price("$2");
         yield* page.click(menu?.ref ?? "no menu");
         yield* Effect.sleep(Duration.millis(2900));
-        const window = yield* page.window({ since: Duration.seconds(2), until });
+        const window = yield* Window.read(page, { since: Duration.seconds(2), until });
         const kept = { events: yield* page.recentEvents, frames: yield* page.recentFrames };
 
         assert.deepStrictEqual([window.since, window.until], [until - 2000, until]);
@@ -849,7 +850,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* start("/ticker");
 
-        yield* page.changes();
+        yield* Change.read(page);
         // Both prices tick every 250 ms; ETH's stops after its fourth tick, two seconds before the
         // window ends.
         yield* Effect.promise(() =>
@@ -865,10 +866,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           }),
         );
         yield* Effect.sleep(Duration.seconds(3));
-        const window = yield* page.window({ since: Duration.millis(2500) });
+        const window = yield* Window.read(page, { since: Duration.millis(2500) });
         const { changing, settled } = Moment.account(window);
 
-        const rows = (changes: ReadonlyArray<Change>) =>
+        const rows = (changes: ReadonlyArray<Change.Change>) =>
           changes.map(({ subject }) => subject.context.row);
 
         assert.deepStrictEqual(rows(changing), ["BTC"]);
@@ -891,7 +892,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         const { browser, refuse } = yield* refusing;
         const page = yield* browser.newPage((yield* Site).url("/desk"));
 
-        yield* page.changes();
+        yield* Change.read(page);
         // No capture runs, so the picture is a new screenshot, which the page refuses; then the read
         // of what changed fails.
         refuse({ method: "Page.captureScreenshot" });

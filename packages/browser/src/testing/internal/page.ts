@@ -7,10 +7,13 @@ import * as Events from "../../BrowserEvent.ts";
 import { checked, methods } from "../../internal/action-port.ts";
 import { monotonicMillis } from "../../internal/clock.ts";
 import type { Gate } from "../../internal/input/gate.ts";
+import { Implementation, key } from "../../internal/page/functions.ts";
 import * as Lane from "../../internal/page/lane.ts";
 import * as Timeline from "../../internal/timeline/events.ts";
 import * as Url from "../../internal/url.ts";
-import { type Page, ResolvedTarget, State, Text, type UntilResult } from "../../Page.ts";
+import { type Page, ResolvedTarget, State } from "../../Page.ts";
+import type { FindQuery, UntilResult, UntilWant } from "../../Snapshot.ts";
+import { Text } from "../../Text.ts";
 import * as Evidence from "./evidence.ts";
 import * as Model from "./model.ts";
 
@@ -180,8 +183,8 @@ const execution = (
 
 /** Wait admission follows preceding input, then releases the lane while observing new evidence. */
 const untilFor =
-  (model: ReturnType<typeof Model.make>, lane: Lane.Lane, now: () => number): Page["until"] =>
-  (query, want, millis) =>
+  (model: ReturnType<typeof Model.make>, lane: Lane.Lane, now: () => number) =>
+  (query: FindQuery, want: UntilWant, millis: number) =>
     lane
       .read("until")(Effect.void)
       .pipe(
@@ -263,11 +266,42 @@ export const makeIn = Effect.fnUntraced(function* (
   const perform: Page["perform"] = checked((action) => own(run.perform(action)));
 
   const page: Page = {
+    [key]: new Implementation({
+      until: (query, want, millis) => own(untilFor(model, lane, now)(query, want, millis)),
+      find: (query) =>
+        query?.selector !== undefined
+          ? unsupported("find:selector")
+          : read("find", () => model.find(query)),
+      snapshot: (options) =>
+        options?.within !== undefined
+          ? unsupported("snapshot:within")
+          : read("snapshot", () => model.snapshot(options)),
+      text: (options) =>
+        options?.scope !== undefined && options.scope !== "viewport"
+          ? unsupported("text:scope")
+          : read("text", () => {
+              const snapshot = model.snapshot({ maxChars: options?.maxChars });
+
+              return new Text({
+                url: snapshot.url,
+                title: snapshot.title,
+                text: snapshot.text,
+                truncated: snapshot.truncated,
+                at: now(),
+              });
+            }),
+      layout: () => unsupported("layout"),
+      overlay: unsupported("overlay"),
+      drawn: Effect.succeedNone,
+      poses: unsupported("poses"),
+      hold: unsupported("hold"),
+      changes: evidence.changes,
+      window: () => unsupported("window"),
+    }),
     ...methods(perform),
     id,
     clock,
     perform,
-    until: (query, want, millis) => own(untilFor(model, lane, now)(query, want, millis)),
     afterInput: (effect) => own(lane.read("afterInput")(effect)),
     read: () => unsupported("read"),
     act: () => unsupported("act"),
@@ -281,28 +315,6 @@ export const makeIn = Effect.fnUntraced(function* (
       }),
       evidence.close,
     ),
-    find: (query) =>
-      query?.selector !== undefined
-        ? unsupported("find:selector")
-        : read("find", () => model.find(query)),
-    snapshot: (options) =>
-      options?.within !== undefined
-        ? unsupported("snapshot:within")
-        : read("snapshot", () => model.snapshot(options)),
-    text: (options) =>
-      options?.scope !== undefined && options.scope !== "viewport"
-        ? unsupported("text:scope")
-        : read("text", () => {
-            const snapshot = model.snapshot({ maxChars: options?.maxChars });
-
-            return new Text({
-              url: snapshot.url,
-              title: snapshot.title,
-              text: snapshot.text,
-              truncated: snapshot.truncated,
-              at: now(),
-            });
-          }),
     viewport: read("viewport", () => model.get().viewport ?? { width: 800, height: 600 }),
     state: Effect.sync(
       () =>
@@ -320,10 +332,6 @@ export const makeIn = Effect.fnUntraced(function* (
         : unsupported("screenshot"),
     frame: evidence.frame,
     zoom: () => unsupported("zoom"),
-    layout: () => unsupported("layout"),
-    overlay: unsupported("overlay"),
-    poses: unsupported("poses"),
-    hold: unsupported("hold"),
     paint: () => unsupported("paint"),
     ready: () =>
       model.get().ready === true ? read("ready", () => undefined) : unsupported("ready"),
@@ -332,8 +340,6 @@ export const makeIn = Effect.fnUntraced(function* (
       Stream.unwrap(Effect.map(evidence.capture(options), (capture) => capture.stream)),
     captureStats: () => unsupported("captureStats"),
     recentFrames: evidence.recentFrames,
-    changes: evidence.changes,
-    window: () => unsupported("window"),
     recentEvents: Effect.map(timeline.recent, (records) =>
       records
         .filter((record) => "page" in record.event && record.event.page === id)

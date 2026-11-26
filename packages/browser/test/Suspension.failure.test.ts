@@ -4,6 +4,7 @@ import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
 
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const owner = Effect.gen(function* () {
@@ -45,7 +46,7 @@ describe("Input suspension failure boundaries", () => {
             '<select aria-label="Choice"><option>One</option><option>Two</option></select>',
           ),
         );
-        const [choice] = yield* page.find({ role: "combobox", name: "Choice" });
+        const [choice] = yield* Snapshot.find(page, { role: "combobox", name: "Choice" });
         const action = yield* page.select(choice?.ref ?? "", ["Two"]).pipe(Effect.forkChild);
 
         yield* Effect.promise(() => arrived.promise);

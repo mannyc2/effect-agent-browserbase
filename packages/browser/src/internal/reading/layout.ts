@@ -1,5 +1,5 @@
 /**
- * Reading where things are: `Page.layout`, in one call to the page that takes its turn as other
+ * Reading where things are: `Layout.measure`, in one call to the page that takes its turn as other
  * reads do and shares its work with identical ones. The page gives each place's viewport box; the
  * document box is that box moved by the scroll read with it.
  */
@@ -94,7 +94,7 @@ export const make = (page: PageContext, bridge: Bridge) => {
         }),
         within("layout"),
       ),
-    ).pipe(span("Page.layout", { picks: asked.length }), owned);
+    ).pipe(span("Layout.measure", { picks: asked.length }), owned);
   };
 
   return layout;

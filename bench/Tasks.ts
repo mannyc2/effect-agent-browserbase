@@ -5,10 +5,11 @@
 import { Deferred, Duration, Effect, Fiber, Option, Schedule, Schema, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import { type BrowserError, refuse } from "effect-browser/BrowserError";
+import * as Change from "effect-browser/Change";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 import { Presentation } from "effect-browser/presentation";
-import type { Snapshot } from "effect-browser/Snapshot";
+import * as Snapshot from "effect-browser/Snapshot";
 import { TestPage } from "effect-browser/testing";
 import { Moment, Stillness } from "effect-browser/timeline";
 import { type AiError, LanguageModel, Prompt, type Response } from "effect/ai";
@@ -221,7 +222,7 @@ const open = (path: string, options: TrialOptions, pages: Readonly<Record<string
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** The ref of the first control with this role and name. */
-export const refOf = (snapshot: Snapshot, role: string, name: string): string => {
+export const refOf = (snapshot: Snapshot.Snapshot, role: string, name: string): string => {
   const ref = new RegExp(`${role} "${literal(name)}" \\[ref=(e\\d+)\\]`).exec(snapshot.text)?.[1];
 
   if (ref === undefined) throw new Error(`no ${role} "${name}" in:\n${snapshot.rendered}`);
@@ -230,16 +231,14 @@ export const refOf = (snapshot: Snapshot, role: string, name: string): string =>
 };
 
 export const press = (page: Page, role: string, name: string) =>
-  page
-    .snapshot({ full: true })
-    .pipe(Effect.flatMap((snapshot) => page.click(refOf(snapshot, role, name))));
+  Snapshot.read(page, { full: true }).pipe(
+    Effect.flatMap((snapshot) => page.click(refOf(snapshot, role, name))),
+  );
 
 export const fill = (page: Page, name: string, text: string) =>
-  page
-    .snapshot({ full: true })
-    .pipe(
-      Effect.flatMap((snapshot) => page.type(text, { into: refOf(snapshot, "textbox", name) })),
-    );
+  Snapshot.read(page, { full: true }).pipe(
+    Effect.flatMap((snapshot) => page.type(text, { into: refOf(snapshot, "textbox", name) })),
+  );
 
 /**
  * Whether an answer quotes the issued `code`, however it is worded: it names that code and no other
@@ -265,7 +264,7 @@ const enterLobby = (page: Page) =>
 const playReels = (page: Page) =>
   truth(page, LobbyLayout).pipe(
     Effect.flatMap(({ layout }) =>
-      page.find({ role: "button", name: layout.play, near: "Temple Reels" }),
+      Snapshot.find(page, { role: "button", name: layout.play, near: "Temple Reels" }),
     ),
     Effect.flatMap(([found]) =>
       found === undefined
@@ -463,7 +462,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
       );
       // A page records what changes on it from its first read of changes, so the moment can tell
       // what the setup changed: the steady state, not a document's first moment.
-      yield* page.changes();
+      yield* Change.read(page);
       yield* spec.setup(page);
       const { frameAfter } = yield* truth(page, FrameTruth);
       const browser = yield* Browser;
@@ -797,7 +796,7 @@ const chartTrade = operate({
   solve: (page) =>
     Effect.gen(function* () {
       yield* buy(page, "0.25");
-      const snapshot = yield* page.snapshot({ full: true });
+      const snapshot = yield* Snapshot.read(page, { full: true });
 
       return { orderId: /ORD-\d+/.exec(snapshot.text)?.[0] ?? "" };
     }),
@@ -847,12 +846,12 @@ const checkout = operate({
       yield* fill(page, layout.labels.street, customer.street);
       yield* fill(page, layout.labels.city, customer.city);
       yield* fill(page, layout.labels.postal, customer.postal);
-      const form = yield* page.snapshot({ full: true });
+      const form = yield* Snapshot.read(page, { full: true });
 
       yield* page.select(refOf(form, "combobox", "Country"), ["United States"]);
       yield* page.click(refOf(form, "radio", layout.express));
       yield* page.click(refOf(form, "button", layout.submit));
-      const done = yield* page.snapshot();
+      const done = yield* Snapshot.read(page);
 
       return { confirmation: /CONF-\d+/.exec(done.text)?.[0] ?? "" };
     }),

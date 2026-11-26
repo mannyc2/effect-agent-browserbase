@@ -9,11 +9,11 @@ import { type BrowserError, PolicyDenied } from "../../src/BrowserError.ts";
 import type { BrowserEvent } from "../../src/BrowserEvent.ts";
 import { type InputRequest, type Page, redacted } from "../../src/Page.ts";
 import * as Presentation from "../../src/presentation/Presentation.ts";
-import type { Snapshot } from "../../src/Snapshot.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 import { Site, SiteLayer, unpaused } from "../fixtures.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
-const refOf = (snapshot: Snapshot, role: string, name: string): string => {
+const refOf = (snapshot: Snapshot.Snapshot, role: string, name: string): string => {
   const ref = new RegExp(role + ' "' + name + '"[^\\n]*?\\[ref=(e\\d+)\\]').exec(
     snapshot.text,
   )?.[1];
@@ -96,7 +96,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             ].join(""),
           ),
         );
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         for (const [role, name, expected] of [
           ["button", "Submit form", ["form-submit"]],
@@ -189,7 +189,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
               '<input type="hidden" name="_method" value="DESTROY"><button>Delete this repository</button></form></dialog>',
           ),
         );
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         yield* failure(page.click(refOf(snapshot, "button", "Remove")));
         yield* failure(page.click(refOf(snapshot, "button", "Delete this repository")));
@@ -265,7 +265,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             '<form action="https://user:password@provider.test/pay?token=private-value&amp;ticker=ETH"><button>Send</button></form>',
           ),
         );
-        const [button] = yield* page.find({ role: "button", name: "Send" });
+        const [button] = yield* Snapshot.find(page, { role: "button", name: "Send" });
 
         yield* failure(page.click(button!.ref));
 
@@ -300,13 +300,13 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             ),
           );
 
-        const typed = yield* guarded.page.snapshot();
+        const typed = yield* Snapshot.read(guarded.page);
 
         yield* guarded.page.type("alex@example.com", { into: refOf(typed, "textbox", "Email") });
         yield* guarded.page.type("hunter2", { into: refOf(typed, "textbox", "Password") });
         // Without a guard nothing is prepared: the field's own state decides, after focusing it.
         yield* open.page.type("4321", {
-          into: refOf(yield* open.page.snapshot(), "textbox", "PIN"),
+          into: refOf(yield* Snapshot.read(open.page), "textbox", "PIN"),
         });
 
         assert.deepStrictEqual(
@@ -360,7 +360,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
         const error = yield* page
           .type(secret, {
-            into: refOf(yield* page.snapshot(), "textbox", "Notes"),
+            into: refOf(yield* Snapshot.read(page), "textbox", "Notes"),
             secret: true,
           })
           .pipe(Effect.flip);
@@ -457,7 +457,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             { x: continueAt.x + continueAt.width / 2, y: continueAt.y + continueAt.height / 2 },
             ["cross-origin", "form-submit"],
           ],
-          [refOf(yield* page.snapshot(), "clickable", "Continue"), ["cross-origin", "form-submit"]],
+          [
+            refOf(yield* Snapshot.read(page), "clickable", "Continue"),
+            ["cross-origin", "form-submit"],
+          ],
         ] as const) {
           assert.deepStrictEqual(yield* failure(page.click(target)), {
             tag: "PolicyDenied",
@@ -492,7 +495,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
               '">Docs</a><button style="position:absolute;left:540px;top:330px;width:200px;height:60px">Delete</button></body>',
           ),
         );
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         yield* page.hover(refOf(snapshot, "link", "Docs"));
         yield* page.scroll({ at: refOf(snapshot, "button", "Delete"), dy: 100 });
@@ -592,7 +595,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.deepStrictEqual(
           yield* failure(
             page.type("abc", {
-              into: refOf(yield* page.snapshot(), "textbox", "Search"),
+              into: refOf(yield* Snapshot.read(page), "textbox", "Search"),
               submit: true,
             }),
           ),
@@ -634,7 +637,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           );
 
           const result = yield* page
-            .type("a b", { into: refOf(yield* page.snapshot(), "textbox", "Query") })
+            .type("a b", { into: refOf(yield* Snapshot.read(page), "textbox", "Query") })
             .pipe(
               Effect.match({
                 onFailure: (error) => ({ tag: error.reason._tag, dispatched: error.dispatched }),
@@ -684,7 +687,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           );
 
           const result = yield* page
-            .click(refOf(yield* page.snapshot(), "button", "Continue"), { clickCount: 2 })
+            .click(refOf(yield* Snapshot.read(page), "button", "Continue"), { clickCount: 2 })
             .pipe(
               Effect.match({
                 onFailure: (error) => ({ tag: error.reason._tag, dispatched: error.dispatched }),
@@ -733,7 +736,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             '<textarea id="notes" aria-label="Notes"></textarea>',
           ),
         );
-        const into = refOf(yield* page.snapshot(), "textbox", "Notes");
+        const into = refOf(yield* Snapshot.read(page), "textbox", "Notes");
         const text = "a guarded paste ".repeat(125);
 
         yield* page.type(text, { into });
@@ -765,7 +768,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         });
 
         const site = yield* Site;
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
         const checkbox = refOf(snapshot, "checkbox", "I agree");
 
         yield* page.hover(checkbox);
@@ -821,7 +824,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           guard: () => Effect.fail(new PolicyDenied({ detail: "test policy refused" })),
         });
 
-        const submit = refOf(yield* page.snapshot(), "button", "Submit");
+        const submit = refOf(yield* Snapshot.read(page), "button", "Submit");
         const refused = yield* page.click(submit).pipe(Effect.flip);
 
         assert.strictEqual(refused.reason._tag, "PolicyDenied");
@@ -902,7 +905,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
               : Effect.void,
         });
 
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
         const held = yield* page.click(refOf(snapshot, "button", "Submit")).pipe(Effect.forkChild);
 
         yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
@@ -928,7 +931,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           guard: () => Effect.never,
         });
 
-        const submit = refOf(yield* page.snapshot(), "button", "Submit");
+        const submit = refOf(yield* Snapshot.read(page), "button", "Submit");
 
         assert.deepStrictEqual(yield* failure(page.click(submit)), {
           tag: "PolicyTimeout",
@@ -958,7 +961,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
         });
 
-        const submit = refOf(yield* page.snapshot(), "button", "Submit");
+        const submit = refOf(yield* Snapshot.read(page), "button", "Submit");
         const held = yield* failure(page.click(submit)).pipe(Effect.forkChild);
 
         yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
@@ -991,24 +994,26 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     [
       "clicking a ref",
       false,
-      (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "button", "Settings")),
+      (page: Page, snapshot: Snapshot.Snapshot) =>
+        page.click(refOf(snapshot, "button", "Settings")),
     ],
     ["clicking a point", false, (page: Page) => page.click({ x: 200, y: 130 })],
     [
       "a performed click",
       true,
-      (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "button", "Settings")),
+      (page: Page, snapshot: Snapshot.Snapshot) =>
+        page.click(refOf(snapshot, "button", "Settings")),
     ],
     [
       "performed typing",
       true,
-      (page: Page, snapshot: Snapshot) =>
+      (page: Page, snapshot: Snapshot.Snapshot) =>
         page.type("12", { into: refOf(snapshot, "textbox", "Notes") }),
     ],
     [
       "a drag",
       false,
-      (page: Page, snapshot: Snapshot) =>
+      (page: Page, snapshot: Snapshot.Snapshot) =>
         page.drag(refOf(snapshot, "button", "Settings"), refOf(snapshot, "textbox", "Notes")),
     ],
   ] as const) {
@@ -1025,7 +1030,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           yield* Effect.promise(() => TestCdp.nativePage(page).setContent(hoverTrap));
 
           // The pointer travelled, but nothing was pressed: the action cannot have taken effect.
-          assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
+          assert.deepStrictEqual(yield* failure(act(page, yield* Snapshot.read(page))), {
             tag: "NotActionable",
             dispatched: false,
           });
@@ -1063,12 +1068,14 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     [
       "clicking a ref",
       false,
-      (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "option", "Quarterly report")),
+      (page: Page, snapshot: Snapshot.Snapshot) =>
+        page.click(refOf(snapshot, "option", "Quarterly report")),
     ],
     [
       "a performed click",
       true,
-      (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "option", "Quarterly report")),
+      (page: Page, snapshot: Snapshot.Snapshot) =>
+        page.click(refOf(snapshot, "option", "Quarterly report")),
     ],
     ["clicking a point", false, (page: Page) => page.click({ x: 250, y: 330 })],
     ["a performed point click", true, (page: Page) => page.click({ x: 250, y: 330 })],
@@ -1087,7 +1094,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
             yield* Effect.promise(() => TestCdp.nativePage(page).setContent(nestedTrap));
 
-            assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
+            assert.deepStrictEqual(yield* failure(act(page, yield* Snapshot.read(page))), {
               tag: "NotActionable",
               dispatched: false,
             });
@@ -1122,7 +1129,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           ),
         );
 
-        yield* page.click(refOf(yield* page.snapshot(), "button", "Open"));
+        yield* page.click(refOf(yield* Snapshot.read(page), "button", "Open"));
 
         assert.lengthOf(requests, 1);
         assert.strictEqual(
@@ -1157,7 +1164,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           const target =
             change === "pixel target"
               ? { x: 70, y: 60 }
-              : refOf(yield* page.snapshot(), "link", "Continue");
+              : refOf(yield* Snapshot.read(page), "link", "Continue");
 
           const held = yield* failure(page.click(target)).pipe(Effect.forkChild);
 
@@ -1210,7 +1217,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
               '<form id="form" action="/next"><input value="10"><button id="submit">Continue</button></form>',
             ),
           );
-          const target = refOf(yield* page.snapshot(), "button", "Continue");
+          const target = refOf(yield* Snapshot.read(page), "button", "Continue");
           const held = yield* failure(page.click(target)).pipe(Effect.forkChild);
 
           yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
@@ -1249,7 +1256,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             document.body.append(button);
           }),
         );
-        const target = refOf(yield* page.snapshot({ full: true }), "button", "Delete below");
+        const target = refOf(yield* Snapshot.read(page, { full: true }), "button", "Delete below");
 
         assert.deepStrictEqual(yield* failure(page.click(target)), {
           tag: "PolicyDenied",
@@ -1319,7 +1326,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
         assert.isNotNull(frame);
         if (frame === null) return;
-        const target = refOf(yield* page.snapshot(), "button", "Frame action");
+        const target = refOf(yield* Snapshot.read(page), "button", "Frame action");
         const held = yield* failure(page.click(target)).pipe(Effect.forkChild);
 
         yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
@@ -1419,7 +1426,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
                 '<select id="coin" aria-label="Coin"><option>Bitcoin</option></select>',
             ),
           );
-          const snapshot = yield* page.snapshot();
+          const snapshot = yield* Snapshot.read(page);
           const first = refOf(snapshot, "button", "First");
           const second = refOf(snapshot, "button", "Second");
           const coin = refOf(snapshot, "combobox", "Coin");
@@ -1478,7 +1485,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           const { page } = yield* setup(options);
 
           yield* Effect.promise(() => TestCdp.nativePage(page).setContent(scrollSpy));
-          const snapshot = yield* page.snapshot({ full: true });
+          const snapshot = yield* Snapshot.read(page, { full: true });
 
           yield* page.click(refOf(snapshot, "button", "Act"));
           yield* page.click(refOf(snapshot, "button", "Send"));
@@ -1517,7 +1524,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         );
 
         const held = yield* failure(
-          page.click(refOf(yield* page.snapshot(), "button", "Remove item")),
+          page.click(refOf(yield* Snapshot.read(page), "button", "Remove item")),
         ).pipe(Effect.forkChild);
 
         yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
@@ -1580,7 +1587,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             );
 
             const error = yield* Effect.flip(
-              page.select(refOf(yield* page.snapshot(), "combobox", "Coin"), ["Ether"]),
+              page.select(refOf(yield* Snapshot.read(page), "combobox", "Coin"), ["Ether"]),
             );
 
             assert.strictEqual(error.reason._tag, "NotActionable");
@@ -1667,7 +1674,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
               "</script>",
           ),
         );
-        const field = refOf(yield* page.snapshot(), "searchbox", "Search");
+        const field = refOf(yield* Snapshot.read(page), "searchbox", "Search");
 
         assert.deepStrictEqual(yield* failure(page.type("proof of work", { into: field })), {
           tag: "StaleRef",

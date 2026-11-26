@@ -7,6 +7,7 @@ import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { BrowserError } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as WorkerCdp from "../src/internal/cdp/workerd.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import { nativeConnect } from "./nativeConnector.ts";
 
 it.effect.prop(
@@ -72,7 +73,7 @@ it.live("uses the supplied connector and disconnects without ending its remote b
       const page = yield* browser.firstPage;
 
       yield* page.goto("data:text/html,<button>Runtime</button>");
-      assert.include((yield* page.snapshot()).text, 'button "Runtime"');
+      assert.include((yield* Snapshot.read(page)).text, 'button "Runtime"');
       assert.isAbove((yield* page.frame()).data.length, 100);
     }).pipe(Effect.scoped);
 
@@ -84,7 +85,7 @@ it.live("uses the supplied connector and disconnects without ending its remote b
     // The native close only disconnects: another connection finds the existing page.
     const later = yield* Cdp.make({ endpoint: proxy.endpoint });
 
-    assert.include((yield* (yield* later.firstPage).snapshot()).text, 'button "Runtime"');
+    assert.include((yield* Snapshot.read(yield* later.firstPage)).text, 'button "Runtime"');
   }).pipe(Effect.scoped),
 );
 
@@ -194,7 +195,7 @@ it.live("connects through the global WebSocket using Playwright's public CDP tra
     const page = yield* browser.firstPage;
 
     yield* page.goto("data:text/html,<button>Native</button>");
-    assert.include((yield* page.snapshot()).text, 'button "Native"');
+    assert.include((yield* Snapshot.read(page)).text, 'button "Native"');
     assert.isAbove((yield* page.frame()).data.length, 100);
   }).pipe(Effect.scoped),
 );

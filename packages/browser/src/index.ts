@@ -12,4 +12,5 @@ export * as Page from "./Page.ts";
 export * as PageTime from "./PageTime.ts";
 export * as Pose from "./Pose.ts";
 export * as Snapshot from "./Snapshot.ts";
+export * as Text from "./Text.ts";
 export * as Window from "./Window.ts";

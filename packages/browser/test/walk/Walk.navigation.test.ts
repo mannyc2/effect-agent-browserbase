@@ -10,7 +10,9 @@ import { Deferred, Duration, Effect, Exit, Fiber } from "effect";
 import { Browser } from "../../src/Browser.ts";
 import { Subject } from "../../src/BrowserEvent.ts";
 import type { Page } from "../../src/Page.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 import * as Walk from "../../src/walk/Walk.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
 const named = (name: string) => new Subject({ role: "button", name, tag: "button", context: {} });
@@ -105,22 +107,23 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           // Signal entry at the public boundary; readiness, arrival reads and all input still
           // use the real page. The prior handler cannot navigate before the walk takes its baseline.
           const observed: Page = {
-            ...page,
+            ...PageFunctions.replace(page, {
+              find: (query) =>
+                phase === "resolution"
+                  ? Deferred.succeed(preparing, undefined).pipe(
+                      Effect.andThen(
+                        Effect.promise(() => TestCdp.nativePage(page).waitForURL(site.destination)),
+                      ),
+                      Effect.andThen(Snapshot.find(page, query)),
+                    )
+                  : Snapshot.find(page, query),
+            }),
             ready: (options) =>
               Deferred.succeed(preparing, undefined).pipe(Effect.andThen(page.ready(options))),
             url:
               phase === "arrival"
                 ? Deferred.succeed(preparing, undefined).pipe(Effect.andThen(page.url))
                 : page.url,
-            find: (query) =>
-              phase === "resolution"
-                ? Deferred.succeed(preparing, undefined).pipe(
-                    Effect.andThen(
-                      Effect.promise(() => TestCdp.nativePage(page).waitForURL(site.destination)),
-                    ),
-                    Effect.andThen(page.find(query)),
-                  )
-                : page.find(query),
           };
 
           const plan = Walk.Walk.new([

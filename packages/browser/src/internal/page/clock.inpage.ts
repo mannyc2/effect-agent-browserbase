@@ -1,5 +1,5 @@
 /**
- * In the page's main world, before its own scripts: the page clock, which `Page.hold` holds and
+ * In the page's main world, before its own scripts: the page clock, which `PageTime.hold` holds and
  * steps. Until held it keeps real time. Held, the page's timers and intervals, its animation
  * frames, `performance.now`, `Date.now`, `new Date()` and `Date()`, and its CSS transitions, CSS
  * animations and Web Animations move only when stepped: due timers run in time order, each at its

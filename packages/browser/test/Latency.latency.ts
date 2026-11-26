@@ -7,6 +7,8 @@ import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
@@ -35,7 +37,7 @@ const opened = (options: Options = {}) =>
 
 const control = (page: Page, role: string, name: string) =>
   Effect.gen(function* () {
-    const [found] = yield* page.find({ role, name });
+    const [found] = yield* Snapshot.find(page, { role, name });
 
     assert.isDefined(found);
 
@@ -55,7 +57,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         const result = yield* measured(page.click(ref));
 
         assert.isBelow(result.millis, 400);
-        assert.include((yield* page.text()).text, "Fetch");
+        assert.include((yield* Text.read(page)).text, "Fetch");
       }),
     ),
   );
@@ -74,7 +76,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           const result = yield* measured(page.click(ref));
 
           assert.isBelow(result.millis, 1000, name);
-          assert.include((yield* page.text()).text, "Still", name);
+          assert.include((yield* Text.read(page)).text, "Still", name);
         }
       }),
     ),
@@ -188,7 +190,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const browser = yield* opened({ actionTimeout: "150 millis" });
         const page = yield* browser.newPage((yield* Site).url("/replacing"));
-        const result = yield* measured(page.until({ text: "Never present" }, "some", 120));
+
+        const result = yield* measured(
+          Snapshot.until(page, { text: "Never present" }, "some", 120),
+        );
 
         assert.isFalse(result.value.met);
         assert.isBelow(result.millis, 600);

@@ -103,6 +103,7 @@ original typed failure and whose optional `cleanup` describes that attempt alone
 
 ```ts
 import { Supervisor } from "effect-browser/supervisor";
+import * as Text from "effect-browser/Text";
 
 const sessions =
   yield *
@@ -115,7 +116,7 @@ const sessions =
     reopen: Schedule.exponential("1 second").pipe(Schedule.upTo({ duration: "5 minutes" })),
   });
 
-const text = yield * sessions.use(({ value }) => value.page.text());
+const text = yield * sessions.use(({ value }) => Text.read(value.page));
 ```
 
 Sessions persisting to a stored context are exclusive. Rotation revokes admitted work, awaits its
@@ -244,7 +245,7 @@ const signedIn =
 
       yield* page.goto("https://example.com/account");
 
-      return (yield* page.text()).text.includes("Sign out");
+      return (yield* Text.read(page)).text.includes("Sign out");
     }),
   );
 ```
