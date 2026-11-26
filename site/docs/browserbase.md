@@ -17,7 +17,7 @@ const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
 program.pipe(Effect.provide([Hosted, OpenRouter]), Effect.runPromise);
 ```
 
-Run on 11 October 2026 with `npm install @effect-browser/browserbase@beta` added, and `BROWSERBASE_API_KEY` set. Browserbase lists the session, in us-west-2, as completed when the program ended:
+Run on 11 October 2026 with `npm install effect-browserbase@beta`, the package's name then, added, and `BROWSERBASE_API_KEY` set. Browserbase lists the session, in us-west-2, as completed when the program ended:
 
 ```text output
 [20:25:37.832] INFO (#1): {

@@ -13,8 +13,9 @@ npm install @yielded/agent@0.1.0-beta.191 effect-browser@beta @effect-browser/ch
 npx playwright-core install chromium
 ```
 
-Captured in a fresh npm project on Linux with Node `24.14.1` and npm `11.11.0`. At capture time,
-`effect-browser` and the agent tools' package, then `effect-agent-browser`, resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
+Captured in a fresh npm project on Linux with Node `24.14.1` and npm `11.11.0`. The capture predates the
+`@effect-browser` packages: Chromium came with `effect-browser`, and `effect-browser` and the agent
+tools' package, then `effect-agent-browser`, resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
 `0.1.0-beta.168`, the peer before the moves to `0.1.0-beta.189` and `0.1.0-beta.191`, with Effect
 and the OpenRouter provider at `4.0.3`. Chromium was already
 installed on this host, so its install command printed nothing:

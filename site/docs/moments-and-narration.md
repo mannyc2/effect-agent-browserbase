@@ -43,7 +43,7 @@ Give `@effect-browser/yielded`'s `YieldedTools` layer the option `vision: "momen
 
 Each moment starts where the one before ended, so nothing that happened while the model was thinking is missed. Accounts stay unchanged until Yielded compacts them with the surrounding conversation. Retiring older pictures never changes an account or invalidates a compacted prefix. The frames are the ones a running screencast painted, up to three per moment; without one, a moment holds a single screenshot.
 
-For long runs, configure Yielded's native compaction and a model-aware image-token estimate. Its default JSON estimate counts image bytes as text and can overestimate screenshots. The [package guide](https://github.com/mannyc2/effect-agent-browserbase/tree/main/packages/yielded#moments-and-long-runs) shows how to compose the consumer's resolved model with the moments preparation. The bounded demo runs do not configure automatic compaction.
+For long runs, configure Yielded's native compaction and a model-aware image-token estimate. Its default estimate reserves each picture's tokens from its dimensions, a generic reservation rather than any provider's price. The [package guide](https://github.com/mannyc2/effect-agent-browserbase/tree/main/packages/yielded#moments-and-long-runs) shows how to compose the consumer's resolved model with the moments preparation. The bounded demo runs do not configure automatic compaction.
 
 ## The agent's own voice
 

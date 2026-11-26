@@ -10,7 +10,7 @@ subtree_prompted: true
 
 ## Project Notes
 
-The repository's own rules, in [`../AGENTS.md`](../AGENTS.md), apply here too: exact versions in every manifest, no paid calls without the person's say, and downstream applications are "the consumer", never named.
+The repository's own rules, in [`../AGENTS.md`](../AGENTS.md) and [`../CONTRIBUTING.md`](../CONTRIBUTING.md), apply here too: exact versions in every manifest, no paid calls without the person's say, and downstream applications are "the consumer", never named.
 
 ### Recording a take for your person
 

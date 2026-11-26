@@ -43,7 +43,7 @@ README says what that risks and how signals end the browser.
 | `Film`         | `effect-browser/presentation` | A page filmed as a function of time: frames, inputs on their frames, passages     |
 | `Walk`         | `effect-browser/walk`         | A walk recorded from a page's events, replayed on a fresh page by subject         |
 | `Policy`       | `effect-browser/policy`       | Judges that read what an input means, and a guard that acts on them unattended    |
-| `Supervisor`   | `effect-browser/supervisor`   | A browser kept open across losses and session ends, as generations                |
+| `Supervisor`   | `effect-browser/supervisor`   | A resource, such as a browser, kept serving across losses and rotation            |
 | `Release`      | `effect-browser/supervisor`   | What a provider said of a release: `Confirmed` or `Unconfirmed`                   |
 | `TestBrowser`  | `effect-browser/testing`      | A seeded browser over the production lane, suspension gate and event timeline     |
 | `TestPage`     | `effect-browser/testing`      | A deterministic page seeded from data, without page code                          |

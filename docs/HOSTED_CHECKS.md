@@ -26,7 +26,8 @@ Use the repository's pinned toolchain and a commit whose `bun run ready` and
 `tools/check-packed.sh` passed. Run one probe, with no concurrent hosted checks. `bench contract`
 tests REST contracts; it is not H2 and would allocate additional sessions. The executable probe is
 `bench handover`, with run artifacts under `.work/h2/<run>/`. It requires a clean checkout and
-records that commit and all four package versions.
+records that commit and the versions of `effect-browser`, `@effect-browser/browserbase`,
+`@effect-browser/yielded` and `@effect-browser/human-strokes`.
 
 Keep a private dashboard screenshot or verification note that establishes the correct key's
 project, included balance, disabled overage and absence of concurrent project use. Reference that

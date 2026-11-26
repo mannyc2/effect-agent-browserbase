@@ -130,7 +130,7 @@ restart adoption or keep-past-scope mode. Explicit `attach` and `session.keepAli
 operations for a consumer that owns that policy.
 
 Keep pages that must close before provider release in `use` callback scopes. Resources acquired by
-`build` close after provider release. Fake-provider ordering tests establish local ordering; they
+`build` close before provider release, including when the build fails. Fake-provider ordering tests establish local ordering; they
 do not establish hosted context-save timing or billing. The included-hours-only
 [H2 recipe](../../docs/HOSTED_CHECKS.md) is a separate hosted check.
 

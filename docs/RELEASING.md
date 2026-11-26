@@ -85,11 +85,10 @@ The owner does this once, in npm and GitHub settings.
 
 ## Cut a release
 
-1. In one PR, set the same `version` in the five published packages' `package.json`, add the
-   release's section to `CHANGELOG.md`, move the `effect-browser` peer ranges in the other four if
-   the release needs the new version, and run
-   `bun install --ignore-scripts` so `bun.lock` agrees. 0.3's first release also deletes the root
-   README's note that 0.3 is not on npm.
+1. In one PR, set the same `version` in the five published packages' `package.json`, give
+   `CHANGELOG.md`'s "Unreleased" entry the release's version as its heading, move the
+   `effect-browser` peer ranges in the other four if the release needs the new version, and run
+   `bun install --ignore-scripts` so `bun.lock` agrees.
 2. Once it is merged, tag the merge commit and push the tag:
 
    ```sh

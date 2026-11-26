@@ -10,21 +10,21 @@ Sessions, scoped input authority, resumable action receipts and cued presentatio
 watched browsing and operator-assisted workflows. The library owns browser lifetimes and failure
 evidence; applications own their decisions and durable business records.
 
-| Package                                                   | What it is                                                         |
-| --------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`effect-browser`](packages/browser)                      | The browser, its pages, moments, films and an agent's tools        |
-| [`@effect-browser/chromium`](packages/chromium)           | A local Chromium as a `Browser`, launched through Playwright       |
-| [`@effect-browser/browserbase`](packages/browserbase)     | Browserbase sessions as a `Browser`, and a client for its REST API |
-| [`@effect-browser/yielded`](packages/yielded)             | `effect-browser/ai`'s tools for a Yielded agent's run              |
-| [`@effect-browser/human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
-| [`@effect-browser/tradingview`](packages/tradingview)     | TradingView charts' data, exact screen points and agent tools      |
-| [`bench`](bench) (private)                                | Graded tasks over canvas games, live charts, quotes and forms      |
-| [`site`](site) (private)                                  | The docs site, its narrated demo and a player for recorded runs    |
+| Package                                                         | What it is                                                         |
+| --------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [`effect-browser`](packages/browser)                            | The browser, its pages, moments, films and an agent's tools        |
+| [`@effect-browser/chromium`](packages/chromium)                 | A local Chromium as a `Browser`, launched through Playwright       |
+| [`@effect-browser/browserbase`](packages/browserbase)           | Browserbase sessions as a `Browser`, and a client for its REST API |
+| [`@effect-browser/yielded`](packages/yielded)                   | `effect-browser/ai`'s tools for a Yielded agent's run              |
+| [`@effect-browser/human-strokes`](packages/human-strokes)       | Optional recorded pointer motion, as a presenter's planner         |
+| [`@effect-browser/tradingview`](packages/tradingview) (private) | TradingView charts' data, exact screen points and agent tools      |
+| [`bench`](bench) (private)                                      | Graded tasks over canvas games, live charts, quotes and forms      |
+| [`site`](site) (private)                                        | The docs site, its narrated demos and a player for recorded runs   |
 
 `@effect-browser/yielded` needs the npm release of `@yielded/agent` `0.1.0-beta.191` and Effect
 `4.1.2`. Its [README](packages/yielded/README.md) gives the install command.
 
-The browser core also owns [leased generations](packages/browser/README.md#supervising-browser-generations):
+The browser core also owns [leased generations](packages/browser/README.md#supervising-resource-generations):
 scoped work and application resources, bounded handover and explicit revocation, with hosted
 sessions through `Browserbase.generations({ build })`. The consumer keeps its editorial policy,
 account decisions and durable business journal. [Compiled composition examples](docs/COMPOSITION.md)

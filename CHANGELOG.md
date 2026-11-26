@@ -2,9 +2,129 @@
 
 Each release lists what changed since the release before it. From 0.3 on, `effect-browser`,
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
-`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them. Where a release was checked beyond
-`bun run ready`, its entry ends with how. Entries before 0.3 are short summaries drawn from the
-release tags.
+`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them. From the release after
+`0.3.0-beta.24` they are `effect-browser` and the `@effect-browser` scope's `chromium`,
+`browserbase`, `human-strokes` and `yielded`. Where a release was checked beyond `bun run ready`,
+its entry ends with how. Entries before 0.3 are short summaries drawn from the release tags.
+
+## Unreleased
+
+**Breaking.** The packages move into the `@effect-browser` scope, Chromium becomes a package of its
+own, the core's features become subpaths, and an agent's browser tools move into the core as
+`effect-browser/ai`, for any `effect/ai` loop (#324, #327). Errors take identifiers and guards
+(#329). There are no aliases or shims: each name this entry gives as removed or renamed is gone,
+and the entry says what replaced it.
+
+### Packages
+
+| `0.3.0-beta.24`                        | This release                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------ |
+| `effect-browser`                       | `effect-browser`                                                         |
+| `effect-browser/Chromium`              | `@effect-browser/chromium`                                               |
+| `effect-browserbase`                   | `@effect-browser/browserbase`                                            |
+| `effect-browser-human-strokes`         | `@effect-browser/human-strokes`                                          |
+| `effect-agent-browser`                 | `effect-browser/ai` for the tools, `@effect-browser/yielded` for Yielded |
+| `effect-browser-tradingview` (private) | `@effect-browser/tradingview` (private)                                  |
+
+- `@effect-browser/chromium` holds `Chromium`, with `layer`, `open` and `Options` as
+  `effect-browser/Chromium` had them. It peers on `effect`, `effect-browser` and `playwright-core`.
+- `@effect-browser/yielded` is only the Yielded binding of `effect-browser/ai`'s tools, and the only
+  package that depends on `@yielded/agent`, still `0.1.0-beta.191` exactly. `effect-browser` gains
+  no dependency.
+- Every package's exports follow Effect's layout: the root, each module by its path (`"./*"`), an
+  entry for each feature folder, and closed `internal` paths. `@effect-browser/human-strokes`'
+  `motion` is also at `@effect-browser/human-strokes/HumanStrokes`.
+
+### Subpaths of `effect-browser`
+
+A feature is a folder whose index is its subpath, and each of its modules can also be imported by
+path, such as `effect-browser/timeline/Moment`.
+
+| `0.3.0-beta.24`                                                         | This release                                                           |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `effect-browser/Moment`, `/Stillness`                                   | `effect-browser/timeline`                                              |
+| `effect-browser/Presentation`, `/Stage`, `/Film`, `/Motion`             | `effect-browser/presentation`; `Film` is experimental                  |
+| `effect-browser/Plan`                                                   | `effect-browser/walk`, as `Walk`                                       |
+| `effect-browser/Policy`                                                 | `effect-browser/policy`                                                |
+| `effect-browser/Supervisor`, `/Released`                                | `effect-browser/supervisor`, `Released` as `Release`                   |
+| `effect-browser/Style`                                                  | `InputStyle`, in the root and at `effect-browser/InputStyle`           |
+| `effect-agent-browser`, `/BrowserTools`, `/PageControl`, `/PromptCache` | `effect-browser/ai`                                                    |
+| `effect-agent-browser/testing`                                          | `effect-browser/testing`: `TestModel`, `HttpCassette` and `Story`      |
+| `effect-agent-browser/AdapterState`                                     | `effect-browser/ai`'s `Tabs` and `@effect-browser/yielded`'s `Moments` |
+| `effect-browser/ActionPort`, `/Clock`, `/Geometry`, `/Matching`, `/Url` | Closed, with no public replacement                                     |
+
+- The root no longer exports `ActionPort`, `Clock`, `Geometry`, `Url` or `Style`, and exports
+  `InputStyle`. `Geometry`'s `Plan`, `Planner`, `Point`, `Sample`, `maximumDurationMillis` and
+  `maximumSamples` are still in `Motion`; its `normal` is gone.
+- `effect-browser/Cdp`, with its `workerd` condition, `effect-browser/Site`, `effect-browser/testing`
+  and the root's modules keep their paths. Neither `Cdp` nor `Site` is in the root.
+
+### Renamed
+
+- `Plan` is `Walk`: the class `Walk`, `take` is `step` and `TakeOptions` is `StepOptions`. Its
+  other names stay: `fromEvents`, `replay`, `restore`, `locate`, `repeatable`, `Step`, `Receipt`,
+  `Stopped`, `Uncertain`, `Expected`, `Ambiguous`, `Drifted`, `Missing`, `ReplayError` and
+  `ReplayOptions`. Its spans are `Walk.step`, `Walk.replay`, `Walk.restore` and `Walk.locate`.
+- `Released` is `Release`, and its `Settled` is `Confirmed`, with the tag `"Confirmed"`.
+  `Unconfirmed` stays.
+- `Style` is `InputStyle`, its type `Style` is `InputStyle`, and its other names stay.
+- `Supervisor.Why` is `Supervisor.StopReason`.
+- `BrowserError.Reason` is `BrowserError.BrowserErrorReason`, and `BrowserbaseError.Reason` is
+  `BrowserbaseError.BrowserbaseErrorReason`.
+- `TestBrowserbase.Release` is `TestBrowserbase.ReleaseAnswer`.
+- `AdapterState`, which `effect-agent-browser/testing` also exported, is split: `tabs`, `Tabs`, `follow` and `selected` are `Tabs.make`, `Tabs.Tabs`,
+  `Tabs.follow` and `Tabs.selected` in `effect-browser/ai`; `moments`, `Moments`, `Placed`,
+  `place` and `weave` are `Moments.make`, `Moments.Moments`, `Moments.Placed`, `Moments.place` and
+  `Moments.weave` in `@effect-browser/yielded`; and `Seed` and `load` are `YieldedTools.Seed` and
+  `YieldedTools.load`.
+- `PageControl.useError` is `ToolError.fromBrowserError`.
+
+### The agent's tools
+
+- `effect-browser/ai` holds `BrowserTools`, `PageControl` and `PromptCache`, with `Tabs` and
+  `ToolError`. The tools run in any `effect/ai` loop. Their names, descriptions and parameters are
+  unchanged.
+- A failed tool answers the model with a `ToolError`, whose `_tag` is `"ToolError"` where it was
+  Yielded's `"BrowserUseError"`. Its `code`, `message` and `dispatch` are unchanged.
+- `BrowserTools.Pictures` is a service the tools' layer provides: `next` gives the pictures for the
+  coming turn, which a loop adds to that request alone, and `crops` the crops queued for a page.
+- `@effect-browser/yielded`'s `YieldedTools.make` gives the same toolkits, and a layer that loads
+  the pictures as Yielded's run context. `vision: "moments"` leaves `BrowserTools.Vision` for
+  `YieldedTools.Vision`, and the layer options `initialMoments` and `onMoment` leave
+  `BrowserTools.LayerOptions` for `YieldedTools.LayerOptions`.
+- `@effect-browser/tradingview`'s `ChartTools` fail with `ToolError` and run in a plain `effect/ai`
+  loop; the package no longer depends on Yielded.
+
+### Errors and identifiers
+
+- Public Schema classes, errors, services and references are identified by their path,
+  `<package>/<folder>/<Module>/<Name>`, and a module's main class by `<package>/<folder>/<Module>`:
+  `effect-browser/Page/Region`, which was `effect-browser/Region`, `effect-browser/BrowserError`,
+  `effect-browser/BrowserError/Timeout`, `effect-browser/walk/Walk/ReplayError`,
+  `@effect-browser/browserbase/BrowserbaseError/NotFound`. Identifiers are not encoded, so encoded
+  values and recordings decode as before.
+- Effect sets an error's `name` to its identifier, so `String(error)`, stacks and `Cause.pretty`
+  read `effect-browser/BrowserError: …` where they read `BrowserError: …`. `message` is unchanged,
+  and so is what the tools tell a model.
+- `Schema.is` of one package's error no longer accepts another's error of the same tag:
+  `BrowserError.NotFound` accepted Browserbase's `NotFound`, and each package's reasons accepted the
+  other's `NotFound` and `InvalidRequest`.
+- Guards: `BrowserError.isBrowserError` and `isBrowserErrorReason`, `BrowserbaseError.isBrowserbaseError`
+  and `isBrowserbaseErrorReason`, `Walk.isReplayError` and `isReplayErrorReason`, with
+  `Walk.ReplayErrorReason` naming the walk's reasons, `ToolError.isToolError` and
+  `TestModel.isScriptError`.
+- `Supervisor.InvalidWait` is a Schema error rather than a `Data.TaggedError`, with the same
+  `detail`.
+- `@effect-browser/human-strokes`' `DataError` has the tag `DataError`, where it had
+  `HumanStrokesDataError`.
+
+### Checks
+
+`bun run boundaries` now deletes each feature folder on its own, with the features that import it,
+and typechecks the rest; checks that the root's runtime loads only `effect`; and refuses
+`@yielded/agent` in any package but `@effect-browser/yielded`. The packed check covers the five
+published names, 59 entry points, in a clean npm project and in a Bun workspace. No hosted or paid
+check has run on this release.
 
 ## 0.3.0-beta.24
 

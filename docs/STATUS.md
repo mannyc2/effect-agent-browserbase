@@ -1,260 +1,237 @@
 # Status
 
-The latest release is `0.3.0-beta.24`. [CHANGELOG.md](../CHANGELOG.md) lists what each release
-changed and how it was checked.
+What the code on `main` does, how it has been checked and what is known not to work, as of 26
+November 2026. [CHANGELOG.md](../CHANGELOG.md) lists what each release changed.
 
-## 0.3
+## Releases
 
-0.3 is a rewrite of the 0.2 set on stable Effect 4 and `effect/ai`, currently pinned to `4.1.2`,
-with agents on Yielded Agent, the renamed Effect Agent:
+The latest release is `0.3.0-beta.24`, published on 25 November 2026 to npm's `beta` dist-tag as
+`effect-browser`, `effect-browserbase`, `effect-browser-human-strokes` and `effect-agent-browser`.
 
-- `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
-  `Frame`, `BrowserEvent` and `BrowserError`; `Moment`. It has no agent code.
-- `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`. Stored contexts
-  and uploaded extensions are managed through the client. A persisting `open` holds its context
-  through a `ContextLease` from before its create until its save settles: `ContextLease.layer`
-  excludes writers in the process, and an application provides its own, such as an advisory lock
-  in its database, to exclude them across processes. A release confirms the session ended and says
-  so, `Settled` or `Unconfirmed`. An unconfirmed release, a create whose answer was lost, or a
-  session kept past its scope leaves the context unsettled, through the lease: the next writer
-  ends the context's sessions, which `open` labels in their user metadata, before it writes, and
-  fails `ContextHeld` while they cannot be confirmed ended, so no context is held with no way out
-  and no two sessions write to one. `Browserbase.reconcile` does the same without opening a
-  session, and `Browserbase.verifyContext` reads a context back, as a login, from a session that
-  saves nothing, under the same hold: on Browserbase it read back the cookie and local storage a
-  writer had saved (8 October). `Browserbase.attach` is resume: on Browserbase a second process
-  attached to a running session by its id, found its page by its target id and changed it.
-  Each create carries a nonce of its own, so a session that a create whose answer was lost made is
-  found and ended, whether it persists a context or not, rather than billing until its timeout.
-  `effect-browserbase/testing` holds the Browserbase API in memory, with scripted faults and
-  Browserbase's own answer to each id shape, and the contract checks it passes. Pages' screencasts
-  run on a capture connection of their own, a second, read-only connection to the session, so a
-  frame never waits behind a large message on the one that drives the page; a provider supplies
-  one through `Cdp.Options.capture`.
-- Sessions that survive: `Supervisor` keeps a browser open as leased generations from any provider,
-  with scoped application values, `use` work and transferable `retain` scopes. It reopens a lost
-  one on a schedule, rotates ahead of a session's end (overlap, or drain and release first for
-  sessions saving to one stored context), and revokes at once on `retire`. A
-  failure the provider deems definite, such as a refused key, is `Down` at once with its cause,
-  rather than hidden behind the schedule. Each generation's changes stream as `states`, with its
-  release outcome last, a loss with its cause. `Browserbase.generations` supplies hosted sessions
-  to `Supervisor.make`, and `Browserbase.attach` resumes a session another process left running.
-- Pages with durable names and a life story. A page's id is its CDP target id, so a new connection
-  to the same browser finds it again with `browser.page(id)`. The timeline tells each page's
-  documents and moves within them (`Navigated` with `document` and `sameDocument`), its loads
-  (`PageLoaded`) and its close or crash, and the browser's end as one `Disconnected` with its
-  cause, `connection`, `session` or `released`, also `browser.disconnected`; frames carry their
-  document and address. A failure on a page that is gone is `Closed` with its cause, calls in
-  flight fail at once with a lost browser or a crashed page, and `BrowserError.consequence` says
-  what any failure leaves and whether to repeat it. Every reported address, the outline's links
-  among them, loses its userinfo and its credentials' values and keeps what it is about, such as
-  `?code=BTC`, and init scripts run where their `match` allows, a popup's first document
-  included. Chromium announces a title change only with the next address change, so titles are
-  read on demand.
-- `effect-browser-human-strokes`: an optional pointer planner, `HumanStrokes.motion`, over 32,130
-  recorded, attributed CC BY 4.0 pointer strokes, retaining their original sample coordinates and
-  times. The core planner, `Motion.lognormal`, uses the tuned two-stroke sigma-lognormal model; a
-  presenter takes either as a value. Complete bounded plans are validated and admitted before
-  publication and input.
-- `effect-agent-browser`: pages as a Yielded agent's browser tools, through a controller pinned to
-  one page or following a browser's tabs without taking the screen: the ref and control tools
-  Yielded Agent defined until `0.1.0-beta.174`, and pointer tools for what has no ref, such as a
-  canvas game or a chart. An observation is the page's outline with its controls as values,
-  and one after an action begins with what followed it: a dialog and how the browser answered it, a
-  navigation, a tab it opened and what its input visibly changed. Every action result says whether
-  its input reached the browser, and nothing is retried. Before each turn the model sees a
-  screenshot of the current tab, as context the run never keeps; with `vision: "moments"` its
-  thread holds instead, after each turn's tool results, a moment of the tab since the turn before,
-  immutable accounts that Yielded can prune and summarize with the conversation. The latest three
-  moments' frames remain as turn-labeled references outside compaction coverage, and older image
-  bytes are released. Lost pages and moments without usable pictures stop preparation before
-  another model call; queued zoom crops only accompany their original tab. Bounded model contexts
-  can compose a model-aware image-token estimator with the tools' preparation, as the package
-  README shows. `wait_still` waits for
-  foreground stillness. Yielded runs the agent: its loop,
-  policy and budgets, approval, context and run events. The package pins the published npm
-  artifact of `@yielded/agent` `0.1.0-beta.191`. The packed
-  check installs it from the registry with npm and with Bun's isolated linker, holding each to
-  the registry integrity and to one copy of each runtime package. Earlier releases used a
-  commit-pinned release-candidate archive from `vendor/yielded-agent`; it remains available for
-  their consumers, as [RELEASING.md](RELEASING.md) records. Its layer also provides the run's
-  controller as `BrowserTools.Controller`, so an application's own tools act on the tab the model
-  sees, with the run's task.
-- `effect-browser-tradingview` (unpublished): a TradingView chart's state, studies, bars and study
-  values, and the viewport points of times and prices, read from the chart's model. `ChartInput`
-  changes the chart as a person does, with its toolbar, hotkeys, searches and dialogs, and the API
-  corrects or completes a change. `ChartTools` serves both as a Yielded agent's tools and as a Code
-  Mode program's methods. It is checked live on the Advanced Charts demo only; tradingview.com
-  refuses drawings when signed out.
-- Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
-  displays whose device pixel ratio differs from one.
-- Structured reads in one call to the page. `Page.find` returns the elements that a query of role,
-  name, text and context matches, each with a ref the actions take, its subject, box and state.
-  `Page.text` returns what the viewport, or one element, shows, with what fields hold masked unless
-  asked for and secret fields masked always. A subject's context binds a table cell to its row and
-  its column's header, and every `Action` records it. Reading the viewport, the outline, `find` and
-  `text` skip subtrees out of view, keeping what is pinned in view: locally, the outline of a
-  28,021-element table takes 7 ms instead of 95.
-- Plans and readiness. `Plan.fromEvents` records a page's walk from its events, and `Plan.replay`
-  replays it on a fresh page by subject, with no model call: it waits for `Page.ready` before each
-  step that acts, finds the one element each step names by role and name among those that repeat
-  all its recorded context, types a secret only into a secret field, and stops at the first step it
-  cannot take with a typed reason. On the drift site, plan 016's four walks and the phase 1
-  review's three, under eleven drift operators, five seeds each, ended in the wrong place 0 times
-  in 420 replays. `Page.ready` says, in one call to the page, whether a page is ready to be shown,
-  from the page's own evidence, so a blank canvas or a spinner alone is still loading; with
-  `quietMillis` it also waits for the screen to be still, and a stalled connection is not stillness;
-  `still: "foreground"` lets what was moving in the 1.5 s before the page's latest input, such as a
-  game's idle animation, go on moving. Brief foreground motion between polls still restarts the
-  quiet interval; missing frame history cannot establish stillness.
-- Expectations: `Expect.attempt` names what an action is for, something that appears, goes or
-  changes as `Page.find` finds it, or a navigation, and each `run` checks before it acts, so an
-  action whose input went before it failed is sent again only where its effect did not come:
-  `Done`, `AlreadyDone` or `NotDone`. A check is one call, and so is the wait for an effect.
-- An input policy over resolved targets and navigation, with typed denials, independently bounded
-  holds and validation before held actions resume: the press point is hit-tested after the
-  pointer arrives, typing refuses to start on a control a key could activate, and a multi-key
-  action stops at a new document. Typing approves its field once: plain text goes into it in one
-  insertion, so a guarded 2,000-character paste takes half a second at a 70 ms round trip, where
-  each key used to wait for the keys before it and a focus check, and keys a presenter's view
-  types check focus before each space and after the last key. Guards receive structural facts, never keyword categories, and
-  page evidence around the target without field values; text typed into secret fields is redacted
-  from requests and recorded events. A 77-control labelled corpus grades the facts in `ready`.
-  `Policy` adds judges over `effect/ai` (`reviewer` on a `LanguageModel`, `decider` on a
-  `DecisionModel` such as Jev) and `make`, a guard that denies a risk the task does not ask for and
-  fails closed on input with facts when its judge fails; `effect-agent-browser`'s tools give it
-  the run's task. The judges are tested with scripted models; `bun run bench judges` in
-  the bench grades them against the corpus, with paid arms only on opt-in.
-- What changed on a page: `Page.changes({ since, until })` reads, in one call, what visibly
-  changed over a window, element by element: text that changed, appeared, disappeared or came
-  and went, fields' values (masked unless asked) and the title, each with what it showed at
-  either end, how often it changed, a number's range, its row, column, label and heading, and the
-  input it followed where it was that input's doing. A page records once something reads its
-  changes, from the start of each later document, and a page nobody reads records nothing and
-  costs nothing; on a 2,000-cell table rewritten every 50 ms, recording takes the page's busy time
-  from about 100 ms per 3 s to about 230, where an empty observer costs about 180. The record keeps
-  news over what keeps changing, counts what it lets go and never claims to be whole where it is
-  not, and a window can continue exactly where the last read ended or end at a frame's paint.
-  `Page.ready({ quietMillis })` also waits for nothing in view to change where a page records.
-- Windows and moments: `page.window({ since, until })` reads a page's three tracks, its events, what
-  changed and its frames, over one window of the host clock, which can end in the past, at a frame
-  a delayed consumer airs late, and go on exactly where the last window ended; its events and
-  frames cost no call and its changes one. A part that cannot be read is missing, with why, and
-  the window is still made; `Moment.account` says what was still changing at its end, what had
-  settled, and how long its page had been still. A
-  moment is a window that ends at a picture of the page now, and never fails because its picture,
-  its changes or its outline did. `Moment.toPrompt` lays a moment out as one message for any
-  `effect/ai` call, leading with what changed, news and what settled first, telling what kept
-  changing as still changing or settled since when, and naming an action only as what a
-  change followed or where its effect is drawn, as on a canvas, a failed one only as failed; it
-  says what it could not read, and why. Describing it is the caller's own `generateObject`,
-  `generateText` or `Chat` turn. In the paid narration run, without the account a model told which
-  of two ticking prices still moved and which had stopped for both in 18 of 32 moments, and with it
-  in 29 (`0.3.0-beta.4` in the changelog). The outline is
-  opt-in (`snapshot: true`): in the first paired run, moments with and without it scored 61/80
-  each on every task but `navigated`, where the outline's reused refs misled the model, and it
-  doubled the tokens on `quote-dense`. Pages keep the screencast frames of the last 5 seconds
-  (`frameHistory`), a moment's default window.
-- Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
-  arrivals, observations and moments.
-- Per-page admission: a page waits only for itself. Its operations take turns in one lane, where an
-  action has the page to itself, in the order actions were asked, and reads share it after the
-  action in flight and every action asked before them, so a read describes the page an action
-  left. A wait for a turn fails `Busy`, never `Timeout`, and `Page.failFast` fails it at once. A
-  click on one page no longer waits for typing at a person's pace on another, which held an on-air
-  click for about 9.5 s in the release review. Identical reads in flight share one call, a read whose
-  callers gave up serves the next caller to ask the same until the page's next action.
-  `Browser.Options.maxPages`
-  bounds the open pages, failing `Limit`. `page.state` says what the library already knows of a
-  page at no call and with no wait: its address, document and load, its newest frame, and the
-  viewport's text and title as last read, each with when it was learned.
-- A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
-  events; a pointer per page, a presenter's one drawn pointer across its views, and bounded event
-  replay with explicit expiration.
-- Input performed for viewers as an explicit view: `Presentation.make({ pacing, motion })` owns one
-  drawn pointer, and `presenter.view(page)` performs a page's actions while the page stays plain.
-  A view waits before each action as a person reacts (280 ms after an expected change, 600 ms
-  after a new document, 1 s on another page), glides from where viewers last saw the pointer,
-  clicks a field before typing near 70 WPM with overlapping holds, and scrolls in notches and
-  bursts, also to off-screen targets, with a bounded fallback and approval revalidation. One view
-  acts at a time, its presentation time is outside `actionTimeout`, and `view.aim` starts a glide
-  as soon as a target is known. The motion planner is a value: `Motion.lognormal`, or recorded
-  strokes from `HumanStrokes.motion`.
-- A stage for live output: `Stage.make` and `stage.present(page, { at })` switch an output's frames
-  between pages, in one session or across two, with the captures overlapping, and stamp when each
-  switch took effect on the frame clock. On Browserbase two captures in one session ran at the
-  frame rate of one, where stopping first left 250 to 295 ms dark. A late first frame fails typed
-  and leaves the old page on the stage, and a capture that fails restarts on its page.
-- After input, one call waits a task and a frame in the page, spanning any navigation the input
-  asked for, and a committed document is waited for until parsed: no fixed sleep. Ten clicks that
-  navigate nowhere took 1.65 s locally and 3.75 s at a 70 ms round trip, and take 0.5 s and 3.25 s.
-- Browser paint mapped onto the host clock with explicit uncertainty, wider as its estimate ages,
-  through one browser-wide clock mapping that the first capture measures, never the opening of a
-  browser, and that a capture measures again while its frames flow, so a busy page's wide first
-  estimate narrows; timestamped mouse and raw text-key input once it exists; and per-page capture
-  counters, over a page's life or a window of the latest minute, for filtering, paint gaps, late
-  frames apart from lost ones and the acknowledgement backlog. Screenshot timing has its own
-  provenance; a frame read states how old it may be, and whether it must follow the latest input,
-  which a screenshot always must, and never shows a document the page has left.
-- Pictures and reads on each page's own protocol session, counted: a picture is one call, or two
-  for a crop or another device pixel ratio, and a page's pictures go one at a time; a page's first
-  clipped picture also holds a copy of the screen the page reads, in two more calls, so a crop leaves
-  a screen another session emulates as it was; the page script is registered once per page session, so
-  a document's first read is two calls and a warm read one, `ready` included however long the page
-  takes, and a wait for a still screen two calls while a capture runs; the library's own clipped
-  pictures stay out of the screencast by pausing native capture through actual picture restoration,
-  retaining readers and settings. Forced pictures with capture running add stop, an uncropped
-  restoration snapshot, viewport refresh and restart calls; cached frame reuse remains free, and readiness requires fresh frame evidence
-  after a pause. Focus emulation keeps tabs behind painting. A native
-  suite holds these to their call budgets through a counting proxy.
-- Tracing: page operations with their phases and protocol cost, captures, page script round trips
-  and opening a browser are Effect spans, and Yielded traces the agent's turns and tool calls with
-  OpenTelemetry's GenAI attributes. No page span carries typed text, and the application chooses the exporter. The
-  bench exports over OTLP on request, records where each trial's time went (`phases`) and can add
-  latency to a local browser's DevTools connection (`--latency`) to measure hosted round trips free;
-  there it also traces each DevTools command under the span that was open when it was sent. Hosted
-  sessions carry their trial in Browserbase's user metadata, and connect through a relay in the
-  bench that traces their commands the same way.
-- `bench` (private): twenty-four tasks over canvas games, live charts, dense quote tables, orders,
-  navigation, forms, a board, menus, a catalogue, an icon toolbar, a seat map, look-alike payments
-  and a market board whose prices tick, flash,
-  scroll out of view and keep ticking or stop, graded against seeded page truth and captured evidence; an understand task's
-  page records its changes from before its setup. The nine operate tasks' pages vary with the seed,
-  and `--split eval` holds a family of seeds out for comparing arms. Trials run with separate
-  browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics and a
-  shared model admission budget. Every trial is graded, an infrastructure failure, denied or
-  unrun, and summaries keep those
-  denominators apart. `--arm` runs the paired experiment's arms 1 (Yielded's tools alone),
-  2 (vision first), 5 (the default tools), 6 (the default tools with moments in the thread), 7 and
-  8 (Code Mode programs), and 9 and 10 (pictures by page or on request) on the same seeds, each a
-  Yielded agent on the task's
-  page, whose streamed model requests are sent and charged as single completions. The bench is an `effect/cli` program (`run`, `report`, `judges`) on `Config` and
-  `FileSystem`; its results are versioned Schema records, and a report states its estimand and
-  tests arms with exact paired tests. Paid runs remain opt-in.
-- `site` (private): the docs site, a Foldkit app on Cloudflare deployed with Alchemy. Its pages are
-  markdown with replays placed in the prose, and each is also served as markdown for agents, with
-  `llms.txt`, `llms-full.txt` and a JSON index. Its demos are recorded takes of an agent that speaks
-  for itself: what it writes beside its tool calls, from the moments in its thread, is spoken by a
-  voice model. One explores Polymarket, its markets checked against Polymarket's API; one plays six
-  spins of a canvas slot in a made-up casino, dealt from a fresh seed, its report checked against
-  the game server's record. The player shows the screencast with the speech as audio and captions,
-  the planned pointer path, what the agent was doing when, its steps and the grade. `bun run dev`
-  serves a local runner, so a visitor records their own take with their key and cap. The site is
-  deployed to Cloudflare.
+`main` holds the next release, which is breaking and not yet published; the changelog's
+"Unreleased" entry describes it. It moves the packages into the `@effect-browser` scope, adds
+`@effect-browser/chromium`, makes the core's features subpaths of their own and moves the agent's
+tools into `effect-browser/ai`. None of the scoped names is on npm yet, so until that release the
+READMEs' and the docs site's install commands fail for them. The owner reserves the names before
+the release ([RELEASING.md](RELEASING.md)).
 
-`effect-agent-browser` is rebuilt on Yielded Agent in place of the 0.2 adapter on Effect Agent,
-and 0.3's own loop on `effect/ai`'s `Chat` went with the move. The tests run against real local Chromium, a fake Browserbase API
-and scripted models. `bun run ready` runs all formatting, lint, type, test and build checks without
-paid calls.
+Every package peers on `effect` `~4.1.2`. `effect-browser`, `@effect-browser/chromium` and
+`@effect-browser/browserbase` peer on `playwright-core` `^1.63.0`, and `@effect-browser/yielded` on
+`@yielded/agent` `0.1.0-beta.191` exactly.
 
-## Not rebuilt yet
+## Packages
 
-0.2 did much that 0.3 does not do yet. A capability inventory of the 0.2 code, the plans, the open
-PRs and the in-progress work marks each capability as rebuilt, left for later, or the consumer's to
-build. The 0.2 PRs are closed, except #164, kept open as a reference.
+### `effect-browser`
 
-The larger pieces left for later:
+Browsers and pages over the Chrome DevTools Protocol, through `playwright-core`. It depends on
+`effect` and `playwright-core` only. The root, `effect-browser`, loads only `effect` at runtime, and
+each of its modules also has a path of its own, such as `effect-browser/Page`:
 
-- recording to video files;
-- operator handoff and uploads;
-- the paid hosted checks.
+- `Browser`: the service. Its pages, which keep their CDP target ids, so a new connection to the
+  same browser finds one again with `browser.page(id)`; its events, read from a cursor, with an
+  explicit failure for a reader that falls behind the kept history; input suspended across every
+  tab (`suspend`); and its end, one `Disconnected` with its cause. Its options bound the open pages
+  (`maxPages`), guard input and navigation (`guard`), answer requests (`requests`), run init
+  scripts where their `match` allows and hold pages' time (`pageTime`).
+- `Page`: one tab. Its operations take turns in a lane of its own: an action has the page to
+  itself, in the order it was admitted, and reads take their turn after it, so a read describes
+  the page an action left. A wait for a turn fails `Busy`, or at once under `Page.failFast`.
+  Navigation, input (`click`, `hover`, `drag`, `type`, `press`, `scroll`, `select`), a typed
+  `Action` through `perform`, the caller's own code in the page through `read` and `act`, and
+  `ready`, which waits for the page's own evidence that it is ready to be shown. `state` says what
+  the library already knows of the page, at no call. The text the viewport shows is read with
+  field values masked unless asked for, and secret fields' always.
+- `Snapshot`: the outline a model reads, whose controls carry refs the actions take; the elements a
+  query of role, name, text and context finds, each with its subject; and a wait, in the page,
+  until a query is met.
+- `Frame`: pictures with their timing. Screencast frames, screenshots and crops, each placed on the
+  host clock with an explicit uncertainty, and a page's capture counters.
+- `Change` and `Window`: what visibly changed on a page over a window, element by element, recorded
+  in the page from the first read on; and a page's events, changes and frames over one window of
+  its browser's clock.
+- `Layout`, `Overlay`, `Pose` and `PageTime`, for filming: where picked things and their words are,
+  as data; a layer over the page that draws a caller's SVG and that no reader reads; the page's own
+  elements moved, turned and scaled; and the page's own time, held and stepped.
+- `BrowserEvent`, `BrowserError`, `Action` and `InputStyle`: the events; typed failures, each with
+  a reason, whether its input was dispatched and what it leaves (`consequence`); typed actions,
+  shared by input, guards, event records and walks; and how input is sent, plainly or performed for
+  viewers.
+
+The subpaths:
+
+- `effect-browser/Cdp`: any DevTools endpoint as a `Browser`. On Node it connects through
+  Playwright's `connectOverCDP`; under the `workerd` condition the entry imports no Node transport,
+  and the caller passes a `connect` of its own.
+- `effect-browser/Site`: the readers, the change record, the overlay and poses, for a site to run in
+  its own bundle on its own page, with no protocol and no runtime `effect`.
+- `effect-browser/timeline`: `Moment`, a window that ends at a picture of the page now, with what
+  was still changing at its end and what had settled (`Moment.account`), laid out as one message
+  for any `effect/ai` call (`Moment.toPrompt`); and `Stillness.wait`, for a page's screen, content
+  or foreground to stay still.
+- `effect-browser/presentation`: `Presentation`, input performed for viewers through a view of a
+  page, with one drawn pointer, a person's reaction times and typing near 70 WPM; `Stage`, the
+  source of a live output, switched between pages with their captures overlapping; `Motion`, the
+  pointer planner, a value; and `Film`, a page filmed on its own held time with each input on its
+  frame, which is experimental.
+- `effect-browser/walk`: `Walk`, a page's walk recorded from its events and replayed on a fresh page
+  by subject, with no model call. It never resends consequential input whose effect is unknown.
+- `effect-browser/policy`: `Policy`, judges over `effect/ai` (`reviewer` on a `LanguageModel`,
+  `decider` on a `DecisionModel`) and `make`, a guard that denies a risk the task does not ask for
+  and fails closed when its judge fails.
+- `effect-browser/supervisor`: `Supervisor`, a resource such as a browser kept serving through
+  failed opens, losses and rotation, as generations with scoped `use` work; and `Release`, what a
+  provider said of a release, `Confirmed` or `Unconfirmed`.
+- `effect-browser/ai`: an agent's browser tools for any `effect/ai` loop (`BrowserTools`), the
+  controller they act through (`PageControl`), the tabs they follow (`Tabs`), the failure a tool
+  answers the model with (`ToolError`) and an HTTP client layer that keeps OpenRouter's prompt cache
+  across turns with pictures (`PromptCache`).
+- `effect-browser/testing`: a seeded browser and pages (`TestBrowser`, `TestPage`), scripted models
+  (`TestModel`), recorded HTTP exchanges (`HttpCassette`) and ports released in a scripted order
+  (`Story`).
+
+`bun run boundaries` checks that the root loads only `effect`, that each feature uses only the
+core's public modules and a short list of shared internals, and that the rest still typechecks with
+each feature folder deleted, together with the features that import it.
+
+### `@effect-browser/chromium`
+
+`Chromium.layer` and `Chromium.open` launch a local Chromium through `playwright-core`, as a
+`Browser`. Chromium runs without its sandbox unless given `sandbox: true`, as in Playwright; the
+package's README says what that risks.
+
+### `@effect-browser/browserbase`
+
+- `BrowserbaseClient`: Browserbase's REST API: sessions, Live View, stored contexts, extensions,
+  search and fetch.
+- `Browserbase`: sessions as a `Browser`. Closing a session's scope releases it and confirms that
+  Browserbase reports it ended, `Confirmed`, or says `Unconfirmed` when it could not by the
+  deadline, which can mean the session bills until its timeout. Each create carries a nonce of its
+  own, so a session whose create lost its answer is found and ended. `attach` resumes a running
+  session from another process, its pages found again by their ids, and `generations` supplies
+  sessions to `Supervisor.make`. Pages' screencasts run on a second, read-only connection to the
+  session, so a frame never waits behind a large message on the connection that drives the page.
+- `ContextLease`: one writer per stored context. A session that saves to a context holds it from
+  before its create until its save has settled. A writer that may have left such a session running
+  leaves the context unsettled, and the next writer ends the context's sessions first, failing
+  `ContextHeld` while it cannot confirm they ended. `Browserbase.reconcile` does that without
+  opening a session, and `Browserbase.verifyContext` reads a context back from a session that saves
+  nothing. `ContextLease.layer` excludes writers within one process; an application excludes them
+  across processes with a lease of its own, such as a lock in its database.
+- `BrowserbaseError`: the client's failures.
+- `@effect-browser/browserbase/testing`: `TestBrowserbase`, the API in memory with scripted faults,
+  and `BrowserbaseContract.checks`, what the package relies on Browserbase to do, which the fake
+  passes and `bun run bench contract` runs against Browserbase.
+
+### `@effect-browser/yielded`
+
+`YieldedTools.make` gives `effect-browser/ai`'s tools to a Yielded Agent run. Its layer adds the
+pictures for each turn as run context the run never keeps (`vision` `true`, `"ask"` or `"page"`),
+or, with `vision: "moments"`, places a moment of the tab since the turn before in the thread after
+each turn's tool results (`Moments`), which Yielded compacts with the conversation. It is the only
+package that depends on `@yielded/agent`, and the boundary check holds it so.
+
+### `@effect-browser/human-strokes`
+
+`motion`, a pointer planner over 32,130 recorded human strokes, for a presenter in place of
+`Motion.lognormal`. Its code is MIT and its stroke data CC BY 4.0, with attribution in its README.
+
+### `@effect-browser/tradingview` (private)
+
+A TradingView chart's state, bars, studies and values, and the screen points of times and prices,
+read from the chart's own model (`Chart`); changes made with the chart's own toolbar, keys and
+dialogs, which the chart's API corrects or completes (`ChartInput`); and both as an agent's tools or
+a Code Mode program's methods (`ChartTools`). It is never published; the bench uses it.
+
+### `bench` and `site` (private)
+
+The bench grades agents on seeded tasks over canvas games, live charts, dense quote tables, forms
+and everyday pages, by the page's own truth, in arms that differ in how a model sees and acts. It
+also grades the input policy's judges against a corpus of 77 labelled controls, runs the hosted
+probes and the Browserbase contract, and runs agents on TradingView. Scripted runs are free; model
+and hosted runs are opt-in ([bench/README.md](../bench/README.md)).
+
+The site is the docs, a Foldkit app that deploys to Cloudflare with Alchemy. Each page is also
+served as markdown, with `llms.txt`, `llms-full.txt` and a JSON index. Its two demos are recorded
+takes of an agent that speaks for itself, one on Polymarket and one at a canvas slot in a made-up
+casino, and `bun run dev` serves a local runner that records a take with the visitor's own key and
+spending cap.
+
+## How it is checked
+
+### On every pull request
+
+CI runs `bun run ready`: the format check, lint with its size limits (600 lines of code a module,
+150 a function, falling to 100), the boundary checks, the typecheck, every workspace's tests and
+the build. Then `tools/check-packed.sh` packs the five published packages and installs them in a
+clean npm project and in a Bun workspace with the isolated linker, where every entry point must
+typecheck and load. Tests run against a real local Chromium on pages the tests serve, an in-memory
+Browserbase and scripted models: none calls a model or a hosted browser. Native suites hold reads,
+pictures and opening a browser to their protocol call budgets through a counting proxy.
+
+On `main` at `3708fce`, 26 November 2026, CI passed with 660 tests in `effect-browser`, 72 in
+`@effect-browser/browserbase`, 9 each in `@effect-browser/yielded` and
+`@effect-browser/tradingview`, 8 in `@effect-browser/human-strokes`, 4 in
+`@effect-browser/chromium`, 207 in the bench and 87 in the site, and the packed check's 59 entry
+points.
+
+### On Browserbase
+
+Every check below ran on code from before the unreleased restructure, whose pull requests describe
+it as changing the API's shape and not its behaviour. None has run on it since.
+
+- **25 November 2026, `0cfee5b`:** the film example on one 1280×720 session, open about 47 s and
+  released with its end confirmed, took all 240 frames in 44.0 s with all 11 inputs on their
+  frames, and recorded 25 changes after the contacts, each with its box. It is the only hosted check
+  of filming.
+- **Before `0.3.0-beta.23`, 3 November 2026:** packed archives, in a consumer on Effect 4.1.2, ran a
+  Yielded agent with Claude Haiku 5.5 inside local workerd, against local Chromium and against a
+  Browserbase session. It read a page, followed a link and answered from both pages.
+- **8 October 2026,** three sessions and 3 browser minutes. `verifyContext` read back the cookie and
+  local storage a writer had saved, and a second process attached to a running session by its id,
+  found its page by its target id and changed it. Browserbase refused a malformed context id with
+  a 400, which the fake now does too; a search by user metadata listed a new session within one
+  search of its create; Browserbase cut a timed-out session's connection 4.4 s after its
+  `expiresAt`; and a context's `updatedAt` did not move when a session saved to it. The same day,
+  two captures in one session ran at the frame rate of one, where stopping the first before
+  starting the second left 250 to 295 ms dark; and with another tab reading and uploading, the
+  page on air waited at most 352 ms between frames on the capture connection, against 1,802 ms
+  without it.
+- **Agents on Browserbase:** the bench's paid runs of 6, 23 and 24 October 2026 ran trials in
+  hosted sessions; [bench/README.md](../bench/README.md) has their results.
+
+### With models
+
+The bench's README records each paid model run with its date, model, arms, results and cost: the
+first paired run and the judges' first graded run on 6 October 2026, and the runs of 22 to 24
+October 2026 on programs, pictures and the TradingView demo. In the paid narration run of 8 October
+2026, a model told which of two ticking prices still moved and which had stopped in 18 of 32
+moments without `Moment.account` and in 29 with it. The site's two demos are recorded takes.
+
+## Known not to work, or not yet checked
+
+- **The scoped packages are not on npm.** Their install commands fail until the unreleased release
+  is published. The other packages still peer on `effect-browser` `^0.3.0-beta.23`, which lacks the
+  subpaths they import; the release raises that range.
+- **Not rebuilt from 0.2:** recording to video files, and file uploads into a page.
+- **Hosted checks prepared but not run** ([HOSTED_CHECKS.md](HOSTED_CHECKS.md)): two captures held
+  for five minutes with cued switches (H1), a supervisor's rotation with a persisted context read
+  back in the next session (H2), and a human sign-in through Live View during an input suspension
+  (H3). They wait for verified included Browserbase hours, and H3 for an operator. Local Chromium and
+  the in-memory Browserbase check their mechanisms, not Browserbase's timing, persistence or
+  billing.
+- **`effect-browser/Site`** has run on no real site yet.
+- **Workers:** the `workerd` run above was local. A Cloudflare-hosted Playwright connector has not
+  been checked.
+- **Stored contexts:** Browserbase does not tell when a session's save has landed, since a context's
+  `updatedAt` does not move, so a writer's hold ends a fixed `contextSettle` after the session
+  ends.
+- **TradingView:** recorded chart walks do not replay, because a click on the chart's unnamed time
+  axis records a subject that replay cannot find. tradingview.com refuses drawings and indicator
+  search when signed out, and the package is checked live only on the Advanced Charts demo.
+- **The docs site's captured outputs** are from runs before the restructure: get-started's agent
+  run is from 11 October 2026, on the earlier release-candidate archive and Effect 4.0.0.
+  Recapturing it takes a paid model call, and the install commands the scoped release.
+- **Timing tests under load:** some of `effect-browser`'s and the bench's timing tests fail on a
+  loaded machine and pass alone. On `main` CI, `Budget.test.ts`'s browser-opening call count, a
+  `Ready.test.ts` foreground-motion case and the bench's tumble-interval grading each failed once on
+  26 November 2026, and passed on the next run.
