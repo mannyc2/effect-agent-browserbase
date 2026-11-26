@@ -61,7 +61,8 @@ export const pages: ReadonlyArray<Page> = [
   {
     slug: "agent-tools",
     title: "Agent tools",
-    summary: "effect-agent-browser: issued pages as Yielded Agent's browser ports and tools.",
+    summary:
+      "effect-browser/ai: an agent's browser tools in any effect/ai loop, and @effect-browser/yielded for Yielded Agent.",
     section: "Guides",
   },
   {

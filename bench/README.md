@@ -69,7 +69,8 @@ to cover its paying cascades, rather than asking the model to count transitions 
 pictures, and its capture is incomplete if two consecutive frames are 1,800 ms (one cascade) or
 more apart. The jump task's first frame must precede the jump, and its control's frames must all
 precede any jump. Half the chart seeds drift up and half down, so a constant trend answer cannot
-pass. Operate tasks run a Yielded agent with `effect-agent-browser`'s tools: in the default arm, it
+pass. Operate tasks run a Yielded agent with `effect-browser/ai`'s tools, through
+`@effect-browser/yielded`: in the default arm, it
 sees a screenshot before each turn and reads the outline with `observe` and after each `act`;
 `zoom` adds requested viewport crops before the next turn, and pixel clicks name the element under
 the requested point. Runs without a model still use the free
@@ -207,7 +208,7 @@ still apply before any recorded provider request, and each recorded call is sett
 its receipt shows, so the cap bounds a trial's spend rather than its calls. Recordings remain private local evidence.
 `bun run --cwd bench bench regrade path/to/recording.json` re-runs the current task grader using
 that saved truth, with no browser or model; a changed task prompt is refused. The public
-`effect-agent-browser/testing` HTTP cassette can replay the saved `http` exchanges beneath the
+`effect-browser/testing` HTTP cassette can replay the saved `http` exchanges beneath the
 same provider layer. Changed request bodies or tool schemas fail with re-record guidance.
 These codec checks do not claim deterministic replay of a live page's changing screenshots.
 

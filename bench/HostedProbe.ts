@@ -54,7 +54,7 @@ export const prepare = Effect.fnUntraced(function* (kind: "h1" | "h3", allowance
   const directory = path.join(import.meta.dirname, "..", ".work", kind, runId);
   const versions: Record<string, string> = {};
 
-  for (const name of ["browser", "browserbase", "agent-browser", "human-strokes"]) {
+  for (const name of ["browser", "browserbase", "yielded", "human-strokes"]) {
     const manifest = yield* fs
       .readFileString(path.join(import.meta.dirname, "..", "packages", name, "package.json"))
       .pipe(

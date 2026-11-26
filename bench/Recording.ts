@@ -2,8 +2,8 @@
 // and the moments shown to a model, on the browser's one host clock, with the trial's outcome.
 // This module has no Node imports, so a player in a web page can decode the same schema.
 import { Schema } from "effect";
-import { HttpCassette } from "effect-agent-browser/testing";
 import { RecordedEvent } from "effect-browser/BrowserEvent";
+import { HttpCassette } from "effect-browser/testing";
 // By module path, not the timeline barrel, whose Stillness loads Node-only code.
 import * as Moment from "effect-browser/timeline/Moment";
 

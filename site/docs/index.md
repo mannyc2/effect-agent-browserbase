@@ -1,16 +1,16 @@
 # effect-browser
 
-effect-browser is browser automation for [Effect](https://effect.website) agents, built for runs people watch. It owns the browser: pages, a compact outline a model can act on, screencast frames, a record of what visibly changed, and **moments**, an account in pictures and words of what a page showed over a window of time. Agents run on [Yielded Agent](https://github.com/yielded-dev/agent), and Browserbase sessions plug in as the same `Browser`.
+effect-browser is browser automation for [Effect](https://effect.website) agents, built for runs people watch. It owns the browser: pages, a compact outline a model can act on, screencast frames, a record of what visibly changed, and **moments**, an account in pictures and words of what a page showed over a window of time. Its agent tools run in any `effect/ai` loop or a [Yielded Agent](https://github.com/yielded-dev/agent) run, and Browserbase sessions plug in as the same `Browser`.
 
 ## What's in the box
 
-| Package                         | What it is                                                                 |
-| ------------------------------- | -------------------------------------------------------------------------- |
-| `effect-browser`                | The browser, its pages, frames, events, moments and films, over Playwright |
-| `@effect-browser/chromium`      | A local Chromium as a `Browser`, launched through Playwright               |
-| `effect-agent-browser`          | Its pages as Yielded Agent's browser ports, with the agent's tools         |
-| `@effect-browser/browserbase`   | Browserbase sessions as a `Browser`, and a client for its REST API         |
-| `@effect-browser/human-strokes` | Optional recorded pointer motion, as a presenter's planner                 |
+| Package                         | What it is                                                             |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| `effect-browser`                | The browser, its pages, frames, events, moments, films and agent tools |
+| `@effect-browser/chromium`      | A local Chromium as a `Browser`, launched through Playwright           |
+| `@effect-browser/browserbase`   | Browserbase sessions as a `Browser`, and a client for its REST API     |
+| `@effect-browser/yielded`       | `effect-browser/ai`'s tools for a Yielded agent's run                  |
+| `@effect-browser/human-strokes` | Optional recorded pointer motion, as a presenter's planner             |
 
 ## The demo
 
