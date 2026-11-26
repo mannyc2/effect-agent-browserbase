@@ -247,6 +247,8 @@ moments without `Moment.account` and in 29 with it. The site's two demos are rec
   Recapturing it takes a paid model call, and the install commands the scoped release.
 - **Timing tests under load:** some of `effect-browser`'s and the bench's timing tests fail on a
   loaded machine and pass alone. On `main` CI, `Budget.test.ts`'s browser-opening call count, a
-  `Ready.test.ts` foreground-motion case, the bench's tumble-interval grading and its watched-order
-  case for a queued reveal, which gives the queued call a fixed 30 ms, each failed once on 26
-  November 2026, and passed on the next run.
+  `Ready.test.ts` foreground-motion case and the bench's watched-order case for a queued reveal,
+  which gives the queued call a fixed 30 ms, each failed once on 26 November 2026, and passed on
+  the next run. The bench's tumble-interval grading failed more often for a reason of its own: a
+  moment read on a loaded host ends with a fresh screenshot, which the test did not accept. It now
+  does, and a second case takes that path every run.
