@@ -11,13 +11,13 @@ with agents on Yielded Agent, the renamed Effect Agent:
 - `effect-browser`: the `Browser` service with Chromium and CDP providers; `Page`, `Snapshot`,
   `Frame`, `BrowserEvent` and `BrowserError`; `Moment`. It has no agent code.
 - `effect-browserbase`: the Browserbase REST client, and sessions as a `Browser`. Stored contexts
-  and uploaded extensions are managed through the client. A persisting `open` holds its context
-  through a `ContextLease` from before its create until its save settles: `ContextLease.layer`
+  and uploaded extensions are managed through the client. A persisting `make` holds its context
+  through a `ContextLease` from before its create until its save settles: the default lease
   excludes writers in the process, and an application provides its own, such as an advisory lock
   in its database, to exclude them across processes. A release confirms the session ended and says
   so, `Settled` or `Unconfirmed`. An unconfirmed release, a create whose answer was lost, or a
   session kept past its scope leaves the context unsettled, through the lease: the next writer
-  ends the context's sessions, which `open` labels in their user metadata, before it writes, and
+  ends the context's sessions, which `make` labels in their user metadata, before it writes, and
   fails `ContextHeld` while they cannot be confirmed ended, so no context is held with no way out
   and no two sessions write to one. `Browserbase.reconcile` does the same without opening a
   session, and `Browserbase.verifyContext` reads a context back, as a login, from a session that

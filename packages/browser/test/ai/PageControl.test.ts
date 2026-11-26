@@ -40,7 +40,7 @@ const outcome = (page: Page.Page) =>
 
 /** A browser of its own whose every input goes to the guard. */
 const guarded = (guard: (request: Page.InputRequest) => Effect.Effect<void, PolicyDenied>) =>
-  Chromium.open({ guard });
+  Chromium.make({ guard });
 
 /** A browser whose pages count each time something brings them to front. */
 const watched = (browser: Browser["Service"]) => {

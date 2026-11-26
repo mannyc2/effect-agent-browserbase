@@ -65,7 +65,7 @@ page scripts.
 
 ## Runtime CDP connectors
 
-`Cdp.open` and `Cdp.layer` accept `connect: Cdp.Connector`, a callback receiving the endpoint and
+`Cdp.make` and `Cdp.layer` accept `connect: Cdp.Connector`, a callback receiving the endpoint and
 `{ timeout, headers, signal }` and returning a real Playwright CDP `Browser`. Node uses
 `playwright-core`'s `chromium.connectOverCDP` by default. A consumer can supply a connector using
 its runtime's WebSocket implementation to avoid Playwright's Node WebSocket transport.
@@ -131,7 +131,9 @@ const nativeConnect: Cdp.Connector = async (endpoint, { timeout, headers, signal
 };
 ```
 
-Pass `nativeConnect` as `connect` to `Cdp.open` or `Cdp.layer`, or to the Browserbase options.
+Pass `nativeConnect` as `connect` to `Cdp.make` or `Cdp.layer`, or to the Browserbase options.
+`Cdp.layerConfig` takes the same options as `Config` values, such as
+`{ endpoint: Config.Redacted("CDP_ENDPOINT") }` for an endpoint that is a credential.
 
 The `workerd` export condition selects a CDP entry without the Node transport. It requires
 `connect`; omitting it fails with `BrowserError` reason `InvalidRequest`. The root entry loads only
@@ -602,7 +604,7 @@ cancellation; a wrapper's timeout cannot surrender their authority.
 
 ```ts
 import { Effect, Stream } from "effect";
-import { Browser } from "effect-browser/Browser";
+import * as Browser from "effect-browser/Browser";
 import type { Frame } from "effect-browser/Frame";
 import { Presentation, Stage } from "effect-browser/presentation";
 
@@ -611,7 +613,7 @@ declare const encode: (frame: Frame) => Effect.Effect<void>; // the application'
 const program = Effect.gen(function* () {
   const stage = yield* Stage.make({ quality: 80 });
   const presenter = yield* Presentation.make();
-  const page = yield* (yield* Browser).newPage("https://example.com");
+  const page = yield* Browser.newPage("https://example.com");
   yield* stage.frames.pipe(Stream.runForEach(encode), Effect.forkScoped);
   const shown = yield* stage.present(page); // Presented { page, at, latency }
   yield* presenter.view(page).click("e12"); // glides, then clicks, as a person would
@@ -821,6 +823,7 @@ A page's `id` is its CDP target id. A new connection to the same browser, as aft
 finds each page under the id it had, with `browser.page(id)`; a stored id the browser no longer
 finds is a page that closed. `browser.pages` lists the open pages in the order the browser began
 tracking them, and `browser.firstPage` gives the first, opening one when there is none.
+`Browser.newPage(url)` opens a page in the context's browser, as `browser.newPage(url)` does.
 
 A page's life is told on the browser's timeline. `PageOpened`; `Navigated` for every move of its
 main frame, `sameDocument` for one within the document, such as `pushState`, with `document`
@@ -1075,7 +1078,7 @@ const program = Effect.gen(function* () {
   const sessions = yield* Supervisor.make({
     open: () =>
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
 
         return { value: browser, lost: browser.disconnected };
       }),
@@ -1304,7 +1307,7 @@ page's script (`Page.evaluate`) and its registration (`Page.register`). Each pag
 `bytesOut` and `bytesIn` (their parameters and results as JSON) and `waitedMillis`, how long at
 least one call awaited its reply. An operation inside another counts toward both. Calls Playwright
 makes on its own sessions, such as navigation, are not counted. `Chromium.launch`, `Cdp.connect` and
-`Browser.newPage` cover opening a browser; `Browserbase.open` records its session's id and region,
+`Browser.newPage` cover opening a browser; `Browserbase.make` records its session's id and region,
 `Browserbase.release` a release and its outcome, and `Browserbase.holdContext` the wait for a
 stored context another session writes to. `Page.calibrateClock` maps the browser's clock onto the
 host's with three probes, each a `Page.evaluate` of `clock`, and records the fastest answered

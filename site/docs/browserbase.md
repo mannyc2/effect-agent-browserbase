@@ -6,11 +6,10 @@ The program from [Get started](/docs/get-started), on a Browserbase session inst
 
 :::Example
 ```ts
-import { Browserbase, BrowserbaseClient, ContextLease } from "@effect-browser/browserbase";
+import { Browserbase, BrowserbaseClient } from "@effect-browser/browserbase";
 
 const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
   Layer.provide(BrowserbaseClient.layerConfig()), // reads BROWSERBASE_API_KEY
-  Layer.provide(ContextLease.layer), // one writer per stored context in this process
   Layer.provide(FetchHttpClient.layer),
 );
 
@@ -48,4 +47,4 @@ A hosted page's screencast runs on a second connection to the session, so frames
 
 ## Stored contexts
 
-Stored contexts keep logins and cookies between sessions. `ContextLease` decides who may write one: `ContextLease.layer` allows one writer at a time in this process, and an application whose processes share contexts provides its own, such as an advisory lock in its database.
+Stored contexts keep logins and cookies between sessions. `ContextLease` decides who may write one: by default one writer at a time in this process, and an application whose processes share contexts provides its own, such as an advisory lock in its database.

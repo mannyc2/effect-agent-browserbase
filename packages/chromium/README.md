@@ -14,10 +14,10 @@ import * as Chromium from "@effect-browser/chromium/Chromium";
 const browser = Chromium.layer({ viewport: { width: 1280, height: 720 } });
 ```
 
-`Chromium.open` and `Chromium.layer` take `effect-browser`'s `Browser.Options` and the launch's own:
+`Chromium.make` and `Chromium.layer` take `effect-browser`'s `Browser.Options` and the launch's own:
 `headless` (default true), `sandbox`, `viewport`, `deviceScaleFactor`, `executablePath`, `args`,
 `userAgent` and `locale`. It uses the Chromium build that `playwright-core` installs unless
-`executablePath` names another.
+`executablePath` names another. `Chromium.layerConfig` takes the same options as `Config` values.
 
 `Chromium.layer` launches that Chromium without its sandbox, as Playwright does, so an exploit in a
 page's renderer runs with your user's privileges. `Chromium.layer({ sandbox: true })` runs it

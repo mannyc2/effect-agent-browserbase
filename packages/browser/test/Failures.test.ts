@@ -53,7 +53,7 @@ it.live("a connect timeout reports the bound the caller gave", () =>
       const port = yield* silentPort;
 
       const error = yield* Effect.flip(
-        Cdp.open({ endpoint: `http://127.0.0.1:${port}`, connectTimeoutMillis: 700 }),
+        Cdp.make({ endpoint: `http://127.0.0.1:${port}`, connectTimeoutMillis: 700 }),
       );
 
       assert.deepStrictEqual(
@@ -67,7 +67,7 @@ it.live("a connect timeout reports the bound the caller gave", () =>
 it.live("a screenshot timeout reports the action timeout", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
-      const browser = yield* Chromium.open({ actionTimeout: "1 second" });
+      const browser = yield* Chromium.make({ actionTimeout: "1 second" });
       const page = yield* browser.newPage("data:text/html,<h1>Busy</h1>");
 
       // A renderer stuck in script cannot produce the frame a screenshot waits for.
@@ -105,7 +105,7 @@ it.live("a failed connect never repeats the endpoint's credential", () =>
         [`wss//${host}/?signingKey=${secret}`, "Invalid URL"],
       ] as const) {
         const error = yield* Effect.flip(
-          Cdp.open({ endpoint: Redacted.make(endpoint), connectTimeoutMillis: 5000 }),
+          Cdp.make({ endpoint: Redacted.make(endpoint), connectTimeoutMillis: 5000 }),
         );
 
         for (const shown of [

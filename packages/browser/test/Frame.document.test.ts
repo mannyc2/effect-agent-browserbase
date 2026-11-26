@@ -12,7 +12,7 @@ import * as TestCdp from "./support/TestCdp.ts";
 it.live("a cached frame from the prior document cannot win on its clock stamp", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
-      const host = yield* Chromium.open();
+      const host = yield* Chromium.make();
       const context = TestCdp.nativeContext(host);
       const faults = yield* TestCdp.make();
 

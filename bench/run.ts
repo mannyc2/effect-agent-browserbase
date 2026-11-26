@@ -3,7 +3,6 @@
 // accounting; only the admission budget is shared.
 import * as Browserbase from "@effect-browser/browserbase/Browserbase";
 import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
-import * as ContextLease from "@effect-browser/browserbase/ContextLease";
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import {
@@ -61,8 +60,7 @@ export const hostedSessionSeconds = 30 * 60;
 
 /**
  * Each hosted trial's browser: a new 1280×720 session that ends at least by its own timeout, with
- * `userMetadata` for Browserbase to show with it. It saves to no stored context, so each trial can
- * have a lease of its own.
+ * `userMetadata` for Browserbase to show with it. It saves to no stored context.
  */
 export const hostedBrowser = (userMetadata?: Readonly<Record<string, string>>) =>
   Fixtures.layer((requests) =>
@@ -74,7 +72,7 @@ export const hostedBrowser = (userMetadata?: Readonly<Record<string, string>>) =
         browserSettings: { viewport: { width: 1280, height: 720 } },
         userMetadata,
       },
-    }).pipe(Layer.provide(ContextLease.layer)),
+    }),
   );
 
 /** A failure as the bench may print or record it: provider errors can embed URLs or ids. */

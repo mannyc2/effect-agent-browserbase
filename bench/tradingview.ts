@@ -7,7 +7,6 @@
 // were taken.
 import * as Browserbase from "@effect-browser/browserbase/Browserbase";
 import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
-import * as ContextLease from "@effect-browser/browserbase/ContextLease";
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import {
   Cause,
@@ -326,7 +325,6 @@ export const command = Command.make(
               userMetadata: metadata,
             },
           }).pipe(
-            Layer.provide(ContextLease.layer),
             Layer.provide(
               BrowserbaseClient.layerConfig().pipe(Layer.provide(FetchHttpClient.layer)),
             ),

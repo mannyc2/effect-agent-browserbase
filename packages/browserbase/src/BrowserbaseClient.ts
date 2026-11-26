@@ -147,7 +147,7 @@ export interface SessionOptions {
 export interface BrowserSettings {
   /**
    * Load a stored context. With `persist`, Browserbase saves the session's changes back to it once
-   * the session ends; `Browserbase.open` lets one such session at a time write to each context.
+   * the session ends; `Browserbase.make` lets one such session at a time write to each context.
    */
   readonly context?: { readonly id: string; readonly persist?: boolean | undefined } | undefined;
   readonly viewport?: { readonly width: number; readonly height: number } | undefined;
@@ -335,7 +335,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
             ),
       ),
       // The deadline also applies inside a caller's uninterruptible acquisition, such as the
-      // session create in Browserbase.open, so that acquisition always settles.
+      // session create in Browserbase.make, so that acquisition always settles.
       Effect.timeoutOrElse({
         duration: requestTimeout,
         orElse: () =>
