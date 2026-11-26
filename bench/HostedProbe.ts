@@ -2,7 +2,6 @@
 import * as Browserbase from "@effect-browser/browserbase/Browserbase";
 import * as Client from "@effect-browser/browserbase/BrowserbaseClient";
 import { BrowserbaseError, InvalidRequest } from "@effect-browser/browserbase/BrowserbaseError";
-import * as ContextLease from "@effect-browser/browserbase/ContextLease";
 import { Cause, Clock, Console, Effect, Exit, FileSystem, Layer, Path, Schema } from "effect";
 import { BrowserError } from "effect-browser/BrowserError";
 import { Digest, SecureRandom } from "effect/crypto";
@@ -55,7 +54,7 @@ export const prepare = Effect.fnUntraced(function* (kind: "h1" | "h3", allowance
   const directory = path.join(import.meta.dirname, "..", ".work", kind, runId);
   const versions: Record<string, string> = {};
 
-  for (const name of ["browser", "browserbase", "agent-browser", "human-strokes"]) {
+  for (const name of ["browser", "browserbase", "yielded", "human-strokes"]) {
     const manifest = yield* fs
       .readFileString(path.join(import.meta.dirname, "..", "packages", name, "package.json"))
       .pipe(
@@ -143,7 +142,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
 
   yield* Effect.scoped(
     Effect.gen(function* () {
-      const hosted = yield* Browserbase.open({
+      const hosted = yield* Browserbase.make({
         requests: fixtures.policy,
         session: {
           timeout: seconds,
@@ -205,7 +204,4 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
     );
 });
 
-export const provider = Layer.mergeAll(
-  Client.layerConfig().pipe(Layer.provide(FetchHttpClient.layer)),
-  ContextLease.layer,
-);
+export const provider = Client.layerConfig().pipe(Layer.provide(FetchHttpClient.layer));

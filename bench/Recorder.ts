@@ -11,10 +11,10 @@ import {
   Stream,
   type Tracer,
 } from "effect";
-import { type HttpCassette } from "effect-agent-browser/testing";
 import { Browser } from "effect-browser/Browser";
 import type { RecordedEvent } from "effect-browser/BrowserEvent";
 import * as Frame from "effect-browser/Frame";
+import { type HttpCassette } from "effect-browser/testing";
 
 import { BenchError } from "./Budget.ts";
 import {

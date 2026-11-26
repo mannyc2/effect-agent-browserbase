@@ -6,12 +6,14 @@ import { type Prompt } from "effect/ai";
 
 import { Browser } from "../src/Browser.ts";
 import { Action, Subject } from "../src/BrowserEvent.ts";
-import { Change, Changes } from "../src/Change.ts";
+import * as Change from "../src/Change.ts";
 import * as Frame from "../src/Frame.ts";
 import { fold, type Folded } from "../src/internal/timeline/fold.inpage.ts";
 import { type Bounds, history } from "../src/internal/timeline/history.inpage.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as Moment from "../src/timeline/Moment.ts";
+import * as Window from "../src/Window.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -219,7 +221,7 @@ describe("a moment's account", () => {
     });
 
   const appeared = (after: string, at: number, cause?: number) =>
-    new Change({
+    new Change.Change({
       kind: "appeared",
       subject: new Subject({ role: null, name: "", tag: "li", context: {} }),
       startedAt: at,
@@ -229,10 +231,10 @@ describe("a moment's account", () => {
       cause,
     });
 
-  const recorded = (from: number, changes: ReadonlyArray<Change>) =>
-    new Changes({ document: 0, from, until: 10_000, cursor: 0, dropped: 0, changes });
+  const recorded = (from: number, changes: ReadonlyArray<Change.Change>) =>
+    new Change.Changes({ document: 0, from, until: 10_000, cursor: 0, dropped: 0, changes });
 
-  const moment = (events: ReadonlyArray<Action>, changes?: Changes) =>
+  const moment = (events: ReadonlyArray<Action>, changes?: Change.Changes) =>
     textOf(
       Moment.toPrompt(
         new Moment.Moment({
@@ -289,7 +291,7 @@ describe("a moment's account", () => {
     ({ told }) => {
       const changes = told.map(
         ({ count, earlier, startedAt, lasted }, index) =>
-          new Change({
+          new Change.Change({
             kind: "text",
             subject: new Subject({ role: null, name: "", tag: "span", context: {} }),
             startedAt,
@@ -307,7 +309,7 @@ describe("a moment's account", () => {
         until: 10_000,
         frames: [],
         events: [],
-        changes: new Changes({
+        changes: new Change.Changes({
           document: 0,
           from: 0,
           until: 10_000,
@@ -357,15 +359,13 @@ const run = (page: Page, script: () => void) =>
 
 /** The ref of the one button `name` names. */
 const button = (page: Page, name: string) =>
-  page
-    .find({ role: "button", name })
-    .pipe(
-      Effect.flatMap(([found]) =>
-        found === undefined ? Effect.die(`no button ${name}`) : Effect.succeed(found.ref),
-      ),
-    );
+  Snapshot.find(page, { role: "button", name }).pipe(
+    Effect.flatMap(([found]) =>
+      found === undefined ? Effect.die(`no button ${name}`) : Effect.succeed(found.ref),
+    ),
+  );
 
-const told = (changes: Changes) =>
+const told = (changes: Change.Changes) =>
   changes.changes.map((change) => [change.kind, change.before, change.after]);
 
 layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
@@ -376,7 +376,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* start("/desk");
-        const first = yield* page.changes();
+        const first = yield* Change.read(page);
 
         yield* run(page, () => {
           const toast = document.createElement("div");
@@ -385,16 +385,16 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           document.querySelector("#alerts")?.append(toast);
         });
         yield* Effect.sleep(Duration.millis(300));
-        const shown = yield* page.changes({ since: first });
+        const shown = yield* Change.read(page, { since: first });
 
         yield* run(page, () => document.querySelector("#alerts div")?.remove());
         yield* Effect.sleep(Duration.millis(300));
-        const gone = yield* page.changes({ since: shown });
+        const gone = yield* Change.read(page, { since: shown });
 
         assert.deepStrictEqual(told(shown), [["appeared", undefined, "Order placed"]]);
         assert.deepStrictEqual(told(gone), [["disappeared", "Order placed", undefined]]);
         // Over both windows it came and went.
-        assert.deepStrictEqual(told(yield* page.changes({ since: first })), [
+        assert.deepStrictEqual(told(yield* Change.read(page, { since: first })), [
           ["brief", undefined, "Order placed"],
         ]);
       }),
@@ -405,7 +405,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* start("/desk");
-        const first = yield* page.changes();
+        const first = yield* Change.read(page);
 
         // The alert a class hid since the page loaded, a line an inline style hid, text below the
         // fold, and text no one can see.
@@ -427,11 +427,11 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           if (below !== null) below.textContent = "Changed below";
         });
         yield* Effect.sleep(Duration.millis(300));
-        const shown = yield* page.changes({ since: first });
+        const shown = yield* Change.read(page, { since: first });
 
         yield* run(page, () => document.querySelector("#notice")?.classList.add("closed"));
         yield* Effect.sleep(Duration.millis(300));
-        const hidden = yield* page.changes({ since: shown });
+        const hidden = yield* Change.read(page, { since: shown });
 
         assert.sameDeepMembers(told(shown), [
           ["appeared", undefined, "Market closes early today"],
@@ -456,7 +456,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             Stream.runDrain,
             Effect.forkScoped,
           );
-          yield* page.changes();
+          yield* Change.read(page);
           yield* run(page, () => {
             const prices = [61_240, 61_310, 61_190, 61_450, 61_380];
             let tick = 0;
@@ -470,7 +470,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           });
           yield* Effect.sleep(Duration.millis(700));
           yield* page.click(yield* button(page, "Place order"));
-          yield* page.until({ text: "Order placed" }, "some", 5000);
+          yield* Snapshot.until(page, { text: "Order placed" }, "some", 5000);
           yield* Effect.sleep(Duration.millis(200));
           const moment = yield* Moment.capture(page, { since: Duration.seconds(2) });
           const changes = moment.changes?.changes ?? [];
@@ -496,7 +496,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* start("/desk");
-        const first = yield* page.changes();
+        const first = yield* Change.read(page);
 
         // News first, then more elements at once than the record keeps.
         yield* run(page, () => {
@@ -510,7 +510,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           ),
         );
         yield* Effect.sleep(Duration.millis(300));
-        const burst = yield* page.changes({ since: first });
+        const burst = yield* Change.read(page, { since: first });
 
         assert.isAtLeast(burst.dropped, 300 - 255);
         assert.isAbove(burst.from, first.until);
@@ -542,16 +542,16 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           );
         });
 
-        yield* page.changes();
+        yield* Change.read(page);
         // A line follows a click on a page that ticked a second before.
         yield* tick;
         yield* Effect.sleep(Duration.millis(1000));
-        const ticked = yield* page.changes();
+        const ticked = yield* Change.read(page);
 
         yield* line;
         yield* page.click(menu);
         yield* Effect.sleep(Duration.millis(2500));
-        const busy = yield* page.changes({ since: ticked });
+        const busy = yield* Change.read(page, { since: ticked });
 
         // On a page still for two seconds, a slow ticker ticks just after a click, and the feed
         // adds a line again.
@@ -559,7 +559,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         yield* page.click(menu);
         yield* tick;
         yield* Effect.sleep(Duration.millis(400));
-        const still = yield* page.changes({ since: busy });
+        const still = yield* Change.read(page, { since: busy });
 
         assert.deepStrictEqual(told(busy), [["appeared", undefined, "gg wp"]]);
         assert.sameDeepMembers(told(still), [
@@ -584,7 +584,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         TestCdp.withCdp(
           Effect.gen(function* () {
             const faults = yield* TestCdp.make();
-            const browser = yield* faults.provide(Chromium.open());
+            const browser = yield* faults.provide(Chromium.make());
             const page = yield* browser.newPage((yield* Site).url("/desk"));
 
             yield* page.bringToFront;
@@ -607,12 +607,12 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
                 { _tag: "Delay", duration: "400 millis" },
               );
             // Keep the source cursor: a host bound includes the calibration estimate's uncertainty.
-            const from = yield* page.window({ since: Duration.zero });
+            const from = yield* Window.read(page, { since: Duration.zero });
 
             // A slow clock probe can put mapped mutations ahead of the host's present. Keep the
             // next input's stamp after the preceding read, so it cannot claim that earlier change.
             const separate = Effect.gen(function* () {
-              const { until } = yield* page.changes();
+              const { until } = yield* Change.read(page);
               let now = yield* browser.now;
 
               while (now <= until) {
@@ -624,11 +624,12 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             yield* page.click(yield* button(page, "Menu"));
             yield* separate;
             yield* page.click(
-              (yield* page.find({ role: "menuitem", name: "Share" }))[0]?.ref ?? "no menu",
+              (yield* Snapshot.find(page, { role: "menuitem", name: "Share" }))[0]?.ref ??
+                "no menu",
             );
             yield* separate;
             yield* page.click(yield* button(page, "Place order"));
-            yield* page.until({ text: "Order placed" }, "some", 5000);
+            yield* Snapshot.until(page, { text: "Order placed" }, "some", 5000);
             yield* Effect.sleep(Duration.millis(100));
             const moment = yield* Moment.capture(page, { since: from });
             const changes = moment.changes?.changes ?? [];
@@ -650,7 +651,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* start("/desk");
-        const field = (name: string) => page.find({ role: "textbox", name });
+        const field = (name: string) => Snapshot.find(page, { role: "textbox", name });
         const amount = (yield* field("Amount"))[0]?.ref ?? "";
         const memo = (yield* field("Memo"))[0]?.ref ?? "";
         const pin = (yield* field("PIN"))[0]?.ref ?? "";
@@ -659,7 +660,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           Stream.runDrain,
           Effect.forkScoped,
         );
-        const first = yield* page.changes();
+        const first = yield* Change.read(page);
 
         yield* page.type("25", { into: amount });
         yield* page.type("sell at 70k", { into: memo });
@@ -672,23 +673,23 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         });
         yield* Effect.sleep(Duration.millis(300));
 
-        const typed = (changes: Changes) =>
+        const typed = (changes: Change.Changes) =>
           changes.changes.flatMap((change) => (change.kind === "value" ? [change.after] : []));
 
-        const masked = yield* page.changes({ since: first });
+        const masked = yield* Change.read(page, { since: first });
 
         // What was typed shows only as a field's value, masked, in an editable region too, and a
         // secret field's stays masked when unmasked.
         assert.deepStrictEqual(typed(masked), ["••••", "••••", "••••"]);
         assert.notInclude(JSON.stringify(masked), "sell");
-        assert.deepStrictEqual(typed(yield* page.changes({ since: first, unmask: true })), [
+        assert.deepStrictEqual(typed(yield* Change.read(page, { since: first, unmask: true })), [
           "25",
           "sell at 70k",
           "••••",
         ]);
         // A window that ends at the frame holds nothing painted after it.
         assert.isFalse(
-          (yield* page.changes({ since: first, until: frame })).changes.some(
+          (yield* Change.read(page, { since: first, until: frame })).changes.some(
             (change) => change.after === "$70,000",
           ),
         );
@@ -702,7 +703,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       TestCdp.withCdp(
         Effect.gen(function* () {
           const page = yield* start("/desk");
-          const reads = [yield* page.changes()];
+          const reads = [yield* Change.read(page)];
 
           for (const price of ["$1", "$2", "$3", "$4"]) {
             yield* Effect.promise(() =>
@@ -711,7 +712,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
               }, price),
             );
             yield* Effect.sleep(Duration.millis(50));
-            reads.push(yield* page.changes({ since: reads.at(-1) }));
+            reads.push(yield* Change.read(page, { since: reads.at(-1) }));
           }
           // Four windows, each holding its one change, each starting where the last ended.
           assert.deepStrictEqual(reads.slice(1).map(told), [
@@ -727,7 +728,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             document.querySelector("#answer")!.textContent = "Order placed";
           });
           yield* Effect.sleep(Duration.millis(300));
-          const next = yield* page.changes();
+          const next = yield* Change.read(page);
 
           assert.strictEqual(next.document, reads[0]!.document + 1);
           assert.deepStrictEqual(told(next), [["appeared", undefined, "Order placed"]]);

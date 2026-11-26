@@ -1,7 +1,7 @@
 /** A consumer of the shipped public entry points, executed after a second bundler transforms it. */
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { Effect, Result } from "effect";
-import { Browser } from "effect-browser";
+import { Browser, PageTime, Change, Text, Snapshot } from "effect-browser";
 import { Subject } from "effect-browser/BrowserEvent";
 import { TestPage } from "effect-browser/testing";
 import { Stillness } from "effect-browser/timeline";
@@ -27,7 +27,7 @@ export const run = () =>
         ],
       });
 
-      const seededRef = (yield* seeded.page.find({ name: " save " }))[0]?.ref ?? "";
+      const seededRef = (yield* Snapshot.find(seeded.page, { name: " save " }))[0]?.ref ?? "";
 
       yield* seeded.page.perform({ _tag: "Click", target: seededRef });
 
@@ -37,13 +37,14 @@ export const run = () =>
 
       const browser = yield* Browser.Browser;
       const page = yield* browser.newPage(form);
-      const snapshot = yield* page.snapshot();
-      const buttons = yield* page.find({ role: "button", name: "Save" });
-      const text = yield* page.text();
-      const blocked = (yield* page.find({ name: "Blocked" }))[0];
+      const snapshot = yield* Snapshot.read(page);
+      const buttons = yield* Snapshot.find(page, { role: "button", name: "Save" });
+      const text = yield* Text.read(page);
+      const blocked = (yield* Snapshot.find(page, { name: "Blocked" }))[0];
       const blockedInput = yield* page.click(blocked?.ref ?? "").pipe(Effect.result);
 
-      const disabledWait = yield* page.until(
+      const disabledWait = yield* Snapshot.until(
+        page,
         { selector: "fieldset > button", state: "enabled" },
         "some",
         20,
@@ -52,21 +53,24 @@ export const run = () =>
       const note = snapshot.controls.find(({ name }) => name === "Note")?.ref ?? "";
       const choice = snapshot.controls.find(({ name }) => name === "Choice")?.ref ?? "";
 
-      yield* page.changes();
+      yield* Change.read(page);
       yield* page.type("bundled", { into: note });
       yield* page.select(choice, ["B"]);
-      const changes = yield* page.changes();
-      const typed = yield* page.text({ unmask: true });
-      const point = (yield* page.find({ name: "Note" }))[0]?.box;
+      const changes = yield* Change.read(page);
+      const typed = yield* Text.read(page, { unmask: true });
+      const point = (yield* Snapshot.find(page, { name: "Note" }))[0]?.box;
 
       if (point !== undefined)
         yield* page.click({ x: point.x + point.width / 2, y: point.y + point.height / 2 });
       yield* page.perform({ _tag: "Click", target: buttons[0]?.ref ?? "" });
-      const outcome = (yield* page.until({ text: "Saved" }, "some", 1000)).met ? "Done" : "NotDone";
 
-      yield* page.until({ selector: "#status", text: "Saved" }, "some", 1000);
+      const outcome = (yield* Snapshot.until(page, { text: "Saved" }, "some", 1000)).met
+        ? "Done"
+        : "NotDone";
+
+      yield* Snapshot.until(page, { selector: "#status", text: "Saved" }, "some", 1000);
       yield* Stillness.wait(page, { still: "foreground", quietMillis: 100, timeout: "5 seconds" });
-      const saved = yield* page.text();
+      const saved = yield* Text.read(page);
 
       yield* page.goto(
         `data:text/html,${encodeURIComponent(`<title>Moving pixels</title>
@@ -86,7 +90,7 @@ setInterval(() => { green = !green; context.fillStyle = green ? 'rgb(0,255,0)' :
 
       // The registered source must also work from the start of the next document.
       yield* page.goto("data:text/html,<title>Next document</title><h1>Next document</h1>");
-      const next = yield* page.snapshot();
+      const next = yield* Snapshot.read(page);
 
       yield* Stillness.wait(page, { still: "foreground", quietMillis: 100, timeout: "5 seconds" });
 
@@ -103,11 +107,11 @@ setInterval(() => { green = !green; context.fillStyle = green ? 'rgb(0,255,0)' :
 
       const fired = yield* Effect.scoped(
         Effect.gen(function* () {
-          const held = yield* page.hold;
+          const held = yield* PageTime.hold(page);
 
           yield* held.advance("1 second");
 
-          return (yield* page.text()).text;
+          return (yield* Text.read(page)).text;
         }),
       );
 

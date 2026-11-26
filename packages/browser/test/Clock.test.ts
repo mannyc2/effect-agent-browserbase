@@ -6,6 +6,7 @@ import { TestClock } from "effect/testing";
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import * as Frame from "../src/Frame.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as Supervisor from "../src/supervisor/Supervisor.ts";
 import * as Moment from "../src/timeline/Moment.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
@@ -263,7 +264,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
         yield* page.goto(site.url("/form"));
         const other = yield* browser.newPage(site.url("/form"));
-        const amount = refOf((yield* page.snapshot()).text, "textbox", "Amount");
+        const amount = refOf((yield* Snapshot.read(page)).text, "textbox", "Amount");
 
         assert.isDefined(amount);
         if (amount === undefined) return;
@@ -286,9 +287,9 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         );
 
         // A deadline measured on the caller's clock would never expire.
-        const missing = yield* caller(page.until({ text: "never shown" }, "some", 300)).pipe(
-          Effect.timeout("5 seconds"),
-        );
+        const missing = yield* caller(
+          Snapshot.until(page, { text: "never shown" }, "some", 300),
+        ).pipe(Effect.timeout("5 seconds"));
 
         assert.isFalse(missing.met);
       }),

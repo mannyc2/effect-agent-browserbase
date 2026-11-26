@@ -6,7 +6,9 @@
 import { Schema } from "effect";
 
 /** The API key is missing, wrong or not allowed to do this (401 or 403). */
-export class Unauthorized extends Schema.TaggedError<Unauthorized>()("Unauthorized", {
+export class Unauthorized extends Schema.TaggedError<Unauthorized>(
+  "@effect-browser/browserbase/BrowserbaseError/Unauthorized",
+)("Unauthorized", {
   detail: Schema.String,
 }) {
   override get message() {
@@ -15,7 +17,9 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()("Unauthoriz
 }
 
 /** No session, context or other resource has that id (404). */
-export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
+export class NotFound extends Schema.TaggedError<NotFound>(
+  "@effect-browser/browserbase/BrowserbaseError/NotFound",
+)("NotFound", {
   detail: Schema.String,
 }) {
   override get message() {
@@ -24,7 +28,9 @@ export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
 }
 
 /** Too many concurrent sessions or requests for the plan (429). Wait, then try again. */
-export class RateLimited extends Schema.TaggedError<RateLimited>()("RateLimited", {
+export class RateLimited extends Schema.TaggedError<RateLimited>(
+  "@effect-browser/browserbase/BrowserbaseError/RateLimited",
+)("RateLimited", {
   detail: Schema.String,
 }) {
   override get message() {
@@ -33,7 +39,9 @@ export class RateLimited extends Schema.TaggedError<RateLimited>()("RateLimited"
 }
 
 /** Any other answer that is not a success, including a redirect, which is never followed. */
-export class Status extends Schema.TaggedError<Status>()("Status", {
+export class Status extends Schema.TaggedError<Status>(
+  "@effect-browser/browserbase/BrowserbaseError/Status",
+)("Status", {
   status: Schema.Finite,
   detail: Schema.String,
 }) {
@@ -46,7 +54,9 @@ export class Status extends Schema.TaggedError<Status>()("Status", {
  * No answer arrived: the request could not be sent, or the connection failed. A request that
  * creates something may still have created it.
  */
-export class Transport extends Schema.TaggedError<Transport>()("Transport", {
+export class Transport extends Schema.TaggedError<Transport>(
+  "@effect-browser/browserbase/BrowserbaseError/Transport",
+)("Transport", {
   detail: Schema.String,
 }) {
   override get message() {
@@ -59,7 +69,9 @@ export class Transport extends Schema.TaggedError<Transport>()("Transport", {
  * `released` says whether the client then released that session; without it, a session may be
  * left running.
  */
-export class Decode extends Schema.TaggedError<Decode>()("Decode", {
+export class Decode extends Schema.TaggedError<Decode>(
+  "@effect-browser/browserbase/BrowserbaseError/Decode",
+)("Decode", {
   detail: Schema.String,
   released: Schema.optional(Schema.Boolean),
 }) {
@@ -72,7 +84,9 @@ export class Decode extends Schema.TaggedError<Decode>()("Decode", {
  * Not a request Browserbase takes, such as an id that is not one: Browserbase refused it (400), or
  * it was refused before sending.
  */
-export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("InvalidRequest", {
+export class InvalidRequest extends Schema.TaggedError<InvalidRequest>(
+  "@effect-browser/browserbase/BrowserbaseError/InvalidRequest",
+)("InvalidRequest", {
   detail: Schema.String,
 }) {
   override get message() {
@@ -80,7 +94,8 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()("Invali
   }
 }
 
-export const Reason = Schema.Union([
+/** What went wrong, as `BrowserbaseError`'s `reason`. */
+export const BrowserbaseErrorReason = Schema.Union([
   Unauthorized,
   NotFound,
   RateLimited,
@@ -90,16 +105,26 @@ export const Reason = Schema.Union([
   InvalidRequest,
 ]);
 
-export type Reason = typeof Reason.Type;
+export type BrowserbaseErrorReason = typeof BrowserbaseErrorReason.Type;
 
-export class BrowserbaseError extends Schema.TaggedError<BrowserbaseError>()("BrowserbaseError", {
+export class BrowserbaseError extends Schema.TaggedError<BrowserbaseError>(
+  "@effect-browser/browserbase/BrowserbaseError",
+)("BrowserbaseError", {
   operation: Schema.String,
-  reason: Reason,
+  reason: BrowserbaseErrorReason,
 }) {
   override get message() {
     return `Browserbase ${this.operation} failed: ${this.reason.message}`;
   }
 }
+
+/** Whether a value is a `BrowserbaseError`. */
+export const isBrowserbaseError: (u: unknown) => u is BrowserbaseError =
+  Schema.is(BrowserbaseError);
+
+/** Whether a value is one of `BrowserbaseError`'s reasons. */
+export const isBrowserbaseErrorReason: (u: unknown) => u is BrowserbaseErrorReason =
+  Schema.is(BrowserbaseErrorReason);
 
 /** True for failures worth retrying after a pause: no answer, a rate limit or a server error. */
 export const isTransient = (error: BrowserbaseError): boolean =>

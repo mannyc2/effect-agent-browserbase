@@ -1,0 +1,728 @@
+/**
+ * Browser tools for an agent in any `effect/ai` loop, over `PageControl`'s controller: `observe`
+ * and `act` on the refs of an observed page; the `Control` tools, which inspect, navigate, scroll,
+ * wait, press keys and select tabs; and the `Pointer` tools for what has no ref, such as a canvas
+ * game or a chart: clicking, hovering and dragging at viewport points, typing and pressing keys
+ * into focus, zooming, waiting for the screen to go still, and going back. The ref and `Control`
+ * tools keep the names, parameters and descriptions Yielded Agent gave them before 0.1.0-beta.174
+ * replaced them with Code Mode over CDP, but that their optional parameters read null as left out.
+ * Every tool returns its failure to the model as a `ToolError`.
+ *
+ * With `vision`, the default, the model sees a screenshot of the current tab before each turn, and
+ * the crops `zoom` took since its last, as context the loop never keeps, so only the current picture
+ * is ever in a request. Its pixel coordinates are viewport coordinates, which the pointer tools
+ * take; with `pixels: "device"`, they are the screen's own, which the tools map back. The loop that
+ * runs the model adds `Pictures`' `next` to each request. With `vision: "ask"`, the screenshot comes
+ * only before a turn after the model called `look`; with `vision: "page"`, also after pointer input
+ * and while the viewport shows a canvas, a video or another site's frame. `Look` is that tool, for
+ * the agent's toolkit beside `make`'s.
+ *
+ * `make` gives the toolkit to put in an agent, and `layer`, which provides every tool's handler
+ * and the `Pictures` for one run, on a page or a browser's tabs, with the run's `Controller` for an
+ * application's own tools on the same tabs.
+ *
+ * @since 0.3.0
+ */
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+  SchemaTransformation,
+} from "effect";
+import { Prompt, Tool, Toolkit } from "effect/ai";
+
+import { Action } from "../Action.ts";
+import type { BrowserError } from "../BrowserError.ts";
+import * as Frame from "../Frame.ts";
+import type * as Page from "../Page.ts";
+import * as Stillness from "../timeline/Stillness.ts";
+import { cropped } from "./internal/crops.ts";
+import * as Points from "./internal/points.ts";
+import * as PageControl from "./PageControl.ts";
+import { fromBrowserError, ToolError } from "./ToolError.ts";
+
+// A parameter a model may leave out. Its JSON Schema allows null, as an optional one's does, and
+// models send null for one they mean to leave out, so null reads as absent rather than refused.
+const absent = <S extends Schema.Top>(
+  schema: S,
+  annotations: { readonly description?: string } = {},
+) =>
+  Schema.optionalKey(Schema.NullOr(schema).annotate(annotations)).pipe(
+    Schema.decodeTo(
+      Schema.optional(Schema.toType(schema)),
+      SchemaTransformation.transformOptional<S["Type"] | undefined, S["Type"] | null>({
+        decode: (input) => Option.filter(input, Predicate.isNotNullish),
+        encode: (output) => Option.filter(output, Predicate.isNotUndefined),
+      }),
+    ),
+  );
+
+const pixel = (axis: "x" | "y") =>
+  Schema.Finite.annotate({ description: `Viewport ${axis} in screenshot pixels` });
+
+const ref = absent(Schema.String, {
+  description: "A ref from the latest observation, such as e12",
+});
+
+/** What a pointer tool did, and what followed on its page while it ran. */
+export const Receipt = Schema.Struct({
+  did: Schema.String,
+  action: Schema.optional(Action),
+  followed: Schema.Array(Schema.String),
+});
+
+const pointerTool = <const Name extends string, Parameters extends Schema.Struct.Fields>(
+  name: Name,
+  description: string,
+  parameters: Parameters,
+) =>
+  Tool.make(name, {
+    description,
+    parameters: Schema.Struct(parameters),
+    success: Receipt,
+    failure: ToolError,
+    failureMode: "return",
+  });
+
+/** Tools for what has no ref, by viewport point and by keyboard focus. */
+export const Pointer = Toolkit.make(
+  pointerTool("click_at", "Click a point of the screenshot, such as on a canvas game or a chart.", {
+    x: pixel("x"),
+    y: pixel("y"),
+    double: absent(Schema.Boolean),
+    button: absent(Schema.Literals(["left", "right", "middle"])),
+  }),
+  pointerTool("hover", "Move the pointer over an observed ref, or to a point of the screenshot.", {
+    ref,
+    x: absent(pixel("x")),
+    y: absent(pixel("y")),
+  }),
+  pointerTool(
+    "drag",
+    "Drag from one ref or point to another, such as a slider or a chart's range.",
+    {
+      fromRef: ref,
+      fromX: absent(pixel("x")),
+      fromY: absent(pixel("y")),
+      toRef: ref,
+      toX: absent(pixel("x")),
+      toY: absent(pixel("y")),
+    },
+  ),
+  pointerTool(
+    "type_text",
+    "Type text into whatever has focus, such as a field just clicked. To type into an observed field, act with fill.",
+    {
+      text: Schema.String,
+      submit: absent(Schema.Boolean, { description: "Press Enter afterwards" }),
+    },
+  ),
+  pointerTool(
+    "press_keys",
+    "Press a key or chord on whatever has focus, such as ArrowLeft, Space or Control+A, as a game control might need.",
+    {
+      keys: Schema.String,
+      times: absent(Schema.Int, { description: "Press it this many times; defaults to 1" }),
+      holdMillis: absent(Schema.Finite, { description: "Hold the keys down this long" }),
+    },
+  ),
+  pointerTool(
+    "zoom",
+    "Crop a small region of the viewport, shown on its own before your next turn at the viewport's own scale: a closer look at small text, not a magnification. Click coordinates stay in viewport space.",
+    Frame.Region.fields,
+  ),
+  pointerTool(
+    "wait_still",
+    "Wait for the screen to stop moving, as reels coming to rest or a chart that loads; what was already moving before your last input, such as an idle animation, does not count.",
+    { seconds: absent(Schema.Finite, { description: "At most this long; defaults to 15" }) },
+  ),
+  // Without parameters, not with an empty struct: an empty struct's JSON Schema has no object root,
+  // which OpenAI's structured outputs reject for the whole request.
+  Tool.make("back", {
+    description: "Go back to the previous page in this tab.",
+    parameters: Tool.EmptyParams,
+    success: Receipt,
+    failure: ToolError,
+    failureMode: "return",
+  }),
+);
+
+/**
+ * The tool that asks for a screenshot before the next turn, for `vision: "ask"` and `"page"`, which
+ * otherwise show none on some turns. The layer serves it whether or not the agent has it.
+ */
+export const Look = Toolkit.make(
+  Tool.make("look", {
+    description: "See a screenshot of the current tab before your next turn.",
+    parameters: Tool.EmptyParams,
+    success: Receipt,
+    failure: ToolError,
+    failureMode: "return",
+  }),
+);
+
+const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
+
+const Delta = Schema.Int.check(Schema.isBetween({ minimum: -100_000, maximum: 100_000 }));
+
+const pageTool = <
+  const Name extends string,
+  Parameters extends Schema.Struct.Fields,
+  Success extends Schema.Top,
+>(
+  name: Name,
+  description: string,
+  parameters: Parameters,
+  success: Success,
+) =>
+  Tool.make(name, {
+    description,
+    parameters: Schema.Struct(parameters),
+    success,
+    failure: ToolError,
+    failureMode: "return",
+  });
+
+/** Tools that inspect, navigate, scroll, wait, press keys on refs and select tabs. */
+export const Control = Toolkit.make(
+  pageTool(
+    "inspect",
+    "Inspect the page or a CSS scope within it, including open shadow roots. Frames are read inline in the observation, so leave frame unset. Narrow a truncated observation with selector or optionFilter before acting.",
+    {
+      selector: absent(Selector),
+      frame: absent(PageControl.Ref),
+      optionFilter: absent(Schema.NonEmptyString.check(Schema.isMaxLength(300))),
+    },
+    PageControl.Observation,
+  ),
+  pageTool(
+    "navigate",
+    "Navigate the current browser to a host-authorized URL. Input receipt is independent of the returned observation; never replay uncertain navigation.",
+    { url: Schema.String.check(Schema.isMaxLength(8_192)) },
+    PageControl.ActionResult,
+  ),
+  pageTool(
+    "scroll",
+    "Scroll the viewport or an observed scroll container by CSS pixels and inspect the result.",
+    { ref: absent(PageControl.Ref), deltaX: Delta, deltaY: Delta },
+    PageControl.ActionResult,
+  ),
+  pageTool(
+    "wait",
+    "Wait for an asynchronous condition using standard CSS and observed DOM/attribute evidence in the current frame. Optional text qualifies every state, case-sensitively; hidden with text waits until no visible match contains that text. Control kinds are semantic roles, not necessarily HTML tags. Returns a fresh observation; do not wait for an already satisfied condition or use fixed sleeps.",
+    {
+      selector: Selector,
+      frame: absent(PageControl.Ref),
+      state: Schema.Literals(["visible", "hidden", "enabled", "text"]),
+      text: absent(Schema.String.check(Schema.isMaxLength(1_024))),
+      timeoutMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 15_000 })),
+    },
+    PageControl.Observation,
+  ),
+  pageTool(
+    "press",
+    "Press a bounded native keyboard key on an observed focusable control, including keyboard-only links with pointerEvents=none and tabindex=0. Revalidates identity, visible state and native focus; a pointer hit is not required. Never replay uncertain input.",
+    {
+      ref: PageControl.Ref,
+      key: Schema.Literals([
+        "Enter",
+        "Escape",
+        "Tab",
+        "ArrowDown",
+        "ArrowUp",
+        "ArrowLeft",
+        "ArrowRight",
+        "Home",
+        "End",
+        "Space",
+        "Backspace",
+        "Delete",
+      ]),
+    },
+    PageControl.ActionResult,
+  ),
+  pageTool(
+    "select_tab",
+    "Select an observed tab or popup in this browser context and inspect it. References from the previous page expire.",
+    { ref: PageControl.Ref },
+    PageControl.Observation,
+  ),
+);
+
+/**
+ * The tool that finds lines of the whole page's outline, in view or not. The layer serves it
+ * whether or not the agent has it.
+ */
+export const Find = Toolkit.make(
+  pageTool(
+    "find",
+    "Find the lines of the whole page's outline, in view or not, that hold this text, ignoring case: controls with their refs, headings and text.",
+    { text: Schema.NonEmptyString.check(Schema.isMaxLength(300)) },
+    PageControl.Observation,
+  ),
+);
+
+const observe = Tool.make("observe", {
+  description: "Read the visible page and controls. Only observed controls may receive actions.",
+  parameters: Tool.EmptyParams,
+  success: PageControl.Observation,
+  failure: ToolError,
+  failureMode: "return",
+});
+
+// `act` takes one action, or up to eight in order.
+const single = Toolkit.make(
+  observe,
+  pageTool(
+    "act",
+    "Perform one action on an observed ref and return the next observation. Never repeat an acknowledged action because its observation failed.",
+    { action: PageControl.Action },
+    PageControl.ActionResult,
+  ),
+);
+
+const batched = Toolkit.make(
+  observe,
+  pageTool(
+    "act",
+    "Perform 1–8 sequential actions on already observed controls. Stop at page/dialog transitions. completed counts acknowledged actions; never replay them.",
+    {
+      actions: Schema.Array(PageControl.Action).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+    },
+    PageControl.ActionResult,
+  ),
+);
+
+/**
+ * The controller of the run `layer` serves, for an application's own tools beside these, such as a
+ * chart's: they act on the tab the model sees now, with the run's task, and say what followed.
+ */
+export class Controller extends Context.Service<Controller, PageControl.Controller>()(
+  "effect-browser/ai/BrowserTools/Controller",
+) {}
+
+/**
+ * What the model sees before its next turn, for the loop that runs it: `next`, the current tab's
+ * screenshot when `vision` says so, and the crops `zoom` took since the last turn, to add to the
+ * coming request and never keep. A loop that shows the page its own way takes the crops with
+ * `crops` instead, as the model is shown them for the tab `page`. Either hands each crop over once.
+ */
+export class Pictures extends Context.Service<
+  Pictures,
+  {
+    readonly next: Effect.Effect<Prompt.Prompt>;
+    readonly crops: (page: string) => Effect.Effect<ReadonlyArray<Prompt.UserMessagePart>>;
+  }
+>()("effect-browser/ai/BrowserTools/Pictures") {}
+
+/** What the model sees of the page; see `LayerOptions`. */
+export type Vision = boolean | "ask" | "page";
+
+export interface LayerOptions extends PageControl.Options {
+  readonly initialZooms?: ReadonlyArray<Frame.Zoom> | undefined;
+  /**
+   * What the model sees of the page: `true`, the default, a screenshot of the current tab before
+   * each turn; `"ask"`, one only before a turn after `look`; `"page"`, one also after pointer input
+   * and while the viewport shows a canvas, a video or another site's frame; `false`, no pictures.
+   */
+  readonly vision?: Vision | undefined;
+  /**
+   * The pixels of the screenshots and crops the model sees, and of the points it gives back:
+   * `"css"`, the default, or `"device"`, the screen's own, as many to a CSS pixel as the browser's
+   * device scale factor, so smaller below 1 and sharper above.
+   */
+  readonly pixels?: "css" | "device" | undefined;
+  /**
+   * How `click_at` and `drag` place a point: `"point"`, the default, at once; `"crop"`, first
+   * showing a crop of the viewport around each point, then placing once called at points inside
+   * crops already shown. A ref needs no crop.
+   */
+  readonly placement?: "point" | "crop" | undefined;
+}
+
+const text = (value: string) => ({ type: "text" as const, text: value });
+
+/**
+ * What the model sees before a turn: the current tab's screenshot if `screen` says so, and the crops
+ * since its last. A screenshot in device pixels sets `scale`, its pixels to a CSS pixel.
+ */
+const pictures = (
+  controller: PageControl.Controller,
+  zooms: Ref.Ref<Array<Frame.Zoom>>,
+  screen: (page: Page.Page) => Effect.Effect<boolean, BrowserError>,
+  pixels: "css" | "device",
+  scale: Ref.Ref<number>,
+) =>
+  Effect.gen(function* () {
+    // A look before a turn shows a tab an action opened, as `follow` says.
+    const parts = yield* Effect.flatMap(controller.look, (page) =>
+      Effect.gen(function* () {
+        const zoomed = yield* Ref.getAndSet(zooms, []);
+
+        if (!(yield* screen(page))) return cropped(zoomed, page.id, yield* Ref.get(scale));
+        const { image: shot } = yield* Frame.read(page, { after: "input", scale: pixels });
+
+        if (pixels === "device") yield* Ref.set(scale, shot.width / (yield* page.viewport).width);
+        const crops = cropped(zoomed, page.id, yield* Ref.get(scale));
+
+        return [
+          text(
+            `The current tab's viewport, ${shot.width}x${shot.height}. Its pixel coordinates are viewport coordinates.`,
+          ),
+          { type: "file" as const, mediaType: shot.mediaType, data: shot.data },
+          ...crops,
+        ];
+      }),
+    ).pipe(
+      Effect.catch((error) =>
+        Effect.succeed([text(`(no screenshot of the current tab: ${error.message})`)]),
+      ),
+      controller.withTask,
+    );
+
+    return parts.length === 0 ? Prompt.empty : Prompt.make([{ role: "user", content: parts }]);
+  });
+
+// Whether the viewport shows what an outline cannot: a canvas, a video, or a frame from another
+// site or holding either, at least 64 pixels square. Page-side code: it stands alone.
+const pictorial = () => {
+  const shown = (element: Element) => {
+    const box = element.getBoundingClientRect();
+    const width = Math.min(box.right, window.innerWidth) - Math.max(box.left, 0);
+    const height = Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0);
+
+    return width >= 64 && height >= 64;
+  };
+
+  return Array.from(document.querySelectorAll("canvas, video, iframe")).some(
+    (element) =>
+      shown(element) &&
+      (!(element instanceof HTMLIFrameElement) ||
+        element.contentDocument === null ||
+        element.contentDocument.querySelector("canvas, video, iframe") !== null),
+  );
+};
+
+const missing = (what: string) =>
+  Effect.fail(
+    new ToolError({
+      code: "invalid",
+      message: `Give ${what} a ref from the observation, or x and y from the screenshot.`,
+    }),
+  );
+
+/** The `zoom` tool's handler: a crop of the current tab, shown before the next turn. */
+const cropping =
+  (
+    controller: PageControl.Controller,
+    zooms: Ref.Ref<Array<Frame.Zoom>>,
+    vision: Vision,
+    scale: Ref.Ref<number>,
+    zoomed: { readonly scale: "device" } | undefined,
+  ) =>
+  (region: ConstructorParameters<typeof Frame.Region>[0]) =>
+    vision !== false
+      ? Effect.all([controller.current, Ref.get(scale)]).pipe(
+          Effect.flatMap(([page, scale]) =>
+            Frame.zoom(page, Points.viewportRegion(new Frame.Region(region), scale), zoomed),
+          ),
+          Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
+          Effect.map(() => ({
+            did: `Cropped (${region.x}, ${region.y}), ${region.width}x${region.height}: it is shown before your next turn if this tab is still current.`,
+            followed: [],
+          })),
+          Effect.mapError(fromBrowserError),
+          controller.withTask,
+        )
+      : Effect.fail(
+          new ToolError({
+            code: "invalid",
+            message: "These tools show no pictures, so a crop cannot be shown.",
+          }),
+        );
+
+/**
+ * The pointer tools' handlers over the controller's current tab. Each sets `pointed` once its input
+ * reaches the page, but going back. Points and crops are in the pictures' pixels, `scale` to a
+ * CSS pixel. With placement by crop, `framed` holds the crops around the points last asked.
+ */
+const pointing = (
+  controller: PageControl.Controller,
+  zooms: Ref.Ref<Array<Frame.Zoom>>,
+  vision: Vision,
+  pointed: Ref.Ref<boolean>,
+  pixels: "css" | "device",
+  scale: Ref.Ref<number>,
+  framed: Ref.Ref<Array<Frame.Zoom>> | undefined,
+) => {
+  const zoomed = pixels === "device" ? ({ scale: "device" } as const) : undefined;
+
+  const act = <A>(
+    run: (page: Page.Page) => Effect.Effect<A, BrowserError>,
+    did: (value: A) => string,
+    action?: Action,
+  ) =>
+    controller.perform(run).pipe(
+      Effect.tap(() =>
+        action === undefined || action._tag === "Back" ? Effect.void : Ref.set(pointed, true),
+      ),
+      // A program reads a receipt as JSON, which has no undefined, so absent fields are left out.
+      Effect.map(({ value, followed }) =>
+        action === undefined
+          ? { did: did(value), followed }
+          : { did: did(value), followed, action },
+      ),
+      Effect.mapError(fromBrowserError),
+    );
+
+  // Act once crops shown since the model asked hold every point; otherwise show crops around them.
+  const placed = <A>(
+    targets: ReadonlyArray<Page.Target>,
+    asked: string,
+    run: Effect.Effect<A, ToolError>,
+  ) =>
+    Effect.gen(function* () {
+      const points = targets.filter((to) => typeof to !== "string");
+
+      if (framed === undefined || vision === false || points.length === 0) return yield* run;
+      const pending = yield* Ref.get(zooms);
+      const shown = (yield* Ref.get(framed)).filter((crop) => !pending.includes(crop));
+
+      if (points.every((point) => shown.some((crop) => Points.holds(crop, point)))) {
+        yield* Ref.set(framed, []);
+
+        return yield* run;
+      }
+
+      const crops = yield* Effect.gen(function* () {
+        const page = yield* controller.current;
+        const viewport = yield* page.viewport;
+
+        return yield* Effect.forEach(points, (point) =>
+          Frame.zoom(page, Points.around(point, viewport), zoomed),
+        );
+      }).pipe(Effect.mapError(fromBrowserError), controller.withTask);
+
+      yield* Ref.set(framed, crops);
+      yield* Ref.update(zooms, (all) => [...all, ...crops]);
+
+      return {
+        did: `Not done yet: a crop around ${asked} is shown before your next turn. Call again at the points you mean, inside the crops, to act.`,
+        followed: [],
+      };
+    });
+
+  return Pointer.of({
+    click_at: ({ x, y, double, button }) =>
+      Effect.flatMap(Ref.get(scale), (scale) => {
+        const options = {
+          clickCount: double === true ? 2 : 1,
+          ...(button === undefined ? {} : { button }),
+        };
+
+        const at = { x: x / scale, y: y / scale };
+
+        return placed(
+          [at],
+          `(${x}, ${y})`,
+          act(
+            (page) => page.click(at, options),
+            ({ element }) => `Clicked ${element} at (${x}, ${y}).`,
+            { _tag: "Click", target: at, options },
+          ),
+        );
+      }),
+    hover: (place) =>
+      Option.match(Points.target(place), {
+        onNone: () => missing("hover"),
+        onSome: (to) =>
+          Effect.flatMap(Ref.get(scale), (scale) => {
+            const at = Points.viewportTarget(to, scale);
+
+            return act(
+              (page) => page.hover(at),
+              () => `Hovered over ${Points.named(to)}.`,
+              { _tag: "Hover", target: at },
+            );
+          }),
+      }),
+    drag: (drag) => {
+      const from = Points.target({ ref: drag.fromRef, x: drag.fromX, y: drag.fromY });
+      const to = Points.target({ ref: drag.toRef, x: drag.toX, y: drag.toY });
+
+      return Option.isNone(from) || Option.isNone(to)
+        ? missing("each end of a drag")
+        : Effect.flatMap(Ref.get(scale), (scale) => {
+            const start = Points.viewportTarget(from.value, scale);
+            const end = Points.viewportTarget(to.value, scale);
+
+            return placed(
+              [start, end],
+              `each end, ${Points.named(from.value)} and ${Points.named(to.value)},`,
+              act(
+                (page) => page.drag(start, end),
+                () => `Dragged from ${Points.named(from.value)} to ${Points.named(to.value)}.`,
+                { _tag: "Drag", from: start, to: end },
+              ),
+            );
+          });
+    },
+    type_text: ({ text: typed, submit }) =>
+      act(
+        (page) => page.type(typed, { submit }),
+        () => `Typed ${JSON.stringify(typed)}${submit === true ? " and pressed Enter" : ""}.`,
+        { _tag: "Type", text: typed, ...(submit === undefined ? {} : { options: { submit } }) },
+      ),
+    press_keys: ({ keys, times, holdMillis }) =>
+      act(
+        (page) => page.press(keys, { times, holdMillis }),
+        () => `Pressed ${keys}${times === undefined || times === 1 ? "" : ` ${times} times`}.`,
+        {
+          _tag: "Press",
+          keys,
+          options: {
+            ...(times === undefined ? {} : { times }),
+            ...(holdMillis === undefined ? {} : { holdMillis }),
+          },
+        },
+      ),
+    zoom: cropping(controller, zooms, vision, scale, zoomed),
+    wait_still: ({ seconds }) =>
+      act(
+        (page) =>
+          // What was already moving before the input, such as a game's idle animation, is not
+          // what the model waits for.
+          Stillness.wait(page, {
+            still: "foreground",
+            quietMillis: 600,
+            timeout: `${Math.min(Math.max(seconds ?? 15, 0), 30)} seconds`,
+          }),
+        () => "The screen is still.",
+      ),
+    back: () =>
+      act(
+        (page) => page.back,
+        () => "Went back.",
+        { _tag: "Back" },
+      ),
+  });
+};
+
+/** One mode's tools and the layer that serves them for a run. */
+const tooling = <Refs extends Record<string, Tool.Any>>(
+  refs: Toolkit.Toolkit<Refs>,
+  serve: (actions: PageControl.Controller["actions"]) => Layer.Layer<Tool.HandlersFor<Refs>>,
+) => {
+  const toolkit = Toolkit.merge(refs, Control, Pointer);
+
+  /** Every tool's handler, and the `Pictures` and `Controller` of one run on `target`. */
+  const layer = (target: PageControl.Target, options: LayerOptions = {}) =>
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const controller = yield* PageControl.make(target, options);
+        const zooms = yield* Ref.make<Array<Frame.Zoom>>([...(options.initialZooms ?? [])]);
+        const vision = options.vision ?? true;
+        const pixels = options.pixels ?? "css";
+        // The pictures' pixels to a CSS pixel, as the latest screenshot showed them.
+        const scale = yield* Ref.make(1);
+        const { control } = controller;
+        // Since the last turn: whether the model called `look`, and whether pointer input ran.
+        const asked = yield* Ref.make(false);
+        const pointed = yield* Ref.make(false);
+
+        const framed =
+          options.placement === "crop" ? yield* Ref.make<Array<Frame.Zoom>>([]) : undefined;
+
+        // Whether the screen is shown before a turn: always with `true`, after `look` with `"ask"`,
+        // and with `"page"` also after pointer input or while the viewport shows a picture.
+        const wanted = (page: Page.Page) =>
+          Effect.gen(function* () {
+            const looked = yield* Ref.getAndSet(asked, false);
+            const input = yield* Ref.getAndSet(pointed, false);
+
+            if (vision === true || looked) return true;
+            if (vision !== "page") return false;
+
+            return (
+              input ||
+              (yield* page.read(pictorial, { arg: undefined, result: Schema.Boolean })).value
+            );
+          });
+
+        const handlers = Layer.mergeAll(
+          serve(controller.actions),
+          Control.toLayer({
+            inspect: control.inspect,
+            navigate: control.navigate,
+            scroll: control.scroll,
+            wait: control.wait,
+            press: control.press,
+            select_tab: control.selectTab,
+          }),
+          Pointer.toLayer(pointing(controller, zooms, vision, pointed, pixels, scale, framed)),
+          Find.toLayer({ find: control.find }),
+          Look.toLayer({
+            look: () =>
+              vision === false
+                ? Effect.fail(
+                    new ToolError({ code: "invalid", message: "These tools show no pictures." }),
+                  )
+                : Ref.set(asked, true).pipe(
+                    Effect.as({
+                      did:
+                        vision === "ask" || vision === "page"
+                          ? "A screenshot of the current tab is shown before your next turn."
+                          : "A screenshot is shown before every turn already.",
+                      followed: [],
+                    }),
+                  ),
+          }),
+        );
+
+        const shown = Pictures.of({
+          next:
+            vision === false
+              ? Effect.succeed(Prompt.empty)
+              : pictures(controller, zooms, wanted, pixels, scale),
+          crops: (page) =>
+            Effect.zipWith(Ref.getAndSet(zooms, []), Ref.get(scale), (crops, scale) =>
+              cropped(crops, page, scale),
+            ),
+        });
+
+        return Layer.mergeAll(
+          handlers,
+          Layer.succeed(Pictures, shown),
+          Layer.succeed(Controller, controller),
+        );
+      }),
+    );
+
+  return { toolkit, layer };
+};
+
+const singleTools = tooling(single, (actions) =>
+  single.toLayer({ observe: () => actions.observe, act: ({ action }) => actions.act([action]) }),
+);
+
+const batchedTools = tooling(batched, (actions) =>
+  batched.toLayer({
+    observe: () => actions.observe,
+    act: ({ actions: steps }) => actions.act(steps),
+  }),
+);
+
+/**
+ * The tools and their layer. `"batched"`, the default, lets `act` take up to eight actions; with
+ * `"single"`, it takes one.
+ */
+export function make(options?: { readonly mode?: "batched" }): typeof batchedTools;
+export function make(options: { readonly mode: "single" }): typeof singleTools;
+
+export function make(options: { readonly mode?: "single" | "batched" } = {}) {
+  return options.mode === "single" ? singleTools : batchedTools;
+}

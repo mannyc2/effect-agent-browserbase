@@ -5,6 +5,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { Connector } from "effect-browser/Cdp";
+import * as Snapshot from "effect-browser/Snapshot";
 import { Supervisor } from "effect-browser/supervisor";
 import { type Browser as PlaywrightBrowser, chromium } from "playwright-core";
 
@@ -56,11 +57,11 @@ it.live("passes the connector through open, layer, attach and supervised generat
         const page = yield* browser.firstPage;
 
         yield* page.goto("data:text/html,<button>Custom</button>");
-        assert.include((yield* page.snapshot()).text, 'button "Custom"');
+        assert.include((yield* Snapshot.read(page)).text, 'button "Custom"');
       });
 
     yield* Effect.gen(function* () {
-      const { browser, session } = yield* Browserbase.open(options);
+      const { browser, session } = yield* Browserbase.make(options);
 
       yield* read(browser);
       yield* Effect.gen(function* () {
@@ -94,7 +95,7 @@ it.live("passes the connector through open, layer, attach and supervised generat
 
 it.effect("releases a failed custom connection and preserves its sanitized failure", () =>
   Effect.gen(function* () {
-    const error = yield* Browserbase.open({
+    const error = yield* Browserbase.make({
       connect: async (url) => {
         throw new Error(`Native transport refused ${url}`);
       },
@@ -121,7 +122,7 @@ it.effect("releases its session when opening is interrupted inside the custom co
     let signal: AbortSignal | undefined;
 
     const opening = yield* Effect.forkChild(
-      Browserbase.open({
+      Browserbase.make({
         connect: (_url, options) =>
           new Promise<PlaywrightBrowser>(() => {
             signal = options.signal;

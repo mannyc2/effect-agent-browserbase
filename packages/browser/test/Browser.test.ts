@@ -26,6 +26,8 @@ import * as Cdp from "../src/Cdp.ts";
 import * as Frame from "../src/Frame.ts";
 import * as Url from "../src/internal/url.ts";
 import { type Page, redacted } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -38,7 +40,7 @@ const connect = (endpoint: string, options: Partial<Cdp.Options> = {}) =>
     const scope = yield* Scope.make();
 
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-    const browser = yield* Cdp.open({ ...options, endpoint }).pipe(Scope.provide(scope));
+    const browser = yield* Cdp.make({ ...options, endpoint }).pipe(Scope.provide(scope));
 
     return { browser, end: Scope.close(scope, Exit.void) };
   });
@@ -106,11 +108,11 @@ describe("a tab opened by input", () => {
   it.live("is tracked before the input ends, even with slow registration and evicted events", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open({ eventHistory: 1 });
+        const browser = yield* Chromium.make({ eventHistory: 1 });
         const page = yield* browser.firstPage;
 
         yield* page.goto((yield* Site).url("/form"));
-        const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
+        const [link] = yield* Snapshot.find(page, { role: "link", name: "Open in a new tab" });
         const registration = yield* holdPopupRegistration(browser, page);
         const clicking = yield* Effect.forkChild(page.click(link?.ref ?? ""));
 
@@ -143,7 +145,7 @@ describe("a tab opened by input", () => {
   it.live("registers another tab while one popup registration is held", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const page = yield* browser.firstPage;
         const registration = yield* holdPopupRegistration(browser, page);
         const context = TestCdp.nativeContext(browser);
@@ -173,7 +175,7 @@ describe("a tab opened by input", () => {
   it.live("registers every opening in a burst without revoking authority", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
 
         yield* browser.firstPage;
         const context = TestCdp.nativeContext(browser);
@@ -227,14 +229,14 @@ describe("a tab opened by input", () => {
 
           yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
 
-          const browser = yield* Chromium.open({ actionTimeout: "2 seconds" }).pipe(
+          const browser = yield* Chromium.make({ actionTimeout: "2 seconds" }).pipe(
             Scope.provide(owner),
           );
 
           const page = yield* browser.firstPage;
 
           yield* page.goto((yield* Site).url("/form"));
-          const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
+          const [link] = yield* Snapshot.find(page, { role: "link", name: "Open in a new tab" });
           const registration = yield* holdPopupRegistration(browser, page);
           const clicking = yield* Effect.forkChild(Effect.flip(page.click(link?.ref ?? "")));
 
@@ -347,7 +349,7 @@ describe("a loss", () => {
           TestCdp.nativeContext(browser).route(site.url("/late"), () => requested.resolve()),
         );
         yield* holdRenderer(page, 2000);
-        const reading = yield* Effect.forkChild(Effect.flip(page.text()));
+        const reading = yield* Effect.forkChild(Effect.flip(Text.read(page)));
 
         proxy.hold = (command) => (command.method === "Page.getNavigationHistory" ? 250 : 0);
         // The browser answers a title while the renderer is busy, but transport can exceed 100 ms.
@@ -364,7 +366,7 @@ describe("a loss", () => {
           [yield* Fiber.join(reading), false],
           [yield* Fiber.join(navigating), true],
           [yield* Fiber.join(watching), false],
-          [yield* Effect.flip(page.snapshot()), false],
+          [yield* Effect.flip(Snapshot.read(page)), false],
         ] as const) {
           assert.deepStrictEqual(lossOf(error), { reason: "Closed", cause: "connection" });
           assert.strictEqual(error.dispatched, dispatched);
@@ -396,7 +398,7 @@ describe("a loss", () => {
         );
         proxy.drop();
         assert.strictEqual(yield* browser.disconnected, "session");
-        assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
+        assert.deepStrictEqual(lossOf(yield* Effect.flip(Text.read(page))), {
           reason: "Closed",
           cause: "session",
         });
@@ -409,7 +411,7 @@ describe("a loss", () => {
   it.live("of a crashed page closes it, failing its calls Closed as crashed", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open({ actionTimeout: Duration.seconds(3) });
+        const browser = yield* Chromium.make({ actionTimeout: Duration.seconds(3) });
         const page = yield* browser.newPage(still("doomed"));
         const from = (yield* browser.recentEvents).length;
 
@@ -418,7 +420,7 @@ describe("a loss", () => {
         );
 
         void session.send("Page.crash").catch(() => undefined);
-        assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
+        assert.deepStrictEqual(lossOf(yield* Effect.flip(Text.read(page))), {
           reason: "Closed",
           cause: "crashed",
         });
@@ -444,7 +446,7 @@ describe("a page's documents", () => {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* Site;
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const page = yield* browser.newPage(site.url("/form"));
 
         yield* Effect.promise(() =>
@@ -499,7 +501,7 @@ describe("init scripts", () => {
       Effect.gen(function* () {
         const site = yield* Site;
 
-        const browser = yield* Chromium.open({
+        const browser = yield* Chromium.make({
           initScripts: [
             {
               match: /^http:\/\/localhost:/,
@@ -524,7 +526,7 @@ describe("init scripts", () => {
         assert.deepStrictEqual(yield* marks(loopback), [null, true]);
         assert.deepStrictEqual(yield* marks(named), ["localhost", true]);
 
-        const [link] = yield* named.find({ role: "link", name: "Open in a new tab" });
+        const [link] = yield* Snapshot.find(named, { role: "link", name: "Open in a new tab" });
 
         yield* named.click(link?.ref ?? "");
 
@@ -741,10 +743,10 @@ describe("an address", () => {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* Site;
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const page = yield* browser.newPage(site.url("/links"));
 
-        const links = (yield* page.snapshot()).text
+        const links = (yield* Snapshot.read(page)).text
           .split("\n")
           .filter((line) => line.includes("->"));
 
@@ -766,7 +768,7 @@ describe("an address", () => {
 it.live("concurrent firstPage calls open exactly one initial page", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
 
       const pages = yield* Effect.all(
         Array.from({ length: 12 }, () => browser.firstPage),
@@ -782,7 +784,7 @@ it.live("concurrent firstPage calls open exactly one initial page", () =>
 it.live("publishes a failed dialog answer and closes only the affected page", () =>
   TestCdp.isolated((faults) =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
       const page = yield* browser.newPage();
 
       faults.rule(

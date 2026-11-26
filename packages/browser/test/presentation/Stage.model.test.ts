@@ -8,6 +8,7 @@ import { monotonicMillis } from "../../src/internal/clock.ts";
 import * as Lifecycle from "../../src/presentation/internal/feed.ts";
 import * as Stage from "../../src/presentation/Stage.ts";
 import * as TestPage from "../../src/testing/TestPage.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 
 const frame = (page: string, document = 0, at = 0) =>
   new Frame.Frame({
@@ -60,10 +61,9 @@ it.effect("publishes only current-document paint and stops retired feeds after a
     const delayed = yield* Deferred.make<void>();
     let held = false;
 
-    const page = yield* TestPage.withPictures(first.page, (own) => ({
-      ...own,
+    const page = PageFunctions.replace(first.page, {
       capture: (options) =>
-        Effect.map(own.capture(options), (capture) => ({
+        Effect.map(Frame.capture(first.page, options), (capture) => ({
           ...capture,
           stream: capture.stream.pipe(
             Stream.mapEffect((frame) =>
@@ -71,7 +71,7 @@ it.effect("publishes only current-document paint and stops retired feeds after a
             ),
           ),
         })),
-    }));
+    });
 
     const probe = yield* Frame.capture(first.page);
     const stage = yield* Stage.make();

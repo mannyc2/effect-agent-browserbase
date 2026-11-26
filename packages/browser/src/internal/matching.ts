@@ -1,5 +1,5 @@
 /**
- * In the page: the rules `find` matches by. It touches no DOM, so it also runs outside a page.
+ * In the page: the rules `Snapshot.find` matches by. It touches no DOM, so it also runs outside a page.
  *
  * - A role matches when it is the same token, ignoring case and the space around it.
  * - A name given as a string matches when the two read the same once their spaces are collapsed,
@@ -11,7 +11,7 @@
  */
 import type { SubjectContext } from "../BrowserEvent.ts";
 import type { Picks } from "../Layout.ts";
-import type { FindQuery } from "../Page.ts";
+import type { FindQuery } from "../Snapshot.ts";
 import type { Point } from "./geometry.ts";
 import type { PickRequest } from "./reading/layout.inpage.ts";
 

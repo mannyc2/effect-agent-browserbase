@@ -4,6 +4,7 @@ import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
 
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const owner = Effect.gen(function* () {
@@ -19,7 +20,7 @@ describe("Input suspension failure boundaries", () => {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const faults = yield* TestCdp.make();
-        const browser = yield* faults.provide(Chromium.open());
+        const browser = yield* faults.provide(Chromium.make());
         const arrived = Promise.withResolvers<void>();
         const gate = yield* Deferred.make<void>();
         const release = { resolve: () => Deferred.doneUnsafe(gate, Effect.void) };
@@ -45,7 +46,7 @@ describe("Input suspension failure boundaries", () => {
             '<select aria-label="Choice"><option>One</option><option>Two</option></select>',
           ),
         );
-        const [choice] = yield* page.find({ role: "combobox", name: "Choice" });
+        const [choice] = yield* Snapshot.find(page, { role: "combobox", name: "Choice" });
         const action = yield* page.select(choice?.ref ?? "", ["Two"]).pipe(Effect.forkChild);
 
         yield* Effect.promise(() => arrived.promise);
@@ -86,7 +87,7 @@ describe("Input suspension failure boundaries", () => {
         const entered = yield* Deferred.make<void>();
         const allow = yield* Deferred.make<void>();
 
-        const browser = yield* Chromium.open({
+        const browser = yield* Chromium.make({
           guard: () =>
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(allow))),
         });

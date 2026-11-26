@@ -3,6 +3,7 @@ import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import * as Frame from "effect-browser/Frame";
 import { Stage } from "effect-browser/presentation";
+import * as Text from "effect-browser/Text";
 
 import { refuse } from "./Budget.ts";
 import * as Fixtures from "./FixtureRoutes.ts";
@@ -125,7 +126,7 @@ export const make = Effect.fnUntraced(function* (browser: Browser.Service) {
       const load = Effect.forever(
         Effect.gen(function* () {
           yield* third.goto(`${origin}/load`);
-          yield* third.text();
+          yield* Text.read(third);
           loads++;
           yield* Effect.sleep("5 seconds");
         }),

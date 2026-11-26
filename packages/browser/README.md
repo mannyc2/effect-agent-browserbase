@@ -5,8 +5,8 @@ compact page outline for models, screencast frames, a record of what visibly cha
 windows over a page's events, changes and frames, and moments, an account in pictures and words of
 what a page showed and what changed on it. It films pages on their own held time, with layout as
 data, an overlay, element poses and input on its frame, and gives its in-page readers to a site that
-owns its page. An agent drives its pages through [`effect-agent-browser`](../agent-browser), with
-Yielded Agent's browser tools.
+owns its page. An agent drives its pages with the browser tools of `effect-browser/ai`, in any
+`effect/ai` loop, or through [`@effect-browser/yielded`](../yielded) in a Yielded Agent run.
 
 ```sh
 npm install effect-browser@beta @effect-browser/chromium@beta effect playwright-core
@@ -20,8 +20,9 @@ README says what that risks and how signals end the browser.
 | Module         | Import from                   | What it holds                                                                     |
 | -------------- | ----------------------------- | --------------------------------------------------------------------------------- |
 | `Browser`      | `effect-browser`              | The `Browser` service: tabs, recent events, lifetime and input suspension         |
-| `Page`         | `effect-browser`              | One tab: navigation, reads, input and waits                                       |
-| `Snapshot`     | `effect-browser`              | The model-readable outline of a page, with refs for its controls                  |
+| `Page`         | `effect-browser`              | One tab: navigation, input and waits                                              |
+| `Snapshot`     | `effect-browser`              | The model-readable outline of a page, with refs, and the elements a query finds   |
+| `Text`         | `effect-browser`              | What a page shows as text, from its viewport or one element whole                 |
 | `Frame`        | `effect-browser`              | A page's pictures, crops and screencast, with timing and capture identity         |
 | `BrowserEvent` | `effect-browser`              | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end    |
 | `BrowserError` | `effect-browser`              | Typed failures, whether input reached the page first, and what each leaves        |
@@ -47,6 +48,14 @@ README says what that risks and how signals end the browser.
 | `Release`      | `effect-browser/supervisor`   | What a provider said of a release: `Confirmed` or `Unconfirmed`                   |
 | `TestBrowser`  | `effect-browser/testing`      | A seeded browser over the production lane, suspension gate and event timeline     |
 | `TestPage`     | `effect-browser/testing`      | A deterministic page seeded from data, without page code                          |
+| `TestModel`    | `effect-browser/testing`      | A model that answers from a script, prompt by prompt, and fails when it runs out  |
+| `HttpCassette` | `effect-browser/testing`      | HTTP exchanges recorded once and replayed, with every live request reserved       |
+| `Story`        | `effect-browser/testing`      | Ports released in a scripted order, with one end check for unfinished work        |
+| `BrowserTools` | `effect-browser/ai`           | An agent's browser tools, the pictures before each turn and their layer           |
+| `PageControl`  | `effect-browser/ai`           | The controller the tools act through, and its observations and results' schemas   |
+| `Tabs`         | `effect-browser/ai`           | The tabs the tools follow, as data to save and resume                             |
+| `ToolError`    | `effect-browser/ai`           | What a failed tool tells the model, and whether its input went                    |
+| `PromptCache`  | `effect-browser/ai`           | An HTTP client layer that keeps OpenRouter's prompt cache across pictured turns   |
 
 The root, `effect-browser`, exports the kernel, and each of its modules also has a path of its own,
 such as `effect-browser/Page`. `effect-browser/Cdp` and `effect-browser/Site` are reached only by
@@ -55,9 +64,19 @@ its modules together, as in `import { Moment } from "effect-browser/timeline"`. 
 experimental. `effect-browser/testing`'s seeded services execute explicit test data and refuse
 page scripts.
 
+`Page` holds what a tab is and how it takes its turns: its identity, the order and time of what is
+done on it, and input. Everything else a page does is a function in the module of what it returns,
+taking the page first: `Snapshot.read(page)`, `Snapshot.find(page, query)`,
+`Snapshot.until(page, query, want, millis)`, `Text.read(page)`, `Layout.measure(page, picks)`,
+`Change.read(page)`, `Window.read(page, options)`, `Overlay.make(page)`, `Pose.make(page)` and
+`PageTime.hold(page)`. Those with more than the page also take it last, for a pipeline, as in
+`Effect.flatMap(browser.firstPage, Snapshot.read({ full: true }))`. A new capability follows the
+same rule: `Page` gains a member only for identity, order, time or input, and everything else is a
+function in its job's module.
+
 ## Runtime CDP connectors
 
-`Cdp.open` and `Cdp.layer` accept `connect: Cdp.Connector`, a callback receiving the endpoint and
+`Cdp.make` and `Cdp.layer` accept `connect: Cdp.Connector`, a callback receiving the endpoint and
 `{ timeout, headers, signal }` and returning a real Playwright CDP `Browser`. Node uses
 `playwright-core`'s `chromium.connectOverCDP` by default. A consumer can supply a connector using
 its runtime's WebSocket implementation to avoid Playwright's Node WebSocket transport.
@@ -123,7 +142,9 @@ const nativeConnect: Cdp.Connector = async (endpoint, { timeout, headers, signal
 };
 ```
 
-Pass `nativeConnect` as `connect` to `Cdp.open` or `Cdp.layer`, or to the Browserbase options.
+Pass `nativeConnect` as `connect` to `Cdp.make` or `Cdp.layer`, or to the Browserbase options.
+`Cdp.layerConfig` takes the same options as `Config` values, such as
+`{ endpoint: Config.Redacted("CDP_ENDPOINT") }` for an endpoint that is a credential.
 
 The `workerd` export condition selects a CDP entry without the Node transport. It requires
 `connect`; omitting it fails with `BrowserError` reason `InvalidRequest`. The root entry loads only
@@ -169,7 +190,7 @@ A snapshot outlines the viewport, or the whole page, with a ref such as `e12` on
 lists those controls as values, `Snapshot.Control`: each one's ref, kind, name and what it holds,
 a select's options, and whether it is disabled, checked or takes typed text. `within` reads only
 inside the elements a CSS selector matches, and `query` keeps the lines that hold some text.
-`Page.until(query, want, millis)` waits using `find` matching, including CSS `selector` and
+`Snapshot.until(page, query, want, millis)` waits using `Snapshot.find`'s matching, including CSS `selector` and
 `state: "enabled"`. It searches the document by default. `want` is `"some"`, `"none"`, or
 `{ other: previous.mark }`; comparison marks reveal no text or values and ignore focus.
 A finite nonnegative deadline returns `{ met, mark }`; document replacements share that deadline.
@@ -196,18 +217,18 @@ counted; elsewhere, `label` is the words just before it in its row, item, group 
 is the nearest heading above it, left out for what is pinned to the viewport. The page binds each to
 the element, so a value is never read under another column's header.
 
-`Page.find` reads structure without the outline, in one call to the page. It returns every element
+`Snapshot.find` reads structure without the outline, in one call to the page. It returns every element
 that matches a query, in tree order, each a `Found`: a ref the actions take, its `subject`, its box,
 whether it is in the viewport, and its state (disabled, focused, and checked, expanded, selected,
 pressed or a heading's level where they apply). A `role` matches ignoring case. A `name` matches
 when it reads the same once spaces are collapsed and case folded, or when a `RegExp` finds itself
 in it. `text` matches the smallest element showing it, and a control or heading for the words
 inside it; `near` matches whole words of the context, as replay's choice does. With no rule,
-`find` returns every element in scope that has a role or is a control. There is no ordinal: a
+it returns every element in scope that has a role or is a control. There is no ordinal: a
 caller tells equal elements apart by their context, and finding none is an empty result, not a
 failure. `scope: "document"` reads the whole page; the default is the viewport.
 
-`Page.text` reads what the viewport shows, or one element whole with `scope` set to its ref, in one
+`Text.read` reads what the viewport shows, or one element whole with `scope` set to its ref, in one
 call to the page: a line per block, table cells apart by tabs, cut at a line after `maxChars`
 (12,000 by default). Like the outline, it leaves out what the page hides from assistive technology,
 such as icon glyphs. What a field holds reads `••••` unless `unmask` is set, and a secret field's
@@ -216,7 +237,7 @@ holds, as a PIN field's may, and one that was secret when the library saw it, su
 its page now reveals. The outline shows what fields hold, as the agent needs, but masks a secret
 field the same way.
 
-Reading the viewport, the outline, `find` and `text` skip a subtree whose box lies outside it before
+Reading the viewport, the outline, `Snapshot.find` and `Text.read` skip a subtree whose box lies outside it before
 styling anything in it, so a long table costs only its rows in view. A box says nothing of what is
 positioned out of it, so a subtree is kept when its box is empty; when it holds what is painted at
 the viewport's edges, corners or middle, beneath any transparent layer too, or in its top layer; or
@@ -264,7 +285,7 @@ document; navigation retries share the original timeout. Canvas animation can co
 content is ready. This does not prove pixel or screencast stillness and inherits the change
 recorder's limits for canvas, SVG, frames, shadow content and values changed only by scripts.
 
-`Page.changes({ since, until })` says what visibly changed on a page over a window, in one call to
+`Change.read(page, { since, until })` says what visibly changed on a page over a window, in one call to
 the page, element by element, as a `Change`: text that changed, appeared, disappeared or came and
 went (`brief`), a field's value, or the title. Each says what it showed at the window's start and
 end, how often that changed, the lowest and highest of a number that changed more than once, when
@@ -311,7 +332,7 @@ sets, or a class that reveals an element it has not seen before, such as a toast
 page, though its later changes it does.
 
 A page's timeline has three tracks on the browser's host clock: its events, what changed on it,
-and its frames. `page.window({ since, until })` reads them over a window, a `Moment.Window`: the
+and its frames. `Window.read(page, { since, until })` reads them over a window, a `Window`: the
 events and frames the page keeps, at no call, and its changes, in one call, the first starting its
 record as any read of changes does. `since` is a previous window, to go on exactly where it ended, a
 frame, a host time, or a `Duration` back from `until`; `until` is a frame or a host time, now by
@@ -370,9 +391,10 @@ A press recorded on a subject resolves and focuses it before sending keys. Text 
 typed into a secret field is typed only into one. An element step never falls back to coordinates.
 A step recorded at a point presses the same place within the element found, brought into view
 first, and only when a press there reaches that element, not something over it. Replay stops at
-the first step it cannot take, with a `ReplayError` naming the step and why: `Missing`,
-`Ambiguous`, `Drifted` (nothing with the subject's role and name repeats its context, or the walk
-did not arrive at the recorded site), the step's `BrowserError`, or `Uncertain`. Arrival waits
+the first step it cannot take, with a `ReplayError` naming the step and why, its
+`ReplayErrorReason`: `Missing`, `Ambiguous`, `Drifted` (nothing with the subject's role and name
+repeats its context, or the walk did not arrive at the recorded site), the step's `BrowserError`,
+or `Uncertain`; `Walk.isReplayError` tells one from other failures. Arrival waits
 are bounded by `arrival` (five seconds by default), including redirects after an action. A zero
 wait makes one read without polling; that read retains the page operation's own timeout.
 Each `Action` now records its ending address, so a bounded event history can still record the site
@@ -473,7 +495,7 @@ const browser = Layer.unwrap(
 );
 ```
 
-The task comes from `Policy.Task`, which `effect-agent-browser`'s tools provide to their inputs
+The task comes from `Policy.Task`, which `effect-browser/ai`'s tools provide to their inputs
 from the run's `task`; elsewhere, provide it yourself, or risky input is denied for want of one. A judge sees the task, the action, the typed
 text and the facts as trusted, and the page's text only as evidence. It never sees the agent's own
 words. A judgement only adds to structure: a `secret` fact counts whatever the judge reads. A judge
@@ -593,7 +615,7 @@ cancellation; a wrapper's timeout cannot surrender their authority.
 
 ```ts
 import { Effect, Stream } from "effect";
-import { Browser } from "effect-browser/Browser";
+import * as Browser from "effect-browser/Browser";
 import type { Frame } from "effect-browser/Frame";
 import { Presentation, Stage } from "effect-browser/presentation";
 
@@ -602,7 +624,7 @@ declare const encode: (frame: Frame) => Effect.Effect<void>; // the application'
 const program = Effect.gen(function* () {
   const stage = yield* Stage.make({ quality: 80 });
   const presenter = yield* Presentation.make();
-  const page = yield* (yield* Browser).newPage("https://example.com");
+  const page = yield* Browser.newPage("https://example.com");
   yield* stage.frames.pipe(Stream.runForEach(encode), Effect.forkScoped);
   const shown = yield* stage.present(page); // Presented { page, at, latency }
   yield* presenter.view(page).click("e12"); // glides, then clicks, as a person would
@@ -736,7 +758,7 @@ and the clock probe runs in a world of its own.
 Every operation is recorded as an `Action`, also when its caller interrupts it. An element or point
 action records its `subject`, and a drag where it ended (`to`): the role, accessible name, tag and
 context of what it found, read when its target was resolved, before the pointer moved or any input
-was sent, so a click that removes its element still names it: the same subject `Page.find` gives. A ref is
+was sent, so a click that removes its element still names it: the same subject `Snapshot.find` gives. A ref is
 reused by later outlines, so read `subject` rather than resolving `target` against a later snapshot.
 
 Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its
@@ -811,6 +833,7 @@ A page's `id` is its CDP target id. A new connection to the same browser, as aft
 finds each page under the id it had, with `browser.page(id)`; a stored id the browser no longer
 finds is a page that closed. `browser.pages` lists the open pages in the order the browser began
 tracking them, and `browser.firstPage` gives the first, opening one when there is none.
+`Browser.newPage(url)` opens a page in the context's browser, as `browser.newPage(url)` does.
 
 A page's life is told on the browser's timeline. `PageOpened`; `Navigated` for every move of its
 main frame, `sameDocument` for one within the document, such as `pushState`, with `document`
@@ -838,18 +861,20 @@ A failure on a page that is gone is `Closed` with its cause: `page`, `crashed`, 
 `page`, or the `session` with its pages), and whether to `repeat` the call: `safe`, as nothing
 reached the browser; `check` its effect first, as it may have taken place; `pointless` as it is,
 such as with a stale ref; or `resume` reading events from a newer cursor. `message` is a sentence
-for operators, and the browser tools tell a model what to do about the failure.
+for operators, and the browser tools tell a model what to do about the failure. The reasons make up
+`BrowserErrorReason`, and `isBrowserError` and `isBrowserErrorReason` tell them from other values.
+As Effect's do, each error names itself by its path, such as `effect-browser/BrowserError/Timeout`.
 
 `Walk.step` checks an authored expected effect before input and after a dispatched failure.
 Unknown consequential input requires positive durable evidence before continuation; the `Walk`
-section above describes that recovery contract. `Page.until` provides the underlying bounded
+section above describes that recovery contract. `Snapshot.until` provides the underlying bounded
 observation without deciding whether an action may be repeated:
 
 ```ts
-const observed = yield * page.until({ text: "Order 42" }, "some", 5000);
+const observed = yield * Snapshot.until(page, { text: "Order 42" }, "some", 5000);
 ```
 
-The mark from `until` compares matching elements' text, values and states except focus. Keep it
+The mark from `Snapshot.until` compares matching elements' text, values and states except focus. Keep it
 only as an observation baseline; an unmet or changed observation does not authorize repeating
 unknown consequential input.
 
@@ -892,8 +917,8 @@ events. Compositing remains the consumer’s job.
 A page waits only for itself. Its operations take turns in one lane of its own: an action, which
 sends input or navigates, has the page to itself in FIFO order once it asks for admission.
 Policy preparation reads the page first and a guard can wait outside that queue, so a later
-approved action may enter before an earlier held one. Reads (the outline, `find`, `text`, `changes`,
-pictures, zooms, `title` and the viewport) share the lane after the earlier queued writes, so they
+approved action may enter before an earlier held one. Reads (the outline, `Snapshot.find`, `Text.read`,
+`Change.read`, pictures, zooms, `title` and the viewport) share the lane after the earlier queued writes, so they
 describe the page those actions left. `ready` follows the action in flight too, and holds none back while it
 watches. An action then waits for its page's unresolved input replies. Its timeout bounds those
 waits before a full timeout bounds the action itself: a turn not given in time fails `Busy`, with
@@ -935,15 +960,15 @@ asked between them, joins it, and costs no call of its own. Each read runs in th
 the action timeout whoever gives up, so a caller's own `Effect.timeout` loses nothing: a read that
 ends after all its callers gave up serves the next caller to ask the same within 250 milliseconds
 of completion, unless an action or a new document came first. An action stops the reads nobody awaits rather than
-wait for them. Pictures and `changes` only join: a picture's caller says how old it may be, and a
+wait for them. Pictures and `Change.read` only join: a picture's caller says how old it may be, and a
 window of changes ends as it is read.
 
 `page.state` is what the library already knows of a page, at no call and with no wait for its
 turn: where its main frame is, its document and when it was committed, how far that document has
-loaded, its newest screencast frame, and the viewport's text and title as last read in that
-document, each with when it was learned, so a caller reads their ages. A caller that must never
-wait, such as one reading the screen on air, reads it rather than polling the page. Chromium
-announces no title change, so the title is as a read of the text last found it.
+loaded, and its newest screencast frame, each with when it was learned, so a caller reads their
+ages. A caller that must never wait, such as one reading the screen on air, reads it rather than
+polling the page. `Overlay.drawn(page)` says, at no call either, where the page's overlay last
+drew.
 
 `Browser.Options.maxPages` bounds the pages a browser keeps open, those a site opened included,
 which are never refused: at the limit, `newPage` waits within the action timeout for one to close,
@@ -959,16 +984,16 @@ cancelled glide. A later viewport clamps the starting point to its bounds if nec
 A browser opened with `pageTime` can film a page frame by frame, each frame showing the page at its
 film time however long the last one took to picture. Each part is a module of its own:
 
-- `page.layout(picks)` reads where things are, as data: a box for each pick in the viewport and the
+- `Layout.measure(page, picks)` reads where things are, as data: a box for each pick in the viewport and the
   document, the boxes of its words, and the viewport, scroll and scale, in one call.
   `Layout.rehearse` measures what exists only after an interaction, such as an open menu, and puts
   the page back.
-- `page.overlay` is a layer over the page for a scope that shows a caller's SVG. Screenshots and
-  live views show it; `find`, `layout`, `changes`, `ready` and stillness never read it.
-- `page.hold` holds the page's timers, animation frames, clocks and animations for a scope.
+- `Overlay.make(page)` is a layer over the page for a scope that shows a caller's SVG. Screenshots
+  and live views show it; `Snapshot`, `Layout`, `Change`, `ready` and stillness never read it.
+- `PageTime.hold(page)` holds the page's timers, animation frames, clocks and animations for a scope.
   `advance(by, { scroll, poses, overlay })` steps them and, in the same call, scrolls, poses and
   draws.
-- `page.poses` moves, turns and scales the page's own elements about a point, as data, through
+- `Pose.make(page)` moves, turns and scales the page's own elements about a point, as data, through
   CSS `translate`, `rotate` and `scale`. Readers and clicks see a posed element where it is drawn,
   and the change record does not report a pose. The scope's end takes every pose off.
 - `Frame.paint(page, { scale, scrollbars })` sets an attached browser's device pixels to each CSS pixel,
@@ -981,10 +1006,10 @@ film time however long the last one took to picture. Each part is a module of it
 
 ```ts
 const film = Effect.gen(function* () {
-  const time = yield* page.hold;
-  const overlay = yield* page.overlay;
+  const time = yield* PageTime.hold(page);
+  const overlay = yield* Overlay.make(page);
 
-  yield* page.poses;
+  yield* Pose.make(page);
 
   return yield* Film.frames(page, {
     times: { fps: 30, to: 8000 },
@@ -1003,7 +1028,7 @@ const film = Effect.gen(function* () {
 ```
 
 The frames are pictures; encoding them is the caller's. What an input changed is
-`page.changes({ since })` read after it. Each `Change` has the `box` to frame it by, and `at`, on
+`Change.read(page, { since })` read after it. Each `Change` has the `box` to frame it by, and `at`, on
 the same clock as a `Shot`'s `at`, so on held time the first shot at or after it is the first to
 show it. To lift an element off the page, take its picture with `Frame.zoom` at
 `scale: "device"`, then pose it to `sx: 0, sy: 0`, which hides it and leaves the page laid out as
@@ -1058,19 +1083,20 @@ the generation's scope ends its resource.
 import { Chromium } from "@effect-browser/chromium";
 import { Effect } from "effect";
 import { Supervisor } from "effect-browser/supervisor";
+import * as Text from "effect-browser/Text";
 
 const program = Effect.gen(function* () {
   const sessions = yield* Supervisor.make({
     open: () =>
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
 
         return { value: browser, lost: browser.disconnected };
       }),
   });
 
   return yield* sessions.use(({ value: browser }) =>
-    Effect.flatMap(browser.firstPage, (page) => page.text()),
+    Effect.flatMap(browser.firstPage, Text.read()),
   );
 }).pipe(Effect.scoped);
 ```
@@ -1110,6 +1136,148 @@ bundlers can preserve function names or minify the library without changing that
 The `@effect-browser/source` export condition is for this workspace's development tools; consumer
 bundles should use the default built exports, which also supply the Workers-specific packaging.
 
+## An agent's tools
+
+`effect-browser/ai` gives an agent in any `effect/ai` loop a browser: the tools it calls, what it
+sees of the page before each turn, and the controller the tools act through.
+[`@effect-browser/yielded`](../yielded) gives the same tools to a
+[Yielded Agent](https://github.com/yielded-dev/agent) run.
+
+```ts
+import { Effect } from "effect";
+import { Browser } from "effect-browser";
+import { BrowserTools } from "effect-browser/ai";
+import { LanguageModel, Prompt } from "effect/ai";
+
+const tools = BrowserTools.make();
+
+const solve = (task: string) =>
+  Effect.gen(function* () {
+    const pictures = yield* BrowserTools.Pictures;
+    let thread = Prompt.make(task);
+
+    for (let turn = 0; turn < 20; turn++) {
+      const response = yield* LanguageModel.generateText({
+        // The pictures are for this request alone: the thread never keeps them.
+        prompt: Prompt.concat(thread, yield* pictures.next),
+        toolkit: tools.toolkit,
+        // One call at a time: a turn's calls act on one page, in the order the model made them.
+        concurrency: 1,
+      });
+
+      thread = Prompt.concat(thread, Prompt.fromResponseParts(response.content));
+      if (response.toolCalls.length === 0) return response.text;
+    }
+
+    return "Out of turns.";
+  });
+
+const program = Effect.gen(function* () {
+  const page = yield* (yield* Browser.Browser).firstPage;
+  const task = "Report the title and points of the top story.";
+
+  yield* page.goto("https://news.ycombinator.com");
+
+  // The tools act on this page, and the input policy's judge reads the task.
+  return yield* solve(task).pipe(Effect.provide(tools.layer({ page }, { task })));
+});
+```
+
+Provide a `Browser` and a `LanguageModel`, as the repository's
+[README](https://github.com/mannyc2/effect-agent-browserbase#readme) does. A failed tool does not
+fail the loop: the model reads a `ToolError`, `invalid` for a request the tools cannot carry out or
+`browser` for a browser failure, with `dispatch` saying whether its input may have gone.
+
+`BrowserTools.make()` gives the ref and control tools, with the names, parameters and descriptions
+Yielded Agent gave them until `0.1.0-beta.174` moved its browser tools to Code Mode over CDP:
+
+| Tool         | What it does                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `observe`    | Reads the viewport as an outline whose controls carry refs such as `e12`, and lists them |
+| `act`        | Clicks, fills or selects up to eight refs in order, then observes                        |
+| `inspect`    | Reads inside a CSS selector, or narrows a select's options                               |
+| `navigate`   | Opens an http or https address, a `data:` URL or `about:blank`, then observes            |
+| `scroll`     | Scrolls the page, or what a ref names, by pixels, then observes                          |
+| `wait`       | Waits for what a selector matches to show, hide, enable or hold some text                |
+| `press`      | Presses a key on the element a ref names, focusing it first                              |
+| `select_tab` | Makes another tab current, where the tools follow a browser's tabs                       |
+
+and pointer tools of their own, for what has no ref, such as a canvas game or a chart:
+
+| Tool         | What it does                                                         |
+| ------------ | -------------------------------------------------------------------- |
+| `click_at`   | Clicks a point of the screenshot                                     |
+| `hover`      | Moves the pointer over a ref or a point                              |
+| `drag`       | Drags from a ref or point to another, as a slider or a chart's range |
+| `type_text`  | Types into whatever has focus                                        |
+| `press_keys` | Presses a key or chord, held or repeated, on whatever has focus      |
+| `zoom`       | Crops a region of the viewport, shown before the next turn           |
+| `wait_still` | Waits for the screen to stop moving, as reels coming to rest         |
+| `back`       | Goes back in the tab                                                 |
+
+`BrowserTools.Control` and `BrowserTools.Pointer` are the two groups, to build an agent with fewer;
+the layer serves every tool either way. `make({ mode: "single" })` lets `act` take one action.
+
+- `Pictures`' `next` holds a screenshot of the current tab and the crops `zoom` took since the
+  last turn. Its pixel coordinates are viewport coordinates, which the pointer tools take.
+  `vision: false` leaves the pictures out, and `zoom` then refuses. A queued crop is discarded if another tab
+  becomes current before the next turn, so its coordinates never describe that other tab.
+- `vision: "ask"` shows the screenshot only before a turn after the model called `look`, a tool in
+  `BrowserTools.Look` to merge into the toolkit; crops still follow `zoom`. `vision: "page"`
+  also shows it after pointer input, and while the viewport shows a canvas, a video or another
+  site's frame, where the outline cannot say what is there.
+- `BrowserTools.Find` holds `find`, which lists the whole page's outline lines that hold a text,
+  in view or not, with their refs. Merge it into the toolkit; the layer serves it either way.
+- The layer also provides `BrowserTools.Controller`, the tools' controller, for an application's
+  own tools on the same tabs, as `@effect-browser/tradingview`'s chart tools are: they act on the tab
+  the model sees now, with the run's task, and say what followed.
+- `boxes: true` ends each control's line in the outline with its box, `WxH at (x,y)` in viewport
+  CSS pixels, so the model can match a ref to what the screenshot shows there. `changes: true`
+  gives, after an action, only the outline's lines gone and new since the tab's last whole look,
+  when those are fewer; `observe` reads the whole outline again.
+- `placement: "crop"` makes `click_at` and `drag` first show a crop of the viewport around each
+  point and act only once called at points inside crops already shown, which costs a turn per
+  placement. A ref needs no crop.
+- An observation after an action begins with what followed it: a dialog and how the browser
+  answered it, where the page went, a tab it opened and up to three changes its input caused,
+  such as `"Full" became "Kept"`. A pointer tool's result says the same in `followed`.
+- Every action result says whether input reached the browser: `acknowledged`; `not-dispatched`,
+  when it was refused first, by a stale ref or the input policy; or `possibly-dispatched`, when it failed after.
+  An observation after an action that fails is still returned, and nothing is ever retried.
+- The input policy's judge reads `task`, the agent's task, as what authorizes a risky input.
+- The browser answers dialogs itself, as `effect-browser` does, so no tool answers one. The model
+  sees a screenshot before each turn rather than calling for one.
+- Frames from the same origin are read inline, and none is listed, so `inspect` and `wait` refuse
+  a `frame`.
+
+Only the current pictures are ever in a request, so a provider's prompt cache keeps the thread.
+A turn's picture is dropped on the next call, so a provider that caches up to a breakpoint at the
+end of the prompt, as OpenAI's models do on OpenRouter, caches nothing a later call can use.
+`PromptCache.layer` marks the end of each chat completion's history instead: its last tool result
+or, before there is one, its system message. Provide it to the OpenRouter client:
+
+```ts
+import { OpenRouterClient } from "@effect/ai-openrouter";
+import { Config, Layer } from "effect";
+import { PromptCache } from "effect-browser/ai";
+import { FetchHttpClient } from "effect/http";
+
+const openRouter = OpenRouterClient.layerConfig({
+  apiKey: Config.Redacted("OPENROUTER_API_KEY"),
+}).pipe(Layer.provide(PromptCache.layer), Layer.provide(FetchHttpClient.layer));
+```
+
+`tools.layer({ page })` pins the tools to one page: they list no tabs, and a tab the page opens stays where
+it is. `tools.layer({ browser, follow })` acts on the tab the model last saw and lists the others; a tab an
+action opens is shown at the next look as `follow` says: `"select"`, the default, makes it current
+without bringing it to front, so the page on air and an operator's view stay where they are;
+`"front"` also brings it to front; `"never"` keeps the current tab.
+
+`PageControl.make(target, options)` gives the controller the tools act through, for a host that
+drives a page without a model: `actions.observe` and `actions.act`, and `control.inspect`,
+`navigate`, `scroll`, `wait`, `press` and `selectTab`. Their results are `PageControl.Observation`
+and `PageControl.ActionResult`.
+
 ## Tracing
 
 Operations are spans in Effect's tracer, so an application that installs an exporter sees them in
@@ -1142,7 +1310,8 @@ records except text: the target, the subject's role, name and tag, whether input
 `error.type`. A read that shared another's work says so in `shared`: `joined` or `kept`.
 `Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
-`Page.snapshot`, `Page.find`, `Page.text`, `Page.title`, `Page.viewport`,
+`Snapshot.read`, `Snapshot.find`, `Snapshot.until`, `Text.read`, `Layout.measure`, `Change.read`,
+`Window.read`, `Page.title`, `Page.viewport`,
 `Frame.read` (with
 `source`: a reused screencast `frame` or a new `screenshot`), `Frame.zoom`, `Page.ready` and the
 other waits are spans, as are `Walk.replay` and `Walk.locate`, and so is each round trip to the
@@ -1150,7 +1319,7 @@ page's script (`Page.evaluate`) and its registration (`Page.register`). Each pag
 `bytesOut` and `bytesIn` (their parameters and results as JSON) and `waitedMillis`, how long at
 least one call awaited its reply. An operation inside another counts toward both. Calls Playwright
 makes on its own sessions, such as navigation, are not counted. `Chromium.launch`, `Cdp.connect` and
-`Browser.newPage` cover opening a browser; `Browserbase.open` records its session's id and region,
+`Browser.newPage` cover opening a browser; `Browserbase.make` records its session's id and region,
 `Browserbase.release` a release and its outcome, and `Browserbase.holdContext` the wait for a
 stored context another session writes to. `Page.calibrateClock` maps the browser's clock onto the
 host's with three probes, each a `Page.evaluate` of `clock`, and records the fastest answered

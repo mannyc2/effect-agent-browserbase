@@ -2,7 +2,9 @@
 
 Each release lists what changed since the release before it. From 0.3 on, `effect-browser`,
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
-`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them.
+`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them. Where a release was checked beyond
+`bun run ready`, its entry ends with how. Entries before 0.3 are short summaries drawn from the
+release tags.
 
 ## 0.3.0-beta.24
 
@@ -33,6 +35,13 @@ Each release lists what changed since the release before it. From 0.3 on, `effec
 
 The other packages are unchanged and still require `effect-browser` `^0.3.0-beta.23`.
 
+Local Chromium tests cover each part, the example's frames pixel by pixel. One hosted run filmed
+the example on Browserbase at `0cfee5b` on 25 November 2026: one 1280×720 session, open about 47 s
+and released with its end confirmed, took all 240 frames in 44.0 s with all 11 inputs on their
+frames, passed to `/docs`, which loaded in 629 ms, and recorded 25 changes after the contacts, each
+with its box. That run is the only hosted check of these features. No real site has run
+`effect-browser/Site` yet; its bundle measured 16,360 bytes, minified and gzipped.
+
 ## 0.3.0-beta.23
 
 - **Breaking:** every package peers on `effect` `~4.1.2`, where it peered on `~4.0.3`, and
@@ -47,6 +56,14 @@ The other packages are unchanged and still require `effect-browser` `^0.3.0-beta
   gets, carried no error. `GaveUp` now reads it from that attempt's own cause. When the open's own
   `Effect.ensuring` finalizer dies, Effect makes the refusal a defect inside the open, so `GaveUp`
   still has none.
+- The private site moves to Foldkit 0.170 and Alchemy 2.0.0-beta.85; the versions before them
+  imported the removed `Crypto` module too.
+
+Before the release every workspace's tests passed but one, in `effect-browser` (586 of 587): a
+`Budget.test.ts` read-cost check that fails on `main` at Effect 4.0.3 too. Archives packed from
+#314, in a consumer on Effect 4.1.2, ran a Yielded agent with Claude Haiku 5.5 inside local workerd,
+against local Chromium and against a Browserbase session: it read a page, followed a link and
+answered from both pages.
 
 ## 0.3.0-beta.22
 
@@ -62,6 +79,9 @@ The other packages are unchanged and still require `effect-browser` `^0.3.0-beta
   `effect-browserbase` replaces `Browserbase.supervise` with `generations`, whose `OpenFailed`
   carries cleanup evidence and retry classification, and closes build resources before provider
   release. The other packages require `effect-browser` from this release.
+- A read that completes after all its callers gave up serves the next identical read for 250 ms,
+  where it served for an action timeout. A request policy that fails refuses the input and stays a
+  typed failure.
 - **Breaking:** `effect-agent-browser` peers on `@yielded/agent` `0.1.0-beta.189` exactly (#309).
   Yielded replaced its ref-based browser vocabulary with Code Mode over raw CDP, so `PageControl`
   now owns `Ref`, `Action`, `Observation` and `ActionResult`, and `BrowserTools` owns `observe`,
@@ -79,7 +99,27 @@ The other packages are unchanged and still require `effect-browser` `^0.3.0-beta
   the tab the model sees (#311).
 - `effect-browser-tradingview` joins the workspace, unpublished: a TradingView chart's state, bars,
   studies and points, changes made with the chart's own controls, and `ChartTools` for a Yielded
-  agent's tools or a Code Mode program (#311).
+  agent's tools or a Code Mode program (#311). `ChartInput` makes each change with the chart's
+  toolbar, hotkeys, searches and dialogs, then reads the chart back; the API corrects a point the
+  chart put elsewhere or makes a change the chart has no control for, and `via` says which.
+
+This release replaces the code that the 21 October audit reviewed, and a Claude review of #308
+followed it. [The audit ledger](docs/archive/AUDIT-IMPLEMENTATION.md) and
+[the follow-through](docs/archive/CLAUDE-FOLLOWTHROUGH.md) record each finding and its regression.
+After the follow-through, 956 workspace tests, 14 local latency checks, all 40 packed entry points,
+941 consumer tests, 55 scripted browser cases and both local Workers modes passed. The raw
+Playwright members went once the consumer ran on `read`, `act` and request policies, in isolation
+and on local Workers over CDP. The owner removed the aggregate source-line ceiling after the
+review found no safe cut from 14,024 lines to its 12,000; the module and function limits stay.
+
+The bench measured the agent's changes, and its README has the runs. `PromptCache.layer` cut the
+default arm's cost per operate trial by 22%, and on the TradingView demo by 53%. Pictures on request
+or by page (arms 9 and 10) did the work about as often as a picture every turn, for 42% and 46%
+less. Sharper pictures passed 8 chart trials the default failed and failed 1 it passed (exact p
+0.039). Programs that read the chart (arm 19) passed 30 of 30 against the default's 17; watched,
+with luna-pro in Browserbase, programs with visible changes (arm 21) passed 32 of 32 against 14.
+Recorded chart walks do not replay: a click on the chart's unnamed time axis records a subject
+that replay cannot find.
 
 ## 0.3.0-beta.21
 
@@ -138,6 +178,11 @@ The other packages are unchanged and still require `effect-browser` `^0.3.0-beta
   browser activity and replay chapters. Demo speech uses the agent's own turn text; malformed URL
   escapes and tied largest wins are handled. The separate narrator and duplicated player code are
   removed.
+
+`v0.3.0-beta.17` and `v0.3.0-beta.18` were tagged but not published: beta.17's dry run exposed a
+timing assumption in the deferred-frame readiness test, and beta.18's publishing build a missing
+resize-frame trigger in the same fixture. This release carries their changes without moving their
+tags.
 
 ## 0.3.0-beta.16
 
@@ -218,6 +263,10 @@ The other packages are unchanged and still require `effect-browser` `^0.3.0-beta
   suspension, cues and resumable steps. Their journals, editorial choices and account decisions
   stay in consumer code. Local scenarios prove durable read-back recovery and refusal to resend
   unknown commitments; hosted capture, persistence and Live View evidence remain separate.
+- The H1, H2 and H3 hosted checks in [HOSTED_CHECKS.md](docs/HOSTED_CHECKS.md) become runnable,
+  opt-in probes with bounded session admission. Local runs check their mechanisms, the full
+  five-minute two-capture schedule and an external operator stand-in among them. The hosted runs
+  wait for verified included Browserbase hours, and H3 for a human operator.
 
 ## 0.3.0-beta.10
 
@@ -298,6 +347,28 @@ integrity, that consumers install in its place, as the release checks do.
 - `Page.waitFor` with no selector waits on through a document that has no body yet, as a new
   document has until its parser reaches one. It failed with a `TypeError` read on the page, so a
   wait for text across a navigation could fail before the text came.
+
+### Published
+
+On 10 October 2026, from tag `v0.3.0-beta.5` (`3af967f`) to the `beta` dist-tag, by
+`.github/workflows/publish.yml` through npm trusted publishing, with provenance. Each archive npm
+serves has the integrity of the one the workflow checked. Installed from npm as their READMEs say,
+in an npm project and in a Bun workspace with the isolated linker, the packages held one copy of
+each runtime package, locked the Yielded archive's integrity and loaded all 27 of their entry
+points. `effect-browser-human-strokes`' first publish failed with `ENEEDAUTH`; rerunning the
+publish job reused the checked archives and completed it.
+
+### Size
+
+Against the 0.2 baseline at `ab326c1`, by `wc -l`: `effect-browser` went from 8,871 to 14,978
+source lines, 11,064 to 15,909 test lines and 129 to 169 top-level exports; `effect-browserbase`
+from 807 to 1,704 source lines with 622 more in `testing`, 611 to 2,391 test lines, and 32 to 41
+exports with 14 in `testing`; `effect-browser-human-strokes` from 309 to 298 source lines. The
+rebuilt `effect-agent-browser` has 935 source lines, 725 test lines and 14 exports. Moving the
+agent onto Yielded took 949 source lines out of `effect-browser`, so the two together are smaller
+than the one was. Getting back to the soft ceiling of about 11,000 lines would have dropped
+features, so `bun run size` holds `effect-browser` at 15,000 from this release: a change that
+would cross it deletes as much as it adds.
 
 ## 0.3.0-beta.4 (tagged, not published)
 
@@ -405,6 +476,22 @@ settled, as the paid narration run found moments did not.
 - `Moment.stillness(window)` is `Moment.account(window).stillFor`.
 - `Moment.toPrompt`'s text changed: a change that kept changing ends with whether it still was, and
   one that settled is told among the news, before what is still changing.
+
+### Checks
+
+The hosted checks on 8 October used 3 browser minutes over three sessions, one at a time, 75 s by
+Browserbase's own clock, each released and confirmed. They found that Browserbase refuses a
+malformed context id as invalid (400), which the fake now does; that a search by user metadata
+lists a new session within one search of its create, 104 to 170 ms; that Browserbase cut a
+timed-out session's connection 4.4 s after its `expiresAt`; and that a context's `updatedAt` does
+not move when a session saves to it, so `contextSettle` stays a fixed wait. The crop finding above
+came from the same run. The paid narration run's 160 calls cost $0.084; with the outline in place
+of the account, 13 of 32 states were wrong in 16 moments.
+
+Of nine bugs planted in the lease, `verifyContext`, `attach`, `keep` and a crop's screen, the suite
+caught eight; the ninth, every generation of a keeping supervisor adopting the session it kept, now
+fails a new test. All eleven planted in `Expect` failed the suite. The packed check now runs on
+every PR and push to `main`. No adversarial review of this phase was run.
 
 ## 0.3.0-beta.3 (not published)
 
@@ -558,6 +645,13 @@ tracks, with moments as windows and `page.state`; and agents on Yielded Agent, t
 - `Page.latestFrame` is gone: `page.state` has the newest frame.
 - `Page.waitForText` is gone: `Page.waitFor({ text })` waits for text, in one call the page
   answers as the text comes, and fails `Timeout` rather than `NotFound` at its deadline.
+
+### Checks
+
+Of fifteen bugs planted after the phase, the suite let two through, and now fails on both: a
+switch that turned on the stage while input on the old page was still under way, and a failure
+after an action's input went reported to a model as not dispatched. No adversarial review of this
+phase was run.
 
 ## 0.3.0-beta.2 (not published)
 
@@ -724,6 +818,14 @@ lead with.
   with it.
 - `Page` has a `changes` member, so a hand-made `Page` needs one.
 
+### Checks
+
+This release carries the fixes from the phase's review (#241, #242), for the change record's
+causes and for identity and lifetime. With them, an inert click beside boards ticking every 0.25 to
+6 s was credited with none of 401 ticks and 96 chat lines, where it had been credited with about
+half the slower boards' ticks and every line. Of eleven bugs planted after the phase, the suite let
+five through, and now fails on each.
+
 ## 0.3.0-beta.1 (not published)
 
 Cheaper pictures and reads, and replay: pictures and reads on each page's own counted protocol
@@ -851,11 +953,21 @@ session, a clock measured on first need, `Page.find`, `Page.text`, `Plan` and `P
   the library, the bench or the demos read them. `Browser.make` takes no `contextOrigin`, and
   `Cdp.open` no second argument.
 
+### Checks
+
+The phase's review found frames of the previous page served after a navigation, replays that acted
+in the wrong place, and a busy page's first capture failing or widening the clock's estimate. This
+release has the fixes: reads show the document a navigation reached, replay refuses the review's
+six drifts, `ready` waits out a loading screen in one call, and a stalled connection does not read
+as a still screen.
+
 ## 0.3.0-beta.0 (not published)
 
 0.3 replaces the 0.2 set with a rewrite on Effect 4.0.0 and `effect/ai`. No 0.2 API carries over,
 and nothing translates 0.2 calls into 0.3 ones. [STATUS.md](docs/STATUS.md) says what 0.3 does, and
-each package's README documents its API.
+each package's README documents its API. The 0.2 code, its records and its media are in Git history
+at `1ed8259`, the last `main` before 0.3. 0.3 was then built in four phases, `0.3.0-beta.1` to
+`0.3.0-beta.4`, each ending with a pass that deleted what the phase made redundant.
 
 ### Packages
 
@@ -906,3 +1018,98 @@ each package's README documents its API.
   put about one frame of the crop into a running screencast.
 - The packages import `effect/ai` and `effect/http`, which Effect 4 marks unstable. CI tests them
   with Effect 4.0.0; a later Effect 4 release may change those modules.
+
+## 0.2.0-beta.9
+
+0.2 published `effect-browser`, `effect-browserbase` and `effect-agent-browser` together, with
+provenance, on the `beta` dist-tag, through `tools/release` on ts-release. This, the last 0.2
+release, went out on 2 October 2026 from tag `v0.2.0-beta.9` (`976d316`).
+
+- `effect-agent-browser/browser-use` supplies Effect Agent's `BrowserActions` over an issued page
+  (#146).
+- Every package peers on the exact Effect prerelease it is tested with, `4.0.0-rc.117` (#148), and
+  `effect-agent-browser` on `effect-agent` `0.1.0-beta.165` (#143).
+- A performed click that its deadline cannot fit is refused before any input (#149), and performed
+  keys are held for their plan, not a round trip (#142). A navigation is recorded as a one-step
+  `Plan` (#144).
+
+## 0.2.0-beta.8
+
+- `effect-browser` lands the `Page`, `Plan` and `Timeline` stack (#139), and tracing and the browser
+  benchmarks move onto pages (#140). Readings report measured scroll progress.
+- A binding's foreign origin is refused before admission (#126), and an observation's node handle
+  extraction is bounded (#124).
+- After the release, #141 checked it on Browserbase.
+
+## 0.2.0-beta.7
+
+- The repository becomes a standalone Bun workspace (#123). The packages it built were
+  byte-identical to the published `0.2.0-beta.6` archives.
+- `effect-browser` adds windows for new pages, a queued `createPage`, native detail and
+  `describePage`; an unknown outcome on a page that is not selected closes only that page (#127).
+
+## 0.2.0-beta.6
+
+- `effect-browserbase` lets a reconciled context take a writer again (#121).
+- A guarded real-model evaluation campaign joins `effect-agent-browser`'s tests, with hosted cases
+  on Browserbase (#117 to #120).
+
+## 0.2.0-beta.5
+
+- `effect-agent-browser`'s tools accept `null` for every optional parameter, say what a refused
+  parameter got wrong, and state `browser_type`'s text limit (#114).
+
+## 0.2.0-beta.4
+
+- An owned Chromium's lifetime is tied to its host process (#102, #103), and capture lifetimes
+  hold across navigation events (#110).
+- Clicks report input receipts (#108), and the livestream orders its captions and steps with its
+  frames (#103).
+- `effect-browserbase` adds a usage observation example (#111).
+
+## 0.2.0-beta.3
+
+- `effect` moves to `4.0.0-rc.117` and `effect-agent` to `0.1.0-beta.142` (#100).
+
+## 0.2.0-beta.2
+
+- A Browserbase session's action allowance can reach 1,000,000 and reports its use (#96).
+- Hosted checks for a persisting context after its writer is killed (#97) and for a long session
+  ran for the first time.
+
+## 0.2.0-beta.1
+
+- Capture serves live and delayed viewers (#81). A livestream example shows the agent's browser,
+  live or delayed, with captions from a narrator that is itself an agent (#87, #92).
+- The agent's tools are configurable, with gated form filling (#74), and public testing entry
+  points serve consumer tests (#75).
+- A reading fetches its data and node handles in a fixed number of round trips (#90), and an
+  observation survives a change in another frame of its page (#89). A hosted live-capture check
+  records its runs (#91).
+
+## 0.2.0-beta.0
+
+Published on 23 September 2026. Three packages replace the 0.1 pair: `effect-browser`, new, with
+self-managed Chromium at `effect-browser/chromium`; `effect-browserbase`; and
+`effect-agent-browser`, in place of `effect-agent-browserbase`. Chromium and Browserbase share one
+scoped runtime and the agent tools, on Effect Agent (`effect-agent`) and `effect` `4.0.0-rc.115`
+(#61, #67 to #73).
+
+## 0.1.0-beta.104
+
+`effect-browserbase` and `effect-agent-browserbase`, the first release through the release
+workflow, with provenance. Its release engine carries its own fix for npm's OIDC exchange.
+
+- A local Chromium, owned or borrowed over loopback, runs through the same owner, driver, capture
+  and page control as a hosted session, and composes with the host's tools (#58).
+- An incomplete `DevToolsActivePort` is startup in progress, not a malformed endpoint (#60).
+
+`v0.1.0-beta.103` was tagged but not published: the release engine rejected npm's OIDC exchange.
+This release carries its changes without moving the tag.
+
+## 0.1.0-beta.102
+
+`effect-browserbase` and `effect-agent-browserbase`, published by hand on 22 September 2026 from tag
+`v0.1.0-beta.102` (`c2afec8`), without provenance. They add real pointer, wheel and key input,
+viewport observation with host-only control facts, passive checkpoints, and an address for every
+document a frame can name.

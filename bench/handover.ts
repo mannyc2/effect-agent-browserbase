@@ -1,6 +1,5 @@
 /** The opt-in H2 command. Only closed, aliased evidence reaches its private output directory. */
 import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
-import * as ContextLease from "@effect-browser/browserbase/ContextLease";
 import { Console, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { Command, Flag } from "effect/cli";
 import { Digest, SecureRandom } from "effect/crypto";
@@ -60,7 +59,7 @@ export const command = Command.make(
       const directory = path.join(import.meta.dirname, "..", ".work", "h2", runId);
       const versions: Record<string, string> = {};
 
-      for (const name of ["browser", "browserbase", "agent-browser", "human-strokes"]) {
+      for (const name of ["browser", "browserbase", "yielded", "human-strokes"]) {
         const manifest = yield* fs
           .readFileString(path.join(import.meta.dirname, "..", "packages", name, "package.json"))
           .pipe(
@@ -120,10 +119,7 @@ export const command = Command.make(
             "H2 did not establish all ordering, persistence and release checks; do not repeat an uncertain run blindly",
           );
       }).pipe(
-        Effect.provide([
-          BrowserbaseClient.layerConfig().pipe(Layer.provide(FetchHttpClient.layer)),
-          ContextLease.layer,
-        ]),
+        Effect.provide(BrowserbaseClient.layerConfig().pipe(Layer.provide(FetchHttpClient.layer))),
       );
     }),
 ).pipe(

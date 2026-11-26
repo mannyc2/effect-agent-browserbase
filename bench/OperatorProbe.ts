@@ -2,6 +2,7 @@
 import { Effect, Schema, Stream } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import * as Frame from "effect-browser/Frame";
+import * as Snapshot from "effect-browser/Snapshot";
 
 import { refuse } from "./Budget.ts";
 import * as Fixtures from "./FixtureRoutes.ts";
@@ -110,7 +111,8 @@ export const make = <E, R>(
               checks.reads++;
               checks.signedIn = false;
               for (const page of yield* browser.pages) {
-                if ((yield* page.find(settings.signedIn)).length > 0) checks.signedIn = true;
+                if ((yield* Snapshot.find(page, settings.signedIn)).length > 0)
+                  checks.signedIn = true;
               }
               if (checks.dispatched !== 0)
                 return yield* refuse("H3 observed dispatched library input during handoff");

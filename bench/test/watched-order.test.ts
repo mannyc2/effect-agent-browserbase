@@ -57,7 +57,7 @@ it.live(
         ).pipe(Effect.provideService(Scope.Scope, hold));
 
         // Its held stream isolates the FIFO handover race; all other contracts use the public kit.
-        const page = yield* TestPage.withPictures(simulated.page, (own) => ({
+        const page = TestPage.withPictures(simulated.page, (own) => ({
           ...own,
           capture: () =>
             Effect.succeed({

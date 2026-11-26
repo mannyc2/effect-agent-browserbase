@@ -7,8 +7,11 @@ import { Deferred, Effect, Fiber, Schedule, Stream, Tracer } from "effect";
 
 import { behindProxy, type Command, type Proxy } from "../../../tools/testing/cdp-proxy.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Change from "../src/Change.ts";
 import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import * as Moment from "../src/timeline/Moment.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
 import * as TestCdp from "./support/TestCdp.ts";
@@ -51,7 +54,7 @@ const animated = html(`<body style="margin:0"><canvas id=c width=300 height=300>
 const opened = (args: ReadonlyArray<string> = []) =>
   Effect.gen(function* () {
     const proxy = yield* behindProxy(args);
-    const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+    const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
 
     return { proxy, browser };
   });
@@ -105,7 +108,7 @@ it.live("opening a browser over CDP costs 33 calls, the tab's registration one r
     Effect.gen(function* () {
       const proxy = yield* behindProxy();
 
-      const sent = (yield* sentBy(proxy, Cdp.open({ endpoint: proxy.endpoint }))).filter(
+      const sent = (yield* sentBy(proxy, Cdp.make({ endpoint: proxy.endpoint }))).filter(
         (command) => command.method !== "Target.detachFromTarget",
       );
 
@@ -132,7 +135,7 @@ it.live("a capture starts in two calls once the browser's clock is mapped", () =
       holds(yield* toFirstFrame(proxy, page), 2, 2);
       const other = yield* browser.newPage(still("second"));
 
-      yield* other.snapshot();
+      yield* Snapshot.read(other);
       holds(yield* toFirstFrame(proxy, other), 2, 2);
     }).pipe(Effect.scoped),
   ),
@@ -182,7 +185,7 @@ it.live("a crop costs two calls, and a page's first two more to hold its screen"
       const page = yield* browser.newPage(still("crop"));
 
       yield* Frame.read(page, { maxAge: 0 });
-      yield* page.snapshot();
+      yield* Snapshot.read(page);
       holds(yield* sentBy(proxy, Frame.zoom(page, { x: 10, y: 10, width: 120, height: 90 })), 4, 3);
       holds(yield* sentBy(proxy, Frame.zoom(page, { x: 20, y: 10, width: 120, height: 90 })), 2, 2);
     }).pipe(Effect.scoped),
@@ -214,18 +217,18 @@ it.live("a read costs two calls on a new document, and one warm", () =>
 
       // The first read registers the page script with the page's own session, once, then finds the
       // world and reads.
-      holds(yield* sentBy(proxy, page.snapshot()), 3, 3, 1);
+      holds(yield* sentBy(proxy, Snapshot.read(page)), 3, 3, 1);
 
       yield* page.goto(still("two"));
-      holds(yield* sentBy(proxy, page.snapshot()), 2, 2);
-      holds(yield* sentBy(proxy, page.snapshot()), 1, 1);
-      holds(yield* sentBy(proxy, page.find({ role: "heading" })), 1, 1);
-      holds(yield* sentBy(proxy, page.find({ at: { x: 20, y: 20 } })), 1, 1);
-      holds(yield* sentBy(proxy, page.text()), 1, 1);
+      holds(yield* sentBy(proxy, Snapshot.read(page)), 2, 2);
+      holds(yield* sentBy(proxy, Snapshot.read(page)), 1, 1);
+      holds(yield* sentBy(proxy, Snapshot.find(page, { role: "heading" })), 1, 1);
+      holds(yield* sentBy(proxy, Snapshot.find(page, { at: { x: 20, y: 20 } })), 1, 1);
+      holds(yield* sentBy(proxy, Text.read(page)), 1, 1);
       // A still page is ready at its first check, and one that shows something only later is
       // checked in the page until it does.
       holds(yield* sentBy(proxy, page.ready()), 1, 1);
-      assert.include((yield* page.text()).text, "two");
+      assert.include((yield* Text.read(page)).text, "two");
       yield* Effect.promise(() =>
         TestCdp.nativePage(page).evaluate(() => {
           const shown = document.body.innerHTML;
@@ -243,7 +246,7 @@ it.live("a read costs two calls on a new document, and one warm", () =>
           setTimeout(() => document.body.insertAdjacentHTML("beforeend", "<p>Arrived</p>"), 600);
         }),
       );
-      holds(yield* sentBy(proxy, page.until({ text: "Arrived" }, "some", 5000)), 1, 1);
+      holds(yield* sentBy(proxy, Snapshot.until(page, { text: "Arrived" }, "some", 5000)), 1, 1);
       // The unified wait holds a single browser-side predicate until its deadline.
 
       yield* Effect.promise(() =>
@@ -251,14 +254,14 @@ it.live("a read costs two calls on a new document, and one warm", () =>
           setTimeout(() => document.body.insertAdjacentHTML("beforeend", "<p>Later</p>"), 600);
         }),
       );
-      holds(yield* sentBy(proxy, page.until({ text: "Later" }, "some", 5000)), 1, 1);
+      holds(yield* sentBy(proxy, Snapshot.until(page, { text: "Later" }, "some", 5000)), 1, 1);
       // However long the page is, a read is one call.
       yield* Effect.promise(() =>
         TestCdp.nativePage(page).evaluate(() =>
           document.body.insertAdjacentHTML("beforeend", "<p><button>Buy</button></p>".repeat(2000)),
         ),
       );
-      holds(yield* sentBy(proxy, page.find({ role: "button", scope: "document" })), 1, 1);
+      holds(yield* sentBy(proxy, Snapshot.find(page, { role: "button", scope: "document" })), 1, 1);
     }).pipe(Effect.scoped),
   ),
 );
@@ -272,17 +275,17 @@ it.live("identical reads asked together cost one call between them", () =>
       const { proxy, browser } = yield* opened();
       const page = yield* browser.newPage(still("joined"));
 
-      yield* page.snapshot();
-      yield* page.changes();
+      yield* Snapshot.read(page);
+      yield* Change.read(page);
 
       const reads = Effect.all(
         [
-          page.snapshot(),
-          page.snapshot(),
-          page.text(),
-          page.text(),
-          page.changes(),
-          page.changes(),
+          Snapshot.read(page),
+          Snapshot.read(page),
+          Text.read(page),
+          Text.read(page),
+          Change.read(page),
+          Change.read(page),
         ],
         { concurrency: "unbounded" },
       );
@@ -305,7 +308,6 @@ it.live("a page's state costs no call, nor waits for an action, and holds what t
         Effect.forkScoped,
       );
       yield* framesArrive(page);
-      const text = yield* page.text();
 
       const state = yield* page.state.pipe(
         Effect.repeat({
@@ -317,12 +319,10 @@ it.live("a page's state costs no call, nor waits for an action, and holds what t
 
       holds(yield* sentBy(proxy, page.state), 0, 0);
       assert.deepStrictEqual(
-        [state.url, state.document, state.text?.title, state.text],
+        [state.url, state.document],
         [
           yield* page.url,
           (yield* page.recentEvents).findLast((event) => event._tag === "Navigated")?.document,
-          "known",
-          text,
         ],
       );
       assert.isDefined(state.committedAt);
@@ -347,12 +347,11 @@ it.live("a page's state costs no call, nor waits for an action, and holds what t
       );
       yield* Deferred.succeed(released, undefined);
       yield* Fiber.join(pressing);
-      // A new document leaves behind the text read of the one before, and any load it holds is the
-      // new document's.
+      // Any load a new document's state holds is the new document's.
       yield* page.goto(still("next"));
       const moved = yield* page.state;
 
-      assert.deepStrictEqual([moved.document, moved.text], [state.document + 1, undefined]);
+      assert.strictEqual(moved.document, state.document + 1);
       assert.isAtLeast(moved.load?.at ?? Infinity, moved.committedAt ?? Infinity);
     }).pipe(Effect.scoped),
   ),
@@ -366,7 +365,7 @@ it.live("reuses one abandoned read without a call, then invalidates it on input"
       const page = yield* browser.newPage(still("kept"));
       const faults = yield* TestCdp.TestCdp;
 
-      yield* page.text();
+      yield* Text.read(page);
 
       const abandon = Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
@@ -382,7 +381,7 @@ it.live("reuses one abandoned read without a call, then invalidates it on input"
           },
           { phase: "after", times: 1 },
         );
-        const caller = yield* page.text().pipe(Effect.forkChild);
+        const caller = yield* Text.read(page).pipe(Effect.forkChild);
 
         yield* Deferred.await(entered);
         yield* Fiber.interrupt(caller);
@@ -390,10 +389,10 @@ it.live("reuses one abandoned read without a call, then invalidates it on input"
       });
 
       yield* abandon;
-      holds(yield* sentBy(proxy, page.text()), 0, 0);
+      holds(yield* sentBy(proxy, Text.read(page)), 0, 0);
       yield* abandon;
       yield* page.press("Shift");
-      holds(yield* sentBy(proxy, page.text()), 1, 1);
+      holds(yield* sentBy(proxy, Text.read(page)), 1, 1);
     }).pipe(Effect.scoped),
   ),
 );
@@ -437,19 +436,19 @@ it.live("a read of changes costs one call, its first a registration beside it", 
         Effect.forkScoped,
       );
       yield* framesArrive(page);
-      yield* page.snapshot();
+      yield* Snapshot.read(page);
       yield* page.ready();
       yield* page.goto(still("unread"));
-      yield* page.snapshot();
+      yield* Snapshot.read(page);
       // Reads, pictures and a new document register only the page script.
       assert.strictEqual(registrations().length, 1);
       yield* page.goto(animated);
       yield* framesArrive(page);
-      yield* page.snapshot();
+      yield* Snapshot.read(page);
 
-      holds(yield* sentBy(proxy, page.changes()), 2, 1);
+      holds(yield* sentBy(proxy, Change.read(page)), 2, 1);
       assert.strictEqual(registrations().length, 2);
-      holds(yield* sentBy(proxy, page.changes()), 1, 1);
+      holds(yield* sentBy(proxy, Change.read(page)), 1, 1);
       yield* Moment.capture(page);
       holds(yield* sentBy(proxy, Moment.capture(page)), 1, 1);
     }).pipe(Effect.scoped),
@@ -467,10 +466,10 @@ it.live("a browser's first read of changes maps its clock, once, where no captur
       const first = yield* browser.newPage(still("first"));
       const second = yield* browser.newPage(still("second"));
 
-      yield* first.snapshot();
-      yield* second.snapshot();
-      holds(yield* sentBy(proxy, first.changes()), 6, 5);
-      holds(yield* sentBy(proxy, second.changes()), 2, 1);
+      yield* Snapshot.read(first);
+      yield* Snapshot.read(second);
+      holds(yield* sentBy(proxy, Change.read(first)), 6, 5);
+      holds(yield* sentBy(proxy, Change.read(second)), 2, 1);
     }).pipe(Effect.scoped),
   ),
 );
@@ -484,7 +483,7 @@ it.live("a wait for a still screen costs two calls, and three more without a run
       const { proxy, browser } = yield* opened();
       const page = yield* browser.newPage(still("quiet"));
 
-      yield* page.snapshot();
+      yield* Snapshot.read(page);
       // The browser's first capture maps its clock.
       yield* toFirstFrame(proxy, page);
       holds(yield* sentBy(proxy, Stillness.wait(page, { quietMillis: 100 })), 5, 5);
@@ -522,10 +521,10 @@ it.live("a page operation's span reports the calls and bytes the wire carried", 
       });
 
       yield* Frame.read(page, { maxAge: 0 });
-      yield* page.snapshot();
+      yield* Snapshot.read(page);
       for (const [name, operation] of [
         ["Frame.read", Effect.asVoid(Frame.read(page, { maxAge: 0 }))],
-        ["Page.snapshot", Effect.asVoid(page.snapshot())],
+        ["Snapshot.read", Effect.asVoid(Snapshot.read(page))],
         ["Frame.zoom", Effect.asVoid(Frame.zoom(page, { x: 0, y: 0, width: 200, height: 100 }))],
       ] as const) {
         const sent = yield* sentBy(proxy, Effect.provideService(operation, Tracer.Tracer, tracer));

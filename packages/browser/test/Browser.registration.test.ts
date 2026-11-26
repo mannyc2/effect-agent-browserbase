@@ -2,17 +2,18 @@ import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Stream } from "effect";
 
+import * as Snapshot from "../src/Snapshot.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("keeps a popup registration alive when its input caller is interrupted", () =>
   TestCdp.isolated((faults) =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
       const opener = yield* browser.firstPage;
 
       yield* opener.goto((yield* Site).url("/form"));
-      const [link] = yield* opener.find({ role: "link", name: "Open in a new tab" });
+      const [link] = yield* Snapshot.find(opener, { role: "link", name: "Open in a new tab" });
       const gate = yield* Deferred.make<void>();
       const baseline = faults.calls.filter((call) => call.method === "$open").length;
 
@@ -45,7 +46,7 @@ it.live("keeps a popup registration alive when its input caller is interrupted",
 it.live("cleans a canceled newPage allocation without canceling another registration", () =>
   TestCdp.isolated((faults) =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
 
       yield* browser.firstPage;
       const context = TestCdp.nativeContext(browser);

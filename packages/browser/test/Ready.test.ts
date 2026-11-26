@@ -8,10 +8,13 @@ import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { Closed, Failed, undispatched } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Change from "../src/Change.ts";
 import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestPage from "../src/testing/TestPage.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
+import * as PageFunctions from "./support/PageFunctions.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const blank = Effect.gen(function* () {
@@ -623,7 +626,7 @@ it.live("is never ready on a tab behind another that paints nothing", () =>
       const proxy = yield* behindProxy();
 
       proxy.swallow = (command) => command.method === "Emulation.setFocusEmulationEnabled";
-      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
       const behind = yield* browser.newPage("data:text/html,<h1>Prepared off stage</h1>");
 
       yield* browser.newPage("data:text/html,<h1>On stage</h1>");
@@ -656,7 +659,7 @@ it.live("never takes a stalled connection for a still screen", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
       const proxy = yield* behindProxy();
-      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
 
       for (const still of ["screen", "foreground"] as const)
         for (const [toward, slow] of [
@@ -709,7 +712,7 @@ it.live(
     TestCdp.withCdp(
       Effect.gen(function* () {
         const proxy = yield* behindProxy();
-        const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+        const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
         const page = yield* browser.newPage(ticking);
 
         yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
@@ -722,7 +725,7 @@ it.live(
             until: (frames) => frames.length > 0,
           }),
         );
-        yield* page.changes();
+        yield* Change.read(page);
         proxy.withhold = (method) => method === "Page.screencastFrame";
         const started = yield* browser.now;
 
@@ -739,14 +742,13 @@ for (const failure of [
 ]) {
   it.live("stillness retains a capture " + failure.reason._tag + " before its deadline", () =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
       const original = yield* browser.newPage("data:text/html,<h1>Ready</h1>");
       let finalized = false;
 
-      const page = yield* TestPage.withPictures(original, (own) => ({
-        ...own,
+      const page = PageFunctions.replace(original, {
         capture: (options) =>
-          own.capture(options).pipe(
+          Frame.capture(original, options).pipe(
             Effect.map((capture) => ({
               ...capture,
               stream: Stream.fail(failure).pipe(
@@ -758,7 +760,7 @@ for (const failure of [
               ),
             })),
           ),
-      }));
+      });
 
       const result = yield* Stillness.wait(page, {
         quietMillis: 10,
@@ -810,7 +812,7 @@ for (const [name, options] of [
 
 it.live("page.ready refuses invalid quiet intervals", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
     const page = yield* browser.newPage("data:text/html,<h1>Ready</h1>");
 
     for (const quietMillis of [-1, Number.NaN, Infinity]) {
@@ -827,7 +829,7 @@ it.live("page.ready refuses invalid quiet intervals", () =>
 it.live("foreground motion after navigation cannot inherit the previous document's mask", () =>
   Effect.gen(function* () {
     const faults = yield* TestCdp.make();
-    const browser = yield* faults.provide(Chromium.open());
+    const browser = yield* faults.provide(Chromium.make());
     const page = yield* browser.newPage();
 
     const native = yield* faults.native(page.id);
@@ -862,7 +864,7 @@ it.live("foreground motion after navigation cannot inherit the previous document
     );
 
     yield* Effect.addFinalizer(() => Effect.sync(resume));
-    const [link] = yield* page.find({ role: "link", name: "Next" });
+    const [link] = yield* Snapshot.find(page, { role: "link", name: "Next" });
 
     yield* page.click(link!.ref);
     const state = yield* page.state;

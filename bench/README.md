@@ -69,7 +69,8 @@ to cover its paying cascades, rather than asking the model to count transitions 
 pictures, and its capture is incomplete if two consecutive frames are 1,800 ms (one cascade) or
 more apart. The jump task's first frame must precede the jump, and its control's frames must all
 precede any jump. Half the chart seeds drift up and half down, so a constant trend answer cannot
-pass. Operate tasks run a Yielded agent with `effect-agent-browser`'s tools: in the default arm, it
+pass. Operate tasks run a Yielded agent with `effect-browser/ai`'s tools, through
+`@effect-browser/yielded`: in the default arm, it
 sees a screenshot before each turn and reads the outline with `observe` and after each `act`;
 `zoom` adds requested viewport crops before the next turn, and pixel clicks name the element under
 the requested point. Runs without a model still use the free
@@ -144,7 +145,7 @@ requests no further session and records the remaining trials as unrun. A refused
 another 4xx) allocated nothing and stops nothing. Browserbase time is not part of
 the model budget. Each session carries the trial's run, task, trial, arm and trace id as user
 metadata, which Browserbase's dashboard shows, and its trace records the session's id and region
-on `Browserbase.open`, so either finds the other.
+on `Browserbase.make`, so either finds the other.
 The model remains a caller choice. For the research runs, use `openai/gpt-6-luna`; reasoning defaults
 to `medium` for operate tasks and `none` for understand tasks. `--reasoning` overrides both.
 
@@ -207,7 +208,7 @@ still apply before any recorded provider request, and each recorded call is sett
 its receipt shows, so the cap bounds a trial's spend rather than its calls. Recordings remain private local evidence.
 `bun run --cwd bench bench regrade path/to/recording.json` re-runs the current task grader using
 that saved truth, with no browser or model; a changed task prompt is refused. The public
-`effect-agent-browser/testing` HTTP cassette can replay the saved `http` exchanges beneath the
+`effect-browser/testing` HTTP cassette can replay the saved `http` exchanges beneath the
 same provider layer. Changed request bodies or tool schemas fail with re-record guidance.
 These codec checks do not claim deterministic replay of a live page's changing screenshots.
 
@@ -231,7 +232,7 @@ Each trial is a trace of its own, rooted at a `bench.trial` span with its task, 
 and model and, once it ends, its status, reason and grade; its `traceId` finds it. Each judged case
 is a `bench.judge` trace. `effect-browser`'s README lists the spans inside. `--record` also keeps
 the trial's spans in `recording.json`, on the recording's host clock. A hosted trial's spans hold
-its Browserbase session id, on `Browserbase.open` and in the API requests' URLs, so keep recordings
+its Browserbase session id, on `Browserbase.make` and in the API requests' URLs, so keep recordings
 and exported traces out of commits; a packed replay leaves the spans out.
 
 ### Latency

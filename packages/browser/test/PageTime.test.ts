@@ -1,11 +1,13 @@
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Option } from "effect";
 import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
 import * as Frame from "../src/Frame.ts";
+import * as Overlay from "../src/Overlay.ts";
 import type { Page } from "../src/Page.ts";
+import * as PageTime from "../src/PageTime.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -104,7 +106,7 @@ layer(
       const page = yield* blank;
 
       yield* show(page, motion);
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
 
       const before = yield* evaluate(page, () => ({
         ticks,
@@ -156,7 +158,7 @@ layer(
       const page = yield* blank;
 
       yield* show(page, motion);
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
 
       yield* page.click({ x: 100, y: 15 });
       yield* realSleep(200);
@@ -186,7 +188,7 @@ layer(
       const page = yield* blank;
 
       yield* show(page, motion);
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
 
       yield* page.click({ x: 100, y: 15 });
       yield* held.advance("100 millis");
@@ -212,7 +214,7 @@ layer(
 
       const [page0, stale] = yield* Effect.scoped(
         Effect.gen(function* () {
-          const held = yield* page.hold;
+          const held = yield* PageTime.hold(page);
 
           yield* page.click({ x: 30, y: 15 });
           yield* held.advance("10 seconds");
@@ -242,7 +244,7 @@ layer(
       const page = yield* blank;
 
       yield* show(page, motion);
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
 
       yield* show(page, motion);
       yield* realSleep(350);
@@ -262,19 +264,19 @@ layer(
       const page = yield* blank;
 
       yield* show(page, `<div style="height: 3000px">Tall</div>`);
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
       const refused = yield* Effect.flip(held.advance("10 millis", { overlay: { _tag: "Empty" } }));
 
       assert.strictEqual(refused.reason._tag, "InvalidRequest");
       assert.strictEqual(
-        (yield* Effect.flip(Effect.scoped(page.hold))).reason._tag,
+        (yield* Effect.flip(Effect.scoped(PageTime.hold(page)))).reason._tag,
         "InvalidRequest",
       );
       assert.strictEqual(
         (yield* Effect.flip(held.advance("-1 millis"))).reason._tag,
         "InvalidRequest",
       );
-      yield* page.overlay;
+      yield* Overlay.make(page);
 
       const scroll = yield* held.advance("33 millis", {
         scroll: 200,
@@ -285,7 +287,7 @@ layer(
       });
 
       assert.deepStrictEqual(scroll, { x: 0, y: 200 });
-      assert.strictEqual((yield* page.state).overlay?.length, 1);
+      assert.strictEqual(Option.getOrUndefined(yield* Overlay.drawn(page))?.length, 1);
     }),
   );
 });
@@ -299,7 +301,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       const page = yield* blank;
 
       yield* show(page, `<p>Plain</p>`);
-      const refused = yield* Effect.flip(Effect.scoped(page.hold));
+      const refused = yield* Effect.flip(Effect.scoped(PageTime.hold(page)));
 
       assert.strictEqual(refused.reason._tag, "InvalidRequest");
       assert.isTrue(yield* evaluate(page, () => String(setTimeout).includes("native code")));

@@ -6,11 +6,12 @@ import { TestClock } from "effect/testing";
 import { chromium } from "playwright-core";
 
 import * as Browser from "../src/Browser.ts";
+import * as Text from "../src/Text.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("fulfills Unicode documents before opening pages and refuses invalid responses", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open({
+    const browser = yield* Chromium.make({
       requests: {
         patterns: ["https://synthetic.test/*"],
         decide: ({ url }) =>
@@ -25,7 +26,7 @@ it.live("fulfills Unicode documents before opening pages and refuses invalid res
 
     const page = yield* browser.newPage("https://synthetic.test/document");
 
-    assert.include((yield* page.text()).text, "Receipt ✓ 日本語");
+    assert.include((yield* Text.read(page)).text, "Receipt ✓ 日本語");
     const refused = yield* page.goto("https://synthetic.test/invalid").pipe(Effect.flip);
 
     assert.isTrue(refused.dispatched);

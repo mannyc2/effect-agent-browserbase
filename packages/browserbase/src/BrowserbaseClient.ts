@@ -41,7 +41,7 @@ import {
   isTransient,
   NotFound,
   RateLimited,
-  type Reason,
+  type BrowserbaseErrorReason,
   Status,
   Transport,
   Unauthorized,
@@ -147,7 +147,7 @@ export interface SessionOptions {
 export interface BrowserSettings {
   /**
    * Load a stored context. With `persist`, Browserbase saves the session's changes back to it once
-   * the session ends; `Browserbase.open` lets one such session at a time write to each context.
+   * the session ends; `Browserbase.make` lets one such session at a time write to each context.
    */
   readonly context?: { readonly id: string; readonly persist?: boolean | undefined } | undefined;
   readonly viewport?: { readonly width: number; readonly height: number } | undefined;
@@ -257,7 +257,7 @@ const ErrorBody = Schema.fromJsonString(Schema.Struct({ message: Schema.String }
 const SearchResponse = Schema.Struct({ results: Schema.Array(SearchResult) });
 const CreatedId = Schema.Struct({ id: Schema.String.check(Schema.isPattern(ids)) });
 
-const statusReason = (status: number, detail: string): Reason => {
+const statusReason = (status: number, detail: string): BrowserbaseErrorReason => {
   if (status < 200 || (status >= 300 && status < 400)) {
     return new Status({
       status,
@@ -305,7 +305,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
     ),
   );
 
-  const failure = (operation: string, reason: Reason) =>
+  const failure = (operation: string, reason: BrowserbaseErrorReason) =>
     new BrowserbaseError({ operation, reason });
 
   const requestTimeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(60));
@@ -335,7 +335,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
             ),
       ),
       // The deadline also applies inside a caller's uninterruptible acquisition, such as the
-      // session create in Browserbase.open, so that acquisition always settles.
+      // session create in Browserbase.make, so that acquisition always settles.
       Effect.timeoutOrElse({
         duration: requestTimeout,
         orElse: () =>

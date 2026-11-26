@@ -14,7 +14,8 @@ import {
   Subject,
   type SubjectContext,
 } from "../../src/BrowserEvent.ts";
-import { type FindQuery, Found, type Page, redacted } from "../../src/Page.ts";
+import { type Page, redacted } from "../../src/Page.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 import { choose } from "../../src/walk/internal/choose.ts";
 import * as Walk from "../../src/walk/Walk.ts";
 import { DriftSite, DriftSiteLayer, type Operator, operators } from "../drift.ts";
@@ -32,7 +33,7 @@ const context = Arbitrary.all({
 });
 
 const buy = (subject: SubjectContext, ref = "e1") =>
-  new Found({
+  new Snapshot.Found({
     ref,
     subject: new Subject({ role: "button", name: "Buy", tag: "button", context: subject }),
     box: { x: 0, y: 0, width: 10, height: 10 },
@@ -45,7 +46,7 @@ const candidates = Arbitrary.map(Arbitrary.array(context, { maxLength: 6 }), (co
 );
 
 // What `choose` decides, as a plain value: the element chosen, or why none was.
-const decide = (subject: Subject, found: ReadonlyArray<Found>) =>
+const decide = (subject: Subject, found: ReadonlyArray<Snapshot.Found>) =>
   Effect.runSync(
     choose(subject, found).pipe(
       Effect.map((one) => ({ _tag: "One" as const, found: one })),
@@ -61,7 +62,7 @@ const decide = (subject: Subject, found: ReadonlyArray<Found>) =>
 
 const shape = (choice: {
   readonly _tag: string;
-  readonly found?: Found;
+  readonly found?: Snapshot.Found;
   readonly count?: number;
 }) => (choice.found === undefined ? JSON.stringify(choice) : `One ${choice.found.ref}`);
 
@@ -319,16 +320,14 @@ describe("Walk.fromEvents", () => {
 });
 
 /** The ref of the one element a query finds, failing the walk otherwise. */
-const ref = (page: Page, query: FindQuery) =>
-  page
-    .find({ scope: "document", ...query })
-    .pipe(
-      Effect.flatMap((found) =>
-        found.length === 1 && found[0] !== undefined
-          ? Effect.succeed(found[0].ref)
-          : Effect.die(`expected one ${JSON.stringify(query)}, found ${found.length}`),
-      ),
-    );
+const ref = (page: Page, query: Snapshot.FindQuery) =>
+  Snapshot.find(page, { scope: "document", ...query }).pipe(
+    Effect.flatMap((found) =>
+      found.length === 1 && found[0] !== undefined
+        ? Effect.succeed(found[0].ref)
+        : Effect.die(`expected one ${JSON.stringify(query)}, found ${found.length}`),
+    ),
+  );
 
 type Journey = "buy" | "read" | "search" | "game" | "cart" | "team" | "signin";
 
@@ -366,7 +365,7 @@ const walks: Record<
   game: (page, url) =>
     Effect.gen(function* () {
       yield* page.goto(url("/game"));
-      const [canvas] = yield* page.find({ role: "canvas" });
+      const [canvas] = yield* Snapshot.find(page, { role: "canvas" });
 
       // The SPIN button, by point, as a model playing from a screenshot would press it.
       yield* page.click({ x: (canvas?.box.x ?? 0) + 300, y: (canvas?.box.y ?? 0) + 320 });
@@ -436,7 +435,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* DriftSite;
-        const browser = yield* Chromium.open({ eventHistory: 16 });
+        const browser = yield* Chromium.make({ eventHistory: 16 });
         const page = yield* browser.newPage(site.url("/news"));
 
         for (let index = 0; index < 20; index++) yield* page.press("Shift");

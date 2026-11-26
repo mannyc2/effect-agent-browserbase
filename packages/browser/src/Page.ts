@@ -1,5 +1,9 @@
 /**
- * One browser tab: navigation, snapshots, pictures and input.
+ * One browser tab: navigation and input.
+ *
+ * `Page` gains a member only for identity, order, time or input. Everything else a page does is a
+ * function in the module of what it returns, taking the page first, such as `Snapshot.read(page)`,
+ * `Text.read(page)` or `Change.read(page)`.
  *
  * A page waits only for itself: its operations take turns in one lane of its own. An action, which
  * sends input or navigates, has the page to itself, in the order admitted after policy approval; reads share
@@ -15,7 +19,7 @@
  *
  * @since 0.3.0
  */
-import { type Clock, type Duration, Effect, Schema, type Scope } from "effect";
+import { type Clock, type Duration, Effect, Schema } from "effect";
 
 import {
   Action,
@@ -26,19 +30,12 @@ import {
 } from "./Action.ts";
 import { type BrowserError, type PolicyDenied } from "./BrowserError.ts";
 import { Box, type BrowserEvent, PageLoaded, Subject } from "./BrowserEvent.ts";
-import type { Changes } from "./Change.ts";
-import type { Frame } from "./Frame.ts";
 import * as Motion from "./internal/geometry.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
+import type { Implementation, key } from "./internal/page/functions.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
 import * as Url from "./internal/url.ts";
-import type { Layout, Picks } from "./Layout.ts";
-import type { Overlay } from "./Overlay.ts";
-import type { Held } from "./PageTime.ts";
-import type { Poses } from "./Pose.ts";
-import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
-import type { Window } from "./Window.ts";
 
 export type Point = Motion.Point;
 
@@ -64,127 +61,15 @@ export type TypeOptions = typeof TypeOptionsSchema.Type;
 export type PressOptions = typeof PressOptionsSchema.Type;
 export type ScrollOptions = typeof ScrollOptionsSchema.Type;
 
-/**
- * What `find` looks for. Every rule given must hold; with none, it finds every element in scope
- * that has a role or is a control.
- */
-export interface FindQuery {
-  /** Narrow matching to this CSS selector. Invalid CSS fails InvalidRequest. */
-  readonly selector?: string | undefined;
-  /** Require a visible match, optionally enabled. */
-  readonly state?: "visible" | "enabled" | undefined;
-  /** An ARIA role, such as `"button"` or `"heading"`, ignoring case. */
-  readonly role?: string | undefined;
-  /**
-   * The accessible name: a string that reads the same once spaces are collapsed and case folded,
-   * or a pattern found in it.
-   */
-  readonly name?: string | RegExp | undefined;
-  /**
-   * Text it shows, ignoring case and spacing, or a pattern. Text inside a control or a heading is
-   * that control's or heading's, and only the smallest element showing it matches, not every
-   * element around it.
-   */
-  readonly text?: string | RegExp | undefined;
-  /** Whole words in its context (row, column, label or heading), ignoring case and spacing. */
-  readonly near?: string | undefined;
-  /** Only what a point action at this viewport point would reach: the control there, or else what is painted there. */
-  readonly at?: Point | undefined;
-  /** The viewport (the default), or the whole document. */
-  readonly scope?: "viewport" | "document" | undefined;
-}
-
-/**
- * An element's state as its markup gives it: `checked` for what can be checked, `expanded`,
- * `selected` and `pressed` where the page says either way, and `level` for headings.
- */
-export const ElementState = Schema.Struct({
-  disabled: Schema.Boolean,
-  focused: Schema.Boolean,
-  checked: Schema.optional(Schema.Boolean),
-  expanded: Schema.optional(Schema.Boolean),
-  selected: Schema.optional(Schema.Boolean),
-  pressed: Schema.optional(Schema.Boolean),
-  level: Schema.optional(Schema.Int),
-});
-
-export type ElementState = typeof ElementState.Type;
-
-/** An element `find` found: a ref for the actions, what it is, where it is and its state. */
-export class Found extends Schema.Class<Found>("effect-browser/Page/Found")({
-  ref: Schema.String,
-  subject: Subject,
-  /** Its box, rounded. Reading the document, it may be out of view. */
-  box: Box,
-  inViewport: Schema.Boolean,
-  state: ElementState,
-}) {}
-
-export interface TextOptions {
-  /** `"viewport"` (the default) reads what the viewport shows; a ref reads that element whole. */
-  readonly scope?: string | undefined;
-  /** Bound on the text's length, cut at a line. Defaults to 12,000 characters. */
-  readonly maxChars?: number | undefined;
-  /** Show what fields hold; a secret field still reads `••••`. Defaults to false. */
-  readonly unmask?: boolean | undefined;
-}
-
-/** What a page showed as text: a line per block, with table cells apart by tabs. */
-export class Text extends Schema.Class<Text>("effect-browser/Page/Text")({
-  url: Schema.String,
-  title: Schema.String,
-  text: Schema.String,
-  /** True when `text` was cut at `maxChars`. */
-  truncated: Schema.Boolean,
-  /** Host monotonic milliseconds from the browser's captured Effect Clock. */
-  at: Schema.Finite,
-}) {}
-
 export interface ReadyOptions {
   /** How long recorded content must stay unchanged. Screen stillness is a separate feature. */
   readonly quietMillis?: number | undefined;
   readonly timeout?: Duration.Input | undefined;
 }
 
-/** The window `changes` reads, and whether to show what fields hold. */
-export interface ChangesOptions {
-  /**
-   * Where the window starts: the changes a previous read returned, to continue exactly where they
-   * ended; a frame, at its paint; or host monotonic milliseconds, which mapped to the page's clock
-   * may miss or repeat changes near the start if the browser's clock mapping changed since. Defaults
-   * to the start of the record.
-   */
-  readonly since?: Changes | Frame | number | undefined;
-  /**
-   * Where it ends: a frame, at its paint, so a delayed frame's window holds nothing it does not
-   * show; or host monotonic milliseconds. Defaults to now, and is never later.
-   */
-  readonly until?: Frame | number | undefined;
-  /** Show what fields hold; a secret field still reads `••••`. Defaults to false. */
-  readonly unmask?: boolean | undefined;
-}
-
-/** The window `window` reads, and whether to show what fields hold. */
-export interface WindowOptions {
-  /**
-   * Where the window starts: a previous window, to continue exactly where it ended; a frame, at its
-   * paint; host monotonic milliseconds; or a `Duration` back from `until`. A start after `until`
-   * leaves the window empty there.
-   */
-  readonly since: Window | Frame | Duration.Duration | number;
-  /**
-   * Where it ends: a frame, at its paint, such as one a delayed consumer airs now; or host
-   * monotonic milliseconds. Defaults to now, and is never later.
-   */
-  readonly until?: Frame | number | undefined;
-  /** Show what fields hold in its changes; a secret field still reads `••••`. Defaults to false. */
-  readonly unmask?: boolean | undefined;
-}
-
 /**
  * What the library knows of a page now, without asking it, each part with when it learned it, in
- * host monotonic milliseconds: a part's age is `at` less its time. Text read before the current
- * document began is left out, since it tells of a document that has gone.
+ * host monotonic milliseconds: a part's age is `at` less its time.
  */
 export class State extends Schema.Class<State>("effect-browser/Page/State")({
   page: Schema.String,
@@ -200,10 +85,6 @@ export class State extends Schema.Class<State>("effect-browser/Page/State")({
   committedAt: Schema.optional(Schema.Finite),
   /** How far that document has loaded, as the page's own session heard; absent until parsed. */
   load: Schema.optional(PageLoaded),
-  /** Where the overlay's drawing was last drawn, in viewport CSS pixels; absent with none shown. */
-  overlay: Schema.optional(Schema.Array(Box)),
-  /** The viewport's text as it was last read, with the page's title then. */
-  text: Schema.optional(Text),
 }) {}
 
 /**
@@ -304,14 +185,6 @@ export const correlate =
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
-/** What a wait requires of the query's matches. */
-export type UntilWant = "some" | "none" | { readonly other: string };
-
-export interface UntilResult {
-  readonly met: boolean;
-  readonly mark: string;
-}
-
 /** Script values cross the page boundary through the caller's Schema. A bundler may rewrite functions. */
 export interface ScriptOptions<A, Arg> {
   readonly arg: Arg;
@@ -325,6 +198,8 @@ export interface ActOptions<A, Arg> extends ScriptOptions<A, Arg> {
 }
 
 export interface Page {
+  /** What the page does behind its types' modules' functions, such as `Snapshot.read`. */
+  readonly [key]: Implementation;
   /** Decode and perform a data action through the same policy and lane as the named methods. */
   readonly perform: (action: Action) => Effect.Effect<ResolvedTarget | string | void, BrowserError>;
   /** Read declared side-effect-free code in the main world, retrying one replaced document. */
@@ -350,12 +225,6 @@ export interface Page {
   readonly afterInput: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | BrowserError, R>;
-  /** One page-side wait; replaced documents share one deadline. Unmet is met:false; an empty mark means no stable document could be sampled. */
-  readonly until: (
-    query: FindQuery,
-    want: UntilWant,
-    millis: number,
-  ) => Effect.Effect<UntilResult, BrowserError>;
   /** The page's CDP target id: the same page has it again after a reconnect to its browser. */
   readonly id: string;
   /** The page's address, without its userinfo or known secret parameters. */
@@ -375,7 +244,6 @@ export interface Page {
   /** Close the tab, succeeding once it has closed, or at once when it already had. */
   readonly close: Effect.Effect<void, BrowserError>;
 
-  readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
   /**
    * The viewport's size in CSS pixels, the space of points, crops and page scrolls. Over CDP the
    * page reports it, within the action timeout.
@@ -385,57 +253,10 @@ export interface Page {
     BrowserError
   >;
   /**
-   * The elements that match a query, in tree order, with refs the actions take, in one call to the
-   * page. All that match are returned, so a caller tells them apart by their context; none is an
-   * empty result, not a failure.
-   */
-  readonly find: (query?: FindQuery) => Effect.Effect<ReadonlyArray<Found>, BrowserError>;
-  /**
-   * Where each pick is, in one call to the page: its box unrounded, in the viewport and in the
-   * document, the boxes of words in it, and the viewport, scroll and scale they were read at. A
-   * pick that finds nothing is listed as missing, not a failure. See `Layout`.
-   */
-  readonly layout: (picks: Picks) => Effect.Effect<Layout, BrowserError>;
-  /**
-   * A layer over the page to draw into, for the scope, that the library's readers never read.
-   * One at a time: a second while one is open fails `InvalidRequest`. See `Overlay`.
-   */
-  readonly overlay: Effect.Effect<Overlay, BrowserError, Scope.Scope>;
-  /**
-   * Pose the page's own elements for the scope, moved, turned and scaled as a caller says, and put
-   * back when the scope closes. One lease at a time: a second while one is open fails
-   * `InvalidRequest`. See `Pose`.
-   */
-  readonly poses: Effect.Effect<Poses, BrowserError, Scope.Scope>;
-  /**
-   * Hold the page's own time for the scope, to step it on with `advance`; real time resumes when
-   * the scope closes. Needs the browser's `pageTime` option; one hold at a time. See `PageTime`.
-   */
-  readonly hold: Effect.Effect<Held, BrowserError, Scope.Scope>;
-  /**
-   * The text the viewport shows, or one element whole, in one call to the page. Field values read
-   * `••••` unless `unmask`, and a secret field's always do, as does one that was secret when the
-   * library saw it.
-   */
-  readonly text: (options?: TextOptions) => Effect.Effect<Text, BrowserError>;
-  /**
-   * What visibly changed over a window, in one call to the page. The first read starts the page's
-   * record, so it finds none; from then the page records, and from the start of each later
-   * document, until nobody has read it for two minutes. See `Change`.
-   */
-  readonly changes: (options?: ChangesOptions) => Effect.Effect<Changes, BrowserError>;
-  /**
-   * The page's events, changes and frames over a window: the frames and events it keeps, at no
-   * call, and its changes, in one call, the first starting its record as `changes` does. A part
-   * that cannot be read is missing, with why; the window fails only for bounds that are not finite.
-   */
-  readonly window: (options: WindowOptions) => Effect.Effect<Window, BrowserError>;
-  /**
    * What the library knows of the page now, at no call and with no wait for its turn: where it is,
-   * its document and how far it has loaded, and its text and title as last read.
+   * its document and how far it has loaded.
    */
   readonly state: Effect.Effect<State>;
-
   readonly click: (
     target: Target,
     options?: ClickOptions,
@@ -463,7 +284,6 @@ export interface Page {
    * Fails Timeout after timeout, 15 seconds by default.
    */
   readonly ready: (options?: ReadyOptions) => Effect.Effect<void, BrowserError>;
-
   /** This page's events among the browser's latest `eventHistory`, oldest first. */
   readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
 }

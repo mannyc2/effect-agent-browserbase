@@ -5,6 +5,7 @@
 // is shown the page. Like the errands, each page varies with the seed, and each grader reads the
 // page, not only the answer.
 import { Effect, Schema } from "effect";
+import * as Snapshot from "effect-browser/Snapshot";
 
 import { draws, style, truth } from "./Sites.ts";
 import { operate, press, quotes, type Task } from "./Tasks.ts";
@@ -165,7 +166,7 @@ const noteFormat = operate({
       const { ask, tools } = yield* truth(page, NoteTruth);
 
       for (const tool of [ask.style, ask.align, `color:${ask.color}`, "save"]) {
-        const [found] = yield* page.find({ selector: `#t${tools.indexOf(tool)}` });
+        const [found] = yield* Snapshot.find(page, { selector: `#t${tools.indexOf(tool)}` });
 
         if (found === undefined) return yield* Effect.die(`the toolbar has no ${tool} button`);
         yield* page.click(found.ref);
@@ -393,7 +394,11 @@ const paymentRefund = operate({
   solve: (page) =>
     Effect.gen(function* () {
       const { target } = yield* truth(page, PaymentsTruth);
-      const [refund] = yield* page.find({ selector: `#p${target} button`, scope: "document" });
+
+      const [refund] = yield* Snapshot.find(page, {
+        selector: `#p${target} button`,
+        scope: "document",
+      });
 
       if (refund === undefined)
         return yield* Effect.die("the asked-for payment has no Refund button");

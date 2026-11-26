@@ -6,7 +6,7 @@ import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import { PolicyDenied } from "../src/BrowserError.ts";
 import type { Page } from "../src/Page.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
-import type { Snapshot } from "../src/Snapshot.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import { unpaused } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -31,7 +31,7 @@ interface RecordedWindow {
   readonly events: Array<NativeEvent>;
 }
 
-const refOf = (snapshot: Snapshot, name: string) => {
+const refOf = (snapshot: Snapshot.Snapshot, name: string) => {
   const ref = new RegExp('"' + name + '"[^\\n]*?\\[ref=(e\\d+)\\]').exec(snapshot.text)?.[1];
 
   if (ref === undefined) throw new Error("missing fixture ref " + name);
@@ -82,7 +82,7 @@ const setup = Effect.fnUntraced(function* (html: string, options: Options = {}) 
         });
     }),
   );
-  const snapshot = yield* page.snapshot({ full: true });
+  const snapshot = yield* Snapshot.read(page, { full: true });
 
   calls.splice(0);
 

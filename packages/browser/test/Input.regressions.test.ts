@@ -8,6 +8,7 @@ import * as InputStyle from "../src/InputStyle.ts";
 import { failFast } from "../src/Page.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Stage from "../src/presentation/Stage.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import { unpaused } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -15,13 +16,13 @@ const html = (source: string) => `data:text/html,${encodeURIComponent(source)}`;
 
 it.live("a focus handler's effect survives a refused press receipt", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
 
     const page = yield* browser.newPage(
       html("<button onfocus=\"document.title='focused';this.blur()\">Action</button>"),
     );
 
-    const [button] = yield* page.find({ role: "button", name: "Action" });
+    const [button] = yield* Snapshot.find(page, { role: "button", name: "Action" });
 
     assert.isDefined(button);
     const error = yield* page.press("Enter", { on: button!.ref }).pipe(Effect.flip);
@@ -43,7 +44,7 @@ it.effect(
       let heldPage = "";
       let inspections = 0;
 
-      const browser = yield* Chromium.open({
+      const browser = yield* Chromium.make({
         actionTimeout: "200 millis",
         guard: (request) =>
           Effect.suspend(() => {
@@ -123,13 +124,13 @@ it.effect(
 
 it.live("oversized presentation refuses before focus handlers or pointer input", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
 
     const page = yield* browser.newPage(
       html('<input aria-label="Text" onfocus="document.title=\'focused\'">'),
     );
 
-    const [field] = yield* page.find({ role: "textbox", name: "Text" });
+    const [field] = yield* Snapshot.find(page, { role: "textbox", name: "Text" });
     const view = (yield* Presentation.make({ pacing: unpaused })).view(page);
     const type = yield* view.type("a".repeat(2000), { into: field!.ref }).pipe(Effect.flip);
     const scroll = yield* view.scroll({ dy: 1_000_000 }).pipe(Effect.flip);
@@ -153,13 +154,13 @@ it.live("oversized presentation refuses before focus handlers or pointer input",
 
 it.live("custom styles are decoded before focus or pointer input", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
 
     const page = yield* browser.newPage(
       html('<input aria-label="Text" onfocus="document.title=\'focused\'">'),
     );
 
-    const [field] = yield* page.find({ role: "textbox", name: "Text" });
+    const [field] = yield* Snapshot.find(page, { role: "textbox", name: "Text" });
 
     const badTyping: InputStyle.InputStyle = {
       ...InputStyle.plain,
@@ -207,9 +208,9 @@ it.live("settlement preserves a protocol failure after acknowledged input", () =
       { method: "Runtime.evaluate", script: "settle" },
       { _tag: "Fail", error: new Error("settle protocol failed") },
     );
-    const browser = yield* faults.provide(Chromium.open());
+    const browser = yield* faults.provide(Chromium.make());
     const page = yield* browser.newPage(html("<button>Press</button>"));
-    const [button] = yield* page.find({ role: "button", name: "Press" });
+    const [button] = yield* Snapshot.find(page, { role: "button", name: "Press" });
     const error = yield* page.click(button!.ref).pipe(Effect.flip);
 
     assert.strictEqual(error.reason._tag, "Failed");
@@ -219,7 +220,7 @@ it.live("settlement preserves a protocol failure after acknowledged input", () =
 
 it.live("presentation and future cuts run on the page clock under a suspended caller clock", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
     const page = yield* browser.newPage(html("<button>Clock</button>"));
 
     const caller = Object.assign(Object.create(page.clock) as Clock.Clock, {
@@ -256,7 +257,7 @@ it.effect("interrupts a waiting presenter before the occupied hand is released",
     const judged = yield* Deferred.make<void>();
     let waitingPage = "";
 
-    const browser = yield* Chromium.open({
+    const browser = yield* Chromium.make({
       actionTimeout: "30 seconds",
       guard: (request) =>
         request.page === waitingPage ? Deferred.succeed(judged, undefined) : Effect.void,

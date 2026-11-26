@@ -12,6 +12,7 @@ import { Subject } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestBrowser from "../src/testing/TestBrowser.ts";
 import * as TestPage from "../src/testing/TestPage.ts";
 
@@ -37,7 +38,7 @@ const browserContract = (browser: Service) =>
     yield* Effect.scoped(
       Effect.gen(function* () {
         yield* browser.suspend();
-        assert.deepStrictEqual(yield* first.find(), []);
+        assert.deepStrictEqual(yield* Snapshot.find(first), []);
         const failure = yield* Effect.flip(first.press("Escape"));
 
         assert.deepStrictEqual([failure.reason._tag, failure.dispatched], ["Suspended", false]);
@@ -80,23 +81,27 @@ const contract = (page: Page, replace: Effect.Effect<void, BrowserError>) =>
         ),
       );
 
-    const snapshot = yield* page.snapshot();
+    const snapshot = yield* Snapshot.read(page);
 
     assert.strictEqual(snapshot.controls.find((one) => one.name === "Choice")?.checked, true);
-    const [save] = yield* page.find({ role: " BUTTON ", name: " save " });
-    const [blocked] = yield* page.find({ name: "Blocked" });
+    const [save] = yield* Snapshot.find(page, { role: " BUTTON ", name: " save " });
+    const [blocked] = yield* Snapshot.find(page, { name: "Blocked" });
 
     assert.isDefined(save);
     assert.isTrue(blocked?.state.disabled);
     const refusal = yield* Effect.flip(page.click(blocked?.ref ?? ""));
 
     assert.deepStrictEqual([refusal.reason._tag, refusal.dispatched], ["NotActionable", false]);
-    assert.isFalse((yield* page.until({ name: "Blocked", state: "enabled" }, "some", 0)).met);
-    const baseline = yield* page.until({ text: /save/i }, "some", 0);
+    assert.isFalse(
+      (yield* Snapshot.until(page, { name: "Blocked", state: "enabled" }, "some", 0)).met,
+    );
+    const baseline = yield* Snapshot.until(page, { text: /save/i }, "some", 0);
 
     assert.isTrue(baseline.met);
     assert.match(baseline.mark, /^1:[a-f0-9]+$/);
-    assert.isFalse((yield* page.until({ text: /save/i }, { other: baseline.mark }, 0)).met);
+    assert.isFalse(
+      (yield* Snapshot.until(page, { text: /save/i }, { other: baseline.mark }, 0)).met,
+    );
     const clicked = yield* page.click(save?.ref ?? "");
 
     assert.strictEqual(clicked.role, "button");

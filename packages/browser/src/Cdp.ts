@@ -6,11 +6,11 @@
  */
 import { chromium } from "playwright-core";
 
-import { make } from "./internal/cdp/connection.ts";
+import { forRuntime } from "./internal/cdp/connection.ts";
 
 export type { Connector, ConnectOptions, Options } from "./internal/cdp/connection.ts";
 
-/** Connect and open a `Browser` over the endpoint's first context. */
-export const { open, layer } = make((endpoint, options) =>
+/** Connect and open a `Browser` over the endpoint's first context, as an effect or a layer. */
+export const { make, layer, layerConfig } = forRuntime((endpoint, options) =>
   chromium.connectOverCDP(endpoint, options),
 );

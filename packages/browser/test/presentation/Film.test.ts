@@ -7,10 +7,13 @@ import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../../src/Browser.ts";
 import { Failed, Timeout, undispatched } from "../../src/BrowserError.ts";
-import type * as Frame from "../../src/Frame.ts";
+import * as Frame from "../../src/Frame.ts";
+import * as Overlay from "../../src/Overlay.ts";
 import type { Page } from "../../src/Page.ts";
+import * as PageTime from "../../src/PageTime.ts";
 import * as Film from "../../src/presentation/Film.ts";
-import * as TestPage from "../../src/testing/TestPage.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 
 const blank = Effect.gen(function* () {
   const browser = yield* Browser;
@@ -104,8 +107,8 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
       const page = yield* blank;
 
       yield* show(page, slide);
-      const held = yield* page.hold;
-      const overlay = yield* page.overlay;
+      const held = yield* PageTime.hold(page);
+      const overlay = yield* Overlay.make(page);
 
       yield* page.click({ x: 320, y: 15 });
 
@@ -145,8 +148,8 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
         page,
         `${slide}<button id=copy style="position: fixed; left: 300px; top: 40px; width: 60px; height: 30px" onclick="copy.textContent = '✓'; setTimeout(() => copy.textContent = 'copy', 1500)">copy</button>`,
       );
-      const held = yield* page.hold;
-      const go = (yield* page.find({ role: "button", name: "go" }))[0]?.ref ?? "";
+      const held = yield* PageTime.hold(page);
+      const go = (yield* Snapshot.find(page, { role: "button", name: "go" }))[0]?.ref ?? "";
 
       const copied = page
         .read(() => document.getElementById("copy")?.textContent, {
@@ -193,7 +196,7 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
       const page = yield* blank;
 
       yield* show(page, slide);
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
       let frames = 0;
 
       const failed = yield* Effect.flip(
@@ -217,7 +220,7 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
       const page = yield* blank;
 
       yield* page.goto(url("/a"));
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
       const seen: Array<[number, number]> = [];
 
       const film = (inputs: ReadonlyArray<Film.Contact>) =>
@@ -368,16 +371,17 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
       yield* show(page, slide);
 
       // The page, whose second picture fails for `reason`.
-      const flaky = (reason: Timeout | Failed) => {
+      const flaky = (reason: Timeout | Failed): Page => {
         let calls = 0;
 
-        return TestPage.withPictures(page, (own) => ({
-          ...own,
-          read: (options) =>
+        return PageFunctions.replace(page, {
+          frame: (options) =>
             Effect.suspend(() =>
-              ++calls === 2 ? Effect.fail(undispatched("frame", reason)) : own.read(options),
+              ++calls === 2
+                ? Effect.fail(undispatched("frame", reason))
+                : Frame.read(page, options),
             ),
-        }));
+        });
       };
 
       const film = (on: Page, retries?: number) =>
@@ -385,16 +389,16 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
           Film.frames(on, { times: [0, 10, 20], time: { seek: () => Effect.void }, retries }),
         );
 
-      const summary = yield* film(yield* flaky(new Timeout({ millis: 10 })));
+      const summary = yield* film(flaky(new Timeout({ millis: 10 })));
 
       assert.strictEqual(summary.frames, 3);
       assert.strictEqual(summary.retries, 1);
       assert.strictEqual(
-        (yield* Effect.flip(film(yield* flaky(new Timeout({ millis: 10 })), 0))).reason._tag,
+        (yield* Effect.flip(film(flaky(new Timeout({ millis: 10 })), 0))).reason._tag,
         "Timeout",
       );
       assert.strictEqual(
-        (yield* Effect.flip(film(yield* flaky(new Failed({ detail: "gone" }))))).reason._tag,
+        (yield* Effect.flip(film(flaky(new Failed({ detail: "gone" }))))).reason._tag,
         "Failed",
       );
     }),

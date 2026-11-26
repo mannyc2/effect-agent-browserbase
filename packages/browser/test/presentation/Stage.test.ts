@@ -199,7 +199,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const proxy = yield* behindProxy();
-        const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+        const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
         const page = yield* browser.newPage(animated);
         const stage = yield* Stage.make();
         const frames = yield* collect(stage);

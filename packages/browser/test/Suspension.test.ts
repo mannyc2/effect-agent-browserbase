@@ -8,6 +8,7 @@ import { consequence } from "../src/BrowserError.ts";
 import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as Stage from "../src/presentation/Stage.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const document = (title = "Input") =>
@@ -54,7 +55,7 @@ describe("Scoped browser input authority", () => {
         const faults = yield* TestCdp.make();
 
         const browser = yield* faults.provide(
-          Chromium.open({ actionTimeout: "2 seconds", navigationTimeout: "2 seconds" }),
+          Chromium.make({ actionTimeout: "2 seconds", navigationTimeout: "2 seconds" }),
         );
 
         const arrived = Promise.withResolvers<void>();
@@ -80,7 +81,7 @@ describe("Scoped browser input authority", () => {
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
         const page = yield* browser.newPage(document());
         const other = yield* browser.newPage(document("Other"));
-        const [choice] = yield* page.find({ role: "combobox", name: "Choice" });
+        const [choice] = yield* Snapshot.find(page, { role: "combobox", name: "Choice" });
         const stage = yield* Stage.make();
 
         yield* stage.present(page);
@@ -121,7 +122,7 @@ describe("Scoped browser input authority", () => {
       Effect.gen(function* () {
         let judged = 0;
 
-        const browser = yield* Chromium.open({
+        const browser = yield* Chromium.make({
           guard: () =>
             Effect.sync(() => {
               judged += 1;
@@ -130,9 +131,9 @@ describe("Scoped browser input authority", () => {
 
         const page = yield* browser.newPage(document());
         const other = yield* browser.newPage(document("Other"));
-        const [field] = yield* page.find({ role: "textbox", name: "Memo" });
-        const [button] = yield* page.find({ role: "button", name: "Submit" });
-        const [choice] = yield* page.find({ role: "combobox", name: "Choice" });
+        const [field] = yield* Snapshot.find(page, { role: "textbox", name: "Memo" });
+        const [button] = yield* Snapshot.find(page, { role: "button", name: "Submit" });
+        const [choice] = yield* Snapshot.find(page, { role: "combobox", name: "Choice" });
         const first = yield* scope;
         const second = yield* scope;
         const before = judged;
@@ -163,7 +164,7 @@ describe("Scoped browser input authority", () => {
           assert.deepStrictEqual(consequence(failure), { lost: "nothing", repeat: "safe" });
         }
         assert.strictEqual(judged, before, "held input must not invoke the guard");
-        assert.include((yield* page.snapshot()).text, "Input");
+        assert.include((yield* Snapshot.read(page)).text, "Input");
         assert.isAbove((yield* Frame.read(other, { after: "input" })).data.length, 0);
 
         const recorded = yield* browser.events({ after: stopped.since }).pipe(
@@ -180,7 +181,7 @@ describe("Scoped browser input authority", () => {
 
         // Direct native input represents a separate operator; the library's gate does not seize it.
         yield* Effect.promise(() => TestCdp.nativePage(page).locator("input").fill("operator"));
-        assert.include((yield* page.snapshot()).text, "operator");
+        assert.include((yield* Snapshot.read(page)).text, "operator");
         yield* Scope.close(first, Exit.void);
         assert.strictEqual((yield* Effect.flip(page.press("a"))).reason._tag, "Suspended");
         yield* Scope.close(second, Exit.void);
@@ -198,7 +199,7 @@ describe("Scoped browser input authority", () => {
     () =>
       TestCdp.withCdp(
         Effect.gen(function* () {
-          const browser = yield* Chromium.open();
+          const browser = yield* Chromium.make();
           const page = yield* browser.newPage(document());
           const other = yield* browser.newPage(document("Other"));
           const held = yield* scope;
@@ -214,7 +215,7 @@ describe("Scoped browser input authority", () => {
           assert.isFalse(refused.dispatched);
           assert.strictEqual(reply.sent(), 1);
           assert.isUndefined(stopping.pollUnsafe());
-          assert.include((yield* other.snapshot()).text, "Other");
+          assert.include((yield* Snapshot.read(other)).text, "Other");
           yield* reply.release;
           yield* Fiber.join(input);
           const stopped = yield* Fiber.join(stopping);
@@ -240,7 +241,7 @@ describe("Scoped browser input authority", () => {
     it.live(`keeps canceled ${kind} replies draining and removes a timed-out suspension`, () =>
       TestCdp.withCdp(
         Effect.gen(function* () {
-          const browser = yield* Chromium.open({
+          const browser = yield* Chromium.make({
             navigationTimeout: kind === "press" ? "40 millis" : "2 seconds",
           });
 
@@ -284,7 +285,7 @@ describe("Scoped browser input authority", () => {
   it.live("abandons an interrupted drain and fails Closed when the browser is lost", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const page = yield* browser.newPage(document());
         const reply = yield* delayedReply(page, "press");
         const input = yield* page.press("a").pipe(Effect.forkChild);

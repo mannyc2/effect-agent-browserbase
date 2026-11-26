@@ -4,11 +4,10 @@
  *
  * @since 0.3.0
  */
-import { type Duration, Effect, type Scope, Schema, type Stream } from "effect";
-import { dual } from "effect/Function";
+import { type Duration, type Effect, Function, type Scope, Schema, type Stream } from "effect";
 
 import type { BrowserError } from "./BrowserError.ts";
-import { Pictures } from "./internal/pictures/slot.ts";
+import { functionsOf, isPage } from "./internal/page/functions.ts";
 import type { Page } from "./Page.ts";
 
 /** An encoded picture with its pixel dimensions. Crops also need their viewport origin. */
@@ -232,10 +231,9 @@ export interface Capture {
 export const read: {
   (options?: FrameOptions): (page: Page) => Effect.Effect<Frame, BrowserError>;
   (page: Page, options?: FrameOptions): Effect.Effect<Frame, BrowserError>;
-} = dual(
-  (args) => Pictures.is(args[0]),
-  (page: Page, options?: FrameOptions) =>
-    Effect.flatMap(Pictures.of(page), (pictures) => pictures.read(options)),
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, options?: FrameOptions) => functionsOf(page).frame(options),
 );
 
 /**
@@ -252,25 +250,24 @@ export const zoom: {
     region: Region,
     options?: Pick<FrameOptions, "quality" | "format" | "scale">,
   ): Effect.Effect<Zoom, BrowserError>;
-} = dual(
-  (args) => Pictures.is(args[0]),
+} = Function.dual(
+  (args) => isPage(args[0]),
   (page: Page, region: Region, options?: Pick<FrameOptions, "quality" | "format" | "scale">) =>
-    Effect.flatMap(Pictures.of(page), (pictures) => pictures.zoom(region, options)),
+    functionsOf(page).zoom(region, options),
 );
 
 /** A scoped lease on the page's capture, which starts at once, independently of its first frame. */
 export const capture: {
   (options?: ScreencastOptions): (page: Page) => Effect.Effect<Capture, BrowserError, Scope.Scope>;
   (page: Page, options?: ScreencastOptions): Effect.Effect<Capture, BrowserError, Scope.Scope>;
-} = dual(
-  (args) => Pictures.is(args[0]),
-  (page: Page, options?: ScreencastOptions) =>
-    Effect.flatMap(Pictures.of(page), (pictures) => pictures.capture(options)),
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, options?: ScreencastOptions) => functionsOf(page).capture(options),
 );
 
 /** The page's screencast frames painted within the browser's `frameHistory` of the newest, oldest first. */
 export const recent = (page: Page): Effect.Effect<ReadonlyArray<Frame>> =>
-  Effect.flatMap(Pictures.of(page), (pictures) => pictures.recent);
+  functionsOf(page).recentFrames;
 
 /**
  * Paint the page at `scale` device pixels to each CSS pixel, or without its scrollbars, for a
@@ -283,6 +280,4 @@ export const recent = (page: Page): Effect.Effect<ReadonlyArray<Frame>> =>
 export const paint: {
   (options: Paint): (page: Page) => Effect.Effect<void, BrowserError, Scope.Scope>;
   (page: Page, options: Paint): Effect.Effect<void, BrowserError, Scope.Scope>;
-} = dual(2, (page: Page, options: Paint) =>
-  Effect.flatMap(Pictures.of(page), (pictures) => pictures.paint(options)),
-);
+} = Function.dual(2, (page: Page, options: Paint) => functionsOf(page).paint(options));

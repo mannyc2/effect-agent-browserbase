@@ -3,7 +3,8 @@ import { Clock, Duration, Effect, Schedule } from "effect";
 
 import { InvalidRequest, undispatched } from "../../BrowserError.ts";
 import { type Box, type Subject } from "../../BrowserEvent.ts";
-import type { Page, Found, Point, Target } from "../../Page.ts";
+import type { Page, Point, Target } from "../../Page.ts";
+import * as Snapshot from "../../Snapshot.ts";
 import { choose, Drifted } from "./choose.ts";
 
 const invalid = (detail: string) => undispatched("replay", new InvalidRequest({ detail }));
@@ -13,22 +14,20 @@ const invalid = (detail: string) => undispatched("replay", new InvalidRequest({ 
  * looking again for two seconds while the page may still be drawing it.
  */
 export const locate = (page: Page, subject: Subject) =>
-  page
-    .find({
-      name: subject.name,
-      scope: "document",
-      ...(subject.role === null ? {} : { role: subject.role }),
-    })
-    .pipe(
-      Effect.flatMap((found) => choose(subject, found)),
-      Effect.retry({
-        schedule: Schedule.spaced(Duration.millis(250)),
-        times: 8,
-        while: (error) => error._tag !== "BrowserError",
-      }),
-      Effect.provideService(Clock.Clock, page.clock),
-      Effect.withSpan("Walk.locate", { attributes: { role: subject.role ?? "" } }),
-    );
+  Snapshot.find(page, {
+    name: subject.name,
+    scope: "document",
+    ...(subject.role === null ? {} : { role: subject.role }),
+  }).pipe(
+    Effect.flatMap((found) => choose(subject, found)),
+    Effect.retry({
+      schedule: Schedule.spaced(Duration.millis(250)),
+      times: 8,
+      while: (error) => error._tag !== "BrowserError",
+    }),
+    Effect.provideService(Clock.Clock, page.clock),
+    Effect.withSpan("Walk.locate", { attributes: { role: subject.role ?? "" } }),
+  );
 
 /**
  * Where the step acts: the element its subject names, or, for a step recorded at a point, the same
@@ -39,7 +38,7 @@ export const aim = (page: Page, subject: Subject | undefined, point?: Point, rec
   if (subject === undefined) return Effect.fail(invalid("the step names no element"));
   if (point === undefined) return Effect.map(locate(page, subject), ({ ref }): Target => ref);
 
-  const reach = ({ ref, box }: Found) => {
+  const reach = ({ ref, box }: Snapshot.Found) => {
     const at =
       recorded === undefined || recorded.width <= 0 || recorded.height <= 0
         ? point
@@ -48,7 +47,9 @@ export const aim = (page: Page, subject: Subject | undefined, point?: Point, rec
             y: box.y + ((point.y - recorded.y) / recorded.height) * box.height,
           };
 
-    return Effect.map(page.find({ at }), ([reached]) => (reached?.ref === ref ? at : undefined));
+    return Effect.map(Snapshot.find(page, { at }), ([reached]) =>
+      reached?.ref === ref ? at : undefined,
+    );
   };
 
   const missed = new Drifted({ detail: "a press at the subject's point reaches another element" });

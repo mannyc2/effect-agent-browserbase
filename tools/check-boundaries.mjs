@@ -19,6 +19,7 @@ const within = (directory, target) => {
 };
 // Each feature folder is a subpath of its own, and can be deleted with the features that import it.
 const featureNames = new Set([
+  "ai",
   "policy",
   "presentation",
   "supervisor",
@@ -34,12 +35,12 @@ const sharedInternals = new Set([
   "internal/matching.ts",
   "internal/url.ts",
 ]);
-// Test services share exactly the ownership algorithms they contract-test, and the slots a page
-// keeps for its modules' functions; runtime features get no exception.
+// Test services share exactly the ownership algorithms they contract-test, and the key a page
+// carries its functions under; runtime features get no exception.
 const testingPlumbing = new Set([
   "internal/input/gate.ts",
+  "internal/page/functions.ts",
   "internal/page/lane.ts",
-  "internal/pictures/slot.ts",
   "internal/timeline/events.ts",
   "internal/timeline/fold.inpage.ts",
 ]);
@@ -121,6 +122,12 @@ const libraries = await Promise.all(
       for (const dependency of declared)
         if (!["effect", "playwright-core"].includes(dependency))
           errors.push(`effect-browser: forbidden runtime dependency ${dependency}`);
+    // Yielded Agent is one binding's dependency: the core's agent tools run in any effect/ai loop.
+    if (
+      manifest.name !== "@effect-browser/yielded" &&
+      (declared.has("@yielded/agent") || Object.hasOwn(manifest.devDependencies ?? {}, "@yielded/agent"))
+    )
+      errors.push(`${manifest.name}: only @effect-browser/yielded depends on @yielded/agent`);
     return {
       directory,
       manifest,

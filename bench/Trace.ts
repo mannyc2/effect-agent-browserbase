@@ -41,11 +41,11 @@ export const collect: Effect.Effect<Collected> = Effect.map(Effect.tracer, (inst
 const seconds = (span: Tracer.Span) =>
   span.status._tag === "Ended" ? Number(span.status.endTime - span.status.startTime) / 1e9 : 0;
 
-const openers = new Set(["Chromium.open", "Browserbase.open", "Latency.open"]);
+const openers = new Set(["Chromium.make", "Browserbase.make", "Latency.make"]);
 
 // Looks at a page outside any tool call: the agent's observation after each turn, an arm's own
 // picture or outline, and a moment's capture.
-const looks = new Set(["Page.observe", "Page.snapshot", "Frame.read", "Moment.capture"]);
+const looks = new Set(["Page.observe", "Snapshot.read", "Frame.read", "Moment.capture"]);
 
 const isTool = (span: Tracer.Span) =>
   span.attributes.get("gen_ai.operation.name") === "execute_tool";
@@ -239,9 +239,9 @@ export const roundTripOf = (spans: ReadonlyArray<Tracer.Span>): number | null =>
   return measured.length === 0 ? null : Math.min(...measured);
 };
 
-/** A hosted unit's Browserbase region, as `Browserbase.open` recorded it; null otherwise. */
+/** A hosted unit's Browserbase region, as `Browserbase.make` recorded it; null otherwise. */
 export const regionOf = (spans: ReadonlyArray<Tracer.Span>): string | null => {
-  const region = spans.find((span) => span.name === "Browserbase.open")?.attributes.get("region");
+  const region = spans.find((span) => span.name === "Browserbase.make")?.attributes.get("region");
 
   return typeof region === "string" ? region : null;
 };

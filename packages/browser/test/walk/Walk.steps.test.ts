@@ -12,9 +12,11 @@ import { nameOf } from "../../src/Action.ts";
 import { Browser } from "../../src/Browser.ts";
 import { BrowserError, Timeout } from "../../src/BrowserError.ts";
 import { Subject } from "../../src/BrowserEvent.ts";
-import { Found, type Page as PublicPage, State } from "../../src/Page.ts";
+import { type Page as PublicPage, State } from "../../src/Page.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 import * as TestPage from "../../src/testing/TestPage.ts";
 import * as Walk from "../../src/walk/Walk.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
 type Page = PublicPage;
@@ -59,8 +61,7 @@ const scripted = Effect.fnUntraced(function* (
 
   for (let index = 0; index < 8; index++) yield* test.succeedNext("chosen");
 
-  const page: Page = {
-    ...test.page,
+  const page = PageFunctions.replace(test.page, {
     until: (query, want, millis) =>
       check === "failed"
         ? Effect.fail(
@@ -70,8 +71,8 @@ const scripted = Effect.fnUntraced(function* (
               dispatched: false,
             }),
           )
-        : test.page.until(query, want, millis),
-  };
+        : Snapshot.until(test.page, query, want, millis),
+  });
 
   return {
     page,
@@ -379,20 +380,17 @@ describe("Walk step safety", () => {
         Effect.gen(function* () {
           const { page, dispatches } = yield* scripted();
 
-          const button: Page = {
-            ...page,
+          const button = PageFunctions.replace(page, {
             find: (query) =>
-              page
-                .find(query)
-                .pipe(
-                  Effect.map((found) =>
-                    found.map(
-                      (target) =>
-                        new Found({ ...target, state: { disabled: false, focused: false } }),
-                    ),
+              Snapshot.find(page, query).pipe(
+                Effect.map((found) =>
+                  found.map(
+                    (target) =>
+                      new Snapshot.Found({ ...target, state: { disabled: false, focused: false } }),
                   ),
                 ),
-          };
+              ),
+          });
 
           const plan = Walk.Walk.new([
             new Walk.Step({
@@ -425,15 +423,16 @@ describe("Walk step safety", () => {
           const { page, dispatches } = yield* scripted();
           let checks = 0;
 
-          const slow: Page = {
-            ...page,
+          const slow = PageFunctions.replace(page, {
             until: (query, want, millis) =>
               Effect.suspend(() =>
                 ++checks > (phase === "after" ? 1 : 0)
-                  ? Effect.sleep("1 hour").pipe(Effect.andThen(page.until(query, want, millis)))
-                  : page.until(query, want, millis),
+                  ? Effect.sleep("1 hour").pipe(
+                      Effect.andThen(Snapshot.until(page, query, want, millis)),
+                    )
+                  : Snapshot.until(page, query, want, millis),
               ),
-          };
+          });
 
           const plan = Walk.Walk.new([
             new Walk.Step({
@@ -922,7 +921,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const site = yield* workflow();
         const expected = site.url.replace("127.0.0.1", "localhost") + "/done";
         const recording = yield* open(site.url + "?delay=200");
-        const [continued] = yield* recording.find({ role: "button", name: "Continue" });
+        const [continued] = yield* Snapshot.find(recording, { role: "button", name: "Continue" });
 
         if (continued === undefined) return yield* Effect.die("missing Continue fixture");
         yield* recording.click(continued.ref);

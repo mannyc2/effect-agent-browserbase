@@ -5,14 +5,13 @@
  * navigation.
  * Features use the same documented Page contract as consumers.
  */
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 
 import type { Frame } from "../../Frame.ts";
 import { type Page, State } from "../../Page.ts";
 import * as ActionPort from "../action-port.ts";
 import * as Actions from "../input/actions.ts";
 import * as Pictures from "../pictures/pictures.ts";
-import { Pictures as Slot } from "../pictures/slot.ts";
 import * as Layouts from "../reading/layout.ts";
 import * as Reading from "../reading/reading.ts";
 import * as Ready from "../reading/ready.ts";
@@ -21,6 +20,7 @@ import * as Window from "../timeline/window.ts";
 import * as Url from "../url.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
+import { Implementation, key } from "./functions.ts";
 import * as Navigation from "./navigation.ts";
 import * as Overlay from "./overlay.ts";
 import * as Poses from "./pose.ts";
@@ -45,7 +45,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const viewports = lane.shared<Effect.Success<Page["viewport"]>>("viewport", true);
 
   // What the page's parts already know, asking it nothing: its documents as its own session saw
-  // them, and the viewport's text as last read since the document began.
+  // them.
   const state = Effect.sync(() => {
     const { document, url } = bridge.frameTag();
     const committedAt = page.activity.documentAt;
@@ -58,8 +58,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       document,
       committedAt: Number.isFinite(committedAt) ? committedAt : undefined,
       load: bridge.loaded(),
-      overlay: overlay.drawn(),
-      text: reading.viewedSince(committedAt),
     });
   });
 
@@ -89,50 +87,52 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   );
 
   const assembled: Page = {
+    [key]: new Implementation({
+      snapshot: reading.snapshot,
+      find: reading.find,
+      until: reading.until,
+      text: reading.text,
+      layout: Layouts.make(page, bridge),
+      changes,
+      window: Window.make(page, changes, capture.recent),
+      overlay: overlay.lease,
+      drawn: Effect.sync(() => Option.fromUndefinedOr(overlay.drawn())),
+      poses: poses.lease,
+      hold: Time.make(page, bridge, overlay, poses).hold,
+      frame: pictures.frame,
+      zoom: pictures.zoom,
+      capture: (options) =>
+        capture.open(options).pipe(
+          Effect.map((lease) => ({
+            ...lease,
+            isCurrent: current,
+            confirm,
+            sync: capture.sync,
+            stats: pictures.captureStats,
+          })),
+        ),
+      recentFrames: capture.recent,
+      paint: pictures.paint,
+    }),
     ...Scripts.make(page, bridge, input),
     ...ActionPort.methods(perform),
     perform,
     clock: page.clock,
     afterInput,
-    until: reading.until,
     id,
     url: Effect.sync(() => Url.redact(playwright.url())),
     title: titles("", navigation.title.pipe(within("title"))).pipe(span("Page.title"), owned),
     bringToFront: native("bringToFront", () => playwright.bringToFront()),
     // Playwright answers once the page has closed, and at once for one already closed.
     close: native("close", () => playwright.close()),
-    snapshot: reading.snapshot,
     viewport: viewports("", viewport.viewportFor("viewport").pipe(within("viewport"))).pipe(
       span("Page.viewport"),
       owned,
     ),
-    find: reading.find,
-    layout: Layouts.make(page, bridge),
-    overlay: overlay.lease,
-    poses: poses.lease,
-    hold: Time.make(page, bridge, overlay, poses).hold,
-    text: reading.text,
-    changes,
-    window: Window.make(page, changes, capture.recent),
     state,
     ready: Ready.make(page, bridge),
     recentEvents: options.recentEvents,
   };
 
-  return Slot.with(assembled, {
-    read: pictures.frame,
-    zoom: pictures.zoom,
-    capture: (options) =>
-      capture.open(options).pipe(
-        Effect.map((lease) => ({
-          ...lease,
-          isCurrent: current,
-          confirm,
-          sync: capture.sync,
-          stats: pictures.captureStats,
-        })),
-      ),
-    recent: capture.recent,
-    paint: pictures.paint,
-  });
+  return assembled;
 });

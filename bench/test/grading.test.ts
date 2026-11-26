@@ -137,7 +137,7 @@ const describeWith = (
         }).pipe(Effect.andThen(page.click(...target))),
     };
 
-    const observed = yield* TestPage.withPictures(clicking, (own) => ({
+    const observed = TestPage.withPictures(clicking, (own) => ({
       ...own,
       recent: own.recent.pipe(Effect.tap((frames) => Effect.sync(() => histories.push(frames)))),
       read: (options) =>

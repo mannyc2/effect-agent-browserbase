@@ -3,6 +3,7 @@
 // buying. Like the bench's other operate pages, each varies with the seed, and each grader reads the
 // page, not only the answer.
 import { Duration, Effect, Schema } from "effect";
+import * as Snapshot from "effect-browser/Snapshot";
 import { Stillness } from "effect-browser/timeline";
 
 import { draws, style, truth } from "./Sites.ts";
@@ -76,8 +77,8 @@ const boardMove = operate({
   maxSteps: 15,
   solve: (page) =>
     Effect.gen(function* () {
-      const [card] = yield* page.find({ text: target });
-      const [column] = yield* page.find({ role: "heading", name: "Done" });
+      const [card] = yield* Snapshot.find(page, { text: target });
+      const [column] = yield* Snapshot.find(page, { role: "heading", name: "Done" });
 
       if (card === undefined || column === undefined)
         return yield* Effect.die("the board shows no target card or no Done column");
@@ -156,7 +157,7 @@ const policyFind = operate({
   solve: (page) =>
     Effect.gen(function* () {
       const layout = yield* truth(page, HelpLayout);
-      const [menu] = yield* page.find({ role: "button", name: layout.menu });
+      const [menu] = yield* Snapshot.find(page, { role: "button", name: layout.menu });
 
       if (menu === undefined) return yield* Effect.die(`the header has no ${layout.menu} menu`);
       yield* page.hover(menu.ref);
@@ -248,7 +249,7 @@ const catalogBuy = operate({
       if (wanted === undefined) return yield* Effect.die("the catalogue has no tent for two");
 
       for (let shown = 0; shown < 3; shown++) {
-        const [add] = yield* page.find({
+        const [add] = yield* Snapshot.find(page, {
           role: "button",
           name: "Add to cart",
           near: wanted.name,

@@ -8,6 +8,7 @@ import { BrowserError } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Frame from "../src/Frame.ts";
 import * as WorkerCdp from "../src/internal/cdp/workerd.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import { nativeConnect } from "./nativeConnector.ts";
 
 it.effect.prop(
@@ -20,7 +21,7 @@ it.effect.prop(
       let calls = 0;
 
       for (const invalid of [timeout, Number.NaN, Infinity, -Infinity]) {
-        const error = yield* Cdp.open({
+        const error = yield* Cdp.make({
           endpoint: "wss://runtime.invalid",
           connectTimeoutMillis: invalid,
           connect: async () => {
@@ -37,7 +38,7 @@ it.effect.prop(
 
 it.effect("requires a connector in the Workers entry", () =>
   Effect.gen(function* () {
-    const error = yield* WorkerCdp.open({ endpoint: "wss://runtime.invalid" }).pipe(
+    const error = yield* WorkerCdp.make({ endpoint: "wss://runtime.invalid" }).pipe(
       Effect.scoped,
       Effect.flip,
     );
@@ -56,7 +57,7 @@ it.live("uses the supplied connector and disconnects without ending its remote b
     const calls: Array<readonly [string, number, unknown, boolean]> = [];
 
     yield* Effect.gen(function* () {
-      const browser = yield* Cdp.open({
+      const browser = yield* Cdp.make({
         endpoint: Redacted.make("wss://runtime.invalid/?signingKey=private"),
         headers: { "x-runtime": "one" },
         connectTimeoutMillis: 5000,
@@ -73,7 +74,7 @@ it.live("uses the supplied connector and disconnects without ending its remote b
       const page = yield* browser.firstPage;
 
       yield* page.goto("data:text/html,<button>Runtime</button>");
-      assert.include((yield* page.snapshot()).text, 'button "Runtime"');
+      assert.include((yield* Snapshot.read(page)).text, 'button "Runtime"');
       assert.isAbove((yield* Frame.read(page)).data.length, 100);
     }).pipe(Effect.scoped);
 
@@ -83,9 +84,9 @@ it.live("uses the supplied connector and disconnects without ending its remote b
     assert.strictEqual(connections.length, 1);
     assert.isFalse(connections[0]?.isConnected());
     // The native close only disconnects: another connection finds the existing page.
-    const later = yield* Cdp.open({ endpoint: proxy.endpoint });
+    const later = yield* Cdp.make({ endpoint: proxy.endpoint });
 
-    assert.include((yield* (yield* later.firstPage).snapshot()).text, 'button "Runtime"');
+    assert.include((yield* Snapshot.read(yield* later.firstPage)).text, 'button "Runtime"');
   }).pipe(Effect.scoped),
 );
 
@@ -94,7 +95,7 @@ it.live("disconnects the supplied browser when opening fails after connection", 
     const proxy = yield* behindProxy();
     const connections: Array<Browser> = [];
 
-    const error = yield* Cdp.open({
+    const error = yield* Cdp.make({
       endpoint: proxy.endpoint,
       maxPages: 0,
       connect: async (endpoint) => {
@@ -122,7 +123,7 @@ it.live("bounds an unresponsive connector and disconnects its late browser", () 
     let signal: AbortSignal | undefined;
     const started = performance.now();
 
-    const error = yield* Cdp.open({
+    const error = yield* Cdp.make({
       endpoint: proxy.endpoint,
       connectTimeoutMillis: 50,
       connect: (_endpoint, options) => {
@@ -158,7 +159,7 @@ it.live("disconnects a connection acquired while its caller was interrupted", ()
     let complete: ((browser: Browser) => void) | undefined;
 
     const opening = yield* Effect.forkChild(
-      Cdp.open({
+      Cdp.make({
         endpoint: proxy.endpoint,
         connect: () =>
           new Promise<Browser>((resolve) => {
@@ -191,11 +192,11 @@ it.live("disconnects a connection acquired while its caller was interrupted", ()
 it.live("connects through the global WebSocket using Playwright's public CDP transport", () =>
   Effect.gen(function* () {
     const proxy = yield* behindProxy();
-    const browser = yield* Cdp.open({ endpoint: proxy.endpoint, connect: nativeConnect });
+    const browser = yield* Cdp.make({ endpoint: proxy.endpoint, connect: nativeConnect });
     const page = yield* browser.firstPage;
 
     yield* page.goto("data:text/html,<button>Native</button>");
-    assert.include((yield* page.snapshot()).text, 'button "Native"');
+    assert.include((yield* Snapshot.read(page)).text, 'button "Native"');
     assert.isAbove((yield* Frame.read(page)).data.length, 100);
   }).pipe(Effect.scoped),
 );
@@ -205,7 +206,7 @@ it.live("keeps a custom connector's failures typed and its credential private", 
     const secret = "custom-signing-key-0123456789";
     const endpoint = `wss://runtime.invalid/${secret}?signingKey=${secret}`;
 
-    const error = yield* Cdp.open({
+    const error = yield* Cdp.make({
       endpoint: Redacted.make(endpoint),
       connect: async () => {
         throw new Error(`Runtime could not connect to ${endpoint}`);
@@ -225,7 +226,7 @@ const connectorFailure = Effect.fnUntraced(function* (
   headers: Readonly<Record<string, string>> | undefined,
   cause: Error | string,
 ) {
-  const error = yield* Cdp.open({
+  const error = yield* Cdp.make({
     endpoint: "wss://runtime.invalid/cdp",
     headers,
     // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- External connectors may reject strings; exercise that redaction boundary alongside Error values.
@@ -366,7 +367,7 @@ it.effect("redacts originally supplied headers when their caller mutates the rec
     const credential = "original-header-private-0123456789";
     const headers = { Authorization: credential };
 
-    const error = yield* Cdp.open({
+    const error = yield* Cdp.make({
       endpoint: "wss://runtime.invalid/cdp",
       headers,
       connect: async () => {

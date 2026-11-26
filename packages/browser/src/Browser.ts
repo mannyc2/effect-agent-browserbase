@@ -116,7 +116,7 @@ export interface Options {
   /** Scripts that new documents run before their own, each where its `match` allows. */
   readonly initScripts?: ReadonlyArray<InitScript> | undefined;
   /**
-   * Run a page clock in each top document before its own scripts, so `Page.hold` can hold and
+   * Run a page clock in each top document before its own scripts, so `PageTime.hold` can hold and
    * step its time. It keeps real time until held, but replaces the page's timers, animation
    * frames, `Date` and `performance.now`, which a page script can notice. See `PageTime`.
    */
@@ -218,6 +218,9 @@ export interface Service {
 }
 
 export class Browser extends Context.Service<Browser, Service>()("effect-browser/Browser") {}
+
+/** Open a page in the context's `Browser`, at `url` when given. */
+export const newPage = (url?: string) => Effect.flatMap(Browser, (browser) => browser.newPage(url));
 
 /** The settings every page shares, and how many events the browser keeps, from its options. */
 const settingsOf = Effect.fnUntraced(function* (options: Options) {

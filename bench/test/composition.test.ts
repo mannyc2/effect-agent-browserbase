@@ -11,7 +11,9 @@ import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect";
 import * as Browser from "effect-browser/Browser";
 import { Subject } from "effect-browser/BrowserEvent";
 import * as Frame from "effect-browser/Frame";
+import * as Snapshot from "effect-browser/Snapshot";
 import { Supervisor } from "effect-browser/supervisor";
+import * as Text from "effect-browser/Text";
 import { Walk } from "effect-browser/walk";
 import { chromium, type Page as NativePage } from "playwright-core";
 
@@ -328,9 +330,9 @@ describe("consumer compositions", () => {
       yield* Workflow.run(world.sessions, journal(path), "RUN-1", claim(world.url, true), {
         operator: {
           needed: (page) =>
-            page
-              .find({ text: "Operator verification required" })
-              .pipe(Effect.map((found) => found.length > 0)),
+            Snapshot.find(page, { text: "Operator verification required" }).pipe(
+              Effect.map((found) => found.length > 0),
+            ),
           resolve: (page) =>
             Effect.gen(function* () {
               interventions++;
@@ -338,7 +340,7 @@ describe("consumer compositions", () => {
 
               assert.strictEqual(refused.reason._tag, "Suspended");
               assert.isFalse(refused.dispatched);
-              assert.include((yield* page.text()).text, "Operator verification required");
+              assert.include((yield* Text.read(page)).text, "Operator verification required");
               assert.isAbove((yield* Frame.read(page, { after: "input" })).data.length, 0);
               // A human/provider viewer is outside the library's automated-input gate.
               yield* Effect.promise(() =>

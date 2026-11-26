@@ -21,6 +21,7 @@ import { BrowserError, Closed, consequence, refuse } from "../../src/BrowserErro
 import { Frame, Screenshot } from "../../src/Frame.ts";
 import * as Stage from "../../src/presentation/Stage.ts";
 import * as TestPage from "../../src/testing/TestPage.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
 const scripted = Effect.fnUntraced(function* (
@@ -60,8 +61,7 @@ const scripted = Effect.fnUntraced(function* (
     { id, session: "scripted", connection: "fixture-connection" },
   );
 
-  const page = yield* TestPage.withPictures(test.page, (own) => ({
-    ...own,
+  const page = PageFunctions.replace(test.page, {
     capture: () =>
       Effect.succeed({
         stream: source,
@@ -76,7 +76,7 @@ const scripted = Effect.fnUntraced(function* (
         sync: Effect.void,
         stats: () => refuse("captureStats", "a scripted capture keeps no counts"),
       }),
-  }));
+  });
 
   const paintAt = (at: number) =>
     Queue.offer(
@@ -651,7 +651,7 @@ it.live("outgoing capture cleanup cannot time out a cut that already reached the
   TestCdp.withCdp(
     Effect.gen(function* () {
       const faults = yield* TestCdp.make();
-      const browser = yield* faults.provide(Chromium.open({ navigationTimeout: "200 millis" }));
+      const browser = yield* faults.provide(Chromium.make({ navigationTimeout: "200 millis" }));
       const stopping = Promise.withResolvers<void>();
       const gate = yield* Deferred.make<void>();
       const release = { resolve: () => Deferred.doneUnsafe(gate, Effect.void) };

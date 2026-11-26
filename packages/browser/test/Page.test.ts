@@ -10,14 +10,15 @@ import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import * as Frame from "../src/Frame.ts";
 import { type Page, redacted } from "../src/Page.ts";
-import type { Snapshot } from "../src/Snapshot.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import * as Moment from "../src/timeline/Moment.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 /** The ref of the line for this role and name, failing the test when there is none. */
-export const refOf = (snapshot: Snapshot, role: string, name: string): string => {
+export const refOf = (snapshot: Snapshot.Snapshot, role: string, name: string): string => {
   const ref = new RegExp(`${role} "${name}"[^\\n]*?\\[ref=(e\\d+)\\]`).exec(snapshot.text)?.[1];
 
   assert.isDefined(ref, `no ${role} "${name}" in:\n${snapshot.text}`);
@@ -81,7 +82,7 @@ const centerPixel = (page: Page, image: Frame.Image) =>
   );
 
 /** What the page shows, read as the next look after an action reads it. */
-const shows = (page: Page) => Effect.map(page.text(), (read) => read.text);
+const shows = (page: Page) => Effect.map(Text.read(page), (read) => read.text);
 
 const reason = <A>(effect: Effect.Effect<A, BrowserError>) =>
   Effect.flip(effect).pipe(
@@ -96,7 +97,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/form");
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         assert.include(snapshot.text, 'heading "Place an order"');
         for (const [role, name] of [
@@ -110,12 +111,12 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         }
         assert.notInclude(snapshot.text, "Bottom of the page");
         assert.isAbove(snapshot.below, 0);
-        assert.include((yield* page.snapshot({ full: true })).text, "Bottom of the page");
-        assert.notInclude((yield* page.snapshot({ query: "submit" })).text, "Amount");
+        assert.include((yield* Snapshot.read(page, { full: true })).text, "Bottom of the page");
+        assert.notInclude((yield* Snapshot.read(page, { query: "submit" })).text, "Amount");
 
         // Asked, each control's line ends with its box.
-        const [submit] = yield* page.find({ role: "button", name: "Submit" });
-        const boxed = (yield* page.snapshot({ boxes: true })).text.split("\n");
+        const [submit] = yield* Snapshot.find(page, { role: "button", name: "Submit" });
+        const boxed = (yield* Snapshot.read(page, { boxes: true })).text.split("\n");
         const box = submit?.box;
 
         assert.notInclude(snapshot.text, " at (");
@@ -134,7 +135,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/form");
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         const byName = new Map(snapshot.controls.map((control) => [control.name, control]));
 
@@ -154,22 +155,22 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.strictEqual(byName.get("Submit")?.ref, refOf(snapshot, "button", "Submit"));
 
         // A cut outline lists only the controls whose lines it kept.
-        const cut = yield* page.snapshot({ maxChars: 80 });
+        const cut = yield* Snapshot.read(page, { maxChars: 80 });
 
         assert.isTrue(cut.truncated);
         for (const control of cut.controls) assert.include(cut.text, `[ref=${control.ref}]`);
         assert.isBelow(cut.controls.length, snapshot.controls.length);
 
-        const nav = yield* page.snapshot({ within: "nav" });
+        const nav = yield* Snapshot.read(page, { within: "nav" });
 
         assert.deepStrictEqual(
           nav.controls.map((control) => control.name),
           ["Next page", "Open in a new tab"],
         );
         assert.notInclude(nav.text, "Amount");
-        assert.strictEqual((yield* page.snapshot({ within: "#nothing" })).text, "");
+        assert.strictEqual((yield* Snapshot.read(page, { within: "#nothing" })).text, "");
 
-        const invalid = yield* Effect.flip(page.snapshot({ within: "nav[" }));
+        const invalid = yield* Effect.flip(Snapshot.read(page, { within: "nav[" }));
 
         assert.strictEqual(invalid.reason._tag, "InvalidRequest");
       }),
@@ -189,15 +190,21 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             }, 300);
           }),
         );
-        yield* page.until({ selector: "#outcome", text: "Ordered later" }, "some", 5000);
-        yield* page.until({ selector: "#outcome", text: "ordered later" }, "none", 5000);
-        yield* page.until({ selector: "h1", state: "visible" }, "some", 5000);
+        yield* Snapshot.until(page, { selector: "#outcome", text: "Ordered later" }, "some", 5000);
+        yield* Snapshot.until(page, { selector: "#outcome", text: "ordered later" }, "none", 5000);
+        yield* Snapshot.until(page, { selector: "h1", state: "visible" }, "some", 5000);
 
-        const unmet = yield* page.until({ selector: "#submit", state: "enabled" }, "some", 300);
+        const unmet = yield* Snapshot.until(
+          page,
+          { selector: "#submit", state: "enabled" },
+          "some",
+          300,
+        );
 
         assert.isFalse(unmet.met);
         assert.strictEqual(
-          (yield* Effect.flip(page.until({ selector: "#outcome[" }, "some", 5000))).reason._tag,
+          (yield* Effect.flip(Snapshot.until(page, { selector: "#outcome[" }, "some", 5000))).reason
+            ._tag,
           "InvalidRequest",
         );
       }),
@@ -208,7 +215,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/form");
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
         const submit = refOf(snapshot, "button", "Submit");
 
         yield* page.press("Enter", { on: submit });
@@ -235,7 +242,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/form");
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         yield* page.type("25", { into: refOf(snapshot, "textbox", "Amount") });
         assert.strictEqual(
@@ -268,7 +275,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/form");
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         yield* page.hover(refOf(snapshot, "link", "Next page"));
         yield* page.scroll({ at: refOf(snapshot, "textbox", "Amount"), dy: 200 });
@@ -300,7 +307,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             '<div contenteditable="true" role="textbox" autocomplete="one-time-code" title="Code">482913</div>',
           ),
         );
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         assert.notInclude(snapshot.text, "482913");
         yield* page.click(refOf(snapshot, "textbox", "Code"));
@@ -329,7 +336,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         </div></label>
         <label>I agree to the <a href="#terms">terms</a> <input type="checkbox"></label>`),
         );
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
         // The native select is the line with options; the scripted opener has the same name.
         const select = /combobox "Country" \[ref=(e\d+)\][^\n]*options=/.exec(snapshot.text)?.[1];
 
@@ -345,7 +352,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/form");
-        const snapshot = yield* page.snapshot();
+        const snapshot = yield* Snapshot.read(page);
 
         const focus = (selector: string) =>
           Effect.promise(() => TestCdp.nativePage(page).locator(selector).focus());
@@ -498,7 +505,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/form");
-        const submit = refOf(yield* page.snapshot(), "button", "Submit");
+        const submit = refOf(yield* Snapshot.read(page), "button", "Submit");
         const site = yield* Site;
 
         yield* page.goto(site.url("/next"));
@@ -517,7 +524,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             '<iframe name="child" srcdoc="<button>Frame action</button>"></iframe>',
           ),
         );
-        const framed = refOf(yield* page.snapshot(), "button", "Frame action");
+        const framed = refOf(yield* Snapshot.read(page), "button", "Frame action");
 
         yield* Effect.promise(() =>
           TestCdp.nativePage(page).frame({ name: "child" })!.goto(site.url("/next")),
@@ -535,18 +542,20 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* open("/form");
         const site = yield* Site;
-        const first = yield* page.snapshot();
+        const first = yield* Snapshot.read(page);
         const submit = refOf(first, "button", "Submit");
         const given = new Set(Array.from(first.text.matchAll(/\[ref=(e\d+)\]/g), ([, ref]) => ref));
 
         // The same form again, each time read first by an outline or by `find`, which number refs
         // apart: the old Submit's ref would name the new one if either began again at `e1`.
         for (const read of [
-          page.snapshot().pipe(
+          Snapshot.read(page).pipe(
             Effect.map((snapshot) => Array.from(snapshot.text.matchAll(/\[ref=(e\d+)\]/g))),
             Effect.map((matches) => matches.map(([, ref]) => ref)),
           ),
-          page.find({ role: "button" }).pipe(Effect.map((found) => found.map(({ ref }) => ref))),
+          Snapshot.find(page, { role: "button" }).pipe(
+            Effect.map((found) => found.map(({ ref }) => ref)),
+          ),
         ]) {
           yield* page.goto(site.url("/form"));
           const refs = yield* read;
@@ -588,7 +597,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         yield* Effect.promise(() =>
           TestCdp.nativePage(page).evaluate(() => setTimeout(() => location.assign("/hop/1"), 100)),
         );
-        yield* page.until({ text: "Arrived after three hops" }, "some", 5000);
+        yield* Snapshot.until(page, { text: "Arrived after three hops" }, "some", 5000);
       }),
     ),
   );
@@ -610,7 +619,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             }, 300);
           }),
         );
-        yield* page.until({ text: "Arrived with the body" }, "some", 5000);
+        yield* Snapshot.until(page, { text: "Arrived with the body" }, "some", 5000);
       }),
     ),
   );
@@ -668,7 +677,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         const page = yield* open("/opens-busy");
         const before = (yield* browser.pages).length;
 
-        yield* page.click(refOf(yield* page.snapshot(), "link", "Open a busy tab"));
+        yield* page.click(refOf(yield* Snapshot.read(page), "link", "Open a busy tab"));
 
         // Registration must not depend on the new tab's renderer answering in time.
         const pages = yield* browser.pages;
@@ -1053,7 +1062,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
                 `<iframe style="position:absolute;left:0;top:1500px;width:400px;height:200px;border:0" srcdoc="<body style='margin:0'><button style='width:200px;height:50px' onclick='${record("deep")}'>Deep action</button>"></iframe></body>`,
             ),
           );
-          const snapshot = yield* page.snapshot({ full: true });
+          const snapshot = yield* Snapshot.read(page, { full: true });
 
           assert.deepStrictEqual(
             yield* reason(page.click(refOf(snapshot, "button", "Covered action"))),
@@ -1116,7 +1125,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         ] as const) {
           const page = yield* open("/navigating");
 
-          yield* page.click(refOf(yield* page.snapshot(), role, name));
+          yield* page.click(refOf(yield* Snapshot.read(page), role, name));
           assert.include(yield* shows(page), "The next page", name);
         }
         for (const [role, name] of [
@@ -1125,24 +1134,24 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         ] as const) {
           const page = yield* open("/navigating");
 
-          yield* page.click(refOf(yield* page.snapshot(), role, name));
-          assert.match((yield* page.text()).url, /\/late$/, name);
+          yield* page.click(refOf(yield* Snapshot.read(page), role, name));
+          assert.match((yield* Text.read(page)).url, /\/late$/, name);
         }
 
         // A document whose end comes 300 ms after its start is parsed as the click returns.
         const streaming = yield* open("/navigating");
 
-        yield* streaming.click(refOf(yield* streaming.snapshot(), "link", "Streaming"));
+        yield* streaming.click(refOf(yield* Snapshot.read(streaming), "link", "Streaming"));
         assert.include(yield* shows(streaming), "The bottom");
 
         const fetching = yield* open("/navigating");
         const response = yield* (yield* Site).hold("/slow");
 
-        yield* fetching.click(refOf(yield* fetching.snapshot(), "button", "Fetch"));
+        yield* fetching.click(refOf(yield* Snapshot.read(fetching), "button", "Fetch"));
         yield* response.arrived;
         assert.include(yield* shows(fetching), "Fetch");
         yield* response.release;
-        yield* fetching.until({ text: "The next page" }, "some", 5000);
+        yield* Snapshot.until(fetching, { text: "The next page" }, "some", 5000);
 
         for (const [role, name] of [
           ["button", "Push"],
@@ -1150,7 +1159,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         ] as const) {
           const page = yield* open("/navigating");
 
-          yield* page.click(refOf(yield* page.snapshot(), role, name));
+          yield* page.click(refOf(yield* Snapshot.read(page), role, name));
 
           assert.include(yield* shows(page), "Still", name);
         }
@@ -1162,7 +1171,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/navigating");
-        const still = refOf(yield* page.snapshot(), "button", "Still");
+        const still = refOf(yield* Snapshot.read(page), "button", "Still");
 
         yield* page.click(still);
 
@@ -1195,7 +1204,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
         yield* Effect.gen(function* () {
           const page = yield* (yield* Browser).newPage(site.url("/form"));
-          const snapshot = yield* page.snapshot();
+          const snapshot = yield* Snapshot.read(page);
 
           assert.deepStrictEqual(yield* reason(page.click(refOf(snapshot, "button", "Submit"))), {
             tag: "PolicyDenied",

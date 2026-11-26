@@ -11,6 +11,7 @@ import { TestBrowserbase } from "@effect-browser/browserbase/testing";
 import { assert, describe, it } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Layer, Redacted } from "effect";
 import { Browser } from "effect-browser/Browser";
+import * as Snapshot from "effect-browser/Snapshot";
 import { HttpClient } from "effect/http";
 
 import * as Latency from "../Latency.ts";
@@ -110,7 +111,7 @@ describe("hosted trials", () => {
           const page = yield* Context.get(context, Browser).firstPage;
 
           yield* page.goto("data:text/html,<button>Go</button>");
-          assert.include((yield* page.snapshot()).text, 'button "Go"');
+          assert.include((yield* Snapshot.read(page)).text, 'button "Go"');
         }).pipe(Effect.scoped);
 
         const methods = new Set(commands.map((command) => command.method));

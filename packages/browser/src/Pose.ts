@@ -13,17 +13,19 @@
  * A page's poses are one lease, for a scope; each `set` poses the elements it names and takes the
  * pose off every other, and the scope's end takes them all off. A pose sets no attribute and starts
  * none of the page's transitions, and the library's change record does not report it. Readers
- * report what is drawn: `layout`, `find` and the input's targets give a posed element's box as
- * posed, and a click lands where it is drawn. Only HTML elements take a pose, and one inside
- * another posed element is posed about its point as if the outer one were not. A new document
- * starts with none.
+ * report what is drawn: `Layout.measure`, `Snapshot.find` and the input's targets give a posed
+ * element's box as posed, and a click lands where it is drawn. Only HTML elements take a pose, and
+ * one inside another posed element is posed about its point as if the outer one were not. A new
+ * document starts with none.
  *
  * @since 0.3.0
  */
-import { type Effect, Schema } from "effect";
+import { type Effect, Schema, type Scope } from "effect";
 
 import type { BrowserError } from "./BrowserError.ts";
 import { Point } from "./internal/geometry.ts";
+import { functionsOf } from "./internal/page/functions.ts";
+import type { Page } from "./Page.ts";
 
 /** How an element is posed. A part left out changes nothing: no move, a scale of 1, no turn. */
 export const Pose = Schema.Struct({
@@ -48,3 +50,11 @@ export interface Poses {
    */
   readonly set: (poses: ReadonlyArray<Pose>) => Effect.Effect<void, BrowserError>;
 }
+
+/**
+ * Pose the page's own elements for the scope, moved, turned and scaled as a caller says, and put
+ * back when the scope closes. One lease at a time: a second while one is open fails
+ * `InvalidRequest`.
+ */
+export const make = (page: Page): Effect.Effect<Poses, BrowserError, Scope.Scope> =>
+  functionsOf(page).poses;

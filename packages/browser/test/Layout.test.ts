@@ -6,6 +6,7 @@ import type { Action } from "../src/Action.ts";
 import { Browser } from "../src/Browser.ts";
 import * as Layout from "../src/Layout.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const blank = Effect.gen(function* () {
@@ -45,7 +46,7 @@ const command = `<style>
 layer(TestCdp.provideLayer(Chromium.layer()), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
-})("Page.layout", (it) => {
+})("Layout.measure", (it) => {
   it.effect("reads unrounded boxes in the viewport and the document, at the scroll it read", () =>
     Effect.gen(function* () {
       const page = yield* blank;
@@ -53,7 +54,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       yield* show(page, command);
       yield* evaluate(page, () => scrollTo(0, 100));
 
-      const layout = yield* page.layout({
+      const layout = yield* Layout.measure(page, {
         command: { role: "button", name: /npm install/, words: "npm install effect" },
         icon: { selector: "#cmd svg", name: "copy" },
         bar: { selector: "#bar" },
@@ -97,7 +98,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
       yield* show(page, command);
 
-      const layout = yield* page.layout({
+      const layout = yield* Layout.measure(page, {
         literal: { selector: "#code", words: "42" },
         numbers: { selector: "#code", words: /\d+/ },
         phrase: { selector: "#code", words: "answer = 42" },
@@ -128,7 +129,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         `<button style="width:40px">A</button><button style="width:200px">Bee</button><button style="width:80px">C</button>`,
       );
 
-      const layout = yield* page.layout({
+      const layout = yield* Layout.measure(page, {
         first: { role: "button" },
         last: { role: "button", choose: "last" },
         smallest: { role: "button", choose: "smallest" },
@@ -139,7 +140,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         layout.places.map((place) => place.subject.name),
         ["A", "C", "A", "Bee"],
       );
-      const refused = yield* Effect.flip(page.layout({ bad: { selector: "[" } }));
+      const refused = yield* Effect.flip(Layout.measure(page, { bad: { selector: "[" } }));
 
       assert.strictEqual(refused.reason._tag, "InvalidRequest");
     }),
@@ -160,9 +161,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       );
 
       const tab = (name: string) =>
-        page
-          .find({ role: "tab", name })
-          .pipe(Effect.map(([found]): Action => ({ _tag: "Click", target: found!.ref })));
+        Snapshot.find(page, { role: "tab", name }).pipe(
+          Effect.map(([found]): Action => ({ _tag: "Click", target: found!.ref })),
+        );
 
       const act = [yield* tab("Two")];
       const undo = [yield* tab("One")];

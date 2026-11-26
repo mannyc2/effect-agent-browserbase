@@ -4,7 +4,8 @@ import { Arbitrary, Duration, Effect, Exit, Layer, Option, Schema } from "effect
 
 import { Browser } from "../src/Browser.ts";
 import { type FindRequest, match } from "../src/internal/matching.ts";
-import type { Found, Page } from "../src/Page.ts";
+import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -193,7 +194,7 @@ const open = (path: string) =>
     );
   });
 
-const rows = (found: ReadonlyArray<Found>) =>
+const rows = (found: ReadonlyArray<Snapshot.Found>) =>
   found.map(({ subject }) => [subject.context.row, subject.context.column]);
 
 const scrollTo = (page: Page, selector: string) =>
@@ -204,15 +205,16 @@ const scrollTo = (page: Page, selector: string) =>
 layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
-})("Page.find", (it) => {
+})("Snapshot.find", (it) => {
   it.effect("refuses invalid wait durations before page dispatch", () =>
     Effect.gen(function* () {
       const page = yield* (yield* Browser).newPage();
 
       for (const millis of [-1, Number.NaN, Infinity]) {
-        const exit = yield* page
-          .until({ text: "absent" }, "some", millis)
-          .pipe(Effect.timeout("100 millis"), Effect.exit);
+        const exit = yield* Snapshot.until(page, { text: "absent" }, "some", millis).pipe(
+          Effect.timeout("100 millis"),
+          Effect.exit,
+        );
 
         const error = Exit.findErrorOption(exit);
 
@@ -232,10 +234,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
   it.effect("answers unmet at one deadline while documents keep replacing its context", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const host = yield* Chromium.open({ actionTimeout: "150 millis" });
+        const host = yield* Chromium.make({ actionTimeout: "150 millis" });
         const page = yield* host.newPage((yield* Site).url("/replacing"));
         const first = (yield* page.state).document;
-        const result = yield* page.until({ text: "Never present" }, "some", 120);
+        const result = yield* Snapshot.until(page, { text: "Never present" }, "some", 120);
 
         assert.isFalse(result.met);
         assert.isAtLeast((yield* page.state).document - first, 2);
@@ -257,26 +259,31 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           (page) => Effect.ignore(page.close),
         );
 
-        assert.lengthOf(yield* page.find({ selector: ".status", text: "saved note" }), 1);
+        assert.lengthOf(yield* Snapshot.find(page, { selector: ".status", text: "saved note" }), 1);
         assert.isTrue(
-          (yield* page.until({ selector: ".status", text: "saved note" }, "some", 0)).met,
+          (yield* Snapshot.until(page, { selector: ".status", text: "saved note" }, "some", 0)).met,
         );
         assert.deepStrictEqual(
-          (yield* page.find({ selector: "button", state: "enabled" })).map(
+          (yield* Snapshot.find(page, { selector: "button", state: "enabled" })).map(
             ({ subject }) => subject.name,
           ),
           ["Allowed"],
         );
         assert.isFalse(
-          (yield* page.until({ selector: "fieldset button", state: "enabled" }, "some", 0)).met,
+          (yield* Snapshot.until(
+            page,
+            { selector: "fieldset button", state: "enabled" },
+            "some",
+            0,
+          )).met,
         );
-        assert.isTrue((yield* page.until({ selector: "#absent" }, "none", 0)).met);
+        assert.isTrue((yield* Snapshot.until(page, { selector: "#absent" }, "none", 0)).met);
         assert.strictEqual(
-          (yield* Effect.flip(page.find({ selector: "[" }))).reason._tag,
+          (yield* Effect.flip(Snapshot.find(page, { selector: "[" }))).reason._tag,
           "InvalidRequest",
         );
         assert.strictEqual(
-          (yield* Effect.flip(page.until({ selector: "[" }, "some", 0))).reason._tag,
+          (yield* Effect.flip(Snapshot.until(page, { selector: "[" }, "some", 0))).reason._tag,
           "InvalidRequest",
         );
       }),
@@ -302,18 +309,23 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           (page) => Effect.ignore(page.close),
         );
 
-        const found = yield* page.find({ role: "button" });
+        const found = yield* Snapshot.find(page, { role: "button" });
 
         assert.deepStrictEqual(
           found.map(({ subject }) => subject.name),
           ["Zero wrapper", "Contents wrapper", "Visible child"],
         );
-        const outlined = yield* page.snapshot();
+        const outlined = yield* Snapshot.read(page);
 
         for (const name of ["Zero wrapper", "Contents wrapper", "Visible child"])
           assert.include(outlined.text, name);
         assert.isTrue(
-          (yield* page.until({ selector: "#contents", text: "Contents wrapper" }, "some", 200)).met,
+          (yield* Snapshot.until(
+            page,
+            { selector: "#contents", text: "Contents wrapper" },
+            "some",
+            200,
+          )).met,
         );
       }),
     ),
@@ -333,10 +345,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           (page) => Effect.ignore(page.close),
         );
 
-        assert.lengthOf(yield* page.find({ role: "button", name: "Canonical label" }), 1);
+        assert.lengthOf(yield* Snapshot.find(page, { role: "button", name: "Canonical label" }), 1);
         for (const role of ["row", "columnheader", "cell", "table", "list", "listitem"])
-          assert.lengthOf(yield* page.find({ role }), 1, role);
-        const outlined = yield* page.snapshot();
+          assert.lengthOf(yield* Snapshot.find(page, { role }), 1, role);
+        const outlined = yield* Snapshot.read(page);
 
         assert.notInclude(outlined.text, "- row:");
         assert.notInclude(outlined.text, "- list:");
@@ -348,7 +360,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/ticker");
-        const buys = yield* page.find({ role: "button", name: " BUY " });
+        const buys = yield* Snapshot.find(page, { role: "button", name: " BUY " });
 
         assert.deepStrictEqual(rows(buys), [
           ["BTC", "Trade"],
@@ -361,7 +373,9 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         );
         assert.isTrue(buys.every(({ subject }) => subject.context.heading === "Prices"));
         // A value is read under its own header, not the one beside it.
-        assert.deepStrictEqual(rows(yield* page.find({ text: "+2.5%" })), [["ETH", "24h"]]);
+        assert.deepStrictEqual(rows(yield* Snapshot.find(page, { text: "+2.5%" })), [
+          ["ETH", "24h"],
+        ]);
       }),
     ),
   );
@@ -370,12 +384,17 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/ticker");
-        const [eth, ...others] = yield* page.find({ role: "button", name: "Buy", near: "eth" });
+
+        const [eth, ...others] = yield* Snapshot.find(page, {
+          role: "button",
+          name: "Buy",
+          near: "eth",
+        });
 
         assert.isDefined(eth);
         assert.lengthOf(others, 0);
         yield* page.click(eth?.ref ?? "");
-        assert.lengthOf(yield* page.find({ text: "Bought ETH" }), 1);
+        assert.lengthOf(yield* Snapshot.find(page, { text: "Bought ETH" }), 1);
 
         // The action records the same subject, context and all.
         const click = (yield* page.recentEvents).find(
@@ -391,17 +410,17 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/ticker");
-        const ordered = yield* page.find({ text: "ordered 25 ETH" });
+        const ordered = yield* Snapshot.find(page, { text: "ordered 25 ETH" });
 
         assert.deepStrictEqual(
           ordered.map(({ subject }) => subject.tag),
           ["div"],
         );
         assert.deepStrictEqual(
-          (yield* page.find({ text: /^buy$/i })).map(({ subject }) => subject.role),
+          (yield* Snapshot.find(page, { text: /^buy$/i })).map(({ subject }) => subject.role),
           ["button", "button", "button"],
         );
-        assert.lengthOf(yield* page.find({ text: "Nothing like this" }), 0);
+        assert.lengthOf(yield* Snapshot.find(page, { text: "Nothing like this" }), 0);
       }),
     ),
   );
@@ -417,8 +436,8 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           ["button", "Accept"],
           ["dialog", "Offer"],
         ] as const)
-          assert.lengthOf(yield* page.find({ role, name }), 1, `${role} ${name}`);
-        assert.lengthOf(yield* page.find({ text: "Saved" }), 1);
+          assert.lengthOf(yield* Snapshot.find(page, { role, name }), 1, `${role} ${name}`);
+        assert.lengthOf(yield* Snapshot.find(page, { text: "Saved" }), 1);
         // Pinned inside a part out of view, under a transparent layer over the whole page: by style
         // attributes, one ignoring the pointer and one away from the probe points, and by a
         // stylesheet, found at a probe point beneath the layer.
@@ -427,19 +446,19 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           "A badge between the points",
           "A bar pinned by an adopted stylesheet",
         ])
-          assert.lengthOf(yield* page.find({ text }), 1, text);
-        assert.lengthOf(yield* page.find({ text: "The top of the story" }), 0);
-        assert.lengthOf(yield* page.find({ role: "button", name: "At the bottom" }), 0);
+          assert.lengthOf(yield* Snapshot.find(page, { text }), 1, text);
+        assert.lengthOf(yield* Snapshot.find(page, { text: "The top of the story" }), 0);
+        assert.lengthOf(yield* Snapshot.find(page, { role: "button", name: "At the bottom" }), 0);
         // What is pinned to the viewport sits under no heading of the story behind it.
-        const [accept] = yield* page.find({ role: "button", name: "Accept" });
+        const [accept] = yield* Snapshot.find(page, { role: "button", name: "Accept" });
 
         assert.isUndefined(accept?.subject.context.heading);
 
-        const [bottom] = yield* page.find({ name: "At the bottom", scope: "document" });
+        const [bottom] = yield* Snapshot.find(page, { name: "At the bottom", scope: "document" });
 
         assert.isFalse(bottom?.inViewport ?? true);
         // The outline skips the same subtrees, and counts each as one part.
-        const outline = yield* page.snapshot();
+        const outline = yield* Snapshot.read(page);
 
         for (const line of ['link "Sign in"', 'button "Accept"', "dialog"])
           assert.include(outline.text, line);
@@ -468,9 +487,9 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           }),
         );
 
-        assert.lengthOf(yield* page.find({ role: "button", scope: "document" }), 2003);
+        assert.lengthOf(yield* Snapshot.find(page, { role: "button", scope: "document" }), 2003);
         // Rows out of view are skipped whole: the outline counts each as one part, not its cells.
-        assert.isBelow((yield* page.snapshot()).below, 2100);
+        assert.isBelow((yield* Snapshot.read(page)).below, 2100);
       }),
     ),
   );

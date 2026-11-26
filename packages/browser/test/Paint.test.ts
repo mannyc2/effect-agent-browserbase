@@ -61,7 +61,7 @@ const measured = (page: Page) =>
     .pipe(Effect.map(({ value }) => value));
 
 layer(attached, { excludeTestServices: true, timeout: Duration.seconds(60) })(
-  "Page.paint, attached",
+  "Frame.paint, attached",
   (it) => {
     it.effect("paints device pixels for a scope, and documents then without scrollbars", () =>
       Effect.gen(function* () {

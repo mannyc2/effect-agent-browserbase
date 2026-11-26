@@ -8,6 +8,8 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Result } from "effect";
 
 import * as Stage from "../src/presentation/Stage.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const site = Effect.acquireRelease(
@@ -39,7 +41,7 @@ it.live("a timed-out navigation permits correction, browser suspension and an ou
     Effect.gen(function* () {
       const { url } = yield* site;
 
-      const browser = yield* Chromium.open({
+      const browser = yield* Chromium.make({
         actionTimeout: "300 millis",
         navigationTimeout: "300 millis",
       });
@@ -82,11 +84,11 @@ it.live("a link's unanswered settling read does not retain input authority", () 
 
       // Leave time for the native input to reach its settling read under load. The held-reply
       // regression below exercises the earlier deadline during input acknowledgement.
-      const browser = yield* Chromium.open({ actionTimeout: "2 seconds" });
+      const browser = yield* Chromium.make({ actionTimeout: "2 seconds" });
 
       const page = yield* browser.newPage(url);
-      const [link] = yield* page.find({ role: "link", name: "Hang" });
-      const [button] = yield* page.find({ role: "button", name: "Continue" });
+      const [link] = yield* Snapshot.find(page, { role: "link", name: "Hang" });
+      const [button] = yield* Snapshot.find(page, { role: "button", name: "Continue" });
       const clicked = yield* page.click(link!.ref).pipe(Effect.result);
 
       if (Result.isFailure(clicked)) assert.isTrue(clicked.failure.dispatched);
@@ -111,7 +113,7 @@ it.live("a refused history traversal sends no stop-loading mutation", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
       const faults = yield* TestCdp.make();
-      const browser = yield* faults.provide(Chromium.open());
+      const browser = yield* faults.provide(Chromium.make());
       const page = yield* browser.newPage();
       const error = yield* page.back.pipe(Effect.flip);
 
@@ -137,7 +139,7 @@ it.live(
         const faults = yield* TestCdp.make();
 
         const browser = yield* faults.provide(
-          Chromium.open({ actionTimeout: "2 seconds", navigationTimeout: "200 millis" }),
+          Chromium.make({ actionTimeout: "2 seconds", navigationTimeout: "200 millis" }),
         );
 
         const arrived = Promise.withResolvers<void>();
@@ -175,7 +177,7 @@ it.live(
           ),
         );
         const page = yield* browser.newPage(url);
-        const [link] = yield* page.find({ role: "link", name: "Hang" });
+        const [link] = yield* Snapshot.find(page, { role: "link", name: "Hang" });
         const clicking = yield* page.click(link!.ref).pipe(Effect.flip, Effect.forkChild);
 
         yield* Effect.promise(() => arrived.promise);
@@ -191,7 +193,7 @@ it.live(
         assert.strictEqual(stops, 0, "stop must follow the actual input acknowledgement");
         acknowledge.resolve();
         // A bounded read can only finish once cleanup has stopped the unanswered navigation.
-        const readable = yield* page.text().pipe(Effect.result);
+        const readable = yield* Text.read(page).pipe(Effect.result);
 
         const cleaning = yield* browser
           .suspend({ drain: "40 millis" })
@@ -215,7 +217,7 @@ it.live("bounds a missing stop reply without surrendering its input authority", 
     Effect.gen(function* () {
       const { url } = yield* site;
       const faults = yield* TestCdp.make();
-      const browser = yield* faults.provide(Chromium.open({ navigationTimeout: "200 millis" }));
+      const browser = yield* faults.provide(Chromium.make({ navigationTimeout: "200 millis" }));
       const sent = Promise.withResolvers<void>();
       const gate = yield* Deferred.make<void>();
       const reply = { resolve: () => Deferred.doneUnsafe(gate, Effect.void) };
