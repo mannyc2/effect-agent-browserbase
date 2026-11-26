@@ -1,8 +1,8 @@
 // The chart module on a real Chromium page, over a stand-in for TradingView's widget.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Arbitrary, Duration, Effect, Exit, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
 
 import * as Chart from "../src/Chart.ts";
 import { chartOn, hour, position, recorded, time } from "./fixture.ts";

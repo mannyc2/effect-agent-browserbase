@@ -7,8 +7,8 @@
 import { Duration, Effect } from "effect";
 
 import { NotActionable, StaleRef } from "../../BrowserError.ts";
+import { maximumDurationMillis } from "../../InputStyle.ts";
 import type { ClickOptions, PressOptions, ScrollOptions, Target, TypeOptions } from "../../Page.ts";
-import { maximumDurationMillis } from "../../Style.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";

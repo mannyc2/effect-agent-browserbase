@@ -1,9 +1,9 @@
 // The contract command, free: its opt-in, its verdicts, and the checks against the package's fake.
+import { BrowserbaseError, Unauthorized } from "@effect-browser/browserbase/BrowserbaseError";
+import { BrowserbaseContract, TestBrowserbase } from "@effect-browser/browserbase/testing";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { ConfigProvider, Effect, Result } from "effect";
-import { BrowserbaseError, Unauthorized } from "effect-browserbase/BrowserbaseError";
-import { BrowserbaseContract, TestBrowserbase } from "effect-browserbase/testing";
 import { Command } from "effect/cli";
 
 import * as Contract from "../contract.ts";

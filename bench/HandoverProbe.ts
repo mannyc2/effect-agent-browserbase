@@ -1,4 +1,11 @@
 /** A bounded H2 probe: exclusive persisted rotation, revoked work and durable browser read-back. */
+import * as Browserbase from "@effect-browser/browserbase/Browserbase";
+import {
+  BrowserbaseClient,
+  type Service,
+  type Session,
+} from "@effect-browser/browserbase/BrowserbaseClient";
+import { BrowserbaseError, InvalidRequest } from "@effect-browser/browserbase/BrowserbaseError";
 import {
   Cause,
   Clock,
@@ -12,14 +19,7 @@ import {
   Stream,
 } from "effect";
 import type * as Browser from "effect-browser/Browser";
-import * as Supervisor from "effect-browser/Supervisor";
-import * as Browserbase from "effect-browserbase/Browserbase";
-import {
-  BrowserbaseClient,
-  type Service,
-  type Session,
-} from "effect-browserbase/BrowserbaseClient";
-import { BrowserbaseError, InvalidRequest } from "effect-browserbase/BrowserbaseError";
+import { Supervisor } from "effect-browser/supervisor";
 
 import { BenchError, refuse } from "./Budget.ts";
 import * as Fixtures from "./FixtureRoutes.ts";

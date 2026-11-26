@@ -20,8 +20,10 @@ const directory = mkdtempSync(join(work, "consumer-bundle-"));
 const entry = fileURLToPath(new URL("./bundled-consumer.ts", import.meta.url));
 
 beforeAll(() => {
-  // Resolve the default published exports, never the workspace's source condition.
+  // Resolve the default published exports, never the workspace's source condition. The consumer
+  // launches its browser through @effect-browser/chromium, so that is built too.
   execFileSync("bun", ["run", "build"], { cwd: root, stdio: "pipe" });
+  execFileSync("bun", ["run", "build"], { cwd: join(root, "../chromium"), stdio: "pipe" });
 });
 
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -90,7 +92,7 @@ it("bundles the published root and Cdp entry points for Workers", async () => {
   const inputs = Object.keys(bundle.metafile.inputs);
 
   assert.isTrue(inputs.some((name) => name.endsWith("dist/index.mjs")));
-  assert.isTrue(inputs.some((name) => name.endsWith("dist/workerd/Cdp.mjs")));
+  assert.isTrue(inputs.some((name) => name.endsWith("dist/internal/cdp/workerd.mjs")));
   assert.isFalse(inputs.some((name) => name.includes("playwright-core")));
   assert.isFalse(inputs.some((name) => name.endsWith("/Chromium.mjs")));
 });

@@ -1,11 +1,11 @@
 // The H2 budget and evidence boundary are verified without a hosted session or model call.
+import { BrowserbaseClient } from "@effect-browser/browserbase/BrowserbaseClient";
+import { BrowserbaseError, Transport } from "@effect-browser/browserbase/BrowserbaseError";
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
+import { TestBrowserbase } from "@effect-browser/browserbase/testing";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Clock, ConfigProvider, DateTime, Deferred, Effect, Fiber } from "effect";
-import { BrowserbaseClient } from "effect-browserbase/BrowserbaseClient";
-import { BrowserbaseError, Transport } from "effect-browserbase/BrowserbaseError";
-import * as ContextLease from "effect-browserbase/ContextLease";
-import { TestBrowserbase } from "effect-browserbase/testing";
 import { Command } from "effect/cli";
 import { TestClock } from "effect/testing";
 

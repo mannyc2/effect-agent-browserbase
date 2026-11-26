@@ -3,7 +3,7 @@ import { Clock, Deferred, Duration, Effect, Stream } from "effect";
 
 import { Browser } from "../../src/Browser.ts";
 import type { BrowserEvent } from "../../src/BrowserEvent.ts";
-import * as BrowserClock from "../../src/Clock.ts";
+import * as BrowserClock from "../../src/internal/clock.ts";
 import * as Openings from "../../src/internal/page/openings.ts";
 import * as PageImpl from "../../src/internal/page/page.ts";
 import * as Port from "../../src/internal/page/port.ts";

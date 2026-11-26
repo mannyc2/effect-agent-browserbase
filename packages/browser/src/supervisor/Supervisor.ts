@@ -21,9 +21,21 @@ import {
   Tracer,
 } from "effect";
 
-import { type Generation, type Options, type Supervisor, Unavailable } from "./contract.ts";
-import * as Lifecycle from "./lifecycle.ts";
-import { type Apply, type Hold, type Runtime, leasing, opening, releasing } from "./runtime.ts";
+import {
+  type Generation,
+  type Options,
+  type Supervisor,
+  Unavailable,
+} from "./internal/contract.ts";
+import * as Lifecycle from "./internal/lifecycle.ts";
+import {
+  type Apply,
+  type Hold,
+  type Runtime,
+  leasing,
+  opening,
+  releasing,
+} from "./internal/runtime.ts";
 
 export {
   type Generation,
@@ -37,7 +49,7 @@ export {
   Unavailable,
   type UseOptions,
   StopReason,
-} from "./contract.ts";
+} from "./internal/contract.ts";
 
 export const make = Effect.fn("Supervisor.make")(function* <A, E, R>(
   options: Options<A, E, R>,

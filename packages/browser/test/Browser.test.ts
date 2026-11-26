@@ -1,5 +1,6 @@
 // A browser's pages and their life story: each page's name across connections, how a page or the
 // whole browser is lost and why, the documents a page moves through, and the addresses it reports.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Arbitrary,
@@ -21,10 +22,9 @@ import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import type * as Browser from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
+import * as Cdp from "../src/Cdp.ts";
+import * as Url from "../src/internal/url.ts";
 import { type Page, redacted } from "../src/Page.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
-import * as Url from "../src/Url.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

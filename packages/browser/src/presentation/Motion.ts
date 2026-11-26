@@ -12,10 +12,17 @@ import {
   type Point,
   type Sample,
   maximumDurationMillis,
-} from "../Geometry.ts";
+} from "../internal/geometry.ts";
 
-export { Point, Sample, Plan, maximumSamples, maximumDurationMillis } from "../Geometry.ts";
-export type { Planner } from "../Geometry.ts";
+export {
+  Point,
+  Sample,
+  Plan,
+  maximumSamples,
+  maximumDurationMillis,
+} from "../internal/geometry.ts";
+
+export type { Planner } from "../internal/geometry.ts";
 
 // These are the research's tuned two-stroke parameters. Width scaling was not evaluated, so the
 // model keeps its 40px reference width rather than implying measured target-size behavior.

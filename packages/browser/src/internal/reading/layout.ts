@@ -7,12 +7,12 @@ import { Effect, Schema } from "effect";
 
 import { NotActionable } from "../../BrowserError.ts";
 import { Box, Subject } from "../../BrowserEvent.ts";
-import { Point } from "../../Geometry.ts";
 import { Layout, type Picks, Place, Word } from "../../Layout.ts";
-import { pickRequests } from "../../Matching.ts";
-import * as Url from "../../Url.ts";
+import { Point } from "../geometry.ts";
+import { pickRequests } from "../matching.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
+import * as Url from "../url.ts";
 
 // What `layout` reads back, before its document boxes are added.
 const LayoutResult = Schema.Union([

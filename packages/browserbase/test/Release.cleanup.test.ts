@@ -1,7 +1,7 @@
 // A failed local finalizer must not skip the paid provider's remote retirement.
 import { assert, it } from "@effect/vitest";
 import { Effect, Exit, Scope } from "effect";
-import * as Release from "effect-browser/Released";
+import { Release } from "effect-browser/supervisor";
 
 import { releasing } from "../src/internal/releasing.ts";
 

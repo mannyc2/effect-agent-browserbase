@@ -49,7 +49,7 @@ const covers: { readonly [K in Risk]: string } = {
 const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
 
 /** A judge's reading of one input. */
-export class Judgement extends Schema.Class<Judgement>("effect-browser/Judgement")({
+export class Judgement extends Schema.Class<Judgement>("effect-browser/policy/Policy/Judgement")({
   /** For each risk, the probability that the input does it. */
   risks: Schema.Struct({
     financial: Probability,
@@ -69,7 +69,7 @@ export class Judgement extends Schema.Class<Judgement>("effect-browser/Judgement
  * The user's task: what authorizes a risky input. `PageControl` provides its task to every input it
  * makes; provide one around other calls with `Effect.provideService`.
  */
-export const Task = Context.Reference<string | undefined>("effect-browser/Policy/Task", {
+export const Task = Context.Reference<string | undefined>("effect-browser/policy/Policy/Task", {
   defaultValue: () => undefined,
 });
 

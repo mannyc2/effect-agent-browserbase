@@ -13,7 +13,7 @@
 import { Schema } from "effect";
 
 import { Action as ActionValue, Name } from "./Action.ts";
-import * as Motion from "./Geometry.ts";
+import * as Motion from "./internal/geometry.ts";
 
 /** A page opened, and the page that opened it, as a link or `window.open` does, if one did. */
 export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
@@ -109,7 +109,7 @@ export type SubjectContext = typeof SubjectContext.Type;
  * context. For a point, it is the control under the point, or else the element painted there.
  * Unlike a ref, it keeps its meaning after the page changes.
  */
-export class Subject extends Schema.Class<Subject>("effect-browser/Subject")({
+export class Subject extends Schema.Class<Subject>("effect-browser/BrowserEvent/Subject")({
   role: Schema.NullOr(Schema.String),
   name: Schema.String,
   tag: Schema.String,
@@ -305,7 +305,9 @@ export const BrowserEvent = Schema.Union([
 export type BrowserEvent = typeof BrowserEvent.Type;
 
 /** A position in the browser's one replayable event history. Sequences begin at one. */
-export class RecordedEvent extends Schema.Class<RecordedEvent>("effect-browser/RecordedEvent")({
+export class RecordedEvent extends Schema.Class<RecordedEvent>(
+  "effect-browser/BrowserEvent/RecordedEvent",
+)({
   sequence: Sequence,
   event: BrowserEvent,
 }) {}

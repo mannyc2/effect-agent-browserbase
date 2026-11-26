@@ -28,16 +28,16 @@ import { type BrowserError, type PolicyDenied } from "./BrowserError.ts";
 import { Box, type BrowserEvent, PageLoaded, Subject } from "./BrowserEvent.ts";
 import type { Changes } from "./Change.ts";
 import { type CaptureStats, Frame, Image, type ScreencastOptions } from "./Frame.ts";
-import * as Motion from "./Geometry.ts";
+import * as Motion from "./internal/geometry.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
+import * as Url from "./internal/url.ts";
 import type { Layout, Picks } from "./Layout.ts";
 import type { Overlay } from "./Overlay.ts";
 import type { Held } from "./PageTime.ts";
 import type { Poses } from "./Pose.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
-import * as Url from "./Url.ts";
 import type { Window } from "./Window.ts";
 
 export type Point = Motion.Point;
@@ -46,7 +46,7 @@ export type Point = Motion.Point;
 export type Target = string | Point;
 
 /** An integer rectangle in viewport CSS pixels. */
-export class Region extends Schema.Class<Region>("effect-browser/Region")({
+export class Region extends Schema.Class<Region>("effect-browser/Page/Region")({
   x: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   y: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   width: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -54,14 +54,16 @@ export class Region extends Schema.Class<Region>("effect-browser/Region")({
 }) {}
 
 /** A crop and its viewport origin: add that origin to a point read from the crop. */
-export class Zoom extends Schema.Class<Zoom>("effect-browser/Zoom")({
+export class Zoom extends Schema.Class<Zoom>("effect-browser/Page/Zoom")({
   page: Schema.String,
   region: Region,
   image: Image,
 }) {}
 
 /** The target as it read before input. Point coordinates are never snapped to another position. */
-export class ResolvedTarget extends Schema.Class<ResolvedTarget>("effect-browser/ResolvedTarget")({
+export class ResolvedTarget extends Schema.Class<ResolvedTarget>(
+  "effect-browser/Page/ResolvedTarget",
+)({
   point: Motion.Point,
   ...Subject.fields,
   element: Schema.String,
@@ -167,7 +169,7 @@ export const ElementState = Schema.Struct({
 export type ElementState = typeof ElementState.Type;
 
 /** An element `find` found: a ref for the actions, what it is, where it is and its state. */
-export class Found extends Schema.Class<Found>("effect-browser/Found")({
+export class Found extends Schema.Class<Found>("effect-browser/Page/Found")({
   ref: Schema.String,
   subject: Subject,
   /** Its box, rounded. Reading the document, it may be out of view. */
@@ -186,7 +188,7 @@ export interface TextOptions {
 }
 
 /** What a page showed as text: a line per block, with table cells apart by tabs. */
-export class Text extends Schema.Class<Text>("effect-browser/Text")({
+export class Text extends Schema.Class<Text>("effect-browser/Page/Text")({
   url: Schema.String,
   title: Schema.String,
   text: Schema.String,
@@ -242,7 +244,7 @@ export interface WindowOptions {
  * host monotonic milliseconds: a part's age is `at` less its time. Text read before the current
  * document began is left out, since it tells of a document that has gone.
  */
-export class State extends Schema.Class<State>("effect-browser/PageState")({
+export class State extends Schema.Class<State>("effect-browser/Page/State")({
   page: Schema.String,
   /** The tracking connection that owns this document counter. */
   connection: Schema.String,
@@ -295,7 +297,7 @@ export type Fact = typeof Fact.Type;
  * record `Unidentified` keys; `press` records the keys it is given. Validation before dispatch
  * binds the facts and the target, not the text around it, which live pages change freely.
  */
-export class InputRequest extends Schema.Class<InputRequest>("effect-browser/InputRequest")({
+export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Page/InputRequest")({
   page: Schema.String,
   /**
    * The page's URL, without a fragment that only names a place on the page. This and the other

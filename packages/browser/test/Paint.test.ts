@@ -1,13 +1,13 @@
 import { createServer } from "node:http";
 
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it, layer } from "@effect/vitest";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { chromium } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
+import * as Cdp from "../src/Cdp.ts";
 import type { Page } from "../src/Page.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 
 const freePort = Effect.callback<number>((resume) => {
   const server = createServer();

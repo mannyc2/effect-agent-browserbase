@@ -6,12 +6,12 @@
 import { Duration, Effect, Schedule, Schema } from "effect";
 
 import { StaleRef } from "../../BrowserError.ts";
-import { request as askedOf, type FindRequest } from "../../Matching.ts";
 import { type FindQuery, Found, Text, type TextOptions } from "../../Page.ts";
 import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
-import * as Url from "../../Url.ts";
+import { request as askedOf, type FindRequest } from "../matching.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
+import * as Url from "../url.ts";
 import type { Want } from "./expect.inpage.ts";
 import type { SnapshotRequest } from "./outline.inpage.ts";
 import type { TextRequest } from "./text.inpage.ts";

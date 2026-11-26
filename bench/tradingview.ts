@@ -5,6 +5,10 @@
 // replayed chart; `--mode model` runs the agent, behind its opt-in. `--humanize` performs the
 // input for viewers, through a presenter. Live sites change, so its results speak to the day they
 // were taken.
+import * as Browserbase from "@effect-browser/browserbase/Browserbase";
+import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import {
   Cause,
   Clock,
@@ -21,12 +25,8 @@ import {
 } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type * as BrowserEvent from "effect-browser/BrowserEvent";
-import * as Chromium from "effect-browser/Chromium";
-import * as Walk from "effect-browser/Plan";
-import * as Presentation from "effect-browser/Presentation";
-import * as Browserbase from "effect-browserbase/Browserbase";
-import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
-import * as ContextLease from "effect-browserbase/ContextLease";
+import { Presentation } from "effect-browser/presentation";
+import { Walk } from "effect-browser/walk";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 

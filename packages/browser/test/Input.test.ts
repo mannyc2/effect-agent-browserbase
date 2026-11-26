@@ -1,8 +1,8 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Fiber, Random, Schedule, Stream } from "effect";
 
 import type * as Page from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import { keys, setup, value, type Dispatch, type RecordedWindow } from "./support/InputRelay.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

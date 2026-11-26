@@ -1,8 +1,8 @@
 /** Native frame timing and monotonic evidence across clock recalibration. */
 import type { Clock } from "effect";
 
-import { type Estimate, monotonicMillis, toHostTime, uncertaintyAt } from "../../Clock.ts";
 import { BrowserPaint, Frame } from "../../Frame.ts";
+import { type Estimate, monotonicMillis, toHostTime, uncertaintyAt } from "../clock.ts";
 import type { NativeFrame, Transport } from "./transport.ts";
 
 /**

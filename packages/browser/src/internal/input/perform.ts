@@ -7,13 +7,13 @@ import { Deferred, Duration, Effect, Exit, Option, Ref } from "effect";
 import { recorded, nameOf, type Action as ActionValue } from "../../Action.ts";
 import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
 import { Action, ActionAnnounced, Subject } from "../../BrowserEvent.ts";
-import type * as BrowserClock from "../../Clock.ts";
+import { Current, type InputStyle, validated } from "../../InputStyle.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
-import { Current, type InputStyle, validated } from "../../Style.ts";
-import { redact } from "../../Url.ts";
+import type * as BrowserClock from "../clock.ts";
 import { failWith, type PageContext, undispatched } from "../page/context.ts";
 import { Correlation, FailFast } from "../page/lane.ts";
 import * as Replies from "../page/replies.ts";
+import { redact } from "../url.ts";
 import type { Dispatch } from "./dispatch.ts";
 import type { Approval, PolicyPlan } from "./guard.ts";
 

@@ -1,16 +1,16 @@
-// Hosted trials against effect-browserbase's in-memory Browserbase; nothing reaches Browserbase.
-import { assert, describe, it } from "@effect/vitest";
-import { Cause, Context, Duration, Effect, Layer, Redacted } from "effect";
-import { Browser } from "effect-browser/Browser";
-import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
+// Hosted trials against @effect-browser/browserbase's in-memory Browserbase; nothing reaches Browserbase.
+import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
 import {
   BrowserbaseError,
   Decode,
   RateLimited,
   Status,
   Transport,
-} from "effect-browserbase/BrowserbaseError";
-import { TestBrowserbase } from "effect-browserbase/testing";
+} from "@effect-browser/browserbase/BrowserbaseError";
+import { TestBrowserbase } from "@effect-browser/browserbase/testing";
+import { assert, describe, it } from "@effect/vitest";
+import { Cause, Context, Duration, Effect, Layer, Redacted } from "effect";
+import { Browser } from "effect-browser/Browser";
 import { HttpClient } from "effect/http";
 
 import * as Latency from "../Latency.ts";

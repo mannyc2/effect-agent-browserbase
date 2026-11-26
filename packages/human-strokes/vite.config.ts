@@ -8,7 +8,12 @@ export default defineConfig({
       externalConditions: ["@effect-browser/source"],
     },
   },
-  pack: { entry: ["src/index.ts"], dts: true, sourcemap: true },
+  pack: {
+    entry: ["src/*.ts"],
+    outputOptions: { chunkFileNames: "internal/[name]-[hash].mjs" },
+    dts: true,
+    sourcemap: true,
+  },
   test: {
     include: ["test/**/*.test.ts"],
     testTimeout: 60_000,

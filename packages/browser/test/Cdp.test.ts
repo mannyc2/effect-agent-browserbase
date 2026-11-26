@@ -9,9 +9,9 @@ import { chromium } from "playwright-core";
 
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser } from "../src/Browser.ts";
+import * as Cdp from "../src/Cdp.ts";
 import type { Frame } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const freePort = Effect.callback<number>((resume) => {

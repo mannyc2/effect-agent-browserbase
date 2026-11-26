@@ -1,9 +1,9 @@
 // Visible changes on a real Chromium page, over a stand-in for TradingView's widget that answers
 // one hotkey and shows none of the chart's toolbars, searches or dialogs.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
 
 import * as Chart from "../src/Chart.ts";
 import * as ChartInput from "../src/ChartInput.ts";

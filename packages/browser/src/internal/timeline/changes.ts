@@ -12,9 +12,9 @@ import { Clock, Duration, Effect, type Fiber, Schema, Semaphore } from "effect";
 
 import type { BrowserError } from "../../BrowserError.ts";
 import { Change, Changes } from "../../Change.ts";
-import * as BrowserClock from "../../Clock.ts";
 import type { Frame } from "../../Frame.ts";
 import type { ChangesOptions } from "../../Page.ts";
+import * as BrowserClock from "../clock.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { decodeWith, type PageContext } from "../page/context.ts";
 import type { ChangesRequest } from "./changes.inpage.ts";

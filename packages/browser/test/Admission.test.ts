@@ -1,15 +1,15 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Arbitrary, Clock, Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import { BrowserError, Closed, consequence } from "../src/BrowserError.ts";
+import * as InputStyle from "../src/InputStyle.ts";
 import * as Lane from "../src/internal/page/lane.ts";
 import * as Input from "../src/internal/page/replies.ts";
 import { failFast, type Page } from "../src/Page.ts";
 import { maximumSamples } from "../src/presentation/Motion.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
-import * as InputStyle from "../src/Style.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 interface Receipt {

@@ -6,12 +6,12 @@
  */
 import { type Clock, Deferred, Duration, Effect, MutableRef, Option, Semaphore } from "effect";
 
-import { methods } from "../ActionPort.ts";
 import { Busy, refuse, undispatched } from "../BrowserError.ts";
 import type { ActionAnnounced } from "../BrowserEvent.ts";
-import { monotonicMillis } from "../Clock.ts";
+import * as InputStyle from "../InputStyle.ts";
+import { methods } from "../internal/action-port.ts";
+import { monotonicMillis } from "../internal/clock.ts";
 import type { Page, Point } from "../Page.ts";
-import * as InputStyle from "../Style.ts";
 import * as Motion from "./Motion.ts";
 
 /** How long a person waits before acting, and how fast they type. */

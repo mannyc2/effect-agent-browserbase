@@ -7,7 +7,7 @@ import * as Arms from "bench/Arms.ts";
 import type { Trace } from "bench/Recording.ts";
 import { Effect, type Schema } from "effect";
 import type { Page } from "effect-browser/Page";
-import * as Presentation from "effect-browser/Presentation";
+import { Presentation } from "effect-browser/presentation";
 
 /** A demo's task, as a take records it. */
 export interface Task {

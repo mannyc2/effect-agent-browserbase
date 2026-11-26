@@ -6,9 +6,9 @@
 import { Duration, Effect, MutableRef, Option, Schema } from "effect";
 
 import { CursorChanged, TrackPerformed, TrackPlanned } from "../../BrowserEvent.ts";
-import * as Motion from "../../Geometry.ts";
+import type { WheelStep } from "../../InputStyle.ts";
 import type { Point } from "../../Page.ts";
-import type { WheelStep } from "../../Style.ts";
+import * as Motion from "../geometry.ts";
 import { type PageContext, refuse } from "../page/context.ts";
 import type { Viewport } from "../page/viewport.ts";
 import type { Dispatch } from "./dispatch.ts";

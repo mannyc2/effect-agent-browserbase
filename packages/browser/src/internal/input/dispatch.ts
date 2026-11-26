@@ -12,8 +12,8 @@ import {
   TextInserted,
   WheelScrolled,
 } from "../../BrowserEvent.ts";
-import * as BrowserClock from "../../Clock.ts";
-import type { Point } from "../../Geometry.ts";
+import * as BrowserClock from "../clock.ts";
+import type { Point } from "../geometry.ts";
 import { type PageContext, reasonOf, undispatched } from "../page/context.ts";
 import type * as Replies from "../page/replies.ts";
 

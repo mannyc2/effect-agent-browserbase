@@ -4,7 +4,7 @@ import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Random, Result, Schema } from "effect";
-import * as Motion from "effect-browser/Motion";
+import { Motion } from "effect-browser/presentation";
 
 import * as HumanStrokes from "../src/index.ts";
 import * as Strokes from "../src/internal/strokes.ts";

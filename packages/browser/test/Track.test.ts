@@ -1,3 +1,4 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Clock, Deferred, Duration, Effect, Fiber, Random, Stream } from "effect";
 import type { BrowserContext } from "playwright-core";
@@ -5,7 +6,6 @@ import type { BrowserContext } from "playwright-core";
 import { Browser, make as makeBrowser, type Service as BrowserService } from "../src/Browser.ts";
 import type { Page } from "../src/Page.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import { unpaused } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

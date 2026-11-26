@@ -4,7 +4,7 @@
  */
 
 import type { Control } from "../../Snapshot.ts";
-import type { addresses } from "../../Url.ts";
+import type { addresses } from "../url.ts";
 import type { Controls } from "./controls.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { SnapshotResult } from "./reading.ts";

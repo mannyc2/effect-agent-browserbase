@@ -1,10 +1,10 @@
 /** Private evidence and one-session admission for the H1/H3 experiments; no autonomous retries. */
+import * as Browserbase from "@effect-browser/browserbase/Browserbase";
+import * as Client from "@effect-browser/browserbase/BrowserbaseClient";
+import { BrowserbaseError, InvalidRequest } from "@effect-browser/browserbase/BrowserbaseError";
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
 import { Cause, Clock, Console, Effect, Exit, FileSystem, Layer, Path, Schema } from "effect";
 import { BrowserError } from "effect-browser/BrowserError";
-import * as Browserbase from "effect-browserbase/Browserbase";
-import * as Client from "effect-browserbase/BrowserbaseClient";
-import { BrowserbaseError, InvalidRequest } from "effect-browserbase/BrowserbaseError";
-import * as ContextLease from "effect-browserbase/ContextLease";
 import { Digest, SecureRandom } from "effect/crypto";
 import { FetchHttpClient } from "effect/http";
 

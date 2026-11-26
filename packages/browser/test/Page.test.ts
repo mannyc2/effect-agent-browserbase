@@ -2,17 +2,17 @@ import type { EventEmitter } from "node:events";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Exit, Fiber, Layer, Schedule, Scope, Stream } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
 import type { Image as BrowserImage } from "../src/Frame.ts";
-import * as Moment from "../src/moment/Moment.ts";
 import { type Page, redacted } from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
-import * as Stillness from "../src/stillness/Stillness.ts";
+import * as Moment from "../src/timeline/Moment.ts";
+import * as Stillness from "../src/timeline/Stillness.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

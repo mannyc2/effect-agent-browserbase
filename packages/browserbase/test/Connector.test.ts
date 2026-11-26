@@ -5,7 +5,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { Connector } from "effect-browser/Cdp";
-import * as Supervisor from "effect-browser/Supervisor";
+import { Supervisor } from "effect-browser/supervisor";
 import { type Browser as PlaywrightBrowser, chromium } from "playwright-core";
 
 import * as Browserbase from "../src/Browserbase.ts";

@@ -9,7 +9,8 @@ export default defineConfig({
     },
   },
   pack: {
-    entry: ["src/*.ts", "src/testing/index.ts"],
+    entry: ["src/*.ts", "src/testing/*.ts"],
+    outputOptions: { chunkFileNames: "internal/[name]-[hash].mjs" },
     dts: { tsconfig: "tsconfig.build.json" },
     sourcemap: true,
   },

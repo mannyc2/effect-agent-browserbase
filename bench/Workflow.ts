@@ -2,8 +2,8 @@
 import { Effect } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { Page } from "effect-browser/Page";
-import * as Walk from "effect-browser/Plan";
-import type * as Supervisor from "effect-browser/Supervisor";
+import type { Supervisor } from "effect-browser/supervisor";
+import { Walk } from "effect-browser/walk";
 
 /**
  * The consumer supplies durable storage and enforces one runner for each run/plan/input identity.

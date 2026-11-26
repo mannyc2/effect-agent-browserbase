@@ -5,13 +5,19 @@ import type { BrowserContext, CDPSession, Page as NativePage } from "playwright-
 import type { CaptureSource } from "../../Browser.ts";
 import { call } from "../../BrowserError.ts";
 
-export const Operation = Context.Reference<string | undefined>("effect-browser/ProtocolOperation", {
-  defaultValue: () => undefined,
-});
+export const Operation = Context.Reference<string | undefined>(
+  "effect-browser/internal/page/ProtocolOperation",
+  {
+    defaultValue: () => undefined,
+  },
+);
 
-export const Script = Context.Reference<string | undefined>("effect-browser/ProtocolScript", {
-  defaultValue: () => undefined,
-});
+export const Script = Context.Reference<string | undefined>(
+  "effect-browser/internal/page/ProtocolScript",
+  {
+    defaultValue: () => undefined,
+  },
+);
 
 export interface Session {
   readonly channel: "page" | "capture" | "browser";
@@ -50,7 +56,7 @@ export interface Hooks {
   readonly opened?: ((session: Session, inject: (event: Event) => void) => () => void) | undefined;
 }
 
-export const Current = Context.Reference<Hooks>("effect-browser/ProtocolPort", {
+export const Current = Context.Reference<Hooks>("effect-browser/internal/page/ProtocolPort", {
   defaultValue: () => ({}),
 });
 

@@ -9,51 +9,51 @@ owns its page. An agent drives its pages through [`effect-agent-browser`](../age
 Yielded Agent's browser tools.
 
 ```sh
-npm install effect-browser@beta effect playwright-core
+npm install effect-browser@beta @effect-browser/chromium@beta effect playwright-core
 npx playwright-core install chromium
 ```
 
-`Chromium.layer` launches that Chromium without its sandbox, as Playwright does, so an exploit in a
-page's renderer runs with your user's privileges. `Chromium.layer({ sandbox: true })` runs it
-sandboxed. Hosts that don't allow unprivileged user namespaces, such as many containers and Ubuntu
-23.10 or later by default, can't start the sandbox; opening then fails and says so.
+`Chromium.layer`, from [`@effect-browser/chromium`](../chromium), launches a local Chromium as a
+`Browser` layer. It runs Chromium without its sandbox unless given `sandbox: true`; that package's
+README says what that risks and how signals end the browser.
 
-`Chromium.layer` leaves signals to your program: Playwright's own handlers, which close every
-browser and, on SIGINT, exit before any finalizer runs, are off. Run the program with
-`NodeRuntime.runMain` from `@effect/platform-node`, which interrupts it on SIGINT and SIGTERM, so
-the browser closes with its scope. A signal that ends the process outright still takes Chromium
-with it, since its pipe closes, but leaves Playwright's temporary profile behind.
+| Module         | Import from                   | What it holds                                                                     |
+| -------------- | ----------------------------- | --------------------------------------------------------------------------------- |
+| `Browser`      | `effect-browser`              | The `Browser` service: tabs, recent events, lifetime and input suspension         |
+| `Page`         | `effect-browser`              | One tab: navigation, reads, screenshots, input, waits and the screencast          |
+| `Snapshot`     | `effect-browser`              | The model-readable outline of a page, with refs for its controls                  |
+| `Frame`        | `effect-browser`              | Pictures, timing evidence and capture identity                                    |
+| `BrowserEvent` | `effect-browser`              | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end    |
+| `BrowserError` | `effect-browser`              | Typed failures, whether input reached the page first, and what each leaves        |
+| `Action`       | `effect-browser`              | Typed actions, shared by input, guards, event records and walks                   |
+| `InputStyle`   | `effect-browser`              | How input is sent: plainly, or performed for viewers                              |
+| `Change`       | `effect-browser`              | What visibly changed on a page over a window, element by element                  |
+| `Window`       | `effect-browser`              | A page's events, changes and frames over one window of its browser's clock        |
+| `Layout`       | `effect-browser`              | Where picked things and their words are on a page, as data, and rehearsals        |
+| `Overlay`      | `effect-browser`              | A layer over a page that the library draws a caller's SVG into and never reads    |
+| `PageTime`     | `effect-browser`              | A page's own time, held and stepped, with its scroll, poses and overlay           |
+| `Pose`         | `effect-browser`              | A page's own elements moved, turned and scaled about a point                      |
+| `Cdp`          | `effect-browser/Cdp`          | Any DevTools endpoint as a `Browser` layer                                        |
+| `Site`         | `effect-browser/Site`         | The readers, change record, overlay and poses, run by a site on its own page      |
+| `Moment`       | `effect-browser/timeline`     | A page's events, changes and frames over a window; a moment, laid out as a prompt |
+| `Stillness`    | `effect-browser/timeline`     | Waits for a page's screen, content or foreground to stay still                    |
+| `Presentation` | `effect-browser/presentation` | Input performed for viewers: a presenter, and its views of pages                  |
+| `Stage`        | `effect-browser/presentation` | The source of a live output, switched between pages and stamped                   |
+| `Motion`       | `effect-browser/presentation` | A bounded pointer planner, as a value, and the tuned sigma-lognormal one          |
+| `Film`         | `effect-browser/presentation` | A page filmed as a function of time: frames, inputs on their frames, passages     |
+| `Walk`         | `effect-browser/walk`         | A walk recorded from a page's events, replayed on a fresh page by subject         |
+| `Policy`       | `effect-browser/policy`       | Judges that read what an input means, and a guard that acts on them unattended    |
+| `Supervisor`   | `effect-browser/supervisor`   | A browser kept open across losses and session ends, as generations                |
+| `Release`      | `effect-browser/supervisor`   | What a provider said of a release: `Confirmed` or `Unconfirmed`                   |
+| `TestBrowser`  | `effect-browser/testing`      | A seeded browser over the production lane, suspension gate and event timeline     |
+| `TestPage`     | `effect-browser/testing`      | A deterministic page seeded from data, without page code                          |
 
-| Module         | What it holds                                                                     |
-| -------------- | --------------------------------------------------------------------------------- |
-| `Browser`      | The `Browser` service: tabs, recent events, lifetime and input suspension         |
-| `Chromium`     | A local Chromium as a `Browser` layer                                             |
-| `Cdp`          | Any DevTools endpoint as a `Browser` layer                                        |
-| `Page`         | One tab: navigation, reads, screenshots, input, waits and the screencast          |
-| `Snapshot`     | The model-readable outline of a page, with refs for its controls                  |
-| `Frame`        | Pictures, timing evidence and capture identity                                    |
-| `BrowserEvent` | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end    |
-| `Motion`       | A bounded pointer planner, as a value, and the tuned sigma-lognormal one          |
-| `Presentation` | Input performed for viewers: a presenter, and its views of pages                  |
-| `Stage`        | The source of a live output, switched between pages and stamped                   |
-| `Layout`       | Where picked things and their words are on a page, as data, and rehearsals        |
-| `Overlay`      | A layer over a page that the library draws a caller's SVG into and never reads    |
-| `PageTime`     | A page's own time, held and stepped, with its scroll, poses and overlay           |
-| `Pose`         | A page's own elements moved, turned and scaled about a point                      |
-| `Film`         | A page filmed as a function of time: frames, inputs on their frames, passages     |
-| `Site`         | The readers, change record, overlay and poses, run by a site on its own page      |
-| `BrowserError` | Typed failures, whether input reached the page first, and what each leaves        |
-| `Policy`       | Judges that read what an input means, and a guard that acts on them unattended    |
-| `Change`       | What visibly changed on a page over a window, element by element                  |
-| `Moment`       | A page's events, changes and frames over a window; a moment, laid out as a prompt |
-| `Plan`         | A walk recorded from a page's events, replayed on a fresh page by subject         |
-| `Supervisor`   | A browser kept open across losses and session ends, as generations                |
-
-Providers and features use explicit subpaths, such as `effect-browser/Chromium` and
-`effect-browser/Plan`. The root exports the kernel. `Action`, `ActionPort`, `Clock`, `Geometry`,
-`Matching`, `Style` and `Window` provide its execution, timing, matching and observation contracts.
-`effect-browser/Stillness` owns screen/content quiet waits. `effect-browser/testing` exports
-seeded TestPage/TestBrowser services; they execute explicit test data and refuse page scripts.
+The root, `effect-browser`, exports the kernel, and each of its modules also has a path of its own,
+such as `effect-browser/Page`. `effect-browser/Cdp` and `effect-browser/Site` are reached only by
+path, never through the root, which loads only `effect`. Each feature is a subpath that exports
+its modules together, as in `import { Moment } from "effect-browser/timeline"`. `Film` is
+experimental. `effect-browser/testing`'s seeded services execute explicit test data and refuse
+page scripts.
 
 ## Runtime CDP connectors
 
@@ -126,8 +126,8 @@ const nativeConnect: Cdp.Connector = async (endpoint, { timeout, headers, signal
 Pass `nativeConnect` as `connect` to `Cdp.open` or `Cdp.layer`, or to the Browserbase options.
 
 The `workerd` export condition selects a CDP entry without the Node transport. It requires
-`connect`; omitting it fails with `BrowserError` reason `InvalidRequest`. The Workers root entry
-excludes local `Chromium`; import `effect-browser/Cdp` for remote connections. Bundlers must select
+`connect`; omitting it fails with `BrowserError` reason `InvalidRequest`. The root entry loads only
+`effect`; import `effect-browser/Cdp` for remote connections. Bundlers must select
 the `workerd` condition. Local Worker/CDP checks also pass without `nodejs_compat`; the consumer still supplies and qualifies the runtime's Playwright
 implementation against this package's Playwright peer; the seam does not certify a different
 Playwright version or provide a Cloudflare connector.
@@ -143,7 +143,7 @@ endpoint's userinfo, path and query. A failure diagnostic that echoes a nonempty
 value is withheld entirely, including in serialized errors.
 
 `page.perform(action)` and the named input methods share the `Action` schema. Guards receive
-that value as `InputRequest.action`; event records and plans preserve it with secret text redacted.
+that value as `InputRequest.action`; event records and walks preserve it with secret text redacted.
 `page.read(fn, { arg, result })` returns `{ value, document, connection }` after schema decoding.
 `page.act(fn, { arg, result, document, connection })` validates the document and optional connection,
 passes the input guard as an opaque scripted action, and records dispatch before evaluation.
@@ -348,16 +348,16 @@ changed was not recorded and lists every step instead; one whose record began wi
 says nothing changed only after that. What it could not read, it names, with why, and a last frame
 that is not the picture is not shown as the moment.
 
-`Plan` rehearses a walk once and replays it later, near live, with no model call.
-`Plan.fromEvents(page.recentEvents)` keeps one page's completed actions with their subjects and
+`Walk` rehearses a walk once and replays it later, near live, with no model call.
+`Walk.fromEvents(page.recentEvents)` keeps one page's completed actions with their subjects and
 the options they were given, its navigations with the address asked for and the one reached, and
 what was typed as an input slot named for its field, never the text itself. A navigation to an
 address with a credential withheld is an input slot too, `address`, so replay goes where the caller
-says, never to the address without its credential. `Plan.replay(page,
+says, never to the address without its credential. `Walk.replay(page,
 plan, { inputs })` takes the steps in turn: before each step except an opening navigate, back or
 reload, it waits for readiness (`settle` sets how, or `false` skips it). A `quietMillis` option uses
 `Stillness.wait` for content quiet; otherwise it calls `Page.ready`. It finds the element with
-`Plan.locate`, and acts on it. An element that does not repeat every part of the recorded context
+`Walk.locate`, and acts on it. An element that does not repeat every part of the recorded context
 is another subject: its row read whole, so a row named "Wrapped BTC" is not the row "BTC" (laid out
 again without rows, as cards, one of its fields must start with the row's words), its column where
 it is under one, and its label and heading read the same or found as words in order. So the one
@@ -378,10 +378,10 @@ wait makes one read without polling; that read retains the page operation's own 
 Each `Action` now records its ending address, so a bounded event history can still record the site
 of later actions after its earlier navigation has expired.
 
-`Plan.take(page, plan, index)` takes one step and returns a `Receipt`: the step index, host-clock
+`Walk.step(page, plan, index)` takes one step and returns a `Receipt`: the step index, host-clock
 `startedAt` and `at`, and `taken`, `verified` or `skipped`. Readiness is a precondition of the next
 step, including later navigation, never a wait after the last step. After replay, call `page.ready`
-for document readiness or `Stillness.wait` for a quiet final page. `Plan.replay` returns those receipts;
+for document readiness or `Stillness.wait` for a quiet final page. `Walk.replay` returns those receipts;
 a `ReplayError` includes completed receipts and a serializable `stopped` value with the next step
 and whether its input is `unsent` or `unknown`. Resume with `{ from: error.stopped }`. A numeric
 index means fresh input, so never convert an unresolved stopping point into a number to retry it.
@@ -394,7 +394,7 @@ input and waits for it afterward. Relative `Navigated` (without a URL) never ski
 it compares with the page immediately before dispatch, after readiness and arrival. It observes
 change after that baseline, without proving the input caused it.
 `verified` means the specified observation held; it is not a transaction
-receipt from the target service. Keep the receipt with its plan to interpret that evidence.
+receipt from the target service. Keep the receipt with its walk to interpret that evidence.
 `Checked` can converge a checkbox click to a desired boolean.
 Unknown non-repeatable input is never automatically sent again: only a positive check explicitly
 marked `durable: true` permits continuation. Only `Appeared` or `Navigated` with an explicit exact
@@ -403,13 +403,13 @@ read-back, such as a saved order receipt or its operation-specific URL. An arbit
 toast or intermediate URL cannot justify it. `Gone`, relative navigation, and a negative or failed
 durable check still leave unknown consequential input uncertain.
 Navigation, hover, scroll, selection and replacement typing without submission can be repeated;
-back, reload, insertion, presses, drags and ordinary clicks cannot. `Plan.repeatable(step)` says
-which applies. `Plan.restore(page, plan, { upTo, inputs })` reconstructs earlier steps on a fresh
+back, reload, insertion, presses, drags and ordinary clicks cannot. `Walk.repeatable(step)` says
+which applies. `Walk.restore(page, plan, { upTo, inputs })` reconstructs earlier steps on a fresh
 page using those same rules and refuses unresolved commitments. `upTo` is exclusive.
 
-`Plan.Plan.new(steps)` emits version 3 with canonical typed Actions. Prior version 1/2
-string-action plans and unknown versions do not decode. This is a hard cutover; rerecord or
-explicitly convert an older plan before replay. Decoding rejects `durable: true` on `Gone` or
+`Walk.Walk.new(steps)` emits version 3 with canonical typed Actions. Prior version 1/2
+string-action walks and unknown versions do not decode. This is a hard cutover; rerecord or
+explicitly convert an older walk before replay. Decoding rejects `durable: true` on `Gone` or
 URL-less `Navigated`; execution also refuses recovery through those unsupported claims.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action, the
@@ -438,9 +438,9 @@ The policy's effect succeeds to allow, fails with `PolicyDenied` to refuse, or w
 the consumer owns to hold. For example:
 
 ```ts
+import { Chromium } from "@effect-browser/chromium";
 import { Effect } from "effect";
 import { PolicyDenied } from "effect-browser/BrowserError";
-import * as Chromium from "effect-browser/Chromium";
 
 const browser = Chromium.layer({
   guard: (request) =>
@@ -450,7 +450,7 @@ const browser = Chromium.layer({
 });
 ```
 
-`effect-browser/Policy` builds guards for a browser with nobody watching. A judge reads what an
+`Policy`, from `effect-browser/policy`, builds guards for a browser with nobody watching. A judge reads what an
 input means. `Policy.reviewer()` asks the `LanguageModel` in context for a structured review, and
 `Policy.decider` asks a `DecisionModel`, such as Jev through `@effect/ai-typesafe`. Both give a
 `Judgement`: for each `Risk` (`financial`, `account`, `access`, `deletion`, `communication` and
@@ -460,9 +460,9 @@ for it. `Policy.escalate(first, second)` asks `second` only when `first` is unsu
 and why. `origins` keeps input to some origins, and `deny` refuses facts outright:
 
 ```ts
+import { Chromium } from "@effect-browser/chromium";
 import { Effect, Layer } from "effect";
-import * as Chromium from "effect-browser/Chromium";
-import * as Policy from "effect-browser/Policy";
+import { Policy } from "effect-browser/policy";
 
 const browser = Layer.unwrap(
   Effect.gen(function* () {
@@ -521,12 +521,12 @@ samples and 5,000 milliseconds, ending at the exact destination. The browser dec
 `InvalidRequest` before their track or input is sent. Equal-time samples are retained. Plain input
 never plans a glide: its pointer jumps, or moves in eight short steps while dragging.
 
-For recorded human strokes, install the optional `effect-browser-human-strokes` package and give
+For recorded human strokes, install the optional `@effect-browser/human-strokes` package and give
 its planner to the presenter:
 
 ```ts
-import * as HumanStrokes from "effect-browser-human-strokes";
-import * as Presentation from "effect-browser/Presentation";
+import * as HumanStrokes from "@effect-browser/human-strokes";
+import { Presentation } from "effect-browser/presentation";
 
 const presenter = yield * Presentation.make({ motion: yield * HumanStrokes.motion });
 ```
@@ -595,8 +595,7 @@ cancellation; a wrapper's timeout cannot surrender their authority.
 import { Effect, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { Frame } from "effect-browser/Frame";
-import * as Presentation from "effect-browser/Presentation";
-import * as Stage from "effect-browser/Stage";
+import { Presentation, Stage } from "effect-browser/presentation";
 
 declare const encode: (frame: Frame) => Effect.Effect<void>; // the application's own output
 
@@ -617,7 +616,7 @@ viewers last saw it, on whichever page; a field is clicked before typing; and th
 100 px notches, in bursts of up to nine. One view acts at a time. The time a view spends showing an
 action, its glides, holds and typing, has a budget of its own outside `actionTimeout`. `page`
 itself stays plain, and plain input on any page never waits for a view. Styles flow through
-`Style.Current`, including to followed tabs. Hand acquisition honours `failFast` and the action's
+`InputStyle.Current`, including to followed tabs. Hand acquisition honours `failFast` and the action's
 wait bound after approval. Planned typing and scrolling have a separate 10-second cap and fail
 `InvalidRequest` before input when the schedule exceeds it.
 
@@ -638,7 +637,7 @@ if (Option.isSome(sent)) yield * cue.commit({ at: sent.value });
 
 Commits serialize in call order. A switch waits until `at` and for admitted old-page input and
 its native replies, keeping new old-page input queued through the cut. Reads and capture continue.
-The consumer can stop performance between `Plan.take` steps for a clean cut. Interruption before
+The consumer can stop performance between `Walk.step` calls for a clean cut. Interruption before
 the switch changes nothing and leaves the cue usable. A committed switch keeps ownership through
 outgoing capture cleanup, even if its caller is interrupted then.
 
@@ -795,7 +794,7 @@ capture keeps delivering, whatever else is attached; a capture starts once the b
 confirmed it, and fails with `Timeout` at the action timeout if a renderer stuck in a script never
 does.
 A provider that reaches its browser over a network can run captures on a connection of their own,
-a `Browser.CaptureSource` given as `Cdp.Options.capture`, as `effect-browserbase` does: there a
+a `Browser.CaptureSource` given as `Cdp.Options.capture`, as `@effect-browser/browserbase` does: there a
 frame never waits behind a large message on the connection that drives the page. Frames then carry
 the document their own connection saw commit, numbered as `Navigated` numbers them, and a failure
 of that connection ends the capture with `Failed` and leaves the page as it was.
@@ -842,8 +841,8 @@ reached the browser; `check` its effect first, as it may have taken place; `poin
 such as with a stale ref; or `resume` reading events from a newer cursor. `message` is a sentence
 for operators, and the browser tools tell a model what to do about the failure.
 
-`Plan.take` checks an authored expected effect before input and after a dispatched failure.
-Unknown consequential input requires positive durable evidence before continuation; the Plan
+`Walk.step` checks an authored expected effect before input and after a dispatched failure.
+Unknown consequential input requires positive durable evidence before continuation; the `Walk`
 section above describes that recovery contract. `Page.until` provides the underlying bounded
 observation without deciding whether an action may be repeated:
 
@@ -1050,16 +1049,16 @@ any globals the site's code patches.
 
 ## Supervising resource generations
 
-`effect-browser/Supervisor` owns a scoped resource through acquisition failures, loss and rotation.
-Its generic core does not inspect browsers. `open(number)` acquires a generation in its own scope
+`Supervisor`, from `effect-browser/supervisor`, owns a scoped resource through acquisition failures,
+loss and rotation. Its generic core does not inspect browsers. `open(number)` acquires a generation in its own scope
 and returns `{ value, lost?, release? }`; `lost` produces a reason string, and `release(why)` reports
-`Settled` or `Unconfirmed` through `effect-browser/Released`. Without a release hook, closing
+a `Release` from the same subpath: `Confirmed` or `Unconfirmed`. Without a release hook, closing
 the generation's scope ends its resource.
 
 ```ts
+import { Chromium } from "@effect-browser/chromium";
 import { Effect } from "effect";
-import * as Chromium from "effect-browser/Chromium";
-import * as Supervisor from "effect-browser/Supervisor";
+import { Supervisor } from "effect-browser/supervisor";
 
 const program = Effect.gen(function* () {
   const sessions = yield* Supervisor.make({
@@ -1147,7 +1146,7 @@ a judge's model call, are its children, as are pointer travel (`Page.move`) and 
 `Page.snapshot`, `Page.find`, `Page.text`, `Page.title`, `Page.viewport`,
 `Page.screenshot` and `Page.frame` (with
 `source`: a reused screencast `frame` or a new `screenshot`), `Page.zoom`, `Page.ready` and the
-other waits are spans, as are `Plan.replay` and `Plan.locate`, and so is each round trip to the
+other waits are spans, as are `Walk.replay` and `Walk.locate`, and so is each round trip to the
 page's script (`Page.evaluate`) and its registration (`Page.register`). Each page span reports its cost on the page's own protocol session: `calls`,
 `bytesOut` and `bytesIn` (their parameters and results as JSON) and `waitedMillis`, how long at
 least one call awaited its reply. An operation inside another counts toward both. Calls Playwright

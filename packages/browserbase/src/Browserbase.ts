@@ -44,8 +44,7 @@ import {
 import * as Browser from "effect-browser/Browser";
 import { BrowserError, Closed } from "effect-browser/BrowserError";
 import * as Cdp from "effect-browser/Cdp";
-import * as Release from "effect-browser/Released";
-import type * as Supervisor from "effect-browser/Supervisor";
+import { Release, type Supervisor } from "effect-browser/supervisor";
 
 import {
   BrowserbaseClient,

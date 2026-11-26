@@ -5,7 +5,7 @@
  */
 import { Schema } from "effect";
 
-import type { Point } from "../../Geometry.ts";
+import type { Point } from "../geometry.ts";
 import type { Names } from "../reading/names.inpage.ts";
 import { type Evidence, type EvidenceReader, EvidenceSchema } from "./evidence.inpage.ts";
 import type { Targets } from "./targets.inpage.ts";

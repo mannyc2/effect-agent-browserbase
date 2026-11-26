@@ -3,9 +3,9 @@ import { type Cause, Deferred, Effect, Exit, Option, Scope } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
-import * as Walk from "effect-browser/Plan";
-import * as Stage from "effect-browser/Stage";
-import type * as Supervisor from "effect-browser/Supervisor";
+import { Stage } from "effect-browser/presentation";
+import type { Supervisor } from "effect-browser/supervisor";
+import { Walk } from "effect-browser/walk";
 
 export interface Prepared<A> {
   readonly id: string;

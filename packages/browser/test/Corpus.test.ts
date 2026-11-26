@@ -1,10 +1,10 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Layer } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { PolicyDenied } from "../src/BrowserError.ts";
 import { type InputRequest, redacted } from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import { corpus } from "./consequence-corpus.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";

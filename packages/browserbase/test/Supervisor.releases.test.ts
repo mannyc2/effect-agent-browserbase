@@ -1,10 +1,10 @@
 // #289 and the 21 October audit: every failed try publishes its own cleanup evidence.
+import * as Browserbase from "@effect-browser/browserbase/Browserbase";
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
+import { TestBrowserbase } from "@effect-browser/browserbase/testing";
 import { assert, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Schedule, Stream } from "effect";
-import * as Supervisor from "effect-browser/Supervisor";
-import * as Browserbase from "effect-browserbase/Browserbase";
-import * as ContextLease from "effect-browserbase/ContextLease";
-import { TestBrowserbase } from "effect-browserbase/testing";
+import { Supervisor } from "effect-browser/supervisor";
 import { TestClock } from "effect/testing";
 
 const fake = (script: TestBrowserbase.Script) =>

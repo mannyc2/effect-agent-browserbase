@@ -6,12 +6,11 @@ import { Deferred, Duration, Effect, Fiber, Option, Schedule, Schema, Stream } f
 import { Browser } from "effect-browser/Browser";
 import { type BrowserError, refuse } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
-import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
-import * as Presentation from "effect-browser/Presentation";
+import { Presentation } from "effect-browser/presentation";
 import type { Snapshot } from "effect-browser/Snapshot";
-import * as Stillness from "effect-browser/Stillness";
 import { TestPage } from "effect-browser/testing";
+import { Moment, Stillness } from "effect-browser/timeline";
 import { type AiError, LanguageModel, Prompt, type Response } from "effect/ai";
 
 import * as Arms from "./Arms.ts";

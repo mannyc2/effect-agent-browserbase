@@ -1,9 +1,9 @@
 // This proves the executable probe composes with real Chromium and the client fake. It cannot
 // prove Browserbase persistence: the fake reconnects to the same local browser context.
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
+import { TestBrowserbase } from "@effect-browser/browserbase/testing";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
-import * as ContextLease from "effect-browserbase/ContextLease";
-import { TestBrowserbase } from "effect-browserbase/testing";
 
 import * as Probe from "../HandoverProbe.ts";
 import * as Latency from "../Latency.ts";

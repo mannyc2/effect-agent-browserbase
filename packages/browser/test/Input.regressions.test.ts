@@ -1,13 +1,13 @@
 // PLAN input regressions through the public page and real local Chromium.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Exit, Fiber, Option, Queue, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
+import * as InputStyle from "../src/InputStyle.ts";
 import { failFast } from "../src/Page.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Stage from "../src/presentation/Stage.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
-import * as InputStyle from "../src/Style.ts";
 import { unpaused } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

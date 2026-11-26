@@ -1,11 +1,11 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect } from "effect";
 import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
 import type { Page } from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
-import * as Stillness from "../src/stillness/Stillness.ts";
+import * as Stillness from "../src/timeline/Stillness.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const blank = Effect.gen(function* () {

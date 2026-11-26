@@ -8,10 +8,10 @@ import { Duration, Effect, Option, Result, Schedule, Schema, type Scope } from "
 import { Base64 } from "effect/encoding";
 
 import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
-import * as BrowserClock from "../../Clock.ts";
 import { Frame, Image, Screenshot } from "../../Frame.ts";
-import type { Point } from "../../Geometry.ts";
 import { type FrameOptions, type Paint, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
+import * as BrowserClock from "../clock.ts";
+import type { Point } from "../geometry.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import {
   decodeWith,

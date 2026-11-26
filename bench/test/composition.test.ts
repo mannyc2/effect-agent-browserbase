@@ -10,8 +10,8 @@ import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect";
 import * as Browser from "effect-browser/Browser";
 import { Subject } from "effect-browser/BrowserEvent";
-import * as Walk from "effect-browser/Plan";
-import * as Supervisor from "effect-browser/Supervisor";
+import { Supervisor } from "effect-browser/supervisor";
+import { Walk } from "effect-browser/walk";
 import { chromium, type Page as NativePage } from "playwright-core";
 
 import * as Watched from "../Watched.ts";

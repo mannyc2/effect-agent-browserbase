@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Arbitrary, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
-import * as Clock from "../src/Clock.ts";
+import * as Clock from "../src/internal/clock.ts";
 
 const between = (minimum: number, maximum: number) =>
   Arbitrary.schema(Schema.Finite.check(Schema.isBetween({ minimum, maximum })));

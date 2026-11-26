@@ -13,7 +13,7 @@ import {
   undispatched,
 } from "../../BrowserError.ts";
 import { type BrowserEvent, RequestRefused } from "../../BrowserEvent.ts";
-import * as Url from "../../Url.ts";
+import * as Url from "../url.ts";
 import * as Port from "./port.ts";
 import * as Owner from "./request-owner.ts";
 

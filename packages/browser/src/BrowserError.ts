@@ -11,7 +11,7 @@
 import { Effect, Schema } from "effect";
 
 import { DisconnectCause } from "./BrowserEvent.ts";
-import * as Url from "./Url.ts";
+import * as Url from "./internal/url.ts";
 
 /** The operation did not finish in time. */
 export class Timeout extends Schema.TaggedError<Timeout>()("Timeout", {

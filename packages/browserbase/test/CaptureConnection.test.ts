@@ -7,7 +7,7 @@ import { Effect, Fiber, Layer, Schedule, Schema, Stream } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
-import * as Stillness from "effect-browser/Stillness";
+import { Stillness } from "effect-browser/timeline";
 
 import { behindProxy, type Command, type Proxy } from "../../../tools/testing/cdp-proxy.ts";
 import * as Browserbase from "../src/Browserbase.ts";

@@ -19,7 +19,7 @@ import {
   Stream,
 } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Supervisor from "effect-browser/Supervisor";
+import { Supervisor } from "effect-browser/supervisor";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { type Browser as NativeBrowser, chromium } from "playwright-core";

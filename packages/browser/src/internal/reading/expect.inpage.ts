@@ -2,7 +2,7 @@
  * In the page: the wait an expectation takes on what `find` matches, and the mark that stands for
  * what the matches show. See `names.inpage.ts` for what a page-side part may use.
  */
-import type { FindRequest, Match } from "../../Matching.ts";
+import type { FindRequest, Match } from "../matching.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 

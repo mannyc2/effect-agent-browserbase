@@ -109,7 +109,7 @@ export interface Handle {
 
 /** The fake's handle, beside the `BrowserbaseClient` that `layer` runs on it. */
 export class TestBrowserbase extends Context.Service<TestBrowserbase, Handle>()(
-  "effect-browserbase/testing/TestBrowserbase",
+  "@effect-browser/browserbase/testing/TestBrowserbase",
 ) {}
 
 /** The API key the fake takes; any other is unauthorized. */

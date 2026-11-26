@@ -1,10 +1,10 @@
-# effect-browserbase
+# @effect-browser/browserbase
 
 [Browserbase](https://www.browserbase.com) for [effect-browser](../browser): hosted sessions as a
 `Browser` layer, and an Effect client for the Browserbase REST API.
 
 ```sh
-npm install effect-browserbase@beta effect-browser@beta effect playwright-core
+npm install @effect-browser/browserbase@beta effect-browser@beta effect playwright-core
 ```
 
 - `Browserbase`: `open` and `layer` create a session and request its release when their scope
@@ -78,7 +78,7 @@ session in Browserbase's dashboard (`https://browserbase.com/sessions/<id>`).
 release first disconnects the browser, which is lost as `released`, so a call in flight or a
 capture's reader says the session was released, not that the connection Browserbase then cuts was
 lost. It asks Browserbase to end the session and then reads it until Browserbase reports it ended,
-trying both again a second apart for up to a minute, and says how it went: `Settled`, or
+trying both again a second apart for up to a minute, and says how it went: `Confirmed`, or
 `Unconfirmed` when the session still ran, or Browserbase could not be asked, at the deadline. An
 unconfirmed session may still bill until its timeout. `open`'s scope releases its session as it
 closes, so closing the scope waits for the release: up to a minute while Browserbase confirms the
@@ -92,13 +92,13 @@ session outlives the process that opened it, for another to attach to.
 ## Supervised sessions
 
 `generations` returns the `open`, `exclusive` and `definite` options for
-`effect-browser/Supervisor.make`. Each generation creates a new session and runs `build(hosted)`
+`Supervisor.make`, from `effect-browser/supervisor`. Each generation creates a new session and runs `build(hosted)`
 in its scope. The value returned by `build` is exactly the lease's `value`. A failed builder closes
 its scope and releases the session before returning `OpenFailed`, whose `error` preserves the
 original typed failure and whose optional `cleanup` describes that attempt alone.
 
 ```ts
-import * as Supervisor from "effect-browser/Supervisor";
+import { Supervisor } from "effect-browser/supervisor";
 
 const sessions =
   yield *
@@ -266,7 +266,7 @@ const program = Effect.gen(function* () {
 
 ## Testing
 
-`effect-browserbase/testing` holds `TestBrowserbase`, the Browserbase API in memory: an `HttpClient`
+`@effect-browser/browserbase/testing` holds `TestBrowserbase`, the Browserbase API in memory: an `HttpClient`
 under the real `BrowserbaseClient`, so the client and `Browserbase` run as they would against
 Browserbase, for free. Sessions run until released or until their timeout on the Effect `Clock`, so
 `TestClock` ends them. A `Script` loses a create, whose session it can list only `listedAfter` a

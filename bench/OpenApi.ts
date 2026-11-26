@@ -1,7 +1,7 @@
-// The part of Browserbase's published OpenAPI document that effect-browserbase relies on: the
+// The part of Browserbase's published OpenAPI document that @effect-browser/browserbase relies on: the
 // session and context operations its client calls and its fake answers, each schema with its
 // references inlined so it stands alone, and without prose, so only a change of shape shows.
-// effect-browserbase's shape test reads a copy, `packages/browserbase/test/browserbase-openapi.json`;
+// @effect-browser/browserbase's shape test reads a copy, `packages/browserbase/test/browserbase-openapi.json`;
 // `bench contract --spec` compares that copy with the document Browserbase publishes now.
 import { Effect, Option, Predicate, Schema } from "effect";
 import { HttpClient } from "effect/http";

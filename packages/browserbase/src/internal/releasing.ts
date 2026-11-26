@@ -3,7 +3,7 @@
  * A failed local cleanup remains explicit release evidence even when the provider confirms its end.
  */
 import { Cause, Effect, Exit, Scope } from "effect";
-import * as Release from "effect-browser/Released";
+import { Release } from "effect-browser/supervisor";
 
 export const releasing = (browser: Scope.Closeable, end: Effect.Effect<Release.Release>) =>
   Effect.gen(function* () {

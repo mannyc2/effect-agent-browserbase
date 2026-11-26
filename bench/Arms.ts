@@ -20,14 +20,14 @@
 // dialogs; arm 21 has those changes in programs, as arm 19 has the reads. Arm 18, which changed the
 // chart through its API, unseen, is retired. Understand tasks differ only in arm 1, whose moments
 // add the outline.
+import * as ChartTools from "@effect-browser/tradingview/ChartTools";
 import { Agent, AgentRuntime, CodeMode, InMemory, type RunEvent } from "@yielded/agent";
 import { inProcessCodeExecutorLayer } from "@yielded/agent-testing/code-executor-substitute";
 import { CodeExecutionLimits } from "@yielded/agent/code-executor";
 import { DateTime, Duration, Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/BrowserTools";
-import * as ChartTools from "effect-browser-tradingview/ChartTools";
-import type * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
+import type { Moment } from "effect-browser/timeline";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
 export const arms = [1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21] as const;

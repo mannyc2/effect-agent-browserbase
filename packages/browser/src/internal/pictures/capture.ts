@@ -18,8 +18,8 @@ import {
 import { Base64 } from "effect/encoding";
 
 import { type BrowserError, InvalidRequest } from "../../BrowserError.ts";
-import { type Estimate, monotonicMillis } from "../../Clock.ts";
 import { CaptureStats, type Frame, type ScreencastOptions, sameCapture } from "../../Frame.ts";
+import { type Estimate, monotonicMillis } from "../clock.ts";
 import { undispatched } from "../page/context.ts";
 import { tally } from "./counts.ts";
 import { readViewport, sizeFilter, type Size } from "./dimensions.ts";

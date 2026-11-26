@@ -1,10 +1,10 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Arbitrary, Duration, Effect, Exit, Layer, Option, Schema } from "effect";
 
 import { Browser } from "../src/Browser.ts";
-import { type FindRequest, match } from "../src/Matching.ts";
+import { type FindRequest, match } from "../src/internal/matching.ts";
 import type { Found, Page } from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

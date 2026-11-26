@@ -4,12 +4,13 @@ effect-browser is browser automation for [Effect](https://effect.website) agents
 
 ## What's in the box
 
-| Package                        | What it is                                                                 |
-| ------------------------------ | -------------------------------------------------------------------------- |
-| `effect-browser`               | The browser, its pages, frames, events, moments and films, over Playwright |
-| `effect-agent-browser`         | Its pages as Yielded Agent's browser ports, with the agent's tools         |
-| `effect-browserbase`           | Browserbase sessions as a `Browser`, and a client for its REST API         |
-| `effect-browser-human-strokes` | Optional recorded pointer motion, as a presenter's planner                 |
+| Package                         | What it is                                                                 |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `effect-browser`                | The browser, its pages, frames, events, moments and films, over Playwright |
+| `@effect-browser/chromium`      | A local Chromium as a `Browser`, launched through Playwright               |
+| `effect-agent-browser`          | Its pages as Yielded Agent's browser ports, with the agent's tools         |
+| `@effect-browser/browserbase`   | Browserbase sessions as a `Browser`, and a client for its REST API         |
+| `@effect-browser/human-strokes` | Optional recorded pointer motion, as a presenter's planner                 |
 
 ## The demo
 
