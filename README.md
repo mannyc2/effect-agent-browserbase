@@ -2,9 +2,9 @@
 
 Browser automation for [Effect](https://effect.website) agents: page control, a compact page
 outline for models, screencast frames, a record of what visibly changed on a page, and moments:
-what a page showed, and what changed on it, over a window of time, ready for a model. Agents run on
-[Yielded Agent](https://github.com/yielded-dev/agent), whose browser tools `effect-agent-browser`
-gives over these pages.
+what a page showed, and what changed on it, over a window of time, ready for a model. An agent's
+browser tools over these pages are `effect-browser/ai`, for any `effect/ai` loop, and
+`@effect-browser/yielded` gives them to a [Yielded Agent](https://github.com/yielded-dev/agent) run.
 
 Sessions, scoped input authority, resumable action receipts and cued presentation compose into
 watched browsing and operator-assisted workflows. The library owns browser lifetimes and failure
@@ -12,17 +12,17 @@ evidence; applications own their decisions and durable business records.
 
 | Package                                                   | What it is                                                         |
 | --------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`effect-browser`](packages/browser)                      | The browser, its pages, moments and films, over Playwright         |
+| [`effect-browser`](packages/browser)                      | The browser, its pages, moments, films and an agent's tools        |
 | [`@effect-browser/chromium`](packages/chromium)           | A local Chromium as a `Browser`, launched through Playwright       |
-| [`effect-agent-browser`](packages/agent-browser)          | Its pages as a Yielded agent's browser tools                       |
 | [`@effect-browser/browserbase`](packages/browserbase)     | Browserbase sessions as a `Browser`, and a client for its REST API |
+| [`@effect-browser/yielded`](packages/yielded)             | `effect-browser/ai`'s tools for a Yielded agent's run              |
 | [`@effect-browser/human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
 | [`@effect-browser/tradingview`](packages/tradingview)     | TradingView charts' data, exact screen points and agent tools      |
 | [`bench`](bench) (private)                                | Graded tasks over canvas games, live charts, quotes and forms      |
 | [`site`](site) (private)                                  | The docs site, its narrated demo and a player for recorded runs    |
 
-`effect-agent-browser` needs the npm release of `@yielded/agent` `0.1.0-beta.191` and Effect
-`4.1.2`. Its [README](packages/agent-browser/README.md) gives the install command.
+`@effect-browser/yielded` needs the npm release of `@yielded/agent` `0.1.0-beta.191` and Effect
+`4.1.2`. Its [README](packages/yielded/README.md) gives the install command.
 
 The browser core also owns [leased generations](packages/browser/README.md#supervising-browser-generations):
 scoped work and application resources, bounded handover and explicit revocation, with hosted
@@ -44,21 +44,22 @@ page runs the same readers, change record, overlay and poses in its own bundle t
 
 ## An agent in a local Chromium
 
-A [Yielded](https://github.com/yielded-dev/agent) agent runs the loop; `BrowserTools` gives it
-Yielded's browser tools over an `effect-browser` page, and tools of its own for what has no ref.
-Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter:
+A [Yielded](https://github.com/yielded-dev/agent) agent runs the loop; `YieldedTools` gives it
+`effect-browser/ai`'s browser tools over an `effect-browser` page, with tools of their own for what
+has no ref, and shows it the page before each turn. Any `effect/ai` `LanguageModel` drives it. This
+one goes through OpenRouter:
 
 ```ts
 import { Chromium } from "@effect-browser/chromium";
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
-import { BrowserTools } from "effect-agent-browser";
+import { YieldedTools } from "@effect-browser/yielded";
 import { Browser } from "effect-browser";
 import { Model } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 
-const tools = BrowserTools.make();
+const tools = YieldedTools.make();
 
 const reader = Agent.make("top-story", {
   input: Schema.String,
@@ -189,7 +190,8 @@ prompt.
 
 ## How the tools work
 
-`BrowserTools.make()` gives an agent the ref and control tools over `PageControl`'s controller,
+`effect-browser/ai`'s `BrowserTools.make()` gives an agent in any `effect/ai` loop the ref and
+control tools over `PageControl`'s controller,
 and the pointer tools: `observe`, `act`, `inspect`, `navigate`, `scroll`, `wait`, `press` and
 `select_tab`, then `click_at`, `hover`, `drag`, `type_text`, `press_keys`, `zoom`, `wait_still` and
 `back`. `BrowserTools.Control` and `BrowserTools.Pointer` are the two groups, for an agent that
@@ -206,22 +208,24 @@ on a browser's tabs. `PageControl.make` gives the controller alone, for a host w
   whether input reached the browser: `acknowledged`, `not-dispatched` for a refusal before any, or
   `possibly-dispatched` for a failure after it; nothing is ever retried.
 - Anything an outline cannot show, such as a canvas game, a chart or a video, takes x and y in
-  viewport CSS pixels with the pointer tools. Before each turn the model sees a screenshot of the
-  current tab, and the crops `zoom` took since its last turn, as context the run never keeps: only
-  the current picture is ever in a request, so the prompt cache keeps the history. `vision: false`
-  leaves the pictures out.
+  viewport CSS pixels with the pointer tools. Before each turn, `BrowserTools.Pictures`' `next`
+  gives a screenshot of the current tab and the crops `zoom` took since the last turn, for that
+  request alone: only the current picture is ever in a request, so the prompt cache keeps the
+  history. `YieldedTools` makes them a Yielded run's transient context; another loop adds them to
+  each request itself. `vision: false` leaves the pictures out.
+- A failed tool answers the model with a `ToolError`: `invalid` for a request it cannot carry out,
+  `browser` for a browser failure, and whether its input was dispatched.
 - Tools that follow a browser's tabs act on the tab the model last saw, since it planned on what it
   saw there, and list the others. A tab that opens is shown at the next look as `follow` says:
   `"select"`, the default, makes it current without bringing it to front, so the page on air and an
   operator's view stay; `"front"` brings it to front; `"never"` stays.
 - `navigate` opens only http and https addresses, `data:` URLs and `about:blank`; a model cannot
   open a local file. `Page.goto` also opens the `file:` URLs its caller passes.
-- The browser answers dialogs itself, so `respond_dialog` is left out and the port refuses it.
-  Yielded's `screenshot` tool is left out too: the pictures before each turn replace it. A host
-  that wants a PNG takes one from the controller's `current` page with
-  `page.screenshot({ format: "png" })`.
-- The run is Yielded's: its policy bounds turns, tool calls, time and spend, and it adds approval,
-  context management, durable runs and run events. See its
+- The browser answers dialogs itself, so no tool answers them. No tool takes a screenshot either:
+  the pictures before each turn replace it. A host that wants a PNG takes one from the
+  controller's `current` page with `page.screenshot({ format: "png" })`.
+- With `@effect-browser/yielded`, the run is Yielded's: its policy bounds turns, tool calls, time
+  and spend, and it adds approval, context management, durable runs and run events. See its
   [documentation](https://github.com/yielded-dev/agent).
 - A page waits only for itself. An action has its page to itself, in the order it was admitted after policy approval,
   and reads share it after the action in flight, so a read describes the page an action left. A

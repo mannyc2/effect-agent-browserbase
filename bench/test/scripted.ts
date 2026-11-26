@@ -2,7 +2,7 @@
 // response's parts; an agent's run, which streams, gets them as a stream that sent everything at
 // once, and a single call, such as an understand task's, gets them whole.
 import { Effect } from "effect";
-import { TestModel } from "effect-agent-browser/testing";
+import { TestModel } from "effect-browser/testing";
 import {
   type AiError,
   type LanguageModel,

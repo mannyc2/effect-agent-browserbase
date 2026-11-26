@@ -16,7 +16,7 @@ try {
     "package.json",
   ])
     await cp(join(root, name), join(work, name), { recursive: true });
-  for (const name of ["browser", "chromium", "browserbase", "agent-browser", "human-strokes"]) {
+  for (const name of ["browser", "chromium", "browserbase", "yielded", "human-strokes"]) {
     await mkdir(join(work, "packages", name), { recursive: true });
     for (const part of ["package.json", "src", "test"])
       await cp(join(root, "packages", name, part), join(work, "packages", name, part), {
@@ -202,7 +202,7 @@ try {
     ],
     [
       "relative cross-package import",
-      "agent-browser/src/PageControl.ts",
+      "yielded/src/YieldedTools.ts",
       'import "../../browser/src/Page.ts";',
       /relative import leaves its package/,
     ],
@@ -221,6 +221,16 @@ try {
           dependencies: { "@yielded/agent": "0.1.0-beta.191" },
         }),
       /forbidden runtime dependency/,
+    ],
+    [
+      "Yielded Agent outside its binding",
+      "browserbase/package.json",
+      (clean) =>
+        JSON.stringify({
+          ...JSON.parse(clean),
+          devDependencies: { ...JSON.parse(clean).devDependencies, "@yielded/agent": "0.1.0-beta.191" },
+        }),
+      /only @effect-browser\/yielded depends on @yielded\/agent/,
     ],
     [
       "root runtime dependency",
