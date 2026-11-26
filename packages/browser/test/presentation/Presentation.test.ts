@@ -13,6 +13,7 @@ import {
   Random,
   Schedule,
   Schema,
+  Tracer,
 } from "effect";
 
 import { Browser, make as makeBrowser } from "../../src/Browser.ts";
@@ -346,6 +347,37 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       const site = yield* Site;
       const page = yield* browser.newPage(site.url("/navigating"));
       const other = yield* browser.newPage(site.url("/navigating"));
+      const diagNow = () => Number(page.clock.monotonicTimeNanosUnsafe()) / 1e6;
+
+      const diagSpans: Array<{
+        readonly name: string;
+        readonly start: number;
+        end: number | undefined;
+        readonly span: Tracer.NativeSpan;
+      }> = [];
+
+      const diagTracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+
+          const entry: (typeof diagSpans)[number] = {
+            name: options.name,
+            start: diagNow(),
+            end: undefined,
+            span,
+          };
+
+          const close = span.end.bind(span);
+
+          diagSpans.push(entry);
+          span.end = (endTime, exit) => {
+            entry.end = diagNow();
+            close(endTime, exit);
+          };
+
+          return span;
+        },
+      });
 
       const presenter = yield* Presentation.make({
         pacing: {
@@ -367,11 +399,18 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         nextDoubleUnsafe: () => 0.25,
       });
 
-      yield* view.click(still).pipe(medians);
-      yield* view.click(still).pipe(medians);
-      yield* view.click(refOf(snapshot, "link", "Link")).pipe(medians);
-      yield* view.click(refOf(yield* page.snapshot(), "button", "Continue")).pipe(medians);
-      yield* presenter.view(other).click({ x: 20, y: 340 }).pipe(medians);
+      yield* view.click(still).pipe(medians, Effect.withTracer(diagTracer));
+      yield* view.click(still).pipe(medians, Effect.withTracer(diagTracer));
+      yield* view
+        .click(refOf(snapshot, "link", "Link"))
+        .pipe(medians, Effect.withTracer(diagTracer));
+      yield* view
+        .click(refOf(yield* page.snapshot(), "button", "Continue"))
+        .pipe(medians, Effect.withTracer(diagTracer));
+      yield* presenter
+        .view(other)
+        .click({ x: 20, y: 340 })
+        .pipe(medians, Effect.withTracer(diagTracer));
 
       const actions = (yield* browser.recentEvents).filter(
         (event): event is Action =>
@@ -389,6 +428,40 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             (plans.find((plan) => plan.at >= action.startedAt)?.at ?? action.at) -
             (actions[index]?.at ?? 0),
         );
+
+      const zero = actions[3]?.at ?? 0;
+      const from = (actions[3]?.startedAt ?? 0) - 1;
+
+      const label = (id: unknown) =>
+        id === page.id ? "p" : id === other.id ? "o" : typeof id === "string" ? id : "";
+
+      const rel = (value: number) => Math.round((value - zero) * 10) / 10;
+
+      process.stderr.write(
+        `DIAG326 ${JSON.stringify({
+          gaps: gaps.map((gap) => Math.round(gap * 10) / 10),
+          sameClock: page.clock === other.clock,
+          events: (yield* browser.recentEvents)
+            .filter((event) => event.at >= from)
+            .map((event) => ({
+              t: event._tag,
+              p: "page" in event ? label(event.page) : "",
+              at: rel(event.at),
+              ...(event._tag === "Action" ? { s: rel(event.startedAt), n: event.name } : {}),
+            })),
+          spans: diagSpans
+            .filter((entry) => entry.start >= from)
+            .map((entry) => ({
+              n: entry.name,
+              p: label(entry.span.attributes.get("page")),
+              s: rel(entry.start),
+              e: entry.end === undefined ? null : rel(entry.end),
+              f: entry.span.attributes.get("function"),
+              c: entry.span.attributes.get("calls"),
+              w: entry.span.attributes.get("waitedMillis"),
+            })),
+        })}\n`,
+      );
 
       // Another click on the page, a link's, a click on the document it reached, another page's.
       for (const [index, median] of [150, 150, 400, 800].entries())
