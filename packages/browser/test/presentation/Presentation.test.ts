@@ -361,6 +361,9 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       const snapshot = yield* Snapshot.read(page);
       const still = refOf(snapshot, "button", "Still");
 
+      // Set up the other page's world and page script now, so it stays out of the last wait.
+      yield* Snapshot.read(other);
+
       // A random source whose normal draws are zero, so each wait is its median.
       const medians = Effect.provideService(Random.Random, {
         nextIntUnsafe: () => 0,
