@@ -242,9 +242,10 @@ moments without `Moment.account` and in 29 with it. The site's two demos are rec
 - **TradingView:** recorded chart walks do not replay, because a click on the chart's unnamed time
   axis records a subject that replay cannot find. tradingview.com refuses drawings and indicator
   search when signed out, and the package is checked live only on the Advanced Charts demo.
-- **The docs site's captured outputs** are from runs before the restructure: get-started's agent
-  run is from 11 October 2026, on the earlier release-candidate archive and Effect 4.0.0.
-  Recapturing it takes a paid model call, and the install commands the scoped release.
+- **The docs site's captured outputs:** Get started's install and agent run were recaptured on 26
+  November 2026 against the published `0.3.0-beta.25`. The outputs on the Browserbase, Watched
+  browsing, Moments and narration, Deploying and Run the demo pages are from runs on 11 and 12
+  October 2026, before the restructure, and each page dates its own.
 - **Timing tests under load:** some of `effect-browser`'s and the bench's timing tests fail on a
   loaded machine and pass alone. On `main` CI, `Budget.test.ts`'s browser-opening call count, a
   `Ready.test.ts` foreground-motion case and the bench's watched-order case for a queued reveal,
