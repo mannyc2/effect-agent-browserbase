@@ -12,6 +12,7 @@
  * a session or context id of any other shape as invalid, where it answers an unknown one as not
  * found.
  *
+ * @stability stable
  * @category testing
  * @since 0.3.0
  */
@@ -43,7 +44,13 @@ import {
 
 const Refusal = Schema.Int.check(Schema.isBetween({ minimum: 400, maximum: 599 }));
 
-/** How a session create answers. */
+/**
+ * How a session create answers.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Create = Schema.Union([
   /** The session is made, and runs. */
   Schema.TaggedStruct("Accept", {}),
@@ -61,7 +68,13 @@ export const Create = Schema.Union([
   Schema.TaggedStruct("Lost", { listedAfter: Schema.optional(Schema.Finite) }),
 ]);
 
-/** How a release answers. */
+/**
+ * How a release answers.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const ReleaseAnswer = Schema.Union([
   /** The session ends at once. */
   Schema.TaggedStruct("Ends", {}),
@@ -73,14 +86,26 @@ export const ReleaseAnswer = Schema.Union([
   Schema.TaggedStruct("Lost", {}),
 ]);
 
-/** How a session read answers. */
+/**
+ * How a session read answers.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Read = Schema.Union([
   Schema.TaggedStruct("Answer", {}),
   Schema.TaggedStruct("Refused", { status: Refusal }),
   Schema.TaggedStruct("Lost", {}),
 ]);
 
-/** A session as the fake keeps it, with how many releases it was asked. */
+/**
+ * A session as the fake keeps it, with how many releases it was asked.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Kept {
   readonly id: string;
   readonly status: string;
@@ -94,6 +119,11 @@ export interface Kept {
   readonly context: { readonly id: string; readonly persist: boolean } | undefined;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Handle {
   /** Every request, oldest first, as `METHOD /path?query`. */
   readonly requests: Effect.Effect<ReadonlyArray<string>>;
@@ -107,12 +137,24 @@ export interface Handle {
   readonly end: (id: string) => Effect.Effect<void>;
 }
 
-/** The fake's handle, beside the `BrowserbaseClient` that `layer` runs on it. */
+/**
+ * The fake's handle, beside the `BrowserbaseClient` that `layer` runs on it.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
 export class TestBrowserbase extends Context.Service<TestBrowserbase, Handle>()(
   "@effect-browser/browserbase/testing/TestBrowserbase",
 ) {}
 
-/** The API key the fake takes; any other is unauthorized. */
+/**
+ * The API key the fake takes; any other is unauthorized.
+ *
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
+ */
 export const apiKey = "test-browserbase-key";
 
 const Settings = Schema.Struct({
@@ -175,6 +217,11 @@ const Settings = Schema.Struct({
 
 const CreateBody = Schema.fromJsonString(Settings);
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Script = Schema.Struct({
   /** How creates answer, in turn; once these run out, each is accepted. */
   creates: Schema.optional(Schema.Array(Create)),
@@ -201,6 +248,11 @@ export const Script = Schema.Struct({
   connectUrl: Schema.optional(Schema.String),
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Script = typeof Script.Type;
 
 const ReleaseBody = Schema.fromJsonString(
@@ -479,7 +531,13 @@ const serve = (fake: Fake, request: HttpClientRequest.HttpClientRequest, url: UR
   }
 };
 
-/** The fake as an `HttpClient`, with its handle. */
+/**
+ * The fake as an `HttpClient`, with its handle.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.fnUntraced(function* (script: Script = {}) {
   const clock = yield* Clock.Clock;
   const decoded = yield* Effect.orDie(Schema.decodeEffect(Script)(script));
@@ -584,7 +642,13 @@ export const make = Effect.fnUntraced(function* (script: Script = {}) {
   };
 });
 
-/** The real `BrowserbaseClient` over the fake, and the fake's handle. */
+/**
+ * The real `BrowserbaseClient` over the fake, and the fake's handle.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layer = (script: Script = {}): Layer.Layer<BrowserbaseClient | TestBrowserbase> =>
   Layer.unwrap(
     Effect.map(make(script), ({ http, handle }) =>

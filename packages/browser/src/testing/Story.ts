@@ -1,14 +1,30 @@
-/** Suspended test ports expose unfinished work and error logs in one explicit end check. */
+/**
+ * Suspended test ports expose unfinished work and error logs in one explicit end check.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { Effect, Logger, Ref } from "effect";
 
 import { ScriptError } from "./TestModel.ts";
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface ErrorLog {
   readonly id: number;
   readonly options: Logger.Options<unknown>;
 }
 
-/** One story owns its ports and logger; interruption still removes the held invocation. */
+/**
+ * One story owns its ports and logger; interruption still removes the held invocation.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.gen(function* () {
   const checks = yield* Ref.make<ReadonlyArray<Effect.Effect<ReadonlyArray<string>>>>([]);
   const logged: Array<ErrorLog> = [];

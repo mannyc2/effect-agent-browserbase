@@ -5,6 +5,7 @@
  * show whether the fake is still faithful, at the cost of a few one-minute sessions. Checks that
  * move the test clock run only against the fake.
  *
+ * @stability stable
  * @category testing
  * @since 0.3.0
  */
@@ -14,7 +15,13 @@ import { TestClock } from "effect/testing";
 import { BrowserbaseClient, type Session } from "../BrowserbaseClient.ts";
 import type { BrowserbaseError } from "../BrowserbaseError.ts";
 
-/** A check found the API behaving otherwise. */
+/**
+ * A check found the API behaving otherwise.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class Broken extends Schema.TaggedError<Broken>(
   "@effect-browser/browserbase/testing/BrowserbaseContract/Broken",
 )("Broken", {
@@ -26,6 +33,11 @@ export class Broken extends Schema.TaggedError<Broken>(
   }
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Check {
   readonly name: string;
   /** It moves the test clock, so only the fake can run it. */
@@ -62,6 +74,11 @@ const ended = (client: BrowserbaseClient["Service"], id: string) =>
     }),
   );
 
+/**
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
+ */
 export const checks: ReadonlyArray<Check> = [
   check("a new session runs, and ends once released", (expect) =>
     Effect.gen(function* () {

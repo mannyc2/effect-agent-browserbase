@@ -35,6 +35,9 @@
           "@effect/ai-openrouter",
           "@effect/ai-typesafe"
         ],
+        // Film is tagged `@stability experimental`, so each use of it warns. The repository's own
+        // code, tests and examples use it on purpose; a consumer allows it the same way.
+        "allowedExperimentalApis": ["effect-browser/presentation/Film"],
         "diagnosticSeverity": {
           "allOfMapToForEach": "warning",
           "anyUnknownInErrorContext": "suggestion",

@@ -2,6 +2,7 @@
  * Input performed for viewers. A presenter owns one pointer and pace. Its public page view applies
  * a style to input after approval, so policy holds leave the hand free. Hand acquisition is bounded
  * by the page's action wait and honours failFast; reactions and input use the page owner's clock.
+ * @stability stable
  * @since 0.3.0
  */
 import { type Clock, Deferred, Duration, Effect, MutableRef, Option, Semaphore } from "effect";
@@ -14,7 +15,13 @@ import { monotonicMillis } from "../internal/clock.ts";
 import type { Page, Point } from "../Page.ts";
 import * as Motion from "./Motion.ts";
 
-/** How long a person waits before acting, and how fast they type. */
+/**
+ * How long a person waits before acting, and how fast they type.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Pacing {
   readonly expected: Duration.Input;
   readonly surprise: Duration.Input;
@@ -23,6 +30,11 @@ export interface Pacing {
   readonly wordsPerMinute: number;
 }
 
+/**
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
+ */
 export const human: Pacing = {
   expected: "280 millis",
   surprise: "600 millis",
@@ -30,6 +42,11 @@ export const human: Pacing = {
   wordsPerMinute: 70,
 };
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options {
   readonly pacing?: Pacing | undefined;
   readonly motion?: Motion.Planner | undefined;
@@ -41,8 +58,18 @@ export interface Options {
   readonly lead?: ((announced: ActionAnnounced) => Effect.Effect<void>) | undefined;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type View = Page;
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Presenter {
   /** The same public page view for the same page. */
   readonly view: (page: Page) => View;
@@ -50,7 +77,13 @@ export interface Presenter {
 
 const spread = { expected: 0.3, surprise: 0.4, unrelated: 0.4 };
 
-/** One hand for the scope; input effects keep their page's authority and failure evidence. */
+/**
+ * One hand for the scope; input effects keep their page's authority and failure evidence.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.fn("Presentation.make")(function* (options: Options = {}) {
   const pacing = options.pacing ?? human;
   const medians = { expected: 0, surprise: 0, unrelated: 0 };

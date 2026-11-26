@@ -2,6 +2,7 @@
  * What a page shows as text: a line per block, with table cells apart by tabs, read from the
  * viewport or from one element whole.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { type Effect, Function, Schema } from "effect";
@@ -10,6 +11,11 @@ import type { BrowserError } from "./BrowserError.ts";
 import { functionsOf, isPage } from "./internal/page/functions.ts";
 import type { Page } from "./Page.ts";
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface TextOptions {
   /** `"viewport"` (the default) reads what the viewport shows; a ref reads that element whole. */
   readonly scope?: string | undefined;
@@ -19,7 +25,13 @@ export interface TextOptions {
   readonly unmask?: boolean | undefined;
 }
 
-/** What a page showed as text: a line per block, with table cells apart by tabs. */
+/**
+ * What a page showed as text: a line per block, with table cells apart by tabs.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Text extends Schema.Class<Text>("effect-browser/Text")({
   url: Schema.String,
   title: Schema.String,
@@ -34,6 +46,10 @@ export class Text extends Schema.Class<Text>("effect-browser/Text")({
  * The text the viewport shows, or one element whole, in one call to the page. Field values read
  * `••••` unless `unmask`, and a secret field's always do, as does one that was secret when the
  * library saw it.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const read: {
   (options?: TextOptions): (page: Page) => Effect.Effect<Text, BrowserError>;

@@ -3,6 +3,9 @@
  * pointer that glides, keys typed at a person's pace, held buttons and wheels in bursts. A page's
  * actions take one, and the input reaches the same controls either way; only its timing, and
  * what viewers see of it, differ. A presenter builds the performed one.
+ *
+ * @stability stable
+ * @since 0.3.0
  */
 import {
   Context,
@@ -23,6 +26,11 @@ import { normal } from "./internal/geometry.ts";
 import * as Keys from "./internal/input/keys.ts";
 import type { Point } from "./Page.ts";
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface TypingEvent {
   /** From the start of the typing. */
   readonly afterMillis: number;
@@ -30,6 +38,11 @@ export interface TypingEvent {
   readonly key: string;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface WheelStep {
   readonly dx: number;
   readonly dy: number;
@@ -37,6 +50,11 @@ export interface WheelStep {
   readonly afterMillis: number;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface InputStyle {
   /** Own presentation only after policy allows input; wait options belong to the page. */
   readonly withInput?:
@@ -78,7 +96,13 @@ export interface InputStyle {
   readonly wheel: (dx: number, dy: number) => Effect.Effect<ReadonlyArray<WheelStep>, BrowserError>;
 }
 
-/** Each key as it comes, with no pause; a drag moves in eight short steps so its target sees it. */
+/**
+ * Each key as it comes, with no pause; a drag moves in eight short steps so its target sees it.
+ *
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
+ */
 export const plain: InputStyle = {
   shown: false,
   pointer: undefined,
@@ -121,7 +145,13 @@ const lognormal = Effect.fnUntraced(function* (
   return Math.max(minimum, Math.min(maximum, median * Math.exp(sigma * (yield* normal))));
 });
 
-/** A pause around `median`, as the research measured reactions: at most four times it. */
+/**
+ * A pause around `median`, as the research measured reactions: at most four times it.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const pause = (median: number, sigma: number) =>
   median <= 0 ? Effect.succeed(0) : lognormal(median, sigma, 0, median * 4);
 
@@ -136,6 +166,10 @@ const eventOrder = { up: 0, insert: 1, down: 2 };
  * physical key is never held twice, as with A and a, or ! and 1. The first key waits for the hand
  * to reach the keys, each later one follows the last by a gap drawn around `gap`, and a word's
  * first key comes 60 ms later.
+ *
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
  */
 export const maximumDurationMillis = 10_000;
 
@@ -189,7 +223,13 @@ const decode =
       ),
     );
 
-/** Copy and validate custom schedules before their first input; planning uses the action bound. */
+/**
+ * Copy and validate custom schedules before their first input; planning uses the action bound.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const validated = (style: InputStyle): InputStyle => ({
   ...style,
   hold: style.hold.pipe(Effect.flatMap(decode(Delay, "click"))),
@@ -246,7 +286,13 @@ const typing = Effect.fnUntraced(function* (
   );
 });
 
-/** A word is five characters; the gap leaves room for each word's later start. */
+/**
+ * A word is five characters; the gap leaves room for each word's later start.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const keyGap = (wordsPerMinute: number) => 12_000 / wordsPerMinute - 10;
 
 /**
@@ -275,6 +321,10 @@ const bursts = Effect.fnUntraced(function* (dx: number, dy: number) {
  * A wheel that eases over `duration`: a step each frame, sixty a second, slow at first and last,
  * so a scroll that viewers watch glides to where it goes. A style takes it as its `wheel`; a film
  * scrolls on its own time instead.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const eased =
   (duration: Duration.Input): InputStyle["wheel"] =>
@@ -302,7 +352,13 @@ export const eased =
     );
   };
 
-/** Input performed for viewers, with this pointer and pace. */
+/**
+ * Input performed for viewers, with this pointer and pace.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const performed = (options: {
   readonly pointer: MutableRef.MutableRef<Option.Option<Point>>;
   readonly motion: Motion.Planner;
@@ -321,12 +377,24 @@ export const performed = (options: {
   };
 };
 
-/** Input style in this fiber; plain input is the default. */
+/**
+ * Input style in this fiber; plain input is the default.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
 export const Current = Context.Reference<InputStyle>("effect-browser/InputStyle", {
   defaultValue: () => plain,
 });
 
-/** Apply a style through page input, including pages selected later by a browser adapter. */
+/**
+ * Apply a style through page input, including pages selected later by a browser adapter.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const provide: {
   (style: InputStyle): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   <A, E, R>(effect: Effect.Effect<A, E, R>, style: InputStyle): Effect.Effect<A, E, R>;

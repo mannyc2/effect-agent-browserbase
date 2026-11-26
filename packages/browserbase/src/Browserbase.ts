@@ -24,6 +24,7 @@
  * before is found again. `generations` supplies scoped resource generations to the generic
  * `Supervisor`; retry schedules and account policy belong to its caller.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import {
@@ -65,6 +66,11 @@ import {
 import * as CaptureConnection from "./internal/captureConnection.ts";
 import { releasing } from "./internal/releasing.ts";
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options extends Browser.Options {
   readonly session?: SessionOptions | undefined;
   /** Runtime-supplied Playwright CDP connection, shared by make, attach and supervision. */
@@ -84,7 +90,13 @@ export interface Options extends Browser.Options {
   readonly captureConnection?: boolean | undefined;
 }
 
-/** A browser on a Browserbase session. */
+/**
+ * A browser on a Browserbase session.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Hosted {
   readonly browser: Browser.Service;
   readonly session: Session;
@@ -96,7 +108,13 @@ export interface Hosted {
   readonly release: Effect.Effect<Release.Release>;
 }
 
-/** The session `layer` opened, with its browser and its release. */
+/**
+ * The session `layer` opened, with its browser and its release.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
 export class Browserbase extends Context.Service<Browserbase, Hosted>()(
   "@effect-browser/browserbase/Browserbase",
 ) {}
@@ -453,6 +471,10 @@ const start = Effect.fnUntraced(function* (
  * open looks for its session by the create's nonce, within `orphanSearch`, ends it, then fails with
  * the create's error. `release` disconnects the browser before it asks Browserbase to end the
  * session, so what fails meanwhile says it was released.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const make = Effect.fn("Browserbase.make")(function* (options: Options = {}) {
   return yield* start(options);
@@ -463,6 +485,10 @@ export const make = Effect.fn("Browserbase.make")(function* (options: Options = 
  * opened. This is resume: its pages keep their ids, their CDP target ids, so `browser.page(id)`
  * finds a page stored before. Closing the scope disconnects and leaves the session running;
  * `release` ends it. A session that has ended fails `Closed` by the session. It holds no context.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const attach = Effect.fn("Browserbase.attach")(function* (
   sessionId: string,
@@ -490,6 +516,10 @@ export const attach = Effect.fn("Browserbase.attach")(function* (
  * left running. It holds the context through the `ContextLease`, so it waits for a writer. A
  * session still running at the deadline makes it `Unconfirmed`, and leaves the context unsettled,
  * as a failure does.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const reconcile = Effect.fn("Browserbase.reconcile")(function* (
   contextId: string,
@@ -512,6 +542,10 @@ export const reconcile = Effect.fn("Browserbase.reconcile")(function* (
  * the read never runs beside a writer, which a site could sign out, and it reads what the last
  * writer saved, once that save settled. A session a writer before may have left saving to it is
  * ended first, as for `make`.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const verifyContext = Effect.fn("Browserbase.verifyContext")(function* <A, E, R>(
   contextId: string,
@@ -542,7 +576,13 @@ export const verifyContext = Effect.fn("Browserbase.verifyContext")(function* <A
   return yield* check(browser);
 }, Effect.scoped);
 
-/** A failed generation acquisition carries its own provider cleanup evidence. */
+/**
+ * A failed generation acquisition carries its own provider cleanup evidence.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class OpenFailed<E> extends Data.TaggedError("OpenFailed")<{
   readonly error: E;
   readonly cleanup?: Release.Release | undefined;
@@ -552,6 +592,11 @@ export class OpenFailed<E> extends Data.TaggedError("OpenFailed")<{
   }
 }
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface GenerationOptions<A, E, R> extends Options {
   /** Resources belong to the generation and close before its browser, including on failure. */
   readonly build: (hosted: Hosted) => Effect.Effect<A, E, R>;
@@ -559,7 +604,13 @@ export interface GenerationOptions<A, E, R> extends Options {
 
 type AcquisitionError = BrowserError | BrowserbaseError | ContextHeld | ContextRefused;
 
-/** Permanent provider refusal; a temporarily held context is retried. */
+/**
+ * Permanent provider refusal; a temporarily held context is retried.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.3.0
+ */
 export const refused = (error: unknown) =>
   Schema.is(ContextRefused)(error) ||
   (Schema.is(BrowserbaseError)(error) && !isTransient(error) && error.reason._tag !== "Decode");
@@ -568,6 +619,10 @@ export const refused = (error: unknown) =>
  * Browserbase's resource provider for `Supervisor.make`. It supplies exclusivity for persisted
  * contexts and a definite-failure predicate; retry schedules and account policy stay with callers.
  * Every failed try closes its scope before publishing its typed error and cleanup evidence.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const generations = <A, E, R>(
   options: GenerationOptions<A, E, R>,
@@ -619,13 +674,25 @@ export const generations = <A, E, R>(
 const provided = (hosted: Hosted) =>
   Context.make(Browserbase, hosted).pipe(Context.add(Browser.Browser, hosted.browser));
 
-/** A session for the layer's lifetime, as `Browserbase`, and its browser, as `Browser`. */
+/**
+ * A session for the layer's lifetime, as `Browserbase`, and its browser, as `Browser`.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layer = (
   options: Options = {},
 ): Layer.Layer<Browserbase | Browser.Browser, AcquisitionError, BrowserbaseClient> =>
   Layer.effectContext(Effect.map(make(options), provided));
 
-/** `layer`, with the options as `Config` values. */
+/**
+ * `layer`, with the options as `Config` values.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layerConfig = (
   config: Config.Wrap<Options>,
 ): Layer.Layer<

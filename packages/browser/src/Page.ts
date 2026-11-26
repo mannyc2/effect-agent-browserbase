@@ -17,6 +17,7 @@
  * screenshot's pixels. Mouse and keyboard input share a bounded pipeline, so pacing does not wait
  * for each protocol reply. Target lookup happens before the input is sent.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { type Clock, type Duration, Effect, Function, Schema } from "effect";
@@ -41,12 +42,29 @@ import {
 import { Correlation, FailFast } from "./internal/page/lane.ts";
 import * as Url from "./internal/url.ts";
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Point = Motion.Point;
 
-/** A ref from a snapshot, such as `"e12"`, or a viewport point. */
+/**
+ * A ref from a snapshot, such as `"e12"`, or a viewport point.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Target = string | Point;
 
-/** The target as it read before input. Point coordinates are never snapped to another position. */
+/**
+ * The target as it read before input. Point coordinates are never snapped to another position.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class ResolvedTarget extends Schema.Class<ResolvedTarget>(
   "effect-browser/Page/ResolvedTarget",
 )({
@@ -59,12 +77,41 @@ export class ResolvedTarget extends Schema.Class<ResolvedTarget>(
   href: Schema.optional(Schema.String),
 }) {}
 
-/** Action options share the execution codec. */
+/**
+ * Action options share the execution codec.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type ClickOptions = typeof ClickOptionsSchema.Type;
+
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type TypeOptions = typeof TypeOptionsSchema.Type;
+
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type PressOptions = typeof PressOptionsSchema.Type;
+
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type ScrollOptions = typeof ScrollOptionsSchema.Type;
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ReadyOptions {
   /** How long recorded content must stay unchanged. Screen stillness is a separate feature. */
   readonly quiet?: Duration.Input | undefined;
@@ -74,6 +121,10 @@ export interface ReadyOptions {
 /**
  * What the library knows of a page now, without asking it, each part with when it learned it, in
  * host monotonic milliseconds: a part's age is `at` less its time.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class State extends Schema.Class<State>("effect-browser/Page/State")({
   page: Schema.String,
@@ -107,9 +158,18 @@ export class State extends Schema.Class<State>("effect-browser/Page/State")({
  *
  * Facts never come from what an element's text says. What an input means, such as a payment
  * or a deletion, takes a judge that reads the evidence in the {@link InputRequest}.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const Fact = Guard.Fact;
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export type Fact = typeof Fact.Type;
 
 /**
@@ -121,6 +181,10 @@ export type Fact = typeof Fact.Type;
  * field is replaced with {@link redacted}, here and in the recorded `Action`, and its key events
  * record `Unidentified` keys; `press` records the keys it is given. Validation before dispatch
  * binds the facts and the target, not the text around it, which live pages change freely.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Page/InputRequest")({
   page: Schema.String,
@@ -167,18 +231,30 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Pag
 /**
  * What replaces text typed into a `secret` field, in requests and in the recorded `Action`, and a
  * credential's value in every address the library reports.
+ *
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
  */
 export const redacted = Url.withheld;
 
 /**
  * Whether a value is a page the library made: what a function over a page, callable with the page
  * first or last, tells it from its other arguments by.
+ *
+ * @stability stable
+ * @category guards
+ * @since 0.3.0
  */
 export const isPage: (u: unknown) => u is Page = isLibraryPage;
 
 /**
  * Run page operations without waiting their turn: on a page busy with other operations, each fails
  * `Busy` at once, and `Browser.newPage` on a browser with `maxPages` open fails `Limit` at once.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
   Effect.provideService(effect, FailFast, true);
@@ -186,6 +262,10 @@ export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect
 /**
  * Give every action `effect` performs a caller's id, such as a model's tool call id, which its
  * recorded `Action` carries as `correlation`.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const correlate: {
   (id: string): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
@@ -196,21 +276,43 @@ export const correlate: {
     Effect.provideService(effect, Correlation, id),
 );
 
-/** Succeed to allow, fail to deny, or await an external signal to hold the input. */
+/**
+ * Succeed to allow, fail to deny, or await an external signal to hold the input.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
-/** Script values cross the page boundary through the caller's Schema. A bundler may rewrite functions. */
+/**
+ * Script values cross the page boundary through the caller's Schema. A bundler may rewrite functions.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ScriptOptions<A, Arg> {
   readonly arg: Arg;
   readonly result: Schema.Codec<A, unknown>;
 }
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ActOptions<A, Arg> extends ScriptOptions<A, Arg> {
   readonly document: number;
   /** Supplying the read's connection also refuses a document counter from another connection. */
   readonly connection?: string | undefined;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Page {
   /** What the page does behind its types' modules' functions, such as `Snapshot.read`. */
   readonly [key]: Implementation;

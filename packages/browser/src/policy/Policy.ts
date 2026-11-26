@@ -14,6 +14,7 @@
  * whatever the judge reads. A judge that fails or runs out of time leaves the input unjudged,
  * which `make` refuses.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Cause, Context, Duration, Effect, Function, Record, Result, Schema } from "effect";
@@ -22,7 +23,13 @@ import { type AiError, Decision, DecisionModel, LanguageModel, Prompt } from "ef
 import { PolicyDenied } from "../BrowserError.ts";
 import { Fact, type InputGuard, InputRequest } from "../Page.ts";
 
-/** What an input means. Only a judge reading the evidence can recognise these. */
+/**
+ * What an input means. Only a judge reading the evidence can recognise these.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Risk = Schema.Literals([
   "financial",
   "account",
@@ -32,6 +39,11 @@ export const Risk = Schema.Literals([
   "secret",
 ]);
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Risk = typeof Risk.Type;
 
 // What each risk covers, in the words both judges are given.
@@ -48,7 +60,13 @@ const covers: { readonly [K in Risk]: string } = {
 
 const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
 
-/** A judge's reading of one input. */
+/**
+ * A judge's reading of one input.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Judgement extends Schema.Class<Judgement>("effect-browser/policy/Policy/Judgement")({
   /** For each risk, the probability that the input does it. */
   risks: Schema.Struct({
@@ -68,12 +86,22 @@ export class Judgement extends Schema.Class<Judgement>("effect-browser/policy/Po
 /**
  * The user's task: what authorizes a risky input. `PageControl` provides its task to every input it
  * makes; provide one around other calls with `Effect.provideService`.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
  */
 export const Task = Context.Reference<string | undefined>("effect-browser/policy/Policy/Task", {
   defaultValue: () => undefined,
 });
 
-/** Reads what an input means, with the user's task from `Task`. */
+/**
+ * Reads what an input means, with the user's task from `Task`.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Judge = (request: InputRequest) => Effect.Effect<Judgement, AiError.AiError>;
 
 /** What a judge is shown. Everything under `evidence` is the page's to write. */
@@ -148,6 +176,10 @@ const unit = (value: number) => Math.min(1, Math.max(0, value));
 /**
  * A judge that asks the `LanguageModel` in context for a structured review. `rules` adds the
  * user's own policy in plain words, such as "Purchases under $20 are fine".
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const reviewer = Effect.fnUntraced(function* (
   options: { readonly rules?: string | undefined } = {},
@@ -196,6 +228,10 @@ const decisions = Decision.make({
  * A judge that answers one probability per risk from the `DecisionModel` in context, all in one
  * call. Jev is one: `TypeSafeDecisionModel.layer({ model: "jev-1.13.0" })` from
  * `@effect/ai-typesafe` provides it.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const decider: Effect.Effect<Judge, never, DecisionModel.DecisionModel> = Effect.gen(
   function* () {
@@ -219,6 +255,10 @@ const unsure = (value: number) => value > 0.2 && value < 0.8;
 /**
  * `first`'s judgement, or `second`'s when `first` is unsure: a risk between 0.2 and 0.8, or a
  * likely risk whose request is. A confident mistake by `first` stands.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const escalate: {
   (second: Judge): (first: Judge) => Judge;
@@ -237,6 +277,11 @@ export const escalate: {
       }),
 );
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options {
   /** Reads what an input means. Without one, only origins and facts decide. */
   readonly judge?: Judge | undefined;
@@ -265,6 +310,10 @@ const originOf = (url: string) => {
  * input on a page or towards a destination outside `origins`, input with a fact in `deny`, and,
  * when a judge finds a risk, input the task does not ask for. An input the judge could not judge
  * in time is denied with the judge's failure as the denial's cause.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const make = (options: Options = {}): InputGuard => {
   const threshold = options.threshold ?? 0.5;

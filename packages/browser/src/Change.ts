@@ -14,6 +14,7 @@
  * shadow roots and SVG; a value a script sets; and a class that reveals an element the record has
  * not seen before, such as a toast already on the page, though its later changes are seen.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { type Effect, Function, Schema } from "effect";
@@ -27,11 +28,25 @@ import type { Page } from "./Page.ts";
 /**
  * `text` changed; `appeared` and `disappeared`, whether added or removed or shown or hidden;
  * `brief`, appeared and gone again by the window's end; `value`, a field's; `title`, the document's.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const Kind = Schema.Literals(["text", "appeared", "disappeared", "brief", "value", "title"]);
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Kind = typeof Kind.Type;
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Change extends Schema.Class<Change>("effect-browser/Change")({
   kind: Kind,
   /**
@@ -75,6 +90,11 @@ export class Change extends Schema.Class<Change>("effect-browser/Change")({
   cause: Schema.optional(Schema.Finite),
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Changes extends Schema.Class<Changes>("effect-browser/Change/Changes")({
   /** The page's document these changes belong to, as `Navigated` counts them. */
   document: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -93,7 +113,13 @@ export class Changes extends Schema.Class<Changes>("effect-browser/Change/Change
   changes: Schema.Array(Change),
 }) {}
 
-/** The window `read` reads, and whether to show what fields hold. */
+/**
+ * The window `read` reads, and whether to show what fields hold.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ChangesOptions {
   /**
    * Where the window starts: the changes a previous read returned, to continue exactly where they
@@ -115,6 +141,10 @@ export interface ChangesOptions {
  * What visibly changed over a window, in one call to the page. The first read starts the page's
  * record, so it finds none; from then the page records, and from the start of each later
  * document, until nobody has read it for two minutes.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const read: {
   (options?: ChangesOptions): (page: Page) => Effect.Effect<Changes, BrowserError>;

@@ -2,6 +2,7 @@
  * Pictures of a page: its viewport as a frame of a stated age, crops of it, its screencast with
  * frames stamped by the browser's clock, and how it paints. Each function takes the page first.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { type Duration, type Effect, Function, type Scope, Schema, type Stream } from "effect";
@@ -10,7 +11,13 @@ import type { BrowserError } from "./BrowserError.ts";
 import { functionsOf, isPage } from "./internal/page/functions.ts";
 import type { Page } from "./Page.ts";
 
-/** An encoded picture with its pixel dimensions. Crops also need their viewport origin. */
+/**
+ * An encoded picture with its pixel dimensions. Crops also need their viewport origin.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Image extends Schema.Class<Image>("effect-browser/Frame/Image")({
   data: Schema.Uint8Array,
   mediaType: Schema.Literals(["image/jpeg", "image/png"]),
@@ -21,7 +28,13 @@ export class Image extends Schema.Class<Image>("effect-browser/Frame/Image")({
 const Nonnegative = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
-/** Native CDP paint time mapped to the owning host clock, with transport uncertainty retained. */
+/**
+ * Native CDP paint time mapped to the owning host clock, with transport uncertainty retained.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class BrowserPaint extends Schema.TaggedClass<BrowserPaint>(
   "effect-browser/Frame/BrowserPaint",
 )("BrowserPaint", {
@@ -30,7 +43,13 @@ export class BrowserPaint extends Schema.TaggedClass<BrowserPaint>(
   uncertaintyMillis: Nonnegative,
 }) {}
 
-/** A screenshot's host capture interval; it has no native browser paint timestamp. */
+/**
+ * A screenshot's host capture interval; it has no native browser paint timestamp.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Screenshot extends Schema.TaggedClass<Screenshot>("effect-browser/Frame/Screenshot")(
   "Screenshot",
   {
@@ -43,6 +62,10 @@ export class Screenshot extends Schema.TaggedClass<Screenshot>("effect-browser/F
  * An image and its timing evidence. Paint time and screenshot capture time cannot be confused in
  * serialized data. `receivedAt` records delivery on the owning host's monotonic clock; it does
  * not make an old paint current.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   page: Schema.String,
@@ -86,7 +109,13 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   }
 }
 
-/** Equal capture lineage survives an image copy; untagged pictures retain object identity only. */
+/**
+ * Equal capture lineage survives an image copy; untagged pictures retain object identity only.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.3.0
+ */
 export const sameCapture = (frame: Frame, other: Frame | undefined): boolean =>
   other !== undefined &&
   (frame === other ||
@@ -102,6 +131,10 @@ export const sameCapture = (frame: Frame, other: Frame | undefined): boolean =>
  * A page's capture counts, over its life or a window of the latest minute: what Chromium sent,
  * what readers got, and why the rest went no further. Frames that came late are counted apart from
  * those a reader lost.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Frame/CaptureStats")({
   received: Count,
@@ -147,6 +180,10 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Fra
  * Settings for a page's one native capture. Readers that join a running capture share its
  * settings: one without options accepts them, and one whose explicit options differ fails with
  * `InvalidRequest`.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
  */
 export interface ScreencastOptions {
   /** JPEG quality, 0 to 100. Defaults to 80. */
@@ -155,7 +192,13 @@ export interface ScreencastOptions {
   readonly size?: { readonly width: number; readonly height: number } | undefined;
 }
 
-/** An integer rectangle in viewport CSS pixels. */
+/**
+ * An integer rectangle in viewport CSS pixels.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Region extends Schema.Class<Region>("effect-browser/Frame/Region")({
   x: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   y: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -163,7 +206,13 @@ export class Region extends Schema.Class<Region>("effect-browser/Frame/Region")(
   height: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
-/** A crop and its viewport origin: add that origin to a point read from the crop. */
+/**
+ * A crop and its viewport origin: add that origin to a point read from the crop.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Zoom extends Schema.Class<Zoom>("effect-browser/Frame/Zoom")({
   page: Schema.String,
   region: Region,
@@ -173,6 +222,10 @@ export class Zoom extends Schema.Class<Zoom>("effect-browser/Frame/Zoom")({
 /**
  * How current a picture must be, and how a new one is taken. The newest screencast frame serves
  * when it qualifies, at no cost; otherwise a new screenshot is taken.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
  */
 export interface FrameOptions {
   /**
@@ -197,7 +250,13 @@ export interface FrameOptions {
   readonly scale?: "css" | "device" | undefined;
 }
 
-/** How a page paints for a scope; see `paint`. */
+/**
+ * How a page paints for a scope; see `paint`.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Paint {
   /** Device pixels to each CSS pixel, more than 0 and at most 4. The layout keeps its size. */
   readonly scale?: number | undefined;
@@ -205,7 +264,13 @@ export interface Paint {
   readonly scrollbars?: boolean | undefined;
 }
 
-/** Scoped access to one page's shared capture and its current-document evidence. */
+/**
+ * Scoped access to one page's shared capture and its current-document evidence.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Capture {
   /**
    * Screencast frames for as long as the stream runs. Concurrent streams share one screencast and
@@ -232,6 +297,10 @@ export interface Capture {
  * screenshot timed by the host interval in which it was taken. A frame of a stated age that the
  * screencast has costs nothing and waits for no action; one that must follow the latest input, or
  * a new screenshot, waits for the action in flight.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const read: {
   (options?: FrameOptions): (page: Page) => Effect.Effect<Frame, BrowserError>;
@@ -244,6 +313,10 @@ export const read: {
 /**
  * A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels.
  * A crop is always a new picture; with `scale: "device"` it has the screen's own pixels.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const zoom: {
   (
@@ -261,7 +334,13 @@ export const zoom: {
     functionsOf(page).zoom(region, options),
 );
 
-/** A scoped lease on the page's capture, which starts at once, independently of its first frame. */
+/**
+ * A scoped lease on the page's capture, which starts at once, independently of its first frame.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const capture: {
   (options?: ScreencastOptions): (page: Page) => Effect.Effect<Capture, BrowserError, Scope.Scope>;
   (page: Page, options?: ScreencastOptions): Effect.Effect<Capture, BrowserError, Scope.Scope>;
@@ -270,7 +349,13 @@ export const capture: {
   (page: Page, options?: ScreencastOptions) => functionsOf(page).capture(options),
 );
 
-/** The page's screencast frames painted within the browser's `frameHistory` of the newest, oldest first. */
+/**
+ * The page's screencast frames painted within the browser's `frameHistory` of the newest, oldest first.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const recent = (page: Page): Effect.Effect<ReadonlyArray<Frame>> =>
   functionsOf(page).recentFrames;
 
@@ -281,6 +366,10 @@ export const recent = (page: Page): Effect.Effect<ReadonlyArray<Frame>> =>
  * from the next after the scope, so paint, then load the page, then measure it. One at a time. A
  * browser this library launched paints at the scale of its launch (Chromium's
  * `deviceScaleFactor`), and refuses another.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const paint: {
   (options: Paint): (page: Page) => Effect.Effect<void, BrowserError, Scope.Scope>;

@@ -1,6 +1,9 @@
 /**
  * Seed a deterministic page without executing page code or inferring browser effects, or give a
  * page pictures of a test's own.
+ *
+ * @stability stable
+ * @since 0.3.0
  */
 import type { Effect, Scope } from "effect";
 
@@ -11,14 +14,44 @@ import type { Page } from "../Page.ts";
 import type { Seed } from "./internal/model.ts";
 import { makeIn } from "./internal/page.ts";
 
-export type { Seed, Element, ChangeTrack } from "./internal/model.ts";
+export type {
+  /**
+   * @stability stable
+   * @category models
+   * @since 0.3.0
+   */
+  Seed,
+  /**
+   * @stability stable
+   * @category models
+   * @since 0.3.0
+   */
+  Element,
+  /**
+   * @stability stable
+   * @category models
+   * @since 0.3.0
+   */
+  ChangeTrack,
+} from "./internal/model.ts";
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = (
   seed: Seed = {},
   options: { readonly id?: string; readonly session?: string; readonly connection?: string } = {},
 ) => makeIn(seed, options);
 
-/** What a page's `Frame` functions read, each under its function's name. */
+/**
+ * What a page's `Frame` functions read, each under its function's name.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Pictures {
   readonly read: (options?: Frame.FrameOptions) => Effect.Effect<Frame.Frame, BrowserError>;
   readonly zoom: (
@@ -35,6 +68,10 @@ export interface Pictures {
 /**
  * A copy of `page` whose `Frame` functions read what `pictures` makes of its own, so a test can
  * watch what a reader took or give it pictures of its own making. The page's members are its own.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const withPictures = <P extends Page>(page: P, pictures: (own: Pictures) => Pictures): P => {
   const functions = functionsOf(page);

@@ -1,4 +1,9 @@
-/** Typed browser actions, shared by execution, policy, recordings and replay. */
+/**
+ * Typed browser actions, shared by execution, policy, recordings and replay.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { Function, Schema } from "effect";
 
 import { Point } from "./internal/geometry.ts";
@@ -8,12 +13,22 @@ const Ref = Schema.String.check(Schema.isPattern(/^e\d+$/));
 const Target = Schema.Union([Ref, Point]);
 const optionalNumber = Schema.optional(Schema.Finite);
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export const ClickOptions = Schema.Struct({
   button: Schema.optional(Schema.Literals(["left", "right", "middle"])),
   clickCount: optionalNumber,
   holdMillis: optionalNumber,
 });
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export const TypeOptions = Schema.Struct({
   into: Schema.optional(Ref),
   replace: Schema.optional(Schema.Boolean),
@@ -21,18 +36,33 @@ export const TypeOptions = Schema.Struct({
   secret: Schema.optional(Schema.Boolean),
 });
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export const PressOptions = Schema.Struct({
   on: Schema.optional(Ref),
   times: optionalNumber,
   holdMillis: optionalNumber,
 });
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export const ScrollOptions = Schema.Struct({
   at: Schema.optional(Target),
   dx: optionalNumber,
   dy: optionalNumber,
 });
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Action = Schema.TaggedUnion({
   Click: { target: Target, options: Schema.optional(ClickOptions) },
   Hover: { target: Target },
@@ -48,8 +78,18 @@ export const Action = Schema.TaggedUnion({
   Act: { document: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) },
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Action = typeof Action.Type;
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Name = Schema.Literals([
   "click",
   "hover",
@@ -64,9 +104,20 @@ export const Name = Schema.Literals([
   "act",
 ]);
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Name = typeof Name.Type;
 
-/** Effective semantics suitable for policy and records; credentials never survive. */
+/**
+ * Effective semantics suitable for policy and records; credentials never survive.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const recorded: {
   (revealed: boolean): (value: Action) => Action;
   (value: Action, revealed: boolean): Action;
@@ -103,9 +154,20 @@ const names: Record<Action["_tag"], Name> = {
   Act: "act",
 };
 
+/**
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const nameOf = (action: Action): Name => names[action._tag];
 
-/** The primary target, if this action addresses an element or point. */
+/**
+ * The primary target, if this action addresses an element or point.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const targetOf = (action: Action) => {
   switch (action._tag) {
     case "Click":

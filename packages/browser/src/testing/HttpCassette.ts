@@ -1,4 +1,9 @@
-/** HTTP record/replay keeps provider codecs in the test and reserves every live request. */
+/**
+ * HTTP record/replay keeps provider codecs in the test and reserves every live request.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { Config, Context, Effect, Layer, Ref, Schema } from "effect";
 import {
   HttpClient,
@@ -9,7 +14,13 @@ import {
 
 import { canonical, isScriptError, ScriptError } from "./TestModel.ts";
 
-/** Request identities contain hashes only; credentials and prompt text are never written. */
+/**
+ * Request identities contain hashes only; credentials and prompt text are never written.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Exchange = Schema.Struct({
   key: Schema.String,
   response: Schema.Struct({
@@ -19,6 +30,11 @@ export const Exchange = Schema.Struct({
   }),
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Exchange = typeof Exchange.Type;
 
 type Paid = {
@@ -31,6 +47,11 @@ type Paid = {
   ) => Effect.Effect<number, ScriptError>;
 };
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type Options =
   | {
       readonly mode: "replay";
@@ -91,7 +112,13 @@ const responseOf = (request: HttpClientRequest.HttpClientRequest, response: Exch
     new Response([204, 205, 304].includes(response.status) ? null : response.body, response),
   );
 
-/** Construct the same HTTP seam for replay, recording, or explicitly admitted live runs. */
+/**
+ * Construct the same HTTP seam for replay, recording, or explicitly admitted live runs.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = (options: Options) =>
   Effect.gen(function* () {
     if (options.mode !== "replay") {
@@ -179,11 +206,22 @@ export const make = (options: Options) =>
     };
   });
 
-/** Provide this HTTP layer beneath an actual provider model layer in every mode. */
+/**
+ * Provide this HTTP layer beneath an actual provider model layer in every mode.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
 export class Cassette extends Context.Service<Cassette, Effect.Success<ReturnType<typeof make>>>()(
   "effect-browser/testing/HttpCassette",
 ) {}
 
+/**
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layer = (options: Options) =>
   Layer.unwrap(
     Effect.map(make(options), (cassette) =>
@@ -194,7 +232,13 @@ export const layer = (options: Options) =>
     ),
   );
 
-/** A scenario chooses its mode through Config while retaining the same provider and assertions. */
+/**
+ * A scenario chooses its mode through Config while retaining the same provider and assertions.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const configured = (
   options: Paid & {
     readonly exchanges: ReadonlyArray<Exchange>;

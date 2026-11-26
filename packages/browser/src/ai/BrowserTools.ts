@@ -21,6 +21,7 @@
  * and the `Pictures` for one run, on a page or a browser's tabs, with the run's `Controller` for an
  * application's own tools on the same tabs.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import {
@@ -68,7 +69,13 @@ const ref = absent(Schema.String, {
   description: "A ref from the latest observation, such as e12",
 });
 
-/** What a pointer tool did, and what followed on its page while it ran. */
+/**
+ * What a pointer tool did, and what followed on its page while it ran.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Receipt = Schema.Struct({
   did: Schema.String,
   action: Schema.optional(Action),
@@ -88,7 +95,13 @@ const pointerTool = <const Name extends string, Parameters extends Schema.Struct
     failureMode: "return",
   });
 
-/** Tools for what has no ref, by viewport point and by keyboard focus. */
+/**
+ * Tools for what has no ref, by viewport point and by keyboard focus.
+ *
+ * @stability stable
+ * @category toolkits
+ * @since 0.3.0
+ */
 export const Pointer = Toolkit.make(
   pointerTool("click_at", "Click a point of the screenshot, such as on a canvas game or a chart.", {
     x: pixel("x"),
@@ -154,6 +167,10 @@ export const Pointer = Toolkit.make(
 /**
  * The tool that asks for a screenshot before the next turn, for `vision: "ask"` and `"page"`, which
  * otherwise show none on some turns. The layer serves it whether or not the agent has it.
+ *
+ * @stability stable
+ * @category toolkits
+ * @since 0.3.0
  */
 export const Look = Toolkit.make(
   Tool.make("look", {
@@ -187,7 +204,13 @@ const pageTool = <
     failureMode: "return",
   });
 
-/** Tools that inspect, navigate, scroll, wait, press keys on refs and select tabs. */
+/**
+ * Tools that inspect, navigate, scroll, wait, press keys on refs and select tabs.
+ *
+ * @stability stable
+ * @category toolkits
+ * @since 0.3.0
+ */
 export const Control = Toolkit.make(
   pageTool(
     "inspect",
@@ -256,6 +279,10 @@ export const Control = Toolkit.make(
 /**
  * The tool that finds lines of the whole page's outline, in view or not. The layer serves it
  * whether or not the agent has it.
+ *
+ * @stability stable
+ * @category toolkits
+ * @since 0.3.0
  */
 export const Find = Toolkit.make(
   pageTool(
@@ -300,6 +327,10 @@ const batched = Toolkit.make(
 /**
  * The controller of the run `layer` serves, for an application's own tools beside these, such as a
  * chart's: they act on the tab the model sees now, with the run's task, and say what followed.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
  */
 export class Controller extends Context.Service<Controller, PageControl.Controller>()(
   "effect-browser/ai/BrowserTools/Controller",
@@ -310,6 +341,10 @@ export class Controller extends Context.Service<Controller, PageControl.Controll
  * screenshot when `vision` says so, and the crops `zoom` took since the last turn, to add to the
  * coming request and never keep. A loop that shows the page its own way takes the crops with
  * `crops` instead, as the model is shown them for the tab `page`. Either hands each crop over once.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
  */
 export class Pictures extends Context.Service<
   Pictures,
@@ -319,9 +354,20 @@ export class Pictures extends Context.Service<
   }
 >()("effect-browser/ai/BrowserTools/Pictures") {}
 
-/** What the model sees of the page; see `LayerOptions`. */
+/**
+ * What the model sees of the page; see `LayerOptions`.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Vision = boolean | "ask" | "page";
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface LayerOptions extends PageControl.Options {
   readonly initialZooms?: ReadonlyArray<Frame.Zoom> | undefined;
   /**
@@ -719,6 +765,10 @@ const batchedTools = tooling(batched, (actions) =>
 /**
  * The tools and their layer. `"batched"`, the default, lets `act` take up to eight actions; with
  * `"single"`, it takes one.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export function make(options?: { readonly mode?: "batched" }): typeof batchedTools;
 export function make(options: { readonly mode: "single" }): typeof singleTools;

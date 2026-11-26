@@ -16,6 +16,7 @@
  * before it writes. A writer says how it leaves the context once, as it lets the hold go; a hold
  * that never says, as when its process ends first, must read as `unsettled` to the next.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Context, Effect, Layer, Schema, type Scope, Semaphore } from "effect";
@@ -24,6 +25,10 @@ import { Context, Effect, Layer, Schema, type Scope, Semaphore } from "effect";
  * The stored context could not be held for writing: a session that saves to it may still run, as
  * its sessions could not be confirmed ended, or the lease itself could not be taken. The next try
  * clears it again.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
  */
 export class ContextHeld extends Schema.TaggedError<ContextHeld>(
   "@effect-browser/browserbase/ContextLease/ContextHeld",
@@ -36,7 +41,13 @@ export class ContextHeld extends Schema.TaggedError<ContextHeld>(
   }
 }
 
-/** The lease refuses this writer outright; retrying cannot change its policy. */
+/**
+ * The lease refuses this writer outright; retrying cannot change its policy.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class ContextRefused extends Schema.TaggedError<ContextRefused>(
   "@effect-browser/browserbase/ContextLease/ContextRefused",
 )("ContextRefused", {
@@ -48,7 +59,13 @@ export class ContextRefused extends Schema.TaggedError<ContextRefused>(
   }
 }
 
-/** A writer's hold on a stored context, for the scope `hold` was given. */
+/**
+ * A writer's hold on a stored context, for the scope `hold` was given.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Hold {
   /** Whether a session that saves to the context may still run, as the writer before left it. */
   readonly unsettled: boolean;
@@ -56,6 +73,11 @@ export interface Hold {
   readonly leave: (unsettled: boolean) => Effect.Effect<void>;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Service {
   /**
    * Hold the context as its only writer until the scope closes, waiting while another holds it.
@@ -132,10 +154,22 @@ const inProcess = (): Service => {
   };
 };
 
-/** The lease that `Browserbase` holds stored contexts through; the process's own by default. */
+/**
+ * The lease that `Browserbase` holds stored contexts through; the process's own by default.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
 export const ContextLease = Context.Reference<Service>("@effect-browser/browserbase/ContextLease", {
   defaultValue: inProcess,
 });
 
-/** A lease within this process of its own, apart from the default one that the process shares. */
+/**
+ * A lease within this process of its own, apart from the default one that the process shares.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layer: Layer.Layer<never> = Layer.sync(ContextLease, inProcess);
