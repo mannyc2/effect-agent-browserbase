@@ -23,7 +23,9 @@ import { Context, Effect, Layer, Schema, type Scope, Semaphore } from "effect";
  * its sessions could not be confirmed ended, or the lease itself could not be taken. The next try
  * clears it again.
  */
-export class ContextHeld extends Schema.TaggedError<ContextHeld>()("ContextHeld", {
+export class ContextHeld extends Schema.TaggedError<ContextHeld>(
+  "@effect-browser/browserbase/ContextLease/ContextHeld",
+)("ContextHeld", {
   context: Schema.String,
   detail: Schema.String,
 }) {
@@ -33,7 +35,9 @@ export class ContextHeld extends Schema.TaggedError<ContextHeld>()("ContextHeld"
 }
 
 /** The lease refuses this writer outright; retrying cannot change its policy. */
-export class ContextRefused extends Schema.TaggedError<ContextRefused>()("ContextRefused", {
+export class ContextRefused extends Schema.TaggedError<ContextRefused>(
+  "@effect-browser/browserbase/ContextLease/ContextRefused",
+)("ContextRefused", {
   context: Schema.String,
   detail: Schema.String,
 }) {

@@ -7,7 +7,7 @@ import {
   type BrowserError,
   Closed,
   Failed,
-  type Reason,
+  type BrowserErrorReason,
 } from "../../BrowserError.ts";
 import type * as Page from "../../Page.ts";
 
@@ -26,7 +26,7 @@ export const make = Effect.fnUntraced(function* (
   registrations: Registrations,
   closedBy: () => Closed["cause"],
 ) {
-  const failed = (reason: Reason) => Exit.fail(undispatched("newPage", reason));
+  const failed = (reason: BrowserErrorReason) => Exit.fail(undispatched("newPage", reason));
 
   let active: Mark | undefined;
   const gone = Deferred.makeUnsafe<never, BrowserError>();

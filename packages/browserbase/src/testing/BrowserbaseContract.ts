@@ -15,7 +15,9 @@ import { BrowserbaseClient, type Session } from "../BrowserbaseClient.ts";
 import type { BrowserbaseError } from "../BrowserbaseError.ts";
 
 /** A check found the API behaving otherwise. */
-export class Broken extends Schema.TaggedError<Broken>()("Broken", {
+export class Broken extends Schema.TaggedError<Broken>(
+  "@effect-browser/browserbase/testing/BrowserbaseContract/Broken",
+)("Broken", {
   check: Schema.String,
   detail: Schema.String,
 }) {
