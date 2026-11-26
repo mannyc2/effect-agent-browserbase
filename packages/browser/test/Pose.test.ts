@@ -6,8 +6,11 @@ import { Duration, Effect, Stream } from "effect";
 import { PNG } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
+import * as Change from "../src/Change.ts";
 import * as Layout from "../src/Layout.ts";
 import type { Page } from "../src/Page.ts";
+import * as PageTime from "../src/PageTime.ts";
+import * as Pose from "../src/Pose.ts";
 import * as Film from "../src/presentation/Film.ts";
 
 // A button whose every property eases over a second, as many do, and a box the page centres on
@@ -28,7 +31,7 @@ const picks = {
 } as const;
 
 const boxes = (page: Page) =>
-  Effect.map(page.layout(picks), (layout) => ({
+  Effect.map(Layout.measure(page, picks), (layout) => ({
     box: Layout.place(layout, "box")?.box,
     centred: Layout.place(layout, "centred")?.box,
   }));
@@ -45,15 +48,15 @@ const near = (
 layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
-})("Page.poses", (it) => {
+})("Pose.make", (it) => {
   it.effect("poses an element about a point where it is drawn, past the page's transitions", () =>
     Effect.gen(function* () {
       const browser = yield* Browser;
       const tab = yield* browser.newPage(page);
-      const layout = yield* tab.layout(picks);
+      const layout = yield* Layout.measure(tab, picks);
       const box = Layout.place(layout, "box")?.ref ?? "";
       const centred = Layout.place(layout, "centred")?.ref ?? "";
-      const recorded = yield* tab.changes();
+      const recorded = yield* Change.read(tab);
 
       near(
         Layout.place(layout, "centred")?.box,
@@ -63,7 +66,7 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const poses = yield* tab.poses;
+          const poses = yield* Pose.make(tab);
 
           yield* poses.set([{ ref: box, dx: 10, dy: -5 }]);
           near((yield* boxes(tab)).box, { x: 110, y: 95, width: 80, height: 40 }, "moved");
@@ -84,7 +87,7 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
       const after = yield* boxes(tab);
 
       near(after.centred, { x: 370, y: 100, width: 60, height: 60 }, "centred, put back");
-      assert.deepStrictEqual((yield* tab.changes({ since: recorded })).changes, []);
+      assert.deepStrictEqual((yield* Change.read(tab, { since: recorded })).changes, []);
     }),
   );
 
@@ -95,8 +98,8 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
       const browser = yield* Browser;
       const tab = yield* browser.newPage(page);
 
-      const place = Layout.place(yield* tab.layout(picks), "box");
-      const recorded = yield* tab.changes();
+      const place = Layout.place(yield* Layout.measure(tab, picks), "box");
+      const recorded = yield* Change.read(tab);
 
       if (place === undefined) return assert.fail("the box");
       const clip = { x: 95, y: 95, width: 90, height: 50 };
@@ -110,13 +113,13 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
 
       assert.deepStrictEqual([picture.width, picture.height], [180, 100]);
       assert.isTrue(inked(picture.data), "the box's picture");
-      const poses = yield* tab.poses;
+      const poses = yield* Pose.make(tab);
 
       yield* poses.set([{ ref: place.ref, sx: 0, sy: 0 }]);
       const lifted = yield* tab.screenshot({ clip, format: "png", scale: "device" });
 
       assert.isFalse(inked(lifted.data), "nothing where the box was");
-      assert.deepStrictEqual((yield* tab.changes({ since: recorded })).changes, []);
+      assert.deepStrictEqual((yield* Change.read(tab, { since: recorded })).changes, []);
     }).pipe(Effect.scoped),
   );
 
@@ -124,15 +127,15 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
     Effect.gen(function* () {
       const browser = yield* Browser;
       const tab = yield* browser.newPage(page);
-      const layout = yield* tab.layout(picks);
+      const layout = yield* Layout.measure(tab, picks);
       const box = Layout.place(layout, "box")?.ref ?? "";
       const icon = Layout.place(layout, "icon")?.ref ?? "";
-      const poses = yield* tab.poses;
+      const poses = yield* Pose.make(tab);
 
       const reason = <A, E extends { reason: { _tag: string } }>(effect: Effect.Effect<A, E>) =>
         Effect.map(Effect.flip(effect), (error) => error.reason._tag);
 
-      assert.strictEqual(yield* reason(Effect.scoped(tab.poses)), "InvalidRequest");
+      assert.strictEqual(yield* reason(Effect.scoped(Pose.make(tab))), "InvalidRequest");
       assert.strictEqual(yield* reason(poses.set([{ ref: icon, dx: 1 }])), "InvalidRequest");
       assert.strictEqual(
         yield* reason(poses.set([{ ref: box, dx: Number.NaN }])),
@@ -147,8 +150,8 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
     Effect.gen(function* () {
       const browser = yield* Browser;
       const tab = yield* browser.newPage(page);
-      const box = Layout.place(yield* tab.layout(picks), "box")?.ref ?? "";
-      const time = yield* tab.hold;
+      const box = Layout.place(yield* Layout.measure(tab, picks), "box")?.ref ?? "";
+      const time = yield* PageTime.hold(tab);
       const step = { scroll: 50, poses: [{ ref: box, dy: 30 }] };
 
       assert.strictEqual(
@@ -156,7 +159,7 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
         "InvalidRequest",
         "the poses are not open",
       );
-      yield* tab.poses;
+      yield* Pose.make(tab);
       assert.deepStrictEqual(yield* time.advance("10 millis", step), { x: 0, y: 50 });
       near((yield* boxes(tab)).box, { x: 100, y: 80, width: 80, height: 40 }, "posed, scrolled");
 

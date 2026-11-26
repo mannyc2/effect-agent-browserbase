@@ -1,8 +1,8 @@
 /**
- * Choosing the one element a recorded subject names, among those `find` gives for its role and
- * name. Context tells them apart, and an element that does not repeat every part of the recorded
- * context is another subject, so a sole element left once its own has gone, such as Alice's
- * "Remove" after Bob has left, drifts rather than stands in:
+ * Choosing the one element a recorded subject names, among those `Snapshot.find` gives for its
+ * role and name. Context tells them apart, and an element that does not repeat every part of the
+ * recorded context is another subject, so a sole element left once its own has gone, such as
+ * Alice's "Remove" after Bob has left, drifts rather than stands in:
  *
  * - a row is read whole: a row named "Wrapped BTC" is not the row "BTC". Laid out again without
  *   rows, as cards, one of the element's fields must start with the row's words;
@@ -17,7 +17,7 @@ import { Effect, Schema } from "effect";
 
 import type { Subject, SubjectContext } from "../../BrowserEvent.ts";
 import { match } from "../../internal/matching.ts";
-import type { Found } from "../../Page.ts";
+import type { Found } from "../../Snapshot.ts";
 
 /** Nothing on the page has the step's role and name. */
 export class Missing extends Schema.TaggedError<Missing>("effect-browser/walk/Walk/Missing")(

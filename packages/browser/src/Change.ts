@@ -4,7 +4,7 @@
  * shown at the window's start and at its end, how often it changed between, where it is on the
  * page, and the input it followed, where it was that input's doing.
  *
- * `Page.changes` reads it. A page records once something reads its changes: from then, and from the
+ * `read` reads it. A page records once something reads its changes: from then, and from the
  * start of each later document once it is parsed, until nobody has read it for two minutes. A page
  * nobody reads records nothing. The record keeps 256 elements, each with its last 32 changes, for a
  * minute; an element that keeps changing gives way before news, and what gives way is counted in
@@ -16,9 +16,13 @@
  *
  * @since 0.3.0
  */
-import { Schema } from "effect";
+import { type Effect, Function, Schema } from "effect";
 
+import type { BrowserError } from "./BrowserError.ts";
 import { Box, Subject } from "./BrowserEvent.ts";
+import type { Frame } from "./Frame.ts";
+import { functionsOf, isPage } from "./internal/page/functions.ts";
+import type { Page } from "./Page.ts";
 
 /**
  * `text` changed; `appeared` and `disappeared`, whether added or removed or shown or hidden;
@@ -88,5 +92,36 @@ export class Changes extends Schema.Class<Changes>("effect-browser/Change/Change
   /** Oldest first, by when each began to change. */
   changes: Schema.Array(Change),
 }) {}
+
+/** The window `read` reads, and whether to show what fields hold. */
+export interface ChangesOptions {
+  /**
+   * Where the window starts: the changes a previous read returned, to continue exactly where they
+   * ended; a frame, at its paint; or host monotonic milliseconds, which mapped to the page's clock
+   * may miss or repeat changes near the start if the browser's clock mapping changed since. Defaults
+   * to the start of the record.
+   */
+  readonly since?: Changes | Frame | number | undefined;
+  /**
+   * Where it ends: a frame, at its paint, so a delayed frame's window holds nothing it does not
+   * show; or host monotonic milliseconds. Defaults to now, and is never later.
+   */
+  readonly until?: Frame | number | undefined;
+  /** Show what fields hold; a secret field still reads `••••`. Defaults to false. */
+  readonly unmask?: boolean | undefined;
+}
+
+/**
+ * What visibly changed over a window, in one call to the page. The first read starts the page's
+ * record, so it finds none; from then the page records, and from the start of each later
+ * document, until nobody has read it for two minutes.
+ */
+export const read: {
+  (options?: ChangesOptions): (page: Page) => Effect.Effect<Changes, BrowserError>;
+  (page: Page, options?: ChangesOptions): Effect.Effect<Changes, BrowserError>;
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, options?: ChangesOptions) => functionsOf(page).changes(options),
+);
 
 /** A change in words for a model, such as `"$61,240" became "$62,010" (row "Bitcoin", column "Price")`. */

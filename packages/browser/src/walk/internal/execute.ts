@@ -4,6 +4,7 @@ import { Clock, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
 import { type Action } from "../../Action.ts";
 import { type BrowserError, InvalidRequest, undispatched } from "../../BrowserError.ts";
 import type { Page, ReadyOptions, Target } from "../../Page.ts";
+import * as Snapshot from "../../Snapshot.ts";
 import * as Stillness from "../../timeline/Stillness.ts";
 import { type Ambiguous, Drifted, type Missing } from "./choose.ts";
 import { type Walk, Step, Receipt, Stopped, Uncertain, ReplayError } from "./data.ts";
@@ -187,7 +188,8 @@ const checkEffect = (
     case "Appeared":
     case "Gone":
       return Effect.map(
-        page.until(
+        Snapshot.until(
+          page,
           { ...expected.query, scope: "document" },
           expected._tag === "Appeared" ? "some" : "none",
           millis,

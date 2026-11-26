@@ -13,8 +13,14 @@ import type { Frame } from "../../Frame.ts";
 import { match, request } from "../../internal/matching.ts";
 import type { Sample, Shown, Track } from "../../internal/timeline/fold.inpage.ts";
 import * as Url from "../../internal/url.ts";
-import { Found, type ElementState, type FindQuery } from "../../Page.ts";
-import { Control, Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
+import {
+  Control,
+  type ElementState,
+  type FindQuery,
+  Found,
+  Snapshot,
+  type SnapshotOptions,
+} from "../../Snapshot.ts";
 
 /** Unsupported browser mechanics stay typed failures instead of inferred successes. */
 export const unsupported = (operation: string) =>

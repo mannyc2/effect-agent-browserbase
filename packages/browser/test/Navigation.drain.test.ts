@@ -8,6 +8,8 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Result } from "effect";
 
 import * as Stage from "../src/presentation/Stage.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const site = Effect.acquireRelease(
@@ -85,8 +87,8 @@ it.live("a link's unanswered settling read does not retain input authority", () 
       const browser = yield* Chromium.make({ actionTimeout: "2 seconds" });
 
       const page = yield* browser.newPage(url);
-      const [link] = yield* page.find({ role: "link", name: "Hang" });
-      const [button] = yield* page.find({ role: "button", name: "Continue" });
+      const [link] = yield* Snapshot.find(page, { role: "link", name: "Hang" });
+      const [button] = yield* Snapshot.find(page, { role: "button", name: "Continue" });
       const clicked = yield* page.click(link!.ref).pipe(Effect.result);
 
       if (Result.isFailure(clicked)) assert.isTrue(clicked.failure.dispatched);
@@ -175,7 +177,7 @@ it.live(
           ),
         );
         const page = yield* browser.newPage(url);
-        const [link] = yield* page.find({ role: "link", name: "Hang" });
+        const [link] = yield* Snapshot.find(page, { role: "link", name: "Hang" });
         const clicking = yield* page.click(link!.ref).pipe(Effect.flip, Effect.forkChild);
 
         yield* Effect.promise(() => arrived.promise);
@@ -191,7 +193,7 @@ it.live(
         assert.strictEqual(stops, 0, "stop must follow the actual input acknowledgement");
         acknowledge.resolve();
         // A bounded read can only finish once cleanup has stopped the unanswered navigation.
-        const readable = yield* page.text().pipe(Effect.result);
+        const readable = yield* Text.read(page).pipe(Effect.result);
 
         const cleaning = yield* browser
           .suspend({ drain: "40 millis" })

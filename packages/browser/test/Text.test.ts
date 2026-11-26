@@ -4,6 +4,8 @@ import { Duration, Effect, Layer } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -24,17 +26,17 @@ const secrets = ["424242", "hunter2-secret", "4321"];
 
 /** The ref of the one element a query finds. */
 const only = (page: Page, role: string, name: string) =>
-  page.find({ role, name }).pipe(Effect.map((found) => found[0]?.ref ?? "none"));
+  Snapshot.find(page, { role, name }).pipe(Effect.map((found) => found[0]?.ref ?? "none"));
 
 layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
-})("Page.text", (it) => {
+})("Text.read", (it) => {
   it.effect("reads what the viewport shows, a line per block and cells apart by tabs", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/account");
-        const { text, truncated } = yield* page.text();
+        const { text, truncated } = yield* Text.read(page);
         const lines = text.split("\n");
 
         for (const line of [
@@ -48,7 +50,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.notInclude(text, "Last part");
         assert.isFalse(truncated);
 
-        const short = yield* page.text({ maxChars: 20 });
+        const short = yield* Text.read(page, { maxChars: 20 });
 
         assert.isTrue(short.truncated);
         assert.isAtMost(short.text.length, 20);
@@ -64,8 +66,8 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         const page = yield* open("/account");
 
         yield* page.type("hunter2-secret", { into: yield* only(page, "textbox", "Password") });
-        const masked = (yield* page.text()).text;
-        const unmasked = (yield* page.text({ unmask: true })).text;
+        const masked = (yield* Text.read(page)).text;
+        const unmasked = (yield* Text.read(page, { unmask: true })).text;
 
         for (const value of [...held, ...secrets]) assert.notInclude(masked, value);
         for (const value of held) assert.include(unmasked, value);
@@ -81,8 +83,8 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           ),
           "text",
         );
-        assert.notInclude((yield* page.text({ unmask: true })).text, "hunter2-secret");
-        for (const value of secrets) assert.notInclude((yield* page.snapshot()).text, value);
+        assert.notInclude((yield* Text.read(page, { unmask: true })).text, "hunter2-secret");
+        for (const value of secrets) assert.notInclude((yield* Snapshot.read(page)).text, value);
       }),
     ),
   );
@@ -91,11 +93,11 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/account");
-        const story = yield* page.text({ scope: yield* only(page, "region", "Story") });
+        const story = yield* Text.read(page, { scope: yield* only(page, "region", "Story") });
 
         assert.deepStrictEqual(story.text.split("\n"), ["First part", "Last part"]);
         assert.strictEqual(
-          yield* page.text({ scope: "e999999" }).pipe(
+          yield* Text.read(page, { scope: "e999999" }).pipe(
             Effect.flip,
             Effect.map((error) => error.reason._tag),
           ),

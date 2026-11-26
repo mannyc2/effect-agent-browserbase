@@ -48,7 +48,7 @@ const openers = new Set(["Chromium.make", "Browserbase.make", "Latency.make"]);
 const looks = new Set([
   "Page.observe",
   "Page.screenshot",
-  "Page.snapshot",
+  "Snapshot.read",
   "Page.frame",
   "Moment.capture",
 ]);

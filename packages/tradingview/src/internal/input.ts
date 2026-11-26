@@ -3,6 +3,7 @@
 import { Data, Duration, Effect, Schedule, Schema } from "effect";
 import * as BrowserError from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
+import * as Snapshot from "effect-browser/Snapshot";
 
 import * as Chart from "../Chart.ts";
 
@@ -142,7 +143,7 @@ export const control = (
   what: string,
   scope: "viewport" | "document" = "viewport",
 ) =>
-  Effect.flatMap(page.find({ selector, state: "visible", scope }), (found) =>
+  Effect.flatMap(Snapshot.find(page, { selector, state: "visible", scope }), (found) =>
     found[0] === undefined
       ? Effect.fail(new Untaken({ reason: `the chart shows no ${what}` }))
       : Effect.succeed(found[0]),
@@ -156,9 +157,9 @@ export const shown = (
   millis = 1_500,
   scope: "viewport" | "document" = "viewport",
 ) =>
-  page
-    .until({ selector, state: "visible", scope }, "some", millis)
-    .pipe(Effect.andThen(control(page, selector, what, scope)));
+  Snapshot.until(page, { selector, state: "visible", scope }, "some", millis).pipe(
+    Effect.andThen(control(page, selector, what, scope)),
+  );
 
 export const inside = (pane: Box, { x, y }: Chart.Position) =>
   x > pane.x + 1 && x < pane.x + pane.width - 1 && y > pane.y + 1 && y < pane.y + pane.height - 1;

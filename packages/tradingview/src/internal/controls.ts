@@ -2,6 +2,7 @@
 // for a symbol or a timeframe, the indicator search, and a study's settings for its inputs.
 import { Effect, Schema } from "effect";
 import type { Page } from "effect-browser/Page";
+import * as Snapshot from "effect-browser/Snapshot";
 
 import * as Chart from "../Chart.ts";
 import {
@@ -407,7 +408,7 @@ const fieldOf = (name: string) => {
 
 // The ref of what a selector finds at a viewport point.
 const refAt = (page: Page, selector: string, point: { readonly x: number; readonly y: number }) =>
-  Effect.flatMap(page.find({ selector, state: "visible" }), (all) => {
+  Effect.flatMap(Snapshot.find(page, { selector, state: "visible" }), (all) => {
     const hit = all.find(
       ({ box }) =>
         point.x >= box.x &&
@@ -425,11 +426,12 @@ const refAt = (page: Page, selector: string, point: { readonly x: number; readon
 const choose = (page: Page, list: string, value: string) =>
   Effect.gen(function* () {
     yield* page.click(list);
-    yield* page.until({ selector: '[role="option"]', state: "visible" }, "some", 1_000);
+    yield* Snapshot.until(page, { selector: '[role="option"]', state: "visible" }, "some", 1_000);
 
-    const option = (yield* page.find({ selector: '[role="option"]', state: "visible" })).find(
-      ({ subject }) => subject.name.trim().toLowerCase() === value.trim().toLowerCase(),
-    );
+    const option = (yield* Snapshot.find(page, {
+      selector: '[role="option"]',
+      state: "visible",
+    })).find(({ subject }) => subject.name.trim().toLowerCase() === value.trim().toLowerCase());
 
     yield* page.click(option?.ref ?? list);
   });
@@ -463,7 +465,7 @@ const configured = (
       else yield* choose(page, ref, String(value));
     }
     yield* page.click((yield* control(page, `${dialog} [data-name="submit-button"]`, "Ok")).ref);
-    yield* page.until({ selector: dialog, state: "visible" }, "none", 1_500);
+    yield* Snapshot.until(page, { selector: dialog, state: "visible" }, "none", 1_500);
   });
 
 const holds = (study: Chart.Study, id: string, value: Chart.InputValue) =>

@@ -8,8 +8,11 @@ import { jpegjs } from "playwright-core/lib/utilsBundle";
 import { Browser } from "../../src/Browser.ts";
 import { Failed, Timeout, undispatched } from "../../src/BrowserError.ts";
 import type { Image } from "../../src/Frame.ts";
+import * as Overlay from "../../src/Overlay.ts";
 import type { Page } from "../../src/Page.ts";
+import * as PageTime from "../../src/PageTime.ts";
 import * as Film from "../../src/presentation/Film.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 
 const blank = Effect.gen(function* () {
   const browser = yield* Browser;
@@ -103,8 +106,8 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
       const page = yield* blank;
 
       yield* show(page, slide);
-      const held = yield* page.hold;
-      const overlay = yield* page.overlay;
+      const held = yield* PageTime.hold(page);
+      const overlay = yield* Overlay.make(page);
 
       yield* page.click({ x: 320, y: 15 });
 
@@ -144,8 +147,8 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
         page,
         `${slide}<button id=copy style="position: fixed; left: 300px; top: 40px; width: 60px; height: 30px" onclick="copy.textContent = '✓'; setTimeout(() => copy.textContent = 'copy', 1500)">copy</button>`,
       );
-      const held = yield* page.hold;
-      const go = (yield* page.find({ role: "button", name: "go" }))[0]?.ref ?? "";
+      const held = yield* PageTime.hold(page);
+      const go = (yield* Snapshot.find(page, { role: "button", name: "go" }))[0]?.ref ?? "";
 
       const copied = page
         .read(() => document.getElementById("copy")?.textContent, {
@@ -192,7 +195,7 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
       const page = yield* blank;
 
       yield* show(page, slide);
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
       let frames = 0;
 
       const failed = yield* Effect.flip(
@@ -216,7 +219,7 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
       const page = yield* blank;
 
       yield* page.goto(url("/a"));
-      const held = yield* page.hold;
+      const held = yield* PageTime.hold(page);
       const seen: Array<[number, number]> = [];
 
       const film = (inputs: ReadonlyArray<Film.Contact>) =>

@@ -8,6 +8,7 @@ import * as InputStyle from "../src/InputStyle.ts";
 import { failFast } from "../src/Page.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Stage from "../src/presentation/Stage.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import { unpaused } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -21,7 +22,7 @@ it.live("a focus handler's effect survives a refused press receipt", () =>
       html("<button onfocus=\"document.title='focused';this.blur()\">Action</button>"),
     );
 
-    const [button] = yield* page.find({ role: "button", name: "Action" });
+    const [button] = yield* Snapshot.find(page, { role: "button", name: "Action" });
 
     assert.isDefined(button);
     const error = yield* page.press("Enter", { on: button!.ref }).pipe(Effect.flip);
@@ -129,7 +130,7 @@ it.live("oversized presentation refuses before focus handlers or pointer input",
       html('<input aria-label="Text" onfocus="document.title=\'focused\'">'),
     );
 
-    const [field] = yield* page.find({ role: "textbox", name: "Text" });
+    const [field] = yield* Snapshot.find(page, { role: "textbox", name: "Text" });
     const view = (yield* Presentation.make({ pacing: unpaused })).view(page);
     const type = yield* view.type("a".repeat(2000), { into: field!.ref }).pipe(Effect.flip);
     const scroll = yield* view.scroll({ dy: 1_000_000 }).pipe(Effect.flip);
@@ -159,7 +160,7 @@ it.live("custom styles are decoded before focus or pointer input", () =>
       html('<input aria-label="Text" onfocus="document.title=\'focused\'">'),
     );
 
-    const [field] = yield* page.find({ role: "textbox", name: "Text" });
+    const [field] = yield* Snapshot.find(page, { role: "textbox", name: "Text" });
 
     const badTyping: InputStyle.InputStyle = {
       ...InputStyle.plain,
@@ -209,7 +210,7 @@ it.live("settlement preserves a protocol failure after acknowledged input", () =
     );
     const browser = yield* faults.provide(Chromium.make());
     const page = yield* browser.newPage(html("<button>Press</button>"));
-    const [button] = yield* page.find({ role: "button", name: "Press" });
+    const [button] = yield* Snapshot.find(page, { role: "button", name: "Press" });
     const error = yield* page.click(button!.ref).pipe(Effect.flip);
 
     assert.strictEqual(error.reason._tag, "Failed");

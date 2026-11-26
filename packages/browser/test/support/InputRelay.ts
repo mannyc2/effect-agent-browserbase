@@ -9,6 +9,7 @@ import * as PageImpl from "../../src/internal/page/page.ts";
 import * as Port from "../../src/internal/page/port.ts";
 import type * as Page from "../../src/Page.ts";
 import * as Presentation from "../../src/presentation/Presentation.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 import { unpaused } from "../fixtures.ts";
 import * as TestCdp from "./TestCdp.ts";
 
@@ -242,7 +243,7 @@ export const setup = Effect.fnUntraced(function* (
       ? plain
       : (yield* Presentation.make({ pacing: unpaused })).view(plain);
 
-  yield* page.snapshot();
+  yield* Snapshot.read(page);
   dispatches.splice(0);
 
   return {

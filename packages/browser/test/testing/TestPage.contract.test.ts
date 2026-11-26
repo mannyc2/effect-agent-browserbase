@@ -1,14 +1,17 @@
 /** The simulator earns only the reading, action and lifecycle contracts exercised here. */
 import { assert, it } from "@effect/vitest";
-import { Arbitrary, Cause, Clock, Effect, Exit, Fiber, Option, Stream, Schema } from "effect";
+import { Arbitrary, Cause, Clock, Effect, Exit, Fiber, Option, pipe, Stream, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 import { BrowserError, Timeout } from "../../src/BrowserError.ts";
 import { Subject } from "../../src/BrowserEvent.ts";
+import * as Change from "../../src/Change.ts";
 import { Frame, BrowserPaint } from "../../src/Frame.ts";
 import { failFast } from "../../src/Page.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 import * as TestBrowser from "../../src/testing/TestBrowser.ts";
 import * as TestPage from "../../src/testing/TestPage.ts";
+import * as Text from "../../src/Text.ts";
 
 const button = {
   key: "save",
@@ -25,7 +28,7 @@ it.effect("seeds a mid-story page and keeps old refs stale across document repla
       elements: [button],
     });
 
-    const [save] = yield* test.page.find({ role: "BUTTON", name: " save " });
+    const [save] = yield* Snapshot.find(test.page, { role: "BUTTON", name: " save " });
 
     assert.isDefined(save);
     assert.strictEqual(yield* test.page.url, "https://example.test/step/3");
@@ -43,21 +46,55 @@ it.effect("seeds a mid-story page and keeps old refs stale across document repla
       (yield* Effect.flip(test.page.click(save?.ref ?? ""))).reason._tag,
       "StaleRef",
     );
-    const [next] = yield* test.page.find({ text: "continue" });
+    const [next] = yield* Snapshot.find(test.page, { text: "continue" });
 
     assert.notStrictEqual(next?.ref, save?.ref);
+  }),
+);
+
+// A function with arguments besides the page takes the page first, or last in a pipeline; one that
+// tells a page from its options must not take either for the other.
+it.effect("reads the same through a page's functions called directly or in a pipeline", () =>
+  Effect.gen(function* () {
+    const { page } = yield* TestPage.make({ title: "Two ways", elements: [button] });
+
+    assert.deepStrictEqual(yield* pipe(page, Snapshot.read()), yield* Snapshot.read(page));
+    assert.deepStrictEqual(
+      yield* pipe(page, Snapshot.read({ maxChars: 10 })),
+      yield* Snapshot.read(page, { maxChars: 10 }),
+    );
+    assert.deepStrictEqual(yield* pipe(page, Snapshot.find()), yield* Snapshot.find(page));
+    assert.deepStrictEqual(
+      yield* pipe(page, Snapshot.find({ name: "Save" })),
+      yield* Snapshot.find(page, { name: "Save" }),
+    );
+    assert.deepStrictEqual(
+      yield* pipe(page, Snapshot.until({ name: "Save" }, "some", 0)),
+      yield* Snapshot.until(page, { name: "Save" }, "some", 0),
+    );
+    assert.strictEqual(
+      (yield* pipe(page, Text.read({ maxChars: 4 }))).text,
+      (yield* Text.read(page, { maxChars: 4 })).text,
+    );
+    assert.deepStrictEqual(
+      (yield* pipe(page, Change.read({ since: 0, until: 0 }))).changes,
+      (yield* Change.read(page, { since: 0, until: 0 })).changes,
+    );
   }),
 );
 
 it.effect("holds an action in the real lane and preserves dispatched failure evidence", () =>
   Effect.gen(function* () {
     const test = yield* TestPage.make({ elements: [button] });
-    const ref = (yield* test.page.find({ name: "Save" }))[0]?.ref ?? "";
+    const ref = (yield* Snapshot.find(test.page, { name: "Save" }))[0]?.ref ?? "";
     const hold = yield* test.holdNext();
     const click = yield* test.page.click(ref).pipe(Effect.forkScoped);
 
     yield* hold.entered;
-    assert.strictEqual((yield* Effect.flip(failFast(test.page.snapshot()))).reason._tag, "Busy");
+    assert.strictEqual(
+      (yield* Effect.flip(failFast(Snapshot.read(test.page)))).reason._tag,
+      "Busy",
+    );
     yield* hold.release;
     yield* Fiber.join(click);
     assert.strictEqual((yield* test.actions)[0]?._tag, "Click");
@@ -83,12 +120,13 @@ it.effect("waits for seeded changes on TestClock and leaves a canceled action's 
     const owner = yield* Clock.Clock;
     const caller = { ...owner, sleep: () => Effect.die("caller clock used") };
 
-    const waiting = yield* test.page
-      .until({ text: "Done" }, "some", 1000)
-      .pipe(Effect.provideService(Clock.Clock, caller), Effect.forkScoped);
+    const waiting = yield* Snapshot.until(test.page, { text: "Done" }, "some", 1000).pipe(
+      Effect.provideService(Clock.Clock, caller),
+      Effect.forkScoped,
+    );
 
     yield* TestClock.adjust("100 millis");
-    const before = (yield* test.page.find())[0]?.ref ?? "";
+    const before = (yield* Snapshot.find(test.page))[0]?.ref ?? "";
 
     yield* failFast(test.page.click(before));
     yield* test.update({
@@ -98,13 +136,13 @@ it.effect("waits for seeded changes on TestClock and leaves a canceled action's 
     });
     yield* TestClock.adjust("100 millis");
     assert.isTrue((yield* Fiber.join(waiting)).met);
-    const ref = (yield* test.page.find())[0]?.ref ?? "";
+    const ref = (yield* Snapshot.find(test.page))[0]?.ref ?? "";
     const hold = yield* test.holdNext();
     const action = yield* test.page.click(ref).pipe(Effect.forkScoped);
 
     yield* hold.entered;
     yield* Fiber.interrupt(action);
-    assert.lengthOf((yield* test.page.snapshot()).controls, 1);
+    assert.lengthOf((yield* Snapshot.read(test.page)).controls, 1);
   }),
 );
 
@@ -119,7 +157,7 @@ it.effect("replays seeded browser page order and drains its actual scoped input 
 
     assert.isDefined(page);
     if (page === undefined) return;
-    const ref = (yield* page.find())[0]?.ref ?? "";
+    const ref = (yield* Snapshot.find(page))[0]?.ref ?? "";
 
     yield* Effect.scoped(
       Effect.gen(function* () {
@@ -127,7 +165,7 @@ it.effect("replays seeded browser page order and drains its actual scoped input 
 
         assert.strictEqual(stopped.since, 2);
         assert.strictEqual((yield* Effect.flip(page.click(ref))).reason._tag, "Suspended");
-        assert.lengthOf(yield* page.find(), 1);
+        assert.lengthOf(yield* Snapshot.find(page), 1);
       }),
     );
     yield* page.click(ref);
@@ -178,7 +216,7 @@ it.effect("refuses code and records sanitized typed data from explicit outcomes"
 
     assert.strictEqual(refused.reason._tag, "InvalidRequest");
     assert.isFalse(executed);
-    const ref = (yield* test.page.find())[0]?.ref ?? "";
+    const ref = (yield* Snapshot.find(test.page))[0]?.ref ?? "";
 
     yield* test.page.type("private-password", { into: ref, secret: true });
     yield* test.page.goto("https://example.test/?token=another-secret");
@@ -187,7 +225,7 @@ it.effect("refuses code and records sanitized typed data from explicit outcomes"
     assert.notInclude(events, "private-password");
     assert.notInclude(events, "another-secret");
     assert.notInclude(yield* test.page.url, "another-secret");
-    assert.strictEqual((yield* test.page.snapshot()).controls[0]?.value, "••••");
+    assert.strictEqual((yield* Snapshot.read(test.page)).controls[0]?.value, "••••");
   }),
 );
 
@@ -247,7 +285,7 @@ it.effect("streams only owned frames and folds explicitly seeded change historie
 
     assert.strictEqual(refused.reason._tag, "InvalidRequest");
     yield* TestClock.adjust("100 millis");
-    const changes = yield* test.page.changes({ since: 0, until: 100 });
+    const changes = yield* Change.read(test.page, { since: 0, until: 100 });
 
     assert.deepStrictEqual(
       changes.changes.map(({ before, after, count }) => [before, after, count]),
@@ -278,7 +316,7 @@ it.effect.prop(
         elements: [button, { ...button, key: "locked", state: { disabled: true } }],
       });
 
-      const [ready, locked] = yield* test.page.find();
+      const [ready, locked] = yield* Snapshot.find(test.page);
 
       const scripted = new BrowserError({
         operation: "click",
@@ -305,7 +343,7 @@ it.effect.prop(
 it.effect("a stale refusal leaves the next scripted hold on dispatched input", () =>
   Effect.gen(function* () {
     const test = yield* TestPage.make({ elements: [button] });
-    const ref = (yield* test.page.find())[0]!.ref;
+    const ref = (yield* Snapshot.find(test.page))[0]!.ref;
     const hold = yield* test.holdNext();
 
     yield* Effect.flip(test.page.click("e9999"));
@@ -364,7 +402,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const test = yield* TestPage.make({ elements: [button] });
-      const ref = (yield* test.page.find())[0]!.ref;
+      const ref = (yield* Snapshot.find(test.page))[0]!.ref;
 
       yield* Effect.flip(test.page.click("e9999"));
       yield* test.failNext(

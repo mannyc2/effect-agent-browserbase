@@ -20,8 +20,9 @@ README says what that risks and how signals end the browser.
 | Module         | Import from                   | What it holds                                                                     |
 | -------------- | ----------------------------- | --------------------------------------------------------------------------------- |
 | `Browser`      | `effect-browser`              | The `Browser` service: tabs, recent events, lifetime and input suspension         |
-| `Page`         | `effect-browser`              | One tab: navigation, reads, screenshots, input, waits and the screencast          |
-| `Snapshot`     | `effect-browser`              | The model-readable outline of a page, with refs for its controls                  |
+| `Page`         | `effect-browser`              | One tab: navigation, screenshots, input, waits and the screencast                 |
+| `Snapshot`     | `effect-browser`              | The model-readable outline of a page, with refs, and the elements a query finds   |
+| `Text`         | `effect-browser`              | What a page shows as text, from its viewport or one element whole                 |
 | `Frame`        | `effect-browser`              | Pictures, timing evidence and capture identity                                    |
 | `BrowserEvent` | `effect-browser`              | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end    |
 | `BrowserError` | `effect-browser`              | Typed failures, whether input reached the page first, and what each leaves        |
@@ -62,6 +63,16 @@ path, never through the root, which loads only `effect`. Each feature is a subpa
 its modules together, as in `import { Moment } from "effect-browser/timeline"`. `Film` is
 experimental. `effect-browser/testing`'s seeded services execute explicit test data and refuse
 page scripts.
+
+`Page` holds what a tab is and how it takes its turns: its identity, the order and time of what is
+done on it, and input. Everything else a page does is a function in the module of what it returns,
+taking the page first: `Snapshot.read(page)`, `Snapshot.find(page, query)`,
+`Snapshot.until(page, query, want, millis)`, `Text.read(page)`, `Layout.measure(page, picks)`,
+`Change.read(page)`, `Window.read(page, options)`, `Overlay.make(page)`, `Pose.make(page)` and
+`PageTime.hold(page)`. Those with more than the page also take it last, for a pipeline, as in
+`Effect.flatMap(browser.firstPage, Snapshot.read({ full: true }))`. A new capability follows the
+same rule: `Page` gains a member only for identity, order, time or input, and everything else is a
+function in its job's module.
 
 ## Runtime CDP connectors
 
@@ -179,7 +190,7 @@ A snapshot outlines the viewport, or the whole page, with a ref such as `e12` on
 lists those controls as values, `Snapshot.Control`: each one's ref, kind, name and what it holds,
 a select's options, and whether it is disabled, checked or takes typed text. `within` reads only
 inside the elements a CSS selector matches, and `query` keeps the lines that hold some text.
-`Page.until(query, want, millis)` waits using `find` matching, including CSS `selector` and
+`Snapshot.until(page, query, want, millis)` waits using `Snapshot.find`'s matching, including CSS `selector` and
 `state: "enabled"`. It searches the document by default. `want` is `"some"`, `"none"`, or
 `{ other: previous.mark }`; comparison marks reveal no text or values and ignore focus.
 A finite nonnegative deadline returns `{ met, mark }`; document replacements share that deadline.
@@ -206,18 +217,18 @@ counted; elsewhere, `label` is the words just before it in its row, item, group 
 is the nearest heading above it, left out for what is pinned to the viewport. The page binds each to
 the element, so a value is never read under another column's header.
 
-`Page.find` reads structure without the outline, in one call to the page. It returns every element
+`Snapshot.find` reads structure without the outline, in one call to the page. It returns every element
 that matches a query, in tree order, each a `Found`: a ref the actions take, its `subject`, its box,
 whether it is in the viewport, and its state (disabled, focused, and checked, expanded, selected,
 pressed or a heading's level where they apply). A `role` matches ignoring case. A `name` matches
 when it reads the same once spaces are collapsed and case folded, or when a `RegExp` finds itself
 in it. `text` matches the smallest element showing it, and a control or heading for the words
 inside it; `near` matches whole words of the context, as replay's choice does. With no rule,
-`find` returns every element in scope that has a role or is a control. There is no ordinal: a
+it returns every element in scope that has a role or is a control. There is no ordinal: a
 caller tells equal elements apart by their context, and finding none is an empty result, not a
 failure. `scope: "document"` reads the whole page; the default is the viewport.
 
-`Page.text` reads what the viewport shows, or one element whole with `scope` set to its ref, in one
+`Text.read` reads what the viewport shows, or one element whole with `scope` set to its ref, in one
 call to the page: a line per block, table cells apart by tabs, cut at a line after `maxChars`
 (12,000 by default). Like the outline, it leaves out what the page hides from assistive technology,
 such as icon glyphs. What a field holds reads `••••` unless `unmask` is set, and a secret field's
@@ -226,7 +237,7 @@ holds, as a PIN field's may, and one that was secret when the library saw it, su
 its page now reveals. The outline shows what fields hold, as the agent needs, but masks a secret
 field the same way.
 
-Reading the viewport, the outline, `find` and `text` skip a subtree whose box lies outside it before
+Reading the viewport, the outline, `Snapshot.find` and `Text.read` skip a subtree whose box lies outside it before
 styling anything in it, so a long table costs only its rows in view. A box says nothing of what is
 positioned out of it, so a subtree is kept when its box is empty; when it holds what is painted at
 the viewport's edges, corners or middle, beneath any transparent layer too, or in its top layer; or
@@ -274,7 +285,7 @@ document; navigation retries share the original timeout. Canvas animation can co
 content is ready. This does not prove pixel or screencast stillness and inherits the change
 recorder's limits for canvas, SVG, frames, shadow content and values changed only by scripts.
 
-`Page.changes({ since, until })` says what visibly changed on a page over a window, in one call to
+`Change.read(page, { since, until })` says what visibly changed on a page over a window, in one call to
 the page, element by element, as a `Change`: text that changed, appeared, disappeared or came and
 went (`brief`), a field's value, or the title. Each says what it showed at the window's start and
 end, how often that changed, the lowest and highest of a number that changed more than once, when
@@ -321,7 +332,7 @@ sets, or a class that reveals an element it has not seen before, such as a toast
 page, though its later changes it does.
 
 A page's timeline has three tracks on the browser's host clock: its events, what changed on it,
-and its frames. `page.window({ since, until })` reads them over a window, a `Moment.Window`: the
+and its frames. `Window.read(page, { since, until })` reads them over a window, a `Window`: the
 events and frames the page keeps, at no call, and its changes, in one call, the first starting its
 record as any read of changes does. `since` is a previous window, to go on exactly where it ended, a
 frame, a host time, or a `Duration` back from `until`; `until` is a frame or a host time, now by
@@ -748,7 +759,7 @@ and the clock probe runs in a world of its own.
 Every operation is recorded as an `Action`, also when its caller interrupts it. An element or point
 action records its `subject`, and a drag where it ended (`to`): the role, accessible name, tag and
 context of what it found, read when its target was resolved, before the pointer moved or any input
-was sent, so a click that removes its element still names it: the same subject `Page.find` gives. A ref is
+was sent, so a click that removes its element still names it: the same subject `Snapshot.find` gives. A ref is
 reused by later outlines, so read `subject` rather than resolving `target` against a later snapshot.
 
 Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its
@@ -857,14 +868,14 @@ As Effect's do, each error names itself by its path, such as `effect-browser/Bro
 
 `Walk.step` checks an authored expected effect before input and after a dispatched failure.
 Unknown consequential input requires positive durable evidence before continuation; the `Walk`
-section above describes that recovery contract. `Page.until` provides the underlying bounded
+section above describes that recovery contract. `Snapshot.until` provides the underlying bounded
 observation without deciding whether an action may be repeated:
 
 ```ts
-const observed = yield * page.until({ text: "Order 42" }, "some", 5000);
+const observed = yield * Snapshot.until(page, { text: "Order 42" }, "some", 5000);
 ```
 
-The mark from `until` compares matching elements' text, values and states except focus. Keep it
+The mark from `Snapshot.until` compares matching elements' text, values and states except focus. Keep it
 only as an observation baseline; an unmet or changed observation does not authorize repeating
 unknown consequential input.
 
@@ -907,8 +918,8 @@ events. Compositing remains the consumer’s job.
 A page waits only for itself. Its operations take turns in one lane of its own: an action, which
 sends input or navigates, has the page to itself in FIFO order once it asks for admission.
 Policy preparation reads the page first and a guard can wait outside that queue, so a later
-approved action may enter before an earlier held one. Reads (the outline, `find`, `text`, `changes`,
-pictures, zooms, `title` and the viewport) share the lane after the earlier queued writes, so they
+approved action may enter before an earlier held one. Reads (the outline, `Snapshot.find`, `Text.read`,
+`Change.read`, pictures, zooms, `title` and the viewport) share the lane after the earlier queued writes, so they
 describe the page those actions left. `ready` follows the action in flight too, and holds none back while it
 watches. An action then waits for its page's unresolved input replies. Its timeout bounds those
 waits before a full timeout bounds the action itself: a turn not given in time fails `Busy`, with
@@ -950,15 +961,15 @@ asked between them, joins it, and costs no call of its own. Each read runs in th
 the action timeout whoever gives up, so a caller's own `Effect.timeout` loses nothing: a read that
 ends after all its callers gave up serves the next caller to ask the same within 250 milliseconds
 of completion, unless an action or a new document came first. An action stops the reads nobody awaits rather than
-wait for them. Pictures and `changes` only join: a picture's caller says how old it may be, and a
+wait for them. Pictures and `Change.read` only join: a picture's caller says how old it may be, and a
 window of changes ends as it is read.
 
 `page.state` is what the library already knows of a page, at no call and with no wait for its
 turn: where its main frame is, its document and when it was committed, how far that document has
-loaded, its newest screencast frame, and the viewport's text and title as last read in that
-document, each with when it was learned, so a caller reads their ages. A caller that must never
-wait, such as one reading the screen on air, reads it rather than polling the page. Chromium
-announces no title change, so the title is as a read of the text last found it.
+loaded, and its newest screencast frame, each with when it was learned, so a caller reads their
+ages. A caller that must never wait, such as one reading the screen on air, reads it rather than
+polling the page. `Overlay.drawn(page)` says, at no call either, where the page's overlay last
+drew.
 
 `Browser.Options.maxPages` bounds the pages a browser keeps open, those a site opened included,
 which are never refused: at the limit, `newPage` waits within the action timeout for one to close,
@@ -974,16 +985,16 @@ cancelled glide. A later viewport clamps the starting point to its bounds if nec
 A browser opened with `pageTime` can film a page frame by frame, each frame showing the page at its
 film time however long the last one took to picture. Each part is a module of its own:
 
-- `page.layout(picks)` reads where things are, as data: a box for each pick in the viewport and the
+- `Layout.measure(page, picks)` reads where things are, as data: a box for each pick in the viewport and the
   document, the boxes of its words, and the viewport, scroll and scale, in one call.
   `Layout.rehearse` measures what exists only after an interaction, such as an open menu, and puts
   the page back.
-- `page.overlay` is a layer over the page for a scope that shows a caller's SVG. Screenshots and
-  live views show it; `find`, `layout`, `changes`, `ready` and stillness never read it.
-- `page.hold` holds the page's timers, animation frames, clocks and animations for a scope.
+- `Overlay.make(page)` is a layer over the page for a scope that shows a caller's SVG. Screenshots
+  and live views show it; `Snapshot`, `Layout`, `Change`, `ready` and stillness never read it.
+- `PageTime.hold(page)` holds the page's timers, animation frames, clocks and animations for a scope.
   `advance(by, { scroll, poses, overlay })` steps them and, in the same call, scrolls, poses and
   draws.
-- `page.poses` moves, turns and scales the page's own elements about a point, as data, through
+- `Pose.make(page)` moves, turns and scales the page's own elements about a point, as data, through
   CSS `translate`, `rotate` and `scale`. Readers and clicks see a posed element where it is drawn,
   and the change record does not report a pose. The scope's end takes every pose off.
 - `page.paint({ scale, scrollbars })` sets an attached browser's device pixels to each CSS pixel,
@@ -996,10 +1007,10 @@ film time however long the last one took to picture. Each part is a module of it
 
 ```ts
 const film = Effect.gen(function* () {
-  const time = yield* page.hold;
-  const overlay = yield* page.overlay;
+  const time = yield* PageTime.hold(page);
+  const overlay = yield* Overlay.make(page);
 
-  yield* page.poses;
+  yield* Pose.make(page);
 
   return yield* Film.frames(page, {
     times: { fps: 30, to: 8000 },
@@ -1018,7 +1029,7 @@ const film = Effect.gen(function* () {
 ```
 
 The frames are pictures; encoding them is the caller's. What an input changed is
-`page.changes({ since })` read after it. Each `Change` has the `box` to frame it by, and `at`, on
+`Change.read(page, { since })` read after it. Each `Change` has the `box` to frame it by, and `at`, on
 the same clock as a `Shot`'s `at`, so on held time the first shot at or after it is the first to
 show it. To lift an element off the page, take its picture with a clipped screenshot at
 `scale: "device"`, then pose it to `sx: 0, sy: 0`, which hides it and leaves the page laid out as
@@ -1073,6 +1084,7 @@ the generation's scope ends its resource.
 import { Chromium } from "@effect-browser/chromium";
 import { Effect } from "effect";
 import { Supervisor } from "effect-browser/supervisor";
+import * as Text from "effect-browser/Text";
 
 const program = Effect.gen(function* () {
   const sessions = yield* Supervisor.make({
@@ -1085,7 +1097,7 @@ const program = Effect.gen(function* () {
   });
 
   return yield* sessions.use(({ value: browser }) =>
-    Effect.flatMap(browser.firstPage, (page) => page.text()),
+    Effect.flatMap(browser.firstPage, Text.read()),
   );
 }).pipe(Effect.scoped);
 ```
@@ -1299,7 +1311,8 @@ records except text: the target, the subject's role, name and tag, whether input
 `error.type`. A read that shared another's work says so in `shared`: `joined` or `kept`.
 `Page.prepare`, the policy's preparation, and `Page.guard`, which lasts as long as a hold and holds
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
-`Page.snapshot`, `Page.find`, `Page.text`, `Page.title`, `Page.viewport`,
+`Snapshot.read`, `Snapshot.find`, `Snapshot.until`, `Text.read`, `Layout.measure`, `Change.read`,
+`Window.read`, `Page.title`, `Page.viewport`,
 `Page.screenshot` and `Page.frame` (with
 `source`: a reused screencast `frame` or a new `screenshot`), `Page.zoom`, `Page.ready` and the
 other waits are spans, as are `Walk.replay` and `Walk.locate`, and so is each round trip to the
