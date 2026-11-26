@@ -7,6 +7,7 @@ import { type Prompt } from "effect/ai";
 import { Browser } from "../src/Browser.ts";
 import { Action, Subject } from "../src/BrowserEvent.ts";
 import * as Change from "../src/Change.ts";
+import * as Frame from "../src/Frame.ts";
 import { fold, type Folded } from "../src/internal/timeline/fold.inpage.ts";
 import { type Bounds, history } from "../src/internal/timeline/history.inpage.ts";
 import type { Page } from "../src/Page.ts";
@@ -451,7 +452,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         Effect.gen(function* () {
           const page = yield* start("/desk");
 
-          yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+          yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
           yield* Change.read(page);
           yield* run(page, () => {
             const prices = [61_240, 61_310, 61_190, 61_450, 61_380];
@@ -468,7 +472,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           yield* page.click(yield* button(page, "Place order"));
           yield* Snapshot.until(page, { text: "Order placed" }, "some", 5000);
           yield* Effect.sleep(Duration.millis(200));
-          const moment = yield* Moment.capture(page, { since: Duration.seconds(2) });
+          const moment = yield* Moment.read(page, { since: Duration.seconds(2) });
           const changes = moment.changes?.changes ?? [];
           const placed = changes.find((change) => change.after === "Order placed");
           const ticker = changes.find((change) => change.subject.context.row === "BTC");
@@ -627,7 +631,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             yield* page.click(yield* button(page, "Place order"));
             yield* Snapshot.until(page, { text: "Order placed" }, "some", 5000);
             yield* Effect.sleep(Duration.millis(100));
-            const moment = yield* Moment.capture(page, { since: from });
+            const moment = yield* Moment.read(page, { since: from });
             const changes = moment.changes?.changes ?? [];
             const changed = (after: string) => changes.find((change) => change.after === after);
             const [menu, sheet, placed] = ["Share", "Share this page", "Order placed"].map(changed);
@@ -652,14 +656,17 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         const memo = (yield* field("Memo"))[0]?.ref ?? "";
         const pin = (yield* field("PIN"))[0]?.ref ?? "";
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         const first = yield* Change.read(page);
 
         yield* page.type("25", { into: amount });
         yield* page.type("sell at 70k", { into: memo });
         yield* page.type("4321", { into: pin });
         yield* Effect.sleep(Duration.millis(300));
-        const frame = yield* page.frame({ maxAge: 0 });
+        const frame = yield* Frame.read(page, { maxAge: 0 });
 
         yield* run(page, () => {
           document.querySelector("#btc")!.textContent = "$70,000";

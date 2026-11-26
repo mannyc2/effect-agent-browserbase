@@ -6,7 +6,7 @@
  * @stability stable
  * @since 0.3.0
  */
-import { Schema } from "effect";
+import { Function, Schema } from "effect";
 import { Window } from "effect-browser/Window";
 import { Prompt } from "effect/ai";
 
@@ -53,26 +53,32 @@ export const make = (): Moments => new Moments({ placed: [], recent: [] });
  * @category combinators
  * @since 0.3.0
  */
-export const place = (
-  state: Moments,
-  account: Placed,
-  pictures: Prompt.UserMessage,
-  previous: Window,
-): Moments =>
-  state.placed.some((known) => known.turn === account.turn)
-    ? state
-    : new Moments({
-        placed: [...state.placed, account],
-        recent: [...state.recent, pictures].slice(-3),
-        previous,
-      });
+export const place: {
+  (account: Placed, pictures: Prompt.UserMessage, previous: Window): (state: Moments) => Moments;
+  (state: Moments, account: Placed, pictures: Prompt.UserMessage, previous: Window): Moments;
+} = Function.dual(
+  4,
+  (state: Moments, account: Placed, pictures: Prompt.UserMessage, previous: Window): Moments =>
+    state.placed.some((known) => known.turn === account.turn)
+      ? state
+      : new Moments({
+          placed: [...state.placed, account],
+          recent: [...state.recent, pictures].slice(-3),
+          previous,
+        }),
+);
 
 /**
+ * `source` with each placed moment after the messages it follows.
+ *
  * @stability stable
  * @category combinators
  * @since 0.3.0
  */
-export const weave = (source: Prompt.Prompt, placed: ReadonlyArray<Placed>): Prompt.Prompt => {
+export const weave: {
+  (placed: ReadonlyArray<Placed>): (source: Prompt.Prompt) => Prompt.Prompt;
+  (source: Prompt.Prompt, placed: ReadonlyArray<Placed>): Prompt.Prompt;
+} = Function.dual(2, (source: Prompt.Prompt, placed: ReadonlyArray<Placed>): Prompt.Prompt => {
   const messages: Array<Prompt.Message> = [];
 
   for (let index = 0; index <= source.content.length; index++) {
@@ -87,4 +93,4 @@ export const weave = (source: Prompt.Prompt, placed: ReadonlyArray<Placed>): Pro
   }
 
   return Prompt.fromMessages(messages);
-};
+});

@@ -103,7 +103,7 @@ with agents on Yielded Agent, the renamed Effect Agent:
   review's three, under eleven drift operators, five seeds each, ended in the wrong place 0 times
   in 420 replays. `Page.ready` says, in one call to the page, whether a page is ready to be shown,
   from the page's own evidence, so a blank canvas or a spinner alone is still loading; with
-  `quietMillis` it also waits for the screen to be still, and a stalled connection is not stillness;
+  `quiet` it also waits for the screen to be still, and a stalled connection is not stillness;
   `still: "foreground"` lets what was moving in the 1.5 s before the page's latest input, such as a
   game's idle animation, go on moving. Brief foreground motion between polls still restarts the
   quiet interval; missing frame history cannot establish stillness.
@@ -135,7 +135,7 @@ with agents on Yielded Agent, the renamed Effect Agent:
   from about 100 ms per 3 s to about 230, where an empty observer costs about 180. The record keeps
   news over what keeps changing, counts what it lets go and never claims to be whole where it is
   not, and a window can continue exactly where the last read ended or end at a frame's paint.
-  `Page.ready({ quietMillis })` also waits for nothing in view to change where a page records.
+  `Page.ready({ quiet })` also waits for nothing in view to change where a page records.
 - Windows and moments: `page.window({ since, until })` reads a page's three tracks, its events, what
   changed and its frames, over one window of the host clock, which can end in the past, at a frame
   a delayed consumer airs late, and go on exactly where the last window ended; its events and

@@ -120,7 +120,7 @@ stored context in this process; an application whose processes share stored cont
 
 ## A moment
 
-`Moment.capture` gathers a page's screencast frames over a window, what visibly changed on it, and
+`Moment.read` gathers a page's screencast frames over a window, what visibly changed on it, and
 its events in between; `snapshot: true` adds the page's outline at the end. A page records what
 changes on it from its first moment, so its next moments can say `"$61,240" became "$62,010" (row
 "BTC", column "Price")`, or that an alert came and went between two frames. `Moment.toPrompt` lays a
@@ -140,11 +140,11 @@ const VideoPrompt = Schema.Struct({
 const watch = Effect.gen(function* () {
   const page = yield* (yield* Browser.Browser).firstPage;
 
-  yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+  yield* Frame.capture(page);
   yield* page.goto("https://example.com/live-chart");
   yield* Effect.sleep("5 seconds");
 
-  const moment = yield* Moment.capture(page, { frames: 3 });
+  const moment = yield* Moment.read(page, { frames: 3 });
 
   const { value } = yield* LanguageModel.generateObject({
     prompt: Prompt.setSystem(
@@ -170,10 +170,10 @@ const narrate = (page: Page.Page) =>
       { role: "system", content: "Caption the stream in five words." },
     ]);
 
-    let last = yield* Moment.capture(page);
+    let last = yield* Moment.read(page);
 
     const caption = Effect.gen(function* () {
-      last = yield* Moment.capture(page, { since: last });
+      last = yield* Moment.read(page, { since: last });
       const { text } = yield* chat.generateText({ prompt: Moment.toPrompt(last) });
 
       yield* Effect.log(text);
@@ -222,7 +222,7 @@ on a browser's tabs. `PageControl.make` gives the controller alone, for a host w
   open a local file. `Page.goto` also opens the `file:` URLs its caller passes.
 - The browser answers dialogs itself, so no tool answers them. No tool takes a screenshot either:
   the pictures before each turn replace it. A host that wants a PNG takes one from the
-  controller's `current` page with `page.screenshot({ format: "png" })`.
+  controller's `current` page with `Frame.read(page, { format: "png" })`.
 - With `@effect-browser/yielded`, the run is Yielded's: its policy bounds turns, tool calls, time
   and spend, and it adds approval, context management, durable runs and run events. See its
   [documentation](https://github.com/yielded-dev/agent).
@@ -262,7 +262,7 @@ on a browser's tabs. `PageControl.make` gives the controller alone, for a host w
 - Events, frame arrivals and moments share the owning browser’s host monotonic clock in milliseconds.
   `Browser.now` reads that clock. These stamps measure elapsed time, not calendar dates.
   Native frames map browser paint to `hostTime` with explicit uncertainty; screenshot timing has
-  separate provenance. `Page.captureStats` reports frame gaps, filtering, late frames apart from
+  separate provenance. A capture's `stats` report frame gaps, filtering, late frames apart from
   lost ones and the acknowledgement backlog, over a page's life or a window of the latest minute.
 - `Browser.events()` carries the timed input track for the consumer’s cursor rendering: complete
   glide plans, submission receipts, button and key phases, wheel input and cursor shape. Each page

@@ -10,7 +10,7 @@ import { Browser, type Service } from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
 import { Subject } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
-import { BrowserPaint, Frame } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as Snapshot from "../src/Snapshot.ts";
 import * as TestBrowser from "../src/testing/TestBrowser.ts";
@@ -63,18 +63,18 @@ const html =
 
 const contract = (page: Page, replace: Effect.Effect<void, BrowserError>) =>
   Effect.gen(function* () {
-    const capture = yield* page.capture();
+    const capture = yield* Frame.capture(page);
 
     const frame =
       capture.current ??
       Option.getOrThrow(yield* capture.stream.pipe(Stream.runHead, Effect.timeout("5 seconds")));
 
-    assert.isTrue(capture.isCurrent(new Frame({ ...frame, data: new Uint8Array([0]) })));
-    assert.isFalse(capture.isCurrent(new Frame({ ...frame, document: frame.document + 1 })));
+    assert.isTrue(capture.isCurrent(new Frame.Frame({ ...frame, data: new Uint8Array([0]) })));
+    assert.isFalse(capture.isCurrent(new Frame.Frame({ ...frame, document: frame.document + 1 })));
     if (frame.capture !== undefined)
       assert.isFalse(
         capture.isCurrent(
-          new Frame({
+          new Frame.Frame({
             ...frame,
             capture: { ...frame.capture, sequence: frame.capture.sequence + 1 },
           }),
@@ -125,7 +125,7 @@ it.effect("earns the supported Page contract with seeded data", () =>
   Effect.gen(function* () {
     const seed = {
       frames: [
-        new Frame({
+        new Frame.Frame({
           page: "test-page",
           session: "test-browser",
           connection: "test-connection",
@@ -136,7 +136,7 @@ it.effect("earns the supported Page contract with seeded data", () =>
           width: 10,
           height: 10,
           receivedAt: 0,
-          timing: new BrowserPaint({ timestamp: 0, hostTime: 0, uncertaintyMillis: 0 }),
+          timing: new Frame.BrowserPaint({ timestamp: 0, hostTime: 0, uncertaintyMillis: 0 }),
         }),
       ],
       elements: [

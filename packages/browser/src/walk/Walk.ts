@@ -135,6 +135,12 @@ export {
    * @since 0.3.0
    */
   type ReplayOptions,
+  /**
+   * @stability stable
+   * @category options
+   * @since 0.3.0
+   */
+  type RestoreOptions,
 } from "./internal/execute.ts";
 
 export {

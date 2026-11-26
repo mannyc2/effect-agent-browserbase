@@ -1,7 +1,7 @@
 // Moments of real pages, laid out for scripted models: no model is called.
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, expectTypeOf, it, layer } from "@effect/vitest";
-import { Arbitrary, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Arbitrary, Duration, Effect, Layer, Option, pipe, Schema, Stream } from "effect";
 import { LanguageModel, Prompt, type Response } from "effect/ai";
 
 import { Browser, make as makeBrowser } from "../../src/Browser.ts";
@@ -16,13 +16,13 @@ import {
   TrackEvent,
 } from "../../src/BrowserEvent.ts";
 import * as Change from "../../src/Change.ts";
-import { BrowserPaint, Frame, Screenshot } from "../../src/Frame.ts";
+import * as Frame from "../../src/Frame.ts";
 import { boundsOf, within } from "../../src/internal/timeline/window.ts";
-import type { Page } from "../../src/Page.ts";
 import * as Snapshot from "../../src/Snapshot.ts";
 import * as Moment from "../../src/timeline/Moment.ts";
 import * as Window from "../../src/Window.ts";
 import { Site, SiteLayer } from "../fixtures.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
 const texts = (prompt: Prompt.Prompt) =>
@@ -38,12 +38,12 @@ const pictures = (prompt: Prompt.Prompt) =>
   );
 
 const shot = (hostTime: number, byte: number) =>
-  new Frame({
+  new Frame.Frame({
     page: "p1",
     session: "s1",
     connection: "fixture-connection",
     data: new Uint8Array([0xff, 0xd8, byte]),
-    timing: new Screenshot({ hostTime, uncertaintyMillis: 0 }),
+    timing: new Frame.Screenshot({ hostTime, uncertaintyMillis: 0 }),
     receivedAt: hostTime,
     width: 800,
     height: 600,
@@ -301,9 +301,9 @@ const framesAt = (at: ReadonlyArray<number>) =>
 
 /** A screencast frame: a paint, at its host time. */
 const paintedAt = (hostTime: number) =>
-  new Frame({
+  new Frame.Frame({
     ...shot(hostTime, 3),
-    timing: new BrowserPaint({ timestamp: hostTime + 1e12, hostTime, uncertaintyMillis: 1 }),
+    timing: new Frame.BrowserPaint({ timestamp: hostTime + 1e12, hostTime, uncertaintyMillis: 1 }),
   });
 
 // How a bound is asked: a host time, a frame's paint or, for a start, a previous window's end or a
@@ -334,7 +334,7 @@ describe("a window", () => {
       const first = within({ since: a, until: b }, tracks.events, tracks.frames);
       const second = within({ since: b, until: c }, tracks.events, tracks.frames);
 
-      const at = (frames: ReadonlyArray<Frame>, time: number) =>
+      const at = (frames: ReadonlyArray<Frame.Frame>, time: number) =>
         frames.filter((frame) => frame.hostTime === time);
 
       // Every event after the first's start, up to the second's end, once and in order, apart
@@ -555,11 +555,14 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* start("/slots");
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         yield* Effect.sleep(Duration.millis(300));
         yield* page.click({ x: 300, y: 320 });
         yield* Effect.sleep(Duration.millis(400));
-        const moment = yield* Moment.capture(page, { frames: 2 });
+        const moment = yield* Moment.read(page, { frames: 2 });
         const prompts: Array<Prompt.Prompt> = [];
 
         const model = yield* LanguageModel.make({
@@ -602,18 +605,16 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* start("/form");
-        const first = yield* Moment.capture(page);
+        const first = yield* Moment.read(page);
 
         yield* page.press("Tab");
-        const second = yield* Moment.capture(page, { since: first });
+        const second = yield* pipe(page, Moment.read({ since: first }));
 
         yield* page.goto((yield* Site).url("/next"));
-        const third = yield* Moment.capture(page, { since: second, snapshot: true });
+        const third = yield* Moment.read(page, { since: second, snapshot: true });
 
         // A moment needs only its page: no Browser in context.
-        expectTypeOf(Moment.capture(page)).toEqualTypeOf<
-          Effect.Effect<Moment.Moment, BrowserError>
-        >();
+        expectTypeOf(Moment.read(page)).toEqualTypeOf<Effect.Effect<Moment.Moment, BrowserError>>();
         assert.strictEqual(second.since, first.until);
         assert.strictEqual(third.since, second.until);
         assert.isUndefined(second.snapshot);
@@ -655,7 +656,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         if (ref === undefined) return yield* Effect.die("the form has no Next page link");
         yield* page.click(ref);
         yield* Snapshot.until(page, { text: "The next page" }, "some", 5000);
-        const moment = yield* Moment.capture(page, { snapshot: true });
+        const moment = yield* Moment.read(page, { snapshot: true });
 
         const click = moment.events.find(
           (event) => event._tag === "Action" && event.name === "click",
@@ -685,7 +686,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* start("/form");
-        const first = yield* Moment.capture(page);
+        const first = yield* Moment.read(page);
         const [link] = yield* Snapshot.find(page, { role: "link", name: "Next page" });
 
         if (link === undefined) return yield* Effect.die("missing navigation link");
@@ -701,11 +702,11 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         if (action?._tag !== "Action" || navigation?._tag !== "Navigated")
           return yield* Effect.die("missing native navigation evidence");
         assert.isBelow(navigation.at, action.at);
-        const picture = yield* page.frame({ maxAge: 0 });
+        const picture = yield* Frame.read(page, { maxAge: 0 });
 
-        const painted = new Frame({
+        const painted = new Frame.Frame({
           ...picture,
-          timing: new Screenshot({
+          timing: new Frame.Screenshot({
             hostTime: (navigation.at + action.at) / 2,
             uncertaintyMillis: 0,
           }),
@@ -718,14 +719,13 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           until: (action.startedAt + navigation.at) / 2,
         });
 
-        const cached: Page = {
-          ...page,
+        const cached = PageFunctions.replace(page, {
           frame: (options) =>
-            options?.maxAge === 0 ? page.frame(options) : Effect.succeed(painted),
-        };
+            options?.maxAge === 0 ? Frame.read(page, options) : Effect.succeed(painted),
+        });
 
-        const moment = yield* Moment.capture(cached, { since: during });
-        const following = yield* Moment.capture(page, { since: moment });
+        const moment = yield* Moment.read(cached, { since: during });
+        const following = yield* Moment.read(page, { since: moment });
 
         assert.include(moment.events, action);
         assert.include(moment.events, navigation);
@@ -746,13 +746,16 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* start("/slots");
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         yield* Effect.sleep(Duration.millis(300));
         yield* page.click({ x: 300, y: 320 });
         yield* Effect.sleep(Duration.millis(1500));
 
-        const recent = yield* Moment.capture(page, { since: Duration.millis(500), frames: 3 });
-        const longer = yield* Moment.capture(page, { frames: 3 });
+        const recent = yield* Moment.read(page, { since: Duration.millis(500), frames: 3 });
+        const longer = yield* Moment.read(page, { frames: 3 });
 
         assert.closeTo(recent.until - recent.since, 500, 1e-6);
         assert.isTrue(recent.frames.every((frame) => frame.hostTime >= recent.since));
@@ -775,7 +778,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* start("/form");
 
-        const invalid: ReadonlyArray<Moment.CaptureOptions> = [
+        const invalid: ReadonlyArray<Moment.MomentOptions> = [
           { frames: 0 },
           { frames: 1.5 },
           { since: Duration.millis(-1) },
@@ -784,7 +787,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         ];
 
         for (const options of invalid) {
-          const error = yield* Moment.capture(page, options).pipe(Effect.flip);
+          const error = yield* Moment.read(page, options).pipe(Effect.flip);
 
           assert.strictEqual(error.reason._tag, "InvalidRequest", JSON.stringify(options));
           assert.isFalse(error.dispatched);
@@ -809,7 +812,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             }, shown),
           );
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         yield* Change.read(page);
         yield* price("$1");
         yield* Effect.sleep(Duration.millis(300));
@@ -821,7 +827,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         yield* page.click(menu?.ref ?? "no menu");
         yield* Effect.sleep(Duration.millis(2900));
         const window = yield* Window.read(page, { since: Duration.seconds(2), until });
-        const kept = { events: yield* page.recentEvents, frames: yield* page.recentFrames };
+        const kept = { events: yield* page.recentEvents, frames: yield* Frame.recent(page) };
 
         assert.deepStrictEqual([window.since, window.until], [until - 2000, until]);
         assert.isEmpty(window.missing);
@@ -896,10 +902,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         // No capture runs, so the picture is a new screenshot, which the page refuses; then the read
         // of what changed fails.
         refuse({ method: "Page.captureScreenshot" });
-        const unpictured = yield* Moment.capture(page);
+        const unpictured = yield* Moment.read(page);
 
         refuse({ method: "Runtime.evaluate", script: "changes" });
-        const unchanged = yield* Moment.capture(page, { since: unpictured });
+        const unchanged = yield* Moment.read(page, { since: unpictured });
 
         const why = (moment: Moment.Moment) =>
           moment.missing.map((error) => [error.operation, error.reason.message]);

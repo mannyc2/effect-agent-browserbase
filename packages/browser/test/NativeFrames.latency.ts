@@ -3,6 +3,7 @@ import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Clock, Duration, Effect, Fiber, Random, Stream } from "effect";
 
+import * as Frame from "../src/Frame.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Stage from "../src/presentation/Stage.ts";
 import { unpaused } from "./fixtures.ts";
@@ -29,7 +30,10 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         yield* Effect.promise(() => TestCdp.nativePage(page).setContent(busy));
         yield* Effect.sleep("300 millis");
-        const frames = yield* page.screencast().pipe(Stream.take(1), Stream.runCollect);
+
+        const frames = yield* Stream.unwrap(
+          Effect.map(Frame.capture(page), ({ stream }) => stream),
+        ).pipe(Stream.take(1), Stream.runCollect);
 
         assert.isAtMost(frames[0]?.timing.uncertaintyMillis ?? Infinity, 450);
       }),
@@ -83,7 +87,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const { browser } = yield* session("latency-clock");
         const page = yield* browser.newPage("data:text/html,<button>Clock</button>");
 
-        const caller = Object.assign(Object.create(page.clock) as Clock.Clock, {
+        const caller = Object.assign(Object.create(page.hostClock) as Clock.Clock, {
           monotonicTimeNanosUnsafe: () => 0n,
           sleep: () => Effect.never,
         });
@@ -161,7 +165,11 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* Effect.promise(() => firstDown);
         relay.shiftClock();
         relay.age(10_000);
-        const frames = yield* relay.page.screencast().pipe(Stream.take(1), Stream.runCollect);
+
+        const frames = yield* Stream.unwrap(
+          Effect.map(Frame.capture(relay.page), ({ stream }) => stream),
+        ).pipe(Stream.take(1), Stream.runCollect);
+
         const frame = frames[0];
 
         assert.isDefined(frame);

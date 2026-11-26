@@ -308,7 +308,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   it.effect("waits for a condition, and returns the page as it is when it stays unmet", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
-      const { actions, control } = yield* PageControl.make({ page }, { maxWaitMillis: 500 });
+      const { actions, control } = yield* PageControl.make({ page }, { maxWait: "500 millis" });
 
       yield* actions.act([{ kind: "click", ref: refOf(yield* actions.observe, "Ship later") }], {
         observe: false,

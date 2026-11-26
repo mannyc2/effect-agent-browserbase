@@ -10,6 +10,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect";
 import * as Browser from "effect-browser/Browser";
 import { Subject } from "effect-browser/BrowserEvent";
+import * as Frame from "effect-browser/Frame";
 import * as Snapshot from "effect-browser/Snapshot";
 import { Supervisor } from "effect-browser/supervisor";
 import * as Text from "effect-browser/Text";
@@ -340,7 +341,7 @@ describe("consumer compositions", () => {
               assert.strictEqual(refused.reason._tag, "Suspended");
               assert.isFalse(refused.dispatched);
               assert.include((yield* Text.read(page)).text, "Operator verification required");
-              assert.isAbove((yield* page.screenshot()).data.length, 0);
+              assert.isAbove((yield* Frame.read(page, { after: "input" })).data.length, 0);
               // A human/provider viewer is outside the library's automated-input gate.
               yield* Effect.promise(() =>
                 world.native().getByRole("button", { name: "Verify operator" }).click(),

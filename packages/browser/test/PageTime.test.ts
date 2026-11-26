@@ -4,6 +4,7 @@ import { Duration, Effect, Option } from "effect";
 import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
+import * as Frame from "../src/Frame.ts";
 import * as Overlay from "../src/Overlay.ts";
 import type { Page } from "../src/Page.ts";
 import * as PageTime from "../src/PageTime.ts";
@@ -81,7 +82,7 @@ const x = (page: Page) =>
 
 // The left edge of the red box a new screenshot shows on its row.
 const redFrom = (page: Page) =>
-  page.screenshot({ maxAge: 0, quality: 100 }).pipe(
+  Frame.read(page, { maxAge: 0, quality: 100 }).pipe(
     Effect.map((image) => {
       const decoded = jpegjs.decode(image.data, { useTArray: true });
       const row = 125 * decoded.width * 4;
@@ -196,7 +197,7 @@ layer(
       assert.strictEqual(waiting.reason._tag, "Timeout");
 
       const still = yield* Effect.flip(
-        Stillness.wait(page, { quietMillis: 100, timeout: "400 millis" }),
+        Stillness.wait(page, { quiet: "100 millis", timeout: "400 millis" }),
       );
 
       assert.strictEqual(still.reason._tag, "Timeout");

@@ -1,7 +1,7 @@
 /** The crops `zoom` took, as the model is shown them before its next turn. */
 import { Prompt } from "effect/ai";
 
-import type * as Page from "../../Page.ts";
+import type { Zoom } from "../../Frame.ts";
 
 /** At most this many crops are shown at once: the latest. */
 const maxZooms = 8;
@@ -11,7 +11,7 @@ const maxZooms = 8;
  * `scale` pixels to a CSS pixel.
  */
 export const cropped = (
-  crops: ReadonlyArray<Page.Zoom>,
+  crops: ReadonlyArray<Zoom>,
   page: string,
   scale = 1,
 ): ReadonlyArray<Prompt.UserMessagePart> => {

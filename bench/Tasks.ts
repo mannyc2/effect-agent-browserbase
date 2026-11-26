@@ -6,7 +6,7 @@ import { Deferred, Duration, Effect, Fiber, Option, Schedule, Schema, Stream } f
 import { Browser } from "effect-browser/Browser";
 import { type BrowserError, refuse } from "effect-browser/BrowserError";
 import * as Change from "effect-browser/Change";
-import type { Frame } from "effect-browser/Frame";
+import * as Frame from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 import { Presentation } from "effect-browser/presentation";
 import * as Snapshot from "effect-browser/Snapshot";
@@ -109,7 +109,11 @@ const narrate = <E>(
 ) =>
   Effect.gen(function* () {
     // Moments read the page's retained screencast frames, so one must be running.
-    yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+    yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+      Stream.runDrain,
+      Effect.ignore,
+      Effect.forkScoped,
+    );
     let previous: Moment.Moment | undefined;
     // The first look is at once, and so is the first retry of a look or call that failed;
     // otherwise the narrator waits `every` after its last try.
@@ -126,7 +130,7 @@ const narrate = <E>(
 
       // A moment says what it could not read, as mid-navigation, rather than fail; one that fails
       // anyway, or whose caption fails, leaves its window to the next try.
-      const captured = yield* Moment.capture(page, {
+      const captured = yield* Moment.read(page, {
         frames: 3,
         since: previous ?? Duration.fromInputUnsafe(every),
         snapshot: false,
@@ -410,7 +414,7 @@ export const operate = <A, I>(spec: {
 });
 
 /** A native paint at or after the fixture's last visual change. */
-const after = (frame: Frame, frameAfter: number) =>
+const after = (frame: Frame.Frame, frameAfter: number) =>
   frame.timestamp !== undefined && frame.timestamp >= frameAfter;
 
 const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
@@ -429,7 +433,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
   ) => Effect.Effect<number, BrowserError | FixtureUnreadable>;
   /** What else the selected frames must show, read after capture; a problem or undefined. */
   readonly covers?: (
-    frames: ReadonlyArray<Frame>,
+    frames: ReadonlyArray<Frame.Frame>,
     page: Page,
   ) => Effect.Effect<string | undefined, BrowserError | FixtureUnreadable>;
   readonly instructions: string;
@@ -448,8 +452,12 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
 
       // Subscribe before the action and await its first frame, so a fast action cannot erase
       // the initial state. Bench providers retain enough history for the longest fixture.
-      yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
-      yield* page.recentFrames.pipe(
+      yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+        Stream.runDrain,
+        Effect.ignore,
+        Effect.forkScoped,
+      );
+      yield* Frame.recent(page).pipe(
         Effect.repeat({
           schedule: Schedule.spaced("25 millis"),
           until: (frames) => frames.length > 0,
@@ -470,7 +478,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
 
       // A quiet host-side stream can still have the final paint in flight. The fixture records
       // the last visual change on the browser's wall clock, which its frame timestamps share.
-      const reached = yield* page.recentFrames.pipe(
+      const reached = yield* Frame.recent(page).pipe(
         Effect.repeat({
           schedule: Schedule.spaced("25 millis"),
           until: (frames) => frames.some((frame) => after(frame, frameAfter)),
@@ -481,13 +489,13 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
 
       // A screencast can drop the final paint of a page that then stays still. A fresh screenshot
       // still shows that state; it keeps its own capture timing and never claims a paint time.
-      const shot = reached ? undefined : yield* page.frame({ maxAge: 0 });
+      const shot = reached ? undefined : yield* Frame.read(page, { maxAge: 0 });
 
       // Time spent waiting for a paint that never arrived must not push earlier frames out of
       // the evidence window.
       const waited = shot === undefined ? 0 : (yield* browser.now) - waiting;
 
-      const captured = yield* Moment.capture(page, {
+      const captured = yield* Moment.read(page, {
         frames: spec.capture.frames,
         since: Duration.millis((spec.capture.windowMillis ?? 5000) + waited),
         snapshot: Arms.outline(options.arm ?? 5),
@@ -496,7 +504,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
       // A moment ends with its own fresh screenshot when its newest frame is not demonstrably
       // current, such as on a page that has been still for a while. One taken after the fixture's
       // last change was read shows that change.
-      const current = (frame: Frame) =>
+      const current = (frame: Frame.Frame) =>
         after(frame, frameAfter) ||
         (frame.timing._tag === "Screenshot" &&
           frame.hostTime - frame.timing.uncertaintyMillis >= waiting);
@@ -597,7 +605,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
 
 /** A selected frame painted before the jump, so the pictures show the move itself. */
 export const precedesJump = (
-  frames: ReadonlyArray<Frame>,
+  frames: ReadonlyArray<Frame.Frame>,
   spikeAt: number | null,
 ): string | undefined => {
   const first = frames[0]?.timestamp;
@@ -609,7 +617,7 @@ export const precedesJump = (
 
 /** No selected frame shows the jump the control must not see. */
 export const precedesAnyJump = (
-  frames: ReadonlyArray<Frame>,
+  frames: ReadonlyArray<Frame.Frame>,
   spikeAt: number | null,
 ): string | undefined => {
   const last = frames.at(-1)?.timestamp;
@@ -620,7 +628,7 @@ export const precedesAnyJump = (
 };
 
 /** Consecutive frames closer than one phase, so no phase can fall between two pictures. */
-export const gapsWithin = (frames: ReadonlyArray<Frame>, maximumMillis: number) => {
+export const gapsWithin = (frames: ReadonlyArray<Frame.Frame>, maximumMillis: number) => {
   const gaps = frames
     .slice(1)
     .map((frame, index) => frame.hostTime - (frames[index]?.hostTime ?? 0));
@@ -638,7 +646,7 @@ const spin = (page: Page) =>
     const { spins } = yield* truth(page, ReelsTruth);
 
     yield* page.click(spinAt);
-    yield* Stillness.wait(page, { quietMillis: 400, timeout: Duration.seconds(10) });
+    yield* Stillness.wait(page, { quiet: "400 millis", timeout: Duration.seconds(10) });
     // `ready` can take a stalled screencast for a still page while the reels turn, and the game
     // ignores a click while they do, so the reels' own state says when the spin has ended.
     yield* truth(page, ReelsTruth).pipe(
@@ -934,7 +942,7 @@ const tumbleWin = understand({
         Effect.timeout("20 seconds"),
         Effect.orDie,
       );
-      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(3) });
     }),
   // Three frames can omit an entire paying cascade; give the describer its visual evidence.
   capture: { frames: 12, windowMillis: 20_000 },
@@ -981,7 +989,7 @@ const orderFilled = understand({
       // Keep an earlier no-order frame distinct from the final filled row.
       yield* Effect.sleep("700 millis");
       yield* buy(page, "0.25");
-      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
   minimumSpanMillis: () => Effect.succeed(500),
@@ -1030,7 +1038,7 @@ const navigated = understand({
     Effect.gen(function* () {
       yield* Effect.sleep("700 millis");
       yield* playReels(page);
-      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
   minimumSpanMillis: () => Effect.succeed(500),
@@ -1214,10 +1222,10 @@ const boardWhen = (page: Page, ready: (board: typeof BoardTruth.Type) => boolean
   );
 
 const settle = (page: Page) =>
-  Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
+  Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(3) });
 
 /** The first selected frame was painted before `at`, so the pictures hold the earlier state. */
-const startsBefore = (frames: ReadonlyArray<Frame>, at: number | null, what: string) => {
+const startsBefore = (frames: ReadonlyArray<Frame.Frame>, at: number | null, what: string) => {
   const first = frames[0]?.timestamp;
 
   return at !== null && first !== undefined && first < at
@@ -1226,7 +1234,11 @@ const startsBefore = (frames: ReadonlyArray<Frame>, at: number | null, what: str
 };
 
 /** A selected frame was painted in `[from, until)`, while what appeared there showed. */
-const showsBetween = (frames: ReadonlyArray<Frame>, from: number | null, until: number | null) =>
+const showsBetween = (
+  frames: ReadonlyArray<Frame.Frame>,
+  from: number | null,
+  until: number | null,
+) =>
   from !== null &&
   until !== null &&
   frames.some(

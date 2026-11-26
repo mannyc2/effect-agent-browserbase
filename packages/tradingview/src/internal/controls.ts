@@ -5,6 +5,7 @@ import type { Page } from "effect-browser/Page";
 import * as Snapshot from "effect-browser/Snapshot";
 
 import * as Chart from "../Chart.ts";
+import { onPage } from "./dual.ts";
 import {
   awaiting,
   control,
@@ -95,7 +96,7 @@ const notch = Math.log(1.1);
  * the wheel leaves the ends more than a bar or a twentieth of the span off, the API sets the view,
  * where the chart implements it. Gives the times of the first and last bars then in view.
  */
-export const range = (page: Page, span: { readonly from: number; readonly to: number }) =>
+export const range = onPage((page: Page, span: { readonly from: number; readonly to: number }) =>
   Effect.gen(function* () {
     if (!(span.to > span.from)) return yield* invalid("a span's end comes after its start");
     const { pane } = yield* look(page);
@@ -149,7 +150,8 @@ export const range = (page: Page, span: { readonly from: number; readonly to: nu
           : "api"
         : "input") as Via,
     };
-  });
+  }),
+);
 
 // --- Symbol and timeframe ------------------------------------------------------------------------
 
@@ -213,7 +215,7 @@ const searched = (page: Page, name: string) =>
  * Chart another symbol, such as "MSFT" or "BINANCE:ETHUSDT", typed on the chart, as opens its
  * symbol search, and chosen with Enter. Gives the symbol the chart then shows, once it has loaded.
  */
-export const symbol = (page: Page, name: string) =>
+export const symbol = onPage((page: Page, name: string) =>
   Effect.gen(function* () {
     const shows = (seen: Glance) => tickerOf(seen.symbol) === tickerOf(name);
 
@@ -233,7 +235,8 @@ export const symbol = (page: Page, name: string) =>
       symbol: (yield* until(page, (seen) => seen.loaded && shows(seen), 10_000)).symbol,
       via,
     };
-  });
+  }),
+);
 
 // A timeframe as the chart writes it, its count of one left out: "D" for "1D".
 const plain = (resolution: string) =>
@@ -246,7 +249,7 @@ const plain = (resolution: string) =>
  * Chart another timeframe, as `State.resolution` writes it, typed on the chart, digit first as
  * opens its interval dialog, and applied with Enter. Gives the timeframe the chart then shows.
  */
-export const timeframe = (page: Page, resolution: string) =>
+export const timeframe = onPage((page: Page, resolution: string) =>
   Effect.gen(function* () {
     const shows = (seen: Glance) => plain(seen.resolution) === plain(resolution);
 
@@ -274,7 +277,8 @@ export const timeframe = (page: Page, resolution: string) =>
       resolution: (yield* until(page, (seen) => seen.loaded && shows(seen), 10_000)).resolution,
       via,
     };
-  });
+  }),
+);
 
 // --- Studies -------------------------------------------------------------------------------------
 
@@ -331,37 +335,39 @@ const found = (page: Page, name: string, before: Glance) =>
  * inputs by id set in its settings as `inputs` sets them. Gives the study as the chart then holds
  * it; an input it does not have is not set.
  */
-export const indicator = (
-  page: Page,
-  request: {
-    readonly name: string;
-    readonly inputs?: Readonly<Record<string, Chart.InputValue>> | undefined;
-  },
-) =>
-  Effect.gen(function* () {
-    const added = yield* found(page, request.name, yield* look(page)).pipe(
-      taken,
-      Effect.map((id) => ({ id, via: "input" as Via })),
-      Effect.catchTag("Untaken", () =>
-        page.press("Escape").pipe(
-          Effect.andThen(Chart.indicator(page, request)),
-          Effect.map((id) => ({ id, via: "api" as Via })),
+export const indicator = onPage(
+  (
+    page: Page,
+    request: {
+      readonly name: string;
+      readonly inputs?: Readonly<Record<string, Chart.InputValue>> | undefined;
+    },
+  ) =>
+    Effect.gen(function* () {
+      const added = yield* found(page, request.name, yield* look(page)).pipe(
+        taken,
+        Effect.map((id) => ({ id, via: "input" as Via })),
+        Effect.catchTag("Untaken", () =>
+          page.press("Escape").pipe(
+            Effect.andThen(Chart.indicator(page, request)),
+            Effect.map((id) => ({ id, via: "api" as Via })),
+          ),
         ),
-      ),
-    );
+      );
 
-    const study = yield* studyOf(page, added.id);
+      const study = yield* studyOf(page, added.id);
 
-    // Through the API, the study took its inputs as it was added. Of the rest, those it has.
-    const wanted = Object.entries(request.inputs ?? {}).filter(([id]) =>
-      study.inputs.some((input) => input.id === id),
-    );
+      // Through the API, the study took its inputs as it was added. Of the rest, those it has.
+      const wanted = Object.entries(request.inputs ?? {}).filter(([id]) =>
+        study.inputs.some((input) => input.id === id),
+      );
 
-    if (added.via === "api" || wanted.length === 0) return { ...study, via: added.via };
-    const set = yield* inputs(page, { study: added.id, inputs: Object.fromEntries(wanted) });
+      if (added.via === "api" || wanted.length === 0) return { ...study, via: added.via };
+      const set = yield* inputs(page, { study: added.id, inputs: Object.fromEntries(wanted) });
 
-    return { ...set, via: set.via === "input" ? set.via : ("corrected" as Via) };
-  });
+      return { ...set, via: set.via === "input" ? set.via : ("corrected" as Via) };
+    }),
+);
 
 const Field = Schema.NullOr(
   Schema.Struct({ kind: Schema.Literals(["text", "list"]), x: Schema.Finite, y: Schema.Finite }),
@@ -477,40 +483,45 @@ const holds = (study: Chart.Study, id: string, value: Chart.InputValue) =>
  * API sets those the dialog has no field for, such as a switch. Gives the study as the chart then
  * holds it, and fails `InvalidRequest`, naming its inputs, for an input it does not have.
  */
-export const inputs = (
-  page: Page,
-  request: { readonly study: string; readonly inputs: Readonly<Record<string, Chart.InputValue>> },
-) =>
-  Effect.gen(function* () {
-    const study = yield* studyOf(page, request.study);
-    const wanted = Object.entries(request.inputs);
-    const unknown = wanted.filter(([id]) => !study.inputs.some((input) => input.id === id));
+export const inputs = onPage(
+  (
+    page: Page,
+    request: {
+      readonly study: string;
+      readonly inputs: Readonly<Record<string, Chart.InputValue>>;
+    },
+  ) =>
+    Effect.gen(function* () {
+      const study = yield* studyOf(page, request.study);
+      const wanted = Object.entries(request.inputs);
+      const unknown = wanted.filter(([id]) => !study.inputs.some((input) => input.id === id));
 
-    if (unknown.length > 0)
-      return yield* invalid(
-        `${study.name} has no input ${unknown.map(([id]) => id).join(", ")}; its inputs are ${study.inputs.map(({ id, name }) => `${id} (${name})`).join(", ")}`,
+      if (unknown.length > 0)
+        return yield* invalid(
+          `${study.name} has no input ${unknown.map(([id]) => id).join(", ")}; its inputs are ${study.inputs.map(({ id, name }) => `${id} (${name})`).join(", ")}`,
+        );
+      if (wanted.every(([id, value]) => holds(study, id, value)))
+        return { ...study, via: "input" as Via };
+
+      const fields = wanted.flatMap(([id, value]) => {
+        const name = study.inputs.find((input) => input.id === id)?.name;
+
+        return name === undefined ? [] : [{ name, value }];
+      });
+
+      yield* configured(page, request.study, fields).pipe(
+        taken,
+        Effect.catchTag("Untaken", () => page.press("Escape")),
       );
-    if (wanted.every(([id, value]) => holds(study, id, value)))
-      return { ...study, via: "input" as Via };
+      const held = yield* studyOf(page, request.study);
+      const unset = wanted.filter(([id, value]) => !holds(held, id, value));
 
-    const fields = wanted.flatMap(([id, value]) => {
-      const name = study.inputs.find((input) => input.id === id)?.name;
+      if (unset.length === 0) return { ...held, via: "input" as Via };
+      yield* Chart.inputs(page, { study: request.study, inputs: Object.fromEntries(unset) });
 
-      return name === undefined ? [] : [{ name, value }];
-    });
-
-    yield* configured(page, request.study, fields).pipe(
-      taken,
-      Effect.catchTag("Untaken", () => page.press("Escape")),
-    );
-    const held = yield* studyOf(page, request.study);
-    const unset = wanted.filter(([id, value]) => !holds(held, id, value));
-
-    if (unset.length === 0) return { ...held, via: "input" as Via };
-    yield* Chart.inputs(page, { study: request.study, inputs: Object.fromEntries(unset) });
-
-    return {
-      ...(yield* studyOf(page, request.study)),
-      via: (unset.length < wanted.length ? "corrected" : "api") as Via,
-    };
-  });
+      return {
+        ...(yield* studyOf(page, request.study)),
+        via: (unset.length < wanted.length ? "corrected" : "api") as Via,
+      };
+    }),
+);

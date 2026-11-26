@@ -1,10 +1,15 @@
 /**
- * Pictures of a page: screenshots, and screencast frames stamped with the browser's clock.
+ * Pictures of a page: its viewport as a frame of a stated age, crops of it, its screencast with
+ * frames stamped by the browser's clock, and how it paints. Each function takes the page first.
  *
  * @stability stable
  * @since 0.3.0
  */
-import { Schema } from "effect";
+import { type Duration, type Effect, Function, type Scope, Schema, type Stream } from "effect";
+
+import type { BrowserError } from "./BrowserError.ts";
+import { functionsOf, isPage } from "./internal/page/functions.ts";
+import type { Page } from "./Page.ts";
 
 /**
  * An encoded picture with its pixel dimensions. Crops also need their viewport origin.
@@ -30,7 +35,9 @@ const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
  * @category schemas
  * @since 0.3.0
  */
-export class BrowserPaint extends Schema.TaggedClass<BrowserPaint>()("BrowserPaint", {
+export class BrowserPaint extends Schema.TaggedClass<BrowserPaint>(
+  "effect-browser/Frame/BrowserPaint",
+)("BrowserPaint", {
   timestamp: Schema.Finite,
   hostTime: Schema.Finite,
   uncertaintyMillis: Nonnegative,
@@ -43,10 +50,13 @@ export class BrowserPaint extends Schema.TaggedClass<BrowserPaint>()("BrowserPai
  * @category schemas
  * @since 0.3.0
  */
-export class Screenshot extends Schema.TaggedClass<Screenshot>()("Screenshot", {
-  hostTime: Schema.Finite,
-  uncertaintyMillis: Nonnegative,
-}) {}
+export class Screenshot extends Schema.TaggedClass<Screenshot>("effect-browser/Frame/Screenshot")(
+  "Screenshot",
+  {
+    hostTime: Schema.Finite,
+    uncertaintyMillis: Nonnegative,
+  },
+) {}
 
 /**
  * An image and its timing evidence. Paint time and screenshot capture time cannot be confused in
@@ -66,6 +76,8 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   /** Native capture identity. Screenshots have no capture generation or sequence. */
   capture: Schema.optionalKey(Schema.Struct({ generation: Count, sequence: Count })),
   data: Schema.Uint8Array,
+  /** The picture's type, when a new picture gave it; one without is a JPEG, as screencast frames are. */
+  mediaType: Schema.optionalKey(Schema.Literals(["image/jpeg", "image/png"])),
   timing: Schema.Union([BrowserPaint, Screenshot]),
   receivedAt: Schema.Finite,
   width: Schema.Finite,
@@ -90,7 +102,7 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   get image(): Image {
     return new Image({
       data: this.data,
-      mediaType: "image/jpeg",
+      mediaType: this.mediaType ?? "image/jpeg",
       width: this.width,
       height: this.height,
     });
@@ -179,3 +191,187 @@ export interface ScreencastOptions {
   /** Frames are scaled down to fit this box. Defaults to the viewport in CSS pixels. */
   readonly size?: { readonly width: number; readonly height: number } | undefined;
 }
+
+/**
+ * An integer rectangle in viewport CSS pixels.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
+export class Region extends Schema.Class<Region>("effect-browser/Frame/Region")({
+  x: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  y: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  width: Schema.Int.check(Schema.isGreaterThan(0)),
+  height: Schema.Int.check(Schema.isGreaterThan(0)),
+}) {}
+
+/**
+ * A crop and its viewport origin: add that origin to a point read from the crop.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
+export class Zoom extends Schema.Class<Zoom>("effect-browser/Frame/Zoom")({
+  page: Schema.String,
+  region: Region,
+  image: Image,
+}) {}
+
+/**
+ * How current a picture must be, and how a new one is taken. The newest screencast frame serves
+ * when it qualifies, at no cost; otherwise a new screenshot is taken.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
+export interface FrameOptions {
+  /**
+   * The oldest a reused frame may be, from its paint, at the earliest its timing allows, to now.
+   * Defaults to 250 milliseconds; 0 always takes a new screenshot.
+   */
+  readonly maxAge?: Duration.Input | undefined;
+  /**
+   * `"input"`: reuse only a frame painted after this page's latest input, including input of an
+   * interrupted action, and never while an action is changing the page. For a caller that has
+   * just acted on the page, so that it sees what its action did.
+   */
+  readonly after?: "input" | undefined;
+  /** JPEG quality of a new picture, 0 to 100. Defaults to 80. */
+  readonly quality?: number | undefined;
+  /** `"jpeg"`, the default, or `"png"`, which is always a new picture. */
+  readonly format?: "jpeg" | "png" | undefined;
+  /**
+   * `"css"`, the default, a picture pixel per CSS pixel; `"device"`, the screen's own pixels, as
+   * many to a CSS pixel as its device scale factor, which is always a new picture.
+   */
+  readonly scale?: "css" | "device" | undefined;
+}
+
+/**
+ * How a page paints for a scope; see `paint`.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export interface Paint {
+  /** Device pixels to each CSS pixel, more than 0 and at most 4. The layout keeps its size. */
+  readonly scale?: number | undefined;
+  /** False hides the page's scrollbars from its next document on, and its layout takes their room. */
+  readonly scrollbars?: boolean | undefined;
+}
+
+/**
+ * Scoped access to one page's shared capture and its current-document evidence.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export interface Capture {
+  /**
+   * Screencast frames for as long as the stream runs. Concurrent streams share one screencast and
+   * its settings; explicit options that differ from a running screencast's fail with
+   * InvalidRequest.
+   */
+  readonly stream: Stream.Stream<Frame, BrowserError>;
+  readonly current: Frame | undefined;
+  readonly isCurrent: (frame: Frame) => boolean;
+  readonly confirm: (frame: Frame) => Effect.Effect<boolean, BrowserError>;
+  readonly sync: Effect.Effect<void, BrowserError>;
+  /**
+   * What this page's captures received, delivered and dropped, over its life or the latest
+   * `window`, which reaches back at most a minute; a longer one is an `InvalidRequest`. It reads
+   * the page's counts, so it serves after the lease's scope has closed.
+   */
+  readonly stats: (options?: {
+    readonly window?: Duration.Input | undefined;
+  }) => Effect.Effect<CaptureStats, BrowserError>;
+}
+
+/**
+ * The viewport with its timing: the newest screencast frame if it qualifies, else a new
+ * screenshot timed by the host interval in which it was taken. A frame of a stated age that the
+ * screencast has costs nothing and waits for no action; one that must follow the latest input, or
+ * a new screenshot, waits for the action in flight.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
+export const read: {
+  (options?: FrameOptions): (page: Page) => Effect.Effect<Frame, BrowserError>;
+  (page: Page, options?: FrameOptions): Effect.Effect<Frame, BrowserError>;
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, options?: FrameOptions) => functionsOf(page).frame(options),
+);
+
+/**
+ * A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels.
+ * A crop is always a new picture; with `scale: "device"` it has the screen's own pixels.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
+export const zoom: {
+  (
+    region: Region,
+    options?: Pick<FrameOptions, "quality" | "format" | "scale">,
+  ): (page: Page) => Effect.Effect<Zoom, BrowserError>;
+  (
+    page: Page,
+    region: Region,
+    options?: Pick<FrameOptions, "quality" | "format" | "scale">,
+  ): Effect.Effect<Zoom, BrowserError>;
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, region: Region, options?: Pick<FrameOptions, "quality" | "format" | "scale">) =>
+    functionsOf(page).zoom(region, options),
+);
+
+/**
+ * A scoped lease on the page's capture, which starts at once, independently of its first frame.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
+export const capture: {
+  (options?: ScreencastOptions): (page: Page) => Effect.Effect<Capture, BrowserError, Scope.Scope>;
+  (page: Page, options?: ScreencastOptions): Effect.Effect<Capture, BrowserError, Scope.Scope>;
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, options?: ScreencastOptions) => functionsOf(page).capture(options),
+);
+
+/**
+ * The page's screencast frames painted within the browser's `frameHistory` of the newest, oldest first.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
+export const recent = (page: Page): Effect.Effect<ReadonlyArray<Frame>> =>
+  functionsOf(page).recentFrames;
+
+/**
+ * Paint the page at `scale` device pixels to each CSS pixel, or without its scrollbars, for a
+ * scope: a frame with `scale: "device"` then has that many more pixels, while the layout, its
+ * boxes and input keep their CSS pixels. Scrollbars go from the next document on, and come back
+ * from the next after the scope, so paint, then load the page, then measure it. One at a time. A
+ * browser this library launched paints at the scale of its launch (Chromium's
+ * `deviceScaleFactor`), and refuses another.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
+export const paint: {
+  (options: Paint): (page: Page) => Effect.Effect<void, BrowserError, Scope.Scope>;
+  (page: Page, options: Paint): Effect.Effect<void, BrowserError, Scope.Scope>;
+} = Function.dual(2, (page: Page, options: Paint) => functionsOf(page).paint(options));

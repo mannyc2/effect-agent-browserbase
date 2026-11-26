@@ -6,12 +6,13 @@
  *
  * @since 0.3.0
  */
-import { Config, type DateTime, Effect, Layer, Redacted } from "effect";
+import { Config, type DateTime, Duration, Effect, Layer, Redacted } from "effect";
 import type { Browser as PlaywrightBrowser } from "playwright-core";
 
 import * as Browser from "../../Browser.ts";
 import * as Errors from "../../BrowserError.ts";
 import { reasonOf, undispatched } from "../../BrowserError.ts";
+import { millisOf } from "../clock.ts";
 import * as Url from "../url.ts";
 
 /** The runtime connector receives the bound and cancellation signal owned by the opening scope. */
@@ -40,7 +41,7 @@ export interface Options extends Browser.Options, Pick<ConnectOptions, "headers"
   readonly id?: string | undefined;
   readonly provider?: string | undefined;
   /** Bound on connecting. Defaults to 30 seconds. */
-  readonly connectTimeoutMillis?: number | undefined;
+  readonly connectTimeout?: Duration.Input | undefined;
   /** When the provider ends the session on its own, as a hosted session's timeout does. */
   readonly expiresAt?: DateTime.Utc | undefined;
   /**
@@ -57,7 +58,7 @@ export const forRuntime = (defaultConnect?: Connector) => {
       ? Redacted.value(options.endpoint)
       : options.endpoint;
 
-    const timeout = options.connectTimeoutMillis ?? 30_000;
+    const timeout = millisOf(options.connectTimeout ?? Duration.seconds(30));
     const connector = options.connect ?? defaultConnect;
     const headers = options.headers === undefined ? undefined : { ...options.headers };
 
@@ -65,7 +66,7 @@ export const forRuntime = (defaultConnect?: Connector) => {
       undispatched("connect", new Errors.InvalidRequest({ detail }));
 
     if (!Number.isFinite(timeout) || timeout <= 0)
-      return yield* invalid("connectTimeoutMillis must be finite and greater than zero");
+      return yield* invalid("connectTimeout must be finite and greater than zero");
     if (connector === undefined)
       return yield* invalid("This runtime requires a CDP connect callback");
 

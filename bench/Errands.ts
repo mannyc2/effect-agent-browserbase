@@ -162,7 +162,7 @@ const policyFind = operate({
       if (menu === undefined) return yield* Effect.die(`the header has no ${layout.menu} menu`);
       yield* page.hover(menu.ref);
       yield* press(page, "link", layout.link);
-      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(5) });
+      yield* Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(5) });
 
       return { code: (yield* truth(page, PolicyTruth)).code ?? "" };
     }),

@@ -225,7 +225,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             Effect.exit(
               Stillness.wait(page, {
                 still: "content",
-                quietMillis: 250,
+                quiet: "250 millis",
                 timeout: Duration.millis(700),
               }),
             ),

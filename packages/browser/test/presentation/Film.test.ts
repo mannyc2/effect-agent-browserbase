@@ -7,12 +7,13 @@ import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../../src/Browser.ts";
 import { Failed, Timeout, undispatched } from "../../src/BrowserError.ts";
-import type { Image } from "../../src/Frame.ts";
+import * as Frame from "../../src/Frame.ts";
 import * as Overlay from "../../src/Overlay.ts";
 import type { Page } from "../../src/Page.ts";
 import * as PageTime from "../../src/PageTime.ts";
 import * as Film from "../../src/presentation/Film.ts";
 import * as Snapshot from "../../src/Snapshot.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 
 const blank = Effect.gen(function* () {
   const browser = yield* Browser;
@@ -73,7 +74,7 @@ const slide = `<style>
 </style><button id=go onclick="box.classList.add('go')">go</button><div id=box></div>`;
 
 // The first column on row `y` whose pixel `matches`, or -1.
-const column = (image: Image, y: number, matches: (rgb: readonly number[]) => boolean) => {
+const column = (image: Frame.Image, y: number, matches: (rgb: readonly number[]) => boolean) => {
   const decoded = jpegjs.decode(image.data, { useTArray: true });
 
   for (let x = 0; x < decoded.width; x++) {
@@ -369,19 +370,18 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
 
       yield* show(page, slide);
 
-      // The page, whose second screenshot fails for `reason`.
+      // The page, whose second picture fails for `reason`.
       const flaky = (reason: Timeout | Failed): Page => {
         let calls = 0;
 
-        return {
-          ...page,
-          screenshot: (options) =>
+        return PageFunctions.replace(page, {
+          frame: (options) =>
             Effect.suspend(() =>
               ++calls === 2
-                ? Effect.fail(undispatched("screenshot", reason))
-                : page.screenshot(options),
+                ? Effect.fail(undispatched("frame", reason))
+                : Frame.read(page, options),
             ),
-        };
+        });
       };
 
       const film = (on: Page, retries?: number) =>

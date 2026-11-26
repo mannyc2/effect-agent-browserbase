@@ -23,7 +23,9 @@ import * as Motion from "./internal/geometry.ts";
  * @category schemas
  * @since 0.3.0
  */
-export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
+export class PageOpened extends Schema.TaggedClass<PageOpened>(
+  "effect-browser/BrowserEvent/PageOpened",
+)("PageOpened", {
   at: Schema.Finite,
   page: Schema.String,
   url: Schema.String,
@@ -38,7 +40,9 @@ export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
  * @category schemas
  * @since 0.3.0
  */
-export class PageClosed extends Schema.TaggedClass<PageClosed>()("PageClosed", {
+export class PageClosed extends Schema.TaggedClass<PageClosed>(
+  "effect-browser/BrowserEvent/PageClosed",
+)("PageClosed", {
   at: Schema.Finite,
   page: Schema.String,
   cause: Schema.Literals(["page", "crashed"]),
@@ -52,7 +56,9 @@ export class PageClosed extends Schema.TaggedClass<PageClosed>()("PageClosed", {
  * @category schemas
  * @since 0.3.0
  */
-export class PageUntracked extends Schema.TaggedClass<PageUntracked>()("PageUntracked", {
+export class PageUntracked extends Schema.TaggedClass<PageUntracked>(
+  "effect-browser/BrowserEvent/PageUntracked",
+)("PageUntracked", {
   at: Schema.Finite,
   url: Schema.String,
   detail: Schema.String,
@@ -66,7 +72,9 @@ export class PageUntracked extends Schema.TaggedClass<PageUntracked>()("PageUntr
  * @category schemas
  * @since 0.3.0
  */
-export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
+export class Navigated extends Schema.TaggedClass<Navigated>(
+  "effect-browser/BrowserEvent/Navigated",
+)("Navigated", {
   at: Schema.Finite,
   page: Schema.String,
   url: Schema.String,
@@ -86,7 +94,9 @@ export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
  * @category schemas
  * @since 0.3.0
  */
-export class PageLoaded extends Schema.TaggedClass<PageLoaded>()("PageLoaded", {
+export class PageLoaded extends Schema.TaggedClass<PageLoaded>(
+  "effect-browser/BrowserEvent/PageLoaded",
+)("PageLoaded", {
   at: Schema.Finite,
   page: Schema.String,
   state: Schema.Literals(["domcontentloaded", "load"]),
@@ -116,7 +126,9 @@ export type DisconnectCause = typeof DisconnectCause.Type;
  * @category schemas
  * @since 0.3.0
  */
-export class Disconnected extends Schema.TaggedClass<Disconnected>()("Disconnected", {
+export class Disconnected extends Schema.TaggedClass<Disconnected>(
+  "effect-browser/BrowserEvent/Disconnected",
+)("Disconnected", {
   at: Schema.Finite,
   cause: DisconnectCause,
 }) {}
@@ -128,7 +140,9 @@ export class Disconnected extends Schema.TaggedClass<Disconnected>()("Disconnect
  * @category schemas
  * @since 0.3.0
  */
-export class SessionEnding extends Schema.TaggedClass<SessionEnding>()("SessionEnding", {
+export class SessionEnding extends Schema.TaggedClass<SessionEnding>(
+  "effect-browser/BrowserEvent/SessionEnding",
+)("SessionEnding", {
   at: Schema.Finite,
   expiresAt: Schema.DateTimeUtc,
 }) {}
@@ -209,28 +223,31 @@ export type Box = typeof Box.Type;
  * @category schemas
  * @since 0.3.0
  */
-export class Action extends Schema.TaggedClass<Action>()("Action", {
-  at: Schema.Finite,
-  startedAt: Schema.Finite,
-  page: Schema.String,
-  name: Name,
-  /** The decoded call, with secrets removed before publication. */
-  value: ActionValue,
-  /** The address when the action ended; absent in events recorded by older releases. */
-  url: Schema.optional(Schema.String),
-  correlation: Schema.optional(Schema.String),
-  target: Schema.optional(Schema.String),
-  subject: Schema.optional(Subject),
-  to: Schema.optional(Subject),
-  /** For an action at a point, the box of what it found there. */
-  box: Schema.optional(Box),
-  text: Schema.optional(Schema.String),
-  x: Schema.optional(Motion.Point.fields.x),
-  y: Schema.optional(Motion.Point.fields.y),
-  ok: Schema.Boolean,
-  dispatched: Schema.Boolean,
-  error: Schema.optional(Schema.String),
-}) {}
+export class Action extends Schema.TaggedClass<Action>("effect-browser/BrowserEvent/Action")(
+  "Action",
+  {
+    at: Schema.Finite,
+    startedAt: Schema.Finite,
+    page: Schema.String,
+    name: Name,
+    /** The decoded call, with secrets removed before publication. */
+    value: ActionValue,
+    /** The address when the action ended; absent in events recorded by older releases. */
+    url: Schema.optional(Schema.String),
+    correlation: Schema.optional(Schema.String),
+    target: Schema.optional(Schema.String),
+    subject: Schema.optional(Subject),
+    to: Schema.optional(Subject),
+    /** For an action at a point, the box of what it found there. */
+    box: Schema.optional(Box),
+    text: Schema.optional(Schema.String),
+    x: Schema.optional(Motion.Point.fields.x),
+    y: Schema.optional(Motion.Point.fields.y),
+    ok: Schema.Boolean,
+    dispatched: Schema.Boolean,
+    error: Schema.optional(Schema.String),
+  },
+) {}
 
 const Sequence = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -245,7 +262,9 @@ const Sequence = Schema.Int.check(Schema.isGreaterThan(0));
  * @category schemas
  * @since 0.3.0
  */
-export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>()("ActionAnnounced", {
+export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>(
+  "effect-browser/BrowserEvent/ActionAnnounced",
+)("ActionAnnounced", {
   at: Schema.Finite,
   page: Schema.String,
   name: Name,
@@ -263,7 +282,9 @@ export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>()("Acti
  * @category schemas
  * @since 0.3.0
  */
-export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlanned", {
+export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>(
+  "effect-browser/BrowserEvent/TrackPlanned",
+)("TrackPlanned", {
   at: Schema.Finite,
   page: Schema.String,
   from: Motion.Point,
@@ -279,7 +300,9 @@ export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlann
  * @category schemas
  * @since 0.3.0
  */
-export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>()("TrackPerformed", {
+export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>(
+  "effect-browser/BrowserEvent/TrackPerformed",
+)("TrackPerformed", {
   at: Schema.Finite,
   page: Schema.String,
   plan: Sequence,
@@ -293,7 +316,9 @@ export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>()("TrackP
  * @category schemas
  * @since 0.3.0
  */
-export class PointerPressed extends Schema.TaggedClass<PointerPressed>()("PointerPressed", {
+export class PointerPressed extends Schema.TaggedClass<PointerPressed>(
+  "effect-browser/BrowserEvent/PointerPressed",
+)("PointerPressed", {
   at: Schema.Finite,
   page: Schema.String,
   ...Motion.Point.fields,
@@ -306,7 +331,9 @@ export class PointerPressed extends Schema.TaggedClass<PointerPressed>()("Pointe
  * @category schemas
  * @since 0.3.0
  */
-export class PointerReleased extends Schema.TaggedClass<PointerReleased>()("PointerReleased", {
+export class PointerReleased extends Schema.TaggedClass<PointerReleased>(
+  "effect-browser/BrowserEvent/PointerReleased",
+)("PointerReleased", {
   at: Schema.Finite,
   page: Schema.String,
   ...Motion.Point.fields,
@@ -319,7 +346,9 @@ export class PointerReleased extends Schema.TaggedClass<PointerReleased>()("Poin
  * @category schemas
  * @since 0.3.0
  */
-export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>()("WheelScrolled", {
+export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>(
+  "effect-browser/BrowserEvent/WheelScrolled",
+)("WheelScrolled", {
   at: Schema.Finite,
   page: Schema.String,
   ...Motion.Point.fields,
@@ -332,7 +361,9 @@ export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>()("WheelScr
  * @category schemas
  * @since 0.3.0
  */
-export class KeyChanged extends Schema.TaggedClass<KeyChanged>()("KeyChanged", {
+export class KeyChanged extends Schema.TaggedClass<KeyChanged>(
+  "effect-browser/BrowserEvent/KeyChanged",
+)("KeyChanged", {
   at: Schema.Finite,
   page: Schema.String,
   key: Schema.String,
@@ -346,7 +377,9 @@ export class KeyChanged extends Schema.TaggedClass<KeyChanged>()("KeyChanged", {
  * @category schemas
  * @since 0.3.0
  */
-export class TextInserted extends Schema.TaggedClass<TextInserted>()("TextInserted", {
+export class TextInserted extends Schema.TaggedClass<TextInserted>(
+  "effect-browser/BrowserEvent/TextInserted",
+)("TextInserted", {
   at: Schema.Finite,
   page: Schema.String,
   text: Schema.String,
@@ -359,7 +392,9 @@ export class TextInserted extends Schema.TaggedClass<TextInserted>()("TextInsert
  * @category schemas
  * @since 0.3.0
  */
-export class CursorChanged extends Schema.TaggedClass<CursorChanged>()("CursorChanged", {
+export class CursorChanged extends Schema.TaggedClass<CursorChanged>(
+  "effect-browser/BrowserEvent/CursorChanged",
+)("CursorChanged", {
   at: Schema.Finite,
   page: Schema.String,
   cursor: Schema.String,
@@ -397,7 +432,9 @@ export type TrackEvent = typeof TrackEvent.Type;
  * @category schemas
  * @since 0.3.0
  */
-export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown", {
+export class DialogShown extends Schema.TaggedClass<DialogShown>(
+  "effect-browser/BrowserEvent/DialogShown",
+)("DialogShown", {
   at: Schema.Finite,
   page: Schema.String,
   kind: Schema.String,
@@ -413,7 +450,9 @@ export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown"
  * @category schemas
  * @since 0.3.0
  */
-export class RequestRefused extends Schema.TaggedClass<RequestRefused>()("RequestRefused", {
+export class RequestRefused extends Schema.TaggedClass<RequestRefused>(
+  "effect-browser/BrowserEvent/RequestRefused",
+)("RequestRefused", {
   at: Schema.Finite,
   page: Schema.optional(Schema.String),
   method: Schema.String,

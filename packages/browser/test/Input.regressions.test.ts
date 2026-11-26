@@ -223,7 +223,7 @@ it.live("presentation and future cuts run on the page clock under a suspended ca
     const browser = yield* Chromium.make();
     const page = yield* browser.newPage(html("<button>Clock</button>"));
 
-    const caller = Object.assign(Object.create(page.clock) as Clock.Clock, {
+    const caller = Object.assign(Object.create(page.hostClock) as Clock.Clock, {
       monotonicTimeNanosUnsafe: () => 0n,
       sleep: () => Effect.never,
     });

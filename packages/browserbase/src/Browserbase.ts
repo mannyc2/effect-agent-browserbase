@@ -76,7 +76,7 @@ export interface Options extends Browser.Options {
   /** Runtime-supplied Playwright CDP connection, shared by make, attach and supervision. */
   readonly connect?: Cdp.Connector | undefined;
   /** Bound on connecting to the session. Defaults to 30 seconds. */
-  readonly connectTimeoutMillis?: number | undefined;
+  readonly connectTimeout?: Duration.Input | undefined;
   /**
    * How long a persisting session's context stays held after the session ends, for its save to
    * land. Defaults to 10 seconds, after which hosted checks have read a save back.

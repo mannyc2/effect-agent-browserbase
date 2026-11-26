@@ -12,16 +12,16 @@
  * @stability experimental
  * @since 0.3.0
  */
-import { Clock, Duration, Effect, Schema, Stream } from "effect";
+import { Clock, Duration, Effect, Function, Schema, Stream } from "effect";
 
 import { Action } from "../Action.ts";
 import { type BrowserError, refuse } from "../BrowserError.ts";
-import { Image } from "../Frame.ts";
+import * as Frame from "../Frame.ts";
 import { monotonicMillis } from "../internal/clock.ts";
 import { Point } from "../internal/geometry.ts";
 import * as Layout from "../Layout.ts";
 import type { Content, Overlay } from "../Overlay.ts";
-import { type Page, ResolvedTarget, type ScreenshotOptions } from "../Page.ts";
+import { type Page, ResolvedTarget } from "../Page.ts";
 import type { Held, Step } from "../PageTime.ts";
 
 /**
@@ -82,9 +82,9 @@ export interface Options<E = never> {
   readonly overlay?: Overlay | undefined;
   /**
    * How each frame is taken. For frames with more pixels than the layout, paint the page first
-   * (`Page.paint`) and take them at `scale: "device"`.
+   * (`Frame.paint`) and take them at `scale: "device"`.
    */
-  readonly image?: Pick<ScreenshotOptions, "format" | "quality" | "scale"> | undefined;
+  readonly image?: Pick<Frame.FrameOptions, "format" | "quality" | "scale"> | undefined;
   /** How many times a frame's screenshot is taken again after it times out. Defaults to 2. */
   readonly retries?: number | undefined;
 }
@@ -158,7 +158,7 @@ export class Passage extends Schema.Class<Passage>("effect-browser/presentation/
 export class Shot extends Schema.Class<Shot>("effect-browser/presentation/Film/Shot")({
   index: Count,
   t: Millis,
-  image: Image,
+  image: Frame.Image,
   /** The page's document and address after the picture, as `Page.state` gives them. */
   document: Count,
   url: Schema.String,
@@ -264,12 +264,12 @@ const mover = (page: Page, time: Time, overlay: Overlay | undefined): Mover => {
     time === "real"
       ? (t: number) =>
           Effect.suspend(() => {
-            const now = monotonicMillis(page.clock);
+            const now = monotonicMillis(page.hostClock);
 
             start ??= now;
 
             return Effect.sleep(Duration.millis(Math.max(0, start + t - now))).pipe(
-              Effect.provideService(Clock.Clock, page.clock),
+              Effect.provideService(Clock.Clock, page.hostClock),
             );
           })
       : time.seek;
@@ -299,31 +299,20 @@ const picture = (page: Page, image: Options["image"], retries: number) =>
   Effect.gen(function* () {
     let timedOut = 0;
 
-    const taken = yield* page.screenshot({ ...image, maxAge: 0 }).pipe(
+    const taken = yield* Frame.read(page, { ...image, maxAge: 0 }).pipe(
       Effect.tapError((error) =>
         Effect.sync(() => (timedOut += error.reason._tag === "Timeout" ? 1 : 0)),
       ),
       Effect.retry({ times: retries, while: (error) => error.reason._tag === "Timeout" }),
     );
 
-    return { image: taken, retries: timedOut };
+    return { image: taken.image, retries: timedOut };
   });
 
 const keyOf = (content: Content | undefined) =>
   content === undefined ? undefined : content._tag === "Svg" ? `svg:${content.markup}` : "empty";
 
-/**
- * Frames of `page` at `times`, one at a time: each moves the page to its film time, draws what
- * `at` gives there when it changed, and takes a new screenshot, again after one that times out.
- *
- * @stability experimental
- * @category constructors
- * @since 0.3.0
- */
-export const frames = <E = never>(
-  page: Page,
-  options: Options<E>,
-): Stream.Stream<Shot, BrowserError | E> =>
+const film = <E = never>(page: Page, options: Options<E>): Stream.Stream<Shot, BrowserError | E> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const times = yield* timesOf(options.times);
@@ -337,7 +326,7 @@ export const frames = <E = never>(
         return yield* refuse(operation, "an input's time is finite and nonnegative");
       let next = 0;
       const { move, skip } = mover(page, options.time, options.overlay);
-      const now = () => monotonicMillis(page.clock);
+      const now = () => monotonicMillis(page.hostClock);
       const passages: Array<Passage> = [];
 
       const at = (t: number) =>
@@ -425,6 +414,19 @@ export const frames = <E = never>(
       );
     }),
   );
+
+/**
+ * Frames of `page` at `times`, one at a time: each moves the page to its film time, draws what
+ * `at` gives there when it changed, and takes a new screenshot, again after one that times out.
+ *
+ * @stability experimental
+ * @category constructors
+ * @since 0.3.0
+ */
+export const frames: {
+  <E = never>(options: Options<E>): (page: Page) => Stream.Stream<Shot, BrowserError | E>;
+  <E = never>(page: Page, options: Options<E>): Stream.Stream<Shot, BrowserError | E>;
+} = Function.dual(2, film);
 
 /**
  * Run a film's shots, which a caller has usually written out on the way, to what they cost.

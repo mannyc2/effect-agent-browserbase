@@ -1,5 +1,5 @@
 /** A scoped, seeded Page for deterministic stories. Effects are explicit data, never page code. */
-import { Clock, Deferred, Duration, Effect, Exit, Scope, Stream } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Scope } from "effect";
 
 import { type Action, nameOf, targetOf, recorded } from "../../Action.ts";
 import { type BrowserError, Closed, NotActionable, undispatched } from "../../BrowserError.ts";
@@ -297,10 +297,15 @@ export const makeIn = Effect.fnUntraced(function* (
       hold: unsupported("hold"),
       changes: evidence.changes,
       window: () => unsupported("window"),
+      frame: evidence.frame,
+      zoom: () => unsupported("zoom"),
+      capture: evidence.capture,
+      recentFrames: evidence.recentFrames,
+      paint: () => unsupported("paint"),
     }),
     ...methods(perform),
     id,
-    clock,
+    hostClock: clock,
     perform,
     afterInput: (effect) => own(lane.read("afterInput")(effect)),
     read: () => unsupported("read"),
@@ -326,20 +331,8 @@ export const makeIn = Effect.fnUntraced(function* (
           url: Url.redact(model.get().url ?? "about:blank"),
         }),
     ),
-    screenshot: (options) =>
-      options === undefined
-        ? Effect.map(evidence.frame(), (frame) => frame.image)
-        : unsupported("screenshot"),
-    frame: evidence.frame,
-    zoom: () => unsupported("zoom"),
-    paint: () => unsupported("paint"),
     ready: () =>
       model.get().ready === true ? read("ready", () => undefined) : unsupported("ready"),
-    capture: evidence.capture,
-    screencast: (options) =>
-      Stream.unwrap(Effect.map(evidence.capture(options), (capture) => capture.stream)),
-    captureStats: () => unsupported("captureStats"),
-    recentFrames: evidence.recentFrames,
     recentEvents: Effect.map(timeline.recent, (records) =>
       records
         .filter((record) => "page" in record.event && record.event.page === id)

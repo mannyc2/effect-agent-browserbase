@@ -9,6 +9,7 @@ import { Arbitrary, Effect, Redacted } from "effect";
 import { BrowserError, consequence } from "../src/BrowserError.ts";
 import { DisconnectCause } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Frame from "../src/Frame.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const timeoutOf = (error: BrowserError) =>
@@ -53,7 +54,7 @@ it.live("a connect timeout reports the bound the caller gave", () =>
       const port = yield* silentPort;
 
       const error = yield* Effect.flip(
-        Cdp.make({ endpoint: `http://127.0.0.1:${port}`, connectTimeoutMillis: 700 }),
+        Cdp.make({ endpoint: `http://127.0.0.1:${port}`, connectTimeout: "700 millis" }),
       );
 
       assert.deepStrictEqual(
@@ -81,9 +82,9 @@ it.live("a screenshot timeout reports the action timeout", () =>
         }),
       );
 
-      const error = yield* Effect.flip(page.screenshot({ maxAge: 0 }));
+      const error = yield* Effect.flip(Frame.read(page, { maxAge: 0 }));
 
-      assert.deepStrictEqual([error.operation, timeoutOf(error)], ["screenshot", 1000]);
+      assert.deepStrictEqual([error.operation, timeoutOf(error)], ["frame", 1000]);
     }).pipe(Effect.scoped),
   ),
 );
@@ -105,7 +106,7 @@ it.live("a failed connect never repeats the endpoint's credential", () =>
         [`wss//${host}/?signingKey=${secret}`, "Invalid URL"],
       ] as const) {
         const error = yield* Effect.flip(
-          Cdp.make({ endpoint: Redacted.make(endpoint), connectTimeoutMillis: 5000 }),
+          Cdp.make({ endpoint: Redacted.make(endpoint), connectTimeout: "5 seconds" }),
         );
 
         for (const shown of [

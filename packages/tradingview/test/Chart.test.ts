@@ -1,7 +1,7 @@
 // The chart module on a real Chromium page, over a stand-in for TradingView's widget.
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
-import { Arbitrary, Duration, Effect, Exit, Schema } from "effect";
+import { Arbitrary, Duration, Effect, Exit, pipe, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 
 import * as Chart from "../src/Chart.ts";
@@ -31,7 +31,8 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.strictEqual(inView.length, 40);
         assert.deepStrictEqual(inView[0], [time(60), 160, 162, 159, 161, 1000]);
         assert.deepStrictEqual(
-          (yield* Chart.bars(page, { last: 3 })).map(([at]) => at),
+          // In a pipeline the page comes last.
+          (yield* pipe(page, Chart.bars({ last: 3 }))).map(([at]) => at),
           [time(97), time(98), time(99)],
         );
         const window = yield* Chart.bars(page, { from: time(49), to: time(51) });

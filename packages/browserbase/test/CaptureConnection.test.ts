@@ -5,7 +5,7 @@
 import { assert, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Schedule, Schema, Stream } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
-import type { Frame } from "effect-browser/Frame";
+import * as Frame from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 import * as Snapshot from "effect-browser/Snapshot";
 import { Stillness } from "effect-browser/timeline";
@@ -55,9 +55,9 @@ const methods = (commands: ReadonlyArray<Command>) => commands.map((command) => 
 /** Frames a reader gets, in order, while the capture runs in the scope. */
 const recorded = (page: Page) =>
   Effect.gen(function* () {
-    const frames: Array<Frame> = [];
+    const frames: Array<Frame.Frame> = [];
 
-    yield* page.screencast().pipe(
+    yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
       Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
       Effect.forkScoped,
     );
@@ -70,7 +70,11 @@ const recorded = (page: Page) =>
   });
 
 const firstFrame = (page: Page) =>
-  page.screencast().pipe(Stream.take(1), Stream.runDrain, Effect.timeout("15 seconds"));
+  Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+    Stream.take(1),
+    Stream.runDrain,
+    Effect.timeout("15 seconds"),
+  );
 
 // What a capture connection may carry: attach and detach for the page's target, its documents, and
 // the screencast. Nothing that acts on the page.
@@ -115,6 +119,7 @@ it.live(
           assert.deepStrictEqual(methods(sentOn(proxy, capturing, from)), ["Page.startScreencast"]);
 
           // Reads and pictures cost what they did.
+          const capture = yield* Frame.capture(page);
           const frames = yield* recorded(page);
 
           from = proxy.commands.length;
@@ -123,7 +128,7 @@ it.live(
           assert.isEmpty(sentOn(proxy, capturing, from));
           yield* Effect.sleep("300 millis");
 
-          const stats = yield* page.captureStats();
+          const stats = yield* capture.stats();
 
           assert.isAbove(frames.length, 5);
           assert.isTrue(frames.every((frame) => frame.timing._tag === "BrowserPaint"));
@@ -140,7 +145,7 @@ it.live(
           yield* Snapshot.read(still);
           yield* recorded(still);
           from = proxy.commands.length;
-          yield* Stillness.wait(still, { quietMillis: 200 });
+          yield* Stillness.wait(still, { quiet: "200 millis" });
           assert.strictEqual(sentOn(proxy, control, from).length, 2);
           assert.deepStrictEqual(methods(sentOn(proxy, capturing, from)), ["Page.getFrameTree"]);
         }),
@@ -168,14 +173,14 @@ it.live(
         Effect.gen(function* () {
           const page = yield* browser.newPage(animated);
 
-          const reader = yield* page
-            .screencast()
-            .pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
+          const reader = yield* Stream.unwrap(
+            Effect.map(Frame.capture(page), ({ stream }) => stream),
+          ).pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
 
-          yield* page.state.pipe(
+          yield* Frame.recent(page).pipe(
             Effect.repeat({
               schedule: Schedule.spaced("10 millis"),
-              until: (state) => state.frame !== undefined,
+              until: (frames) => frames.length > 0,
             }),
             Effect.timeout("10 seconds"),
           );
@@ -226,14 +231,14 @@ it.live("tells a capture's reader the browser was lost, whichever connection hea
             Effect.gen(function* () {
               const page = yield* browser.newPage(animated);
 
-              const reader = yield* page
-                .screencast()
-                .pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
+              const reader = yield* Stream.unwrap(
+                Effect.map(Frame.capture(page), ({ stream }) => stream),
+              ).pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
 
-              yield* page.state.pipe(
+              yield* Frame.recent(page).pipe(
                 Effect.repeat({
                   schedule: Schedule.spaced("10 millis"),
-                  until: (state) => state.frame !== undefined,
+                  until: (frames) => frames.length > 0,
                 }),
                 Effect.timeout("10 seconds"),
               );
@@ -300,7 +305,7 @@ it.live("never reads a stall on the capture connection as a still screen", () =>
               Effect.forkChild,
             );
 
-            return yield* Stillness.wait(page, { quietMillis: 400, timeout: "3 seconds" }).pipe(
+            return yield* Stillness.wait(page, { quiet: "400 millis", timeout: "3 seconds" }).pipe(
               Effect.as("still"),
               Effect.catch((error) => Effect.succeed(error.reason._tag)),
             );
@@ -314,7 +319,7 @@ it.live("never reads a stall on the capture connection as a still screen", () =>
 );
 
 /** The longest wait between frames a reader got within the interval, its ends included. */
-const longestWait = (frames: ReadonlyArray<Frame>, from: number, to: number) => {
+const longestWait = (frames: ReadonlyArray<Frame.Frame>, from: number, to: number) => {
   const arrivals = [
     from,
     ...frames.map((frame) => frame.receivedAt).filter((at) => at > from && at < to),
@@ -375,7 +380,7 @@ const colored = (color: string) =>
 const colors = ["rgb(255, 0, 0)", "rgb(0, 255, 0)", "rgb(0, 0, 255)"];
 
 /** Which of `colors` each frame shows at its centre, decoded by the page itself, or -1. */
-const shownColors = (page: Page, frames: ReadonlyArray<Frame>) =>
+const shownColors = (page: Page, frames: ReadonlyArray<Frame.Frame>) =>
   page
     .read(
       async (pictures: ReadonlyArray<ReadonlyArray<number>>) =>
@@ -544,11 +549,12 @@ it.live("keeps the library's crops out of a capture on the other connection", ()
       Effect.gen(function* () {
         const page = yield* browser.newPage(animated);
         const { width, height } = yield* page.viewport;
+        const capture = yield* Frame.capture(page);
         const frames = yield* recorded(page);
         const replies: Array<number> = [];
 
         for (let index = 0; index < 10; index++) {
-          yield* page.zoom({ x: 5, y: 5, width: 160, height: 90 });
+          yield* Frame.zoom(page, { x: 5, y: 5, width: 160, height: 90 });
           replies.push(yield* browser.now);
           yield* Effect.sleep("250 millis");
         }
@@ -559,7 +565,7 @@ it.live("keeps the library's crops out of a capture on the other connection", ()
           afterCrops: frames.filter((frame) =>
             replies.some((at) => frame.receivedAt >= at && frame.receivedAt <= at + 40),
           ),
-          stats: yield* page.captureStats(),
+          stats: yield* capture.stats(),
         };
       }),
     );

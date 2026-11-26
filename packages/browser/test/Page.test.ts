@@ -8,7 +8,7 @@ import { Duration, Effect, Exit, Fiber, Layer, Schedule, Scope, Stream } from "e
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
-import type { Image as BrowserImage } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import { type Page, redacted } from "../src/Page.ts";
 import * as Snapshot from "../src/Snapshot.ts";
 import * as Text from "../src/Text.ts";
@@ -52,7 +52,7 @@ const slotState = (page: Page) =>
   );
 
 /** Decode the actual capture so a wrong crop origin cannot pass on dimensions alone. */
-const centerPixel = (page: Page, image: BrowserImage) =>
+const centerPixel = (page: Page, image: Frame.Image) =>
   Effect.promise(() =>
     TestCdp.nativePage(page).evaluate(
       async (source) => {
@@ -698,7 +698,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
         yield* page.click({ x: 300, y: 320 });
         assert.isTrue((yield* slotState(page)).spinning);
-        yield* Stillness.wait(page, { quietMillis: 600, timeout: Duration.seconds(10) });
+        yield* Stillness.wait(page, { quiet: "600 millis", timeout: Duration.seconds(10) });
         assert.deepInclude(yield* slotState(page), { spins: 1, spinning: false });
         assert.deepStrictEqual(yield* reason(page.click({ x: 5000, y: 5 })), {
           tag: "InvalidRequest",
@@ -713,9 +713,9 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* open("/slots");
 
-        const frames = yield* page
-          .screencast()
-          .pipe(Stream.take(5), Stream.runCollect, Effect.forkChild);
+        const frames = yield* Stream.unwrap(
+          Effect.map(Frame.capture(page), ({ stream }) => stream),
+        ).pipe(Stream.take(5), Stream.runCollect, Effect.forkChild);
 
         yield* Effect.sleep(Duration.millis(300));
         yield* page.click({ x: 300, y: 320 });
@@ -740,16 +740,18 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         const site = yield* Site;
         const page = yield* open("/spinning");
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
 
-        const reads: Record<string, Effect.Effect<BrowserImage | undefined, BrowserError>> = {
-          screenshot: page.screenshot(),
-          frame: Effect.map(page.frame(), (frame) => frame.image),
-          "frame after input": Effect.map(page.frame({ after: "input" }), (frame) => frame.image),
-          moment: Effect.map(
-            Moment.capture(page, { frames: 1 }),
-            (moment) => moment.frames[0]?.image,
+        const reads: Record<string, Effect.Effect<Frame.Image | undefined, BrowserError>> = {
+          frame: Effect.map(Frame.read(page), (frame) => frame.image),
+          "frame after input": Effect.map(
+            Frame.read(page, { after: "input" }),
+            (frame) => frame.image,
           ),
+          moment: Effect.map(Moment.read(page, { frames: 1 }), (moment) => moment.frames[0]?.image),
         };
 
         for (const [read, image] of Object.entries(reads)) {
@@ -769,8 +771,8 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* open("/chart");
-        const image = yield* page.screenshot();
-        const detail = yield* page.screenshot({ clip: { x: 0, y: 0, width: 200, height: 100 } });
+        const { image } = yield* Frame.read(page, { after: "input" });
+        const { image: detail } = yield* Frame.zoom(page, { x: 0, y: 0, width: 200, height: 100 });
 
         assert.deepStrictEqual(
           [image.mediaType, image.width, image.height],
@@ -779,7 +781,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.deepStrictEqual([image.data[0], image.data[1]], [0xff, 0xd8]);
         assert.deepStrictEqual([detail.width, detail.height], [200, 100]);
 
-        const png = yield* page.screenshot({ format: "png" });
+        const { image: png } = yield* Frame.read(page, { format: "png", after: "input" });
 
         assert.deepStrictEqual([png.mediaType, png.width, png.height], ["image/png", 1280, 720]);
         assert.deepStrictEqual([png.data[0], png.data[1]], [0x89, 0x50]);
@@ -819,7 +821,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         );
 
         const page = yield* browser.newPage((yield* Site).url("/chart"));
-        const image = yield* page.screenshot({ maxAge: 0 });
+        const image = yield* Frame.read(page, { maxAge: 0 });
 
         assert.deepStrictEqual(
           [
@@ -866,7 +868,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           TestCdp.nativePage(page).evaluate(() => window.scrollTo(0, 600)),
         );
         const region = { x: 80, y: 120, width: 100, height: 60 };
-        const zoom = yield* page.zoom(region);
+        const zoom = yield* Frame.zoom(page, region);
         const pixel = yield* centerPixel(page, zoom.image);
 
         assert.strictEqual(
@@ -882,15 +884,18 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         assert.isAbove(pixel[1] ?? 0, 180);
         assert.isBelow(pixel[2] ?? 255, 60);
 
-        const sharp = yield* page.zoom(region, { scale: "device" });
-        const screen = yield* page.screenshot({ scale: "device" });
+        const sharp = yield* Frame.zoom(page, region, { scale: "device" });
+        const screen = yield* Frame.read(page, { scale: "device", after: "input" });
 
         assert.deepStrictEqual({ ...sharp.region }, region);
         assert.deepStrictEqual([sharp.image.width, sharp.image.height], [200, 120]);
         assert.deepStrictEqual(yield* centerPixel(page, sharp.image), pixel);
         assert.deepStrictEqual([screen.width, screen.height], [1280, 960]);
         assert.deepStrictEqual(
-          [(yield* page.screenshot()).width, (yield* page.screenshot()).height],
+          [
+            (yield* Frame.read(page, { after: "input" })).width,
+            (yield* Frame.read(page, { after: "input" })).height,
+          ],
           [640, 480],
         );
 
@@ -943,13 +948,13 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           { x: 1_000_000, y: 0, width: 20, height: 10 },
           { x: 0, y: 1_000_000, width: 10, height: 20 },
         ]) {
-          assert.deepStrictEqual(yield* reason(page.zoom(region)), {
+          assert.deepStrictEqual(yield* reason(Frame.zoom(page, region)), {
             tag: "InvalidRequest",
             dispatched: false,
           });
         }
         assert.strictEqual(captures(), 0);
-        yield* page.zoom({ x: 0, y: 0, width: 40, height: 40 });
+        yield* Frame.zoom(page, { x: 0, y: 0, width: 40, height: 40 });
         assert.strictEqual(captures(), 1);
       }),
     ),
@@ -1238,8 +1243,11 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const visit = Effect.gen(function* () {
           const page = yield* browser.newPage("data:text/html,<h1>Captured tab</h1>");
 
-          yield* page.screencast().pipe(Stream.take(1), Stream.runDrain);
-          for (const frame of yield* page.recentFrames) frames.push(new WeakRef(frame));
+          yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+            Stream.take(1),
+            Stream.runDrain,
+          );
+          for (const frame of yield* Frame.recent(page)) frames.push(new WeakRef(frame));
           yield* page.close;
         });
 

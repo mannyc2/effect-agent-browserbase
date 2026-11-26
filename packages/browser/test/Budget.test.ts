@@ -8,6 +8,7 @@ import { Deferred, Effect, Fiber, Schedule, Stream, Tracer } from "effect";
 import { behindProxy, type Command, type Proxy } from "../../../tools/testing/cdp-proxy.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Change from "../src/Change.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as Snapshot from "../src/Snapshot.ts";
 import * as Text from "../src/Text.ts";
@@ -67,7 +68,7 @@ const toFirstFrame = (proxy: Proxy, page: Page) =>
     const known = new Set(proxy.commands.map((command) => command.sessionId));
     let first = before;
 
-    yield* page.screencast().pipe(
+    yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
       Stream.take(1),
       Stream.tap(() =>
         Effect.sync(() => {
@@ -87,10 +88,10 @@ const toFirstFrame = (proxy: Proxy, page: Page) =>
   });
 
 const framesArrive = (page: Page) =>
-  page.state.pipe(
+  Frame.recent(page).pipe(
     Effect.repeat({
       schedule: Schedule.spaced("10 millis"),
-      until: (state) => state.frame !== undefined,
+      until: (frames) => frames.length > 0,
     }),
     Effect.timeout("10 seconds"),
   );
@@ -146,11 +147,14 @@ it.live("a picture of a changing page with its screencast running costs no call"
       const { proxy, browser } = yield* opened();
       const page = yield* browser.newPage(animated);
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+      yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
       yield* framesArrive(page);
 
-      holds(yield* sentBy(proxy, page.screenshot({ maxAge: "1 second" })), 0, 0);
-      holds(yield* sentBy(proxy, page.frame({ maxAge: "1 second" })), 0, 0);
+      holds(yield* sentBy(proxy, Frame.read(page, { maxAge: "1 second", after: "input" })), 0, 0);
+      holds(yield* sentBy(proxy, Frame.read(page, { maxAge: "1 second" })), 0, 0);
     }).pipe(Effect.scoped),
   ),
 );
@@ -162,11 +166,11 @@ it.live("a picture of a still page costs one call, on a new document too", () =>
       const page = yield* browser.newPage(still("one"));
 
       // The page's first picture also learns the viewport, which Playwright does not know over CDP.
-      holds(yield* sentBy(proxy, page.screenshot({ maxAge: 0 })), 2, 2);
+      holds(yield* sentBy(proxy, Frame.read(page, { maxAge: 0 })), 2, 2);
 
       yield* page.goto(still("two"));
-      holds(yield* sentBy(proxy, page.screenshot({ maxAge: 0 })), 1, 1);
-      holds(yield* sentBy(proxy, page.frame({ maxAge: 0 })), 1, 1);
+      holds(yield* sentBy(proxy, Frame.read(page, { maxAge: 0 })), 1, 1);
+      holds(yield* sentBy(proxy, Frame.read(page, { maxAge: 0 })), 1, 1);
     }).pipe(Effect.scoped),
   ),
 );
@@ -180,10 +184,10 @@ it.live("a crop costs two calls, and a page's first two more to hold its screen"
       const { proxy, browser } = yield* opened();
       const page = yield* browser.newPage(still("crop"));
 
-      yield* page.screenshot({ maxAge: 0 });
+      yield* Frame.read(page, { maxAge: 0 });
       yield* Snapshot.read(page);
-      holds(yield* sentBy(proxy, page.zoom({ x: 10, y: 10, width: 120, height: 90 })), 4, 3);
-      holds(yield* sentBy(proxy, page.zoom({ x: 20, y: 10, width: 120, height: 90 })), 2, 2);
+      holds(yield* sentBy(proxy, Frame.zoom(page, { x: 10, y: 10, width: 120, height: 90 })), 4, 3);
+      holds(yield* sentBy(proxy, Frame.zoom(page, { x: 20, y: 10, width: 120, height: 90 })), 2, 2);
     }).pipe(Effect.scoped),
   ),
 );
@@ -195,10 +199,10 @@ it.live("a picture at another device pixel ratio costs two calls", () =>
       const page = yield* browser.newPage(still("dense"));
 
       // The first picture learns the ratio and the viewport.
-      yield* page.screenshot({ maxAge: 0 });
-      holds(yield* sentBy(proxy, page.screenshot({ maxAge: 0 })), 2, 2);
+      yield* Frame.read(page, { maxAge: 0 });
+      holds(yield* sentBy(proxy, Frame.read(page, { maxAge: 0 })), 2, 2);
       const viewport = yield* page.viewport;
-      const image = yield* page.screenshot({ maxAge: 0 });
+      const image = yield* Frame.read(page, { maxAge: 0 });
 
       assert.deepStrictEqual([image.width, image.height], [viewport.width, viewport.height]);
     }).pipe(Effect.scoped),
@@ -299,7 +303,10 @@ it.live("a page's state costs no call, nor waits for an action, and holds what t
       const { proxy, browser } = yield* opened();
       const page = yield* browser.newPage(still("known"));
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+      yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
       yield* framesArrive(page);
 
       const state = yield* page.state.pipe(
@@ -319,7 +326,6 @@ it.live("a page's state costs no call, nor waits for an action, and holds what t
         ],
       );
       assert.isDefined(state.committedAt);
-      assert.isDefined(state.frame);
       const faults = yield* TestCdp.TestCdp;
       const released = yield* Deferred.make<void>();
 
@@ -425,7 +431,10 @@ it.live("a read of changes costs one call, its first a registration beside it", 
             proxy.attached.has(command.sessionId ?? ""),
         );
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+      yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
       yield* framesArrive(page);
       yield* Snapshot.read(page);
       yield* page.ready();
@@ -440,8 +449,8 @@ it.live("a read of changes costs one call, its first a registration beside it", 
       holds(yield* sentBy(proxy, Change.read(page)), 2, 1);
       assert.strictEqual(registrations().length, 2);
       holds(yield* sentBy(proxy, Change.read(page)), 1, 1);
-      yield* Moment.capture(page);
-      holds(yield* sentBy(proxy, Moment.capture(page)), 1, 1);
+      yield* Moment.read(page);
+      holds(yield* sentBy(proxy, Moment.read(page)), 1, 1);
     }).pipe(Effect.scoped),
   ),
 );
@@ -477,17 +486,17 @@ it.live("a wait for a still screen costs two calls, and three more without a run
       yield* Snapshot.read(page);
       // The browser's first capture maps its clock.
       yield* toFirstFrame(proxy, page);
-      holds(yield* sentBy(proxy, Stillness.wait(page, { quietMillis: 100 })), 5, 5);
+      holds(yield* sentBy(proxy, Stillness.wait(page, { quiet: "100 millis" })), 5, 5);
       // A capture on air, once its first frame has come.
       const onAir = yield* Deferred.make<void>();
 
-      yield* page.screencast().pipe(
+      yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
         Stream.tap(() => Deferred.succeed(onAir, undefined)),
         Stream.runDrain,
         Effect.forkScoped,
       );
       yield* Deferred.await(onAir);
-      holds(yield* sentBy(proxy, Stillness.wait(page, { quietMillis: 100 })), 2, 2);
+      holds(yield* sentBy(proxy, Stillness.wait(page, { quiet: "100 millis" })), 2, 2);
     }).pipe(Effect.scoped),
   ),
 );
@@ -511,12 +520,12 @@ it.live("a page operation's span reports the calls and bytes the wire carried", 
         },
       });
 
-      yield* page.screenshot({ maxAge: 0 });
+      yield* Frame.read(page, { maxAge: 0 });
       yield* Snapshot.read(page);
       for (const [name, operation] of [
-        ["Page.screenshot", Effect.asVoid(page.screenshot({ maxAge: 0 }))],
+        ["Frame.read", Effect.asVoid(Frame.read(page, { maxAge: 0 }))],
         ["Snapshot.read", Effect.asVoid(Snapshot.read(page))],
-        ["Page.zoom", Effect.asVoid(page.zoom({ x: 0, y: 0, width: 200, height: 100 }))],
+        ["Frame.zoom", Effect.asVoid(Frame.zoom(page, { x: 0, y: 0, width: 200, height: 100 }))],
       ] as const) {
         const sent = yield* sentBy(proxy, Effect.provideService(operation, Tracer.Tracer, tracer));
         const span = spans.findLast((recorded) => recorded.name === name);
@@ -536,7 +545,7 @@ it.live("a page operation's span reports the calls and bytes the wire carried", 
         assert.isAbove(attribute("waitedMillis"), 0, name);
       }
       assert.strictEqual(
-        spans.findLast((recorded) => recorded.name === "Page.screenshot")?.attributes.get("source"),
+        spans.findLast((recorded) => recorded.name === "Frame.read")?.attributes.get("source"),
         "screenshot",
       );
     }).pipe(Effect.scoped),

@@ -4,7 +4,7 @@
  * @stability stable
  * @since 0.3.0
  */
-import { Schema } from "effect";
+import { Function, Schema } from "effect";
 
 import { Point } from "./internal/geometry.ts";
 import * as Url from "./internal/url.ts";
@@ -118,7 +118,10 @@ export type Name = typeof Name.Type;
  * @category combinators
  * @since 0.3.0
  */
-export const recorded = (value: Action, revealed: boolean): Action => {
+export const recorded: {
+  (revealed: boolean): (value: Action) => Action;
+  (value: Action, revealed: boolean): Action;
+} = Function.dual(2, (value: Action, revealed: boolean): Action => {
   if (value._tag === "Type") {
     const secret = !revealed || value.options?.secret === true;
 
@@ -134,7 +137,7 @@ export const recorded = (value: Action, revealed: boolean): Action => {
   }
 
   return value._tag === "Goto" ? { ...value, url: Url.redact(value.url) } : value;
-};
+});
 
 /** The stable event vocabulary for an action. */
 const names: Record<Action["_tag"], Name> = {

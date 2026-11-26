@@ -6,6 +6,7 @@ import { type Browser, chromium } from "playwright-core";
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { BrowserError } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Frame from "../src/Frame.ts";
 import * as WorkerCdp from "../src/internal/cdp/workerd.ts";
 import * as Snapshot from "../src/Snapshot.ts";
 import { nativeConnect } from "./nativeConnector.ts";
@@ -22,7 +23,7 @@ it.effect.prop(
       for (const invalid of [timeout, Number.NaN, Infinity, -Infinity]) {
         const error = yield* Cdp.make({
           endpoint: "wss://runtime.invalid",
-          connectTimeoutMillis: invalid,
+          connectTimeout: invalid,
           connect: async () => {
             calls++;
             throw new Error("Connector should not be invoked");
@@ -59,7 +60,7 @@ it.live("uses the supplied connector and disconnects without ending its remote b
       const browser = yield* Cdp.make({
         endpoint: Redacted.make("wss://runtime.invalid/?signingKey=private"),
         headers: { "x-runtime": "one" },
-        connectTimeoutMillis: 5000,
+        connectTimeout: "5 seconds",
         connect: async (endpoint, options) => {
           calls.push([endpoint, options.timeout, options.headers, options.signal.aborted]);
           const connected = await chromium.connectOverCDP(proxy.endpoint);
@@ -74,7 +75,7 @@ it.live("uses the supplied connector and disconnects without ending its remote b
 
       yield* page.goto("data:text/html,<button>Runtime</button>");
       assert.include((yield* Snapshot.read(page)).text, 'button "Runtime"');
-      assert.isAbove((yield* page.frame()).data.length, 100);
+      assert.isAbove((yield* Frame.read(page)).data.length, 100);
     }).pipe(Effect.scoped);
 
     assert.deepStrictEqual(calls, [
@@ -124,7 +125,7 @@ it.live("bounds an unresponsive connector and disconnects its late browser", () 
 
     const error = yield* Cdp.make({
       endpoint: proxy.endpoint,
-      connectTimeoutMillis: 50,
+      connectTimeout: "50 millis",
       connect: (_endpoint, options) => {
         signal = options.signal;
 
@@ -196,7 +197,7 @@ it.live("connects through the global WebSocket using Playwright's public CDP tra
 
     yield* page.goto("data:text/html,<button>Native</button>");
     assert.include((yield* Snapshot.read(page)).text, 'button "Native"');
-    assert.isAbove((yield* page.frame()).data.length, 100);
+    assert.isAbove((yield* Frame.read(page)).data.length, 100);
   }).pipe(Effect.scoped),
 );
 

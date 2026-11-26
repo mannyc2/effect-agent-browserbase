@@ -13,7 +13,9 @@ import { Schema } from "effect";
  * @category schemas
  * @since 0.3.0
  */
-export class Confirmed extends Schema.TaggedClass<Confirmed>()("Confirmed", {}) {}
+export class Confirmed extends Schema.TaggedClass<Confirmed>(
+  "effect-browser/supervisor/Release/Confirmed",
+)("Confirmed", {}) {}
 
 /**
  * The resource may still run, and bill, because its end could not be confirmed.
@@ -22,7 +24,9 @@ export class Confirmed extends Schema.TaggedClass<Confirmed>()("Confirmed", {}) 
  * @category schemas
  * @since 0.3.0
  */
-export class Unconfirmed extends Schema.TaggedClass<Unconfirmed>()("Unconfirmed", {
+export class Unconfirmed extends Schema.TaggedClass<Unconfirmed>(
+  "effect-browser/supervisor/Release/Unconfirmed",
+)("Unconfirmed", {
   detail: Schema.String,
 }) {}
 

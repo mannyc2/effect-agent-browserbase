@@ -4,7 +4,7 @@ A screenshot says what a page shows; a **moment** says what it showed and what c
 
 ## A moment
 
-`Moment.capture` gathers a page's screencast frames over a window, what visibly changed on it, and its events in between; `snapshot: true` adds the page's outline at the end. A page records what changes on it from its first moment, so its next moments can say `"$61,240" became "$62,010" (row "BTC", column "Price")`, or that an alert came and went between two frames.
+`Moment.read` gathers a page's screencast frames over a window, what visibly changed on it, and its events in between; `snapshot: true` adds the page's outline at the end. A page records what changes on it from its first moment, so its next moments can say `"$61,240" became "$62,010" (row "BTC", column "Price")`, or that an alert came and went between two frames.
 
 `Moment.toPrompt` lays a moment out as one message for any `effect/ai` call, leading with what changed and naming an action (`click button "Play"`) only as what a change followed. Here the page is a live game on Lichess TV:
 
@@ -13,11 +13,11 @@ A screenshot says what a page shows; a **moment** says what it showed and what c
 const watch = Effect.gen(function* () {
   const page = yield* (yield* Browser.Browser).firstPage;
 
-  yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+  yield* Frame.capture(page);
   yield* page.goto("https://lichess.org/tv");
   yield* Effect.sleep("5 seconds");
 
-  const moment = yield* Moment.capture(page, { frames: 3 });
+  const moment = yield* Moment.read(page, { frames: 3 });
 
   const { value } = yield* LanguageModel.generateObject({
     prompt: Prompt.setSystem(Moment.toPrompt(moment), "Describe what just happened."),

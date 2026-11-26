@@ -35,7 +35,7 @@ export interface Settings {
   readonly actionTimeout: Duration.Duration;
   readonly policyTimeout: Duration.Duration;
   readonly navigationTimeout: Duration.Duration;
-  /** How long screencast frames stay in `recentFrames`, measured back from the newest. */
+  /** How long screencast frames stay in `Frame.recent`, measured back from the newest. */
   readonly frameHistory: Duration.Duration;
   readonly guard: InputGuard | undefined;
   /** The page clock's event name, when the browser runs one in each document. */

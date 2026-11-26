@@ -5,6 +5,7 @@ import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
 import * as Change from "../src/Change.ts";
+import * as Frame from "../src/Frame.ts";
 import * as Layout from "../src/Layout.ts";
 import type { Content } from "../src/Overlay.ts";
 import * as Overlay from "../src/Overlay.ts";
@@ -35,7 +36,7 @@ const square = svg(`<rect x="20" y="20" width="60" height="60" fill="rgb(255,0,0
 
 // The colour a new screenshot shows at a viewport point.
 const colorAt = (page: Page, x: number, y: number) =>
-  page.screenshot({ maxAge: 0, quality: 100 }).pipe(
+  Frame.read(page, { maxAge: 0, quality: 100 }).pipe(
     Effect.map((image) => {
       const decoded = jpegjs.decode(image.data, { useTArray: true });
       const at = (Math.round(y) * decoded.width + Math.round(x)) * 4;
@@ -184,7 +185,7 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
       );
 
       yield* Effect.sleep(Duration.millis(200));
-      yield* Stillness.wait(page, { still: "screen", quietMillis: 500, timeout: "5 seconds" });
+      yield* Stillness.wait(page, { still: "screen", quiet: "500 millis", timeout: "5 seconds" });
       assert.isTrue(x > 5);
       yield* Fiber.interrupt(moving);
       assert.isTrue(yield* evaluate(page, () => document.querySelectorAll("p").length === 1));
