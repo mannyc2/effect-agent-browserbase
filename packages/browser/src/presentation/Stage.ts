@@ -368,7 +368,7 @@ const openFeed = (
     );
 
     feed.fiber = yield* capture.pipe(
-      Effect.provideService(Clock.Clock, feed.page.clock),
+      Effect.provideService(Clock.Clock, feed.page.hostClock),
       Effect.forkIn(scope),
     );
     yield* Effect.raceFirst(Deferred.await(started), ended(feed)).pipe(
@@ -386,9 +386,9 @@ export const make = Effect.fn("Stage.make")(function* (
 
   const choose = (page: Page) =>
     Effect.suspend(() => {
-      if (clock !== undefined && clock !== page.clock)
+      if (clock !== undefined && clock !== page.hostClock)
         return refuse("stage", "pages presented by one stage must share an owning clock");
-      clock ??= page.clock;
+      clock ??= page.hostClock;
       Deferred.doneUnsafe(chosen, Exit.succeed(clock));
 
       return Effect.void;
@@ -479,11 +479,11 @@ export const make = Effect.fn("Stage.make")(function* (
           (feed) => ({
             page,
             ready: firstOf(feed, firstFrame).pipe(
-              Effect.provideService(Clock.Clock, feed.page.clock),
+              Effect.provideService(Clock.Clock, feed.page.hostClock),
             ),
             commit: (options?: { readonly at?: number | undefined }) =>
               Effect.suspend(() => switching(commit(feed, options?.at ?? now()))).pipe(
-                Effect.provideService(Clock.Clock, feed.page.clock),
+                Effect.provideService(Clock.Clock, feed.page.hostClock),
               ),
           }),
         ),
@@ -512,7 +512,7 @@ export const make = Effect.fn("Stage.make")(function* (
             );
           }),
         ),
-        Effect.provideService(Clock.Clock, page.clock),
+        Effect.provideService(Clock.Clock, page.hostClock),
       ),
     shown: ({ hold }) => {
       const parsed = Duration.fromInput(hold);

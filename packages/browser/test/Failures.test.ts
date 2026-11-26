@@ -54,7 +54,7 @@ it.live("a connect timeout reports the bound the caller gave", () =>
       const port = yield* silentPort;
 
       const error = yield* Effect.flip(
-        Cdp.make({ endpoint: `http://127.0.0.1:${port}`, connectTimeoutMillis: 700 }),
+        Cdp.make({ endpoint: `http://127.0.0.1:${port}`, connectTimeout: "700 millis" }),
       );
 
       assert.deepStrictEqual(
@@ -106,7 +106,7 @@ it.live("a failed connect never repeats the endpoint's credential", () =>
         [`wss//${host}/?signingKey=${secret}`, "Invalid URL"],
       ] as const) {
         const error = yield* Effect.flip(
-          Cdp.make({ endpoint: Redacted.make(endpoint), connectTimeoutMillis: 5000 }),
+          Cdp.make({ endpoint: Redacted.make(endpoint), connectTimeout: "5 seconds" }),
         );
 
         for (const shown of [

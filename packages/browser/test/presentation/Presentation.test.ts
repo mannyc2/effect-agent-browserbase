@@ -157,7 +157,7 @@ describe("Presentation's style", () => {
 
   it.effect("eases a wheel in over a frame-a-step schedule, slow at first and last", () =>
     Effect.gen(function* () {
-      const steps = yield* InputStyle.eased(500)(0, 1000);
+      const steps = yield* InputStyle.eased("500 millis")(0, 1000);
       const middle = steps[Math.floor(steps.length / 2)]?.dy ?? 0;
 
       assert.lengthOf(steps, 30);
@@ -412,7 +412,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
       yield* page
         .scroll({ at: { x: 100, y: 100 }, dy: 1000 })
-        .pipe(InputStyle.provide({ ...InputStyle.plain, wheel: InputStyle.eased(400) }));
+        .pipe(InputStyle.provide({ ...InputStyle.plain, wheel: InputStyle.eased("400 millis") }));
       assert.isAtLeast(Date.now() - started, 350);
       assert.closeTo(
         (yield* page.read(() => scrollY, { arg: null, result: Schema.Finite })).value,

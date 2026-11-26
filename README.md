@@ -120,7 +120,7 @@ stored context in this process; an application whose processes share stored cont
 
 ## A moment
 
-`Moment.capture` gathers a page's screencast frames over a window, what visibly changed on it, and
+`Moment.read` gathers a page's screencast frames over a window, what visibly changed on it, and
 its events in between; `snapshot: true` adds the page's outline at the end. A page records what
 changes on it from its first moment, so its next moments can say `"$61,240" became "$62,010" (row
 "BTC", column "Price")`, or that an alert came and went between two frames. `Moment.toPrompt` lays a
@@ -144,7 +144,7 @@ const watch = Effect.gen(function* () {
   yield* page.goto("https://example.com/live-chart");
   yield* Effect.sleep("5 seconds");
 
-  const moment = yield* Moment.capture(page, { frames: 3 });
+  const moment = yield* Moment.read(page, { frames: 3 });
 
   const { value } = yield* LanguageModel.generateObject({
     prompt: Prompt.setSystem(
@@ -170,10 +170,10 @@ const narrate = (page: Page.Page) =>
       { role: "system", content: "Caption the stream in five words." },
     ]);
 
-    let last = yield* Moment.capture(page);
+    let last = yield* Moment.read(page);
 
     const caption = Effect.gen(function* () {
-      last = yield* Moment.capture(page, { since: last });
+      last = yield* Moment.read(page, { since: last });
       const { text } = yield* chat.generateText({ prompt: Moment.toPrompt(last) });
 
       yield* Effect.log(text);

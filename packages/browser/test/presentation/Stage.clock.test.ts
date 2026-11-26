@@ -21,7 +21,7 @@ it.effect("refuses unrelated owning clocks before starting capture or waiting fo
 
     yield* stage.cue(first.page);
     yield* stage.cue(second.page);
-    const foreign = { ...second.page, clock: unrelated };
+    const foreign = { ...second.page, hostClock: unrelated };
 
     for (const operation of [
       Effect.asVoid(stage.cue(foreign)),

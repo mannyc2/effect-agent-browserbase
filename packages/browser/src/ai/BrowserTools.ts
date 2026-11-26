@@ -598,7 +598,7 @@ const pointing = (
           // what the model waits for.
           Stillness.wait(page, {
             still: "foreground",
-            quietMillis: 600,
+            quiet: "600 millis",
             timeout: `${Math.min(Math.max(seconds ?? 15, 0), 30)} seconds`,
           }),
         () => "The screen is still.",

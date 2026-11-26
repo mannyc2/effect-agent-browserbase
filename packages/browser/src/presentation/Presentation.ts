@@ -99,7 +99,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
     const known = views.get(page);
 
     if (known !== undefined) return known;
-    const now = () => monotonicMillis(page.clock);
+    const now = () => monotonicMillis(page.hostClock);
 
     const style: InputStyle.InputStyle = {
       ...planned,
@@ -125,14 +125,14 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
               const document = (yield* page.state).document;
 
               const kind =
-                last === undefined || last.page !== page.id || last.clock !== page.clock
+                last === undefined || last.page !== page.id || last.clock !== page.hostClock
                   ? "unrelated"
                   : last.document === document
                     ? "expected"
                     : "surprise";
 
               const left =
-                (last?.clock === page.clock ? last.at : now()) +
+                (last?.clock === page.hostClock ? last.at : now()) +
                 (yield* InputStyle.pause(medians[kind], spread[kind])) -
                 now();
 
@@ -144,7 +144,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
               return yield* effect.pipe(
                 Effect.ensuring(
                   Effect.sync(() => {
-                    last = { page: page.id, document, clock: page.clock, at: now() };
+                    last = { page: page.id, document, clock: page.hostClock, at: now() };
                   }),
                 ),
               );

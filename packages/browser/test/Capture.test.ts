@@ -721,12 +721,31 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
     ),
   );
 
+  it.effect("refuses a maxAge that is negative or holds NaN, rather than reading it as zero", () =>
+    TestCdp.withCdp(
+      Effect.gen(function* () {
+        const page = yield* (yield* Browser).newPage();
+
+        for (const after of [undefined, "input"] as const)
+          for (const maxAge of [-1, Number.NaN, { milliseconds: Number.NaN }]) {
+            const error = yield* Frame.read(page, { maxAge, after }).pipe(Effect.flip);
+
+            assert.strictEqual(
+              error.reason._tag,
+              "InvalidRequest",
+              `${after} ${JSON.stringify(maxAge)}`,
+            );
+          }
+      }),
+    ),
+  );
+
   it.effect("counts the page still only from the first frame of a capture it starts", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* slowFirstFrame();
 
-        yield* Stillness.wait(page, { quietMillis: 400, timeout: Duration.seconds(10) });
+        yield* Stillness.wait(page, { quiet: "400 millis", timeout: Duration.seconds(10) });
 
         assert.isTrue(
           yield* Effect.promise(() =>
@@ -760,13 +779,13 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 </script></body>`),
         );
         // Waiting for the screen to settle runs and stops a capture; its frames stay retained.
-        yield* Stillness.wait(page, { quietMillis: 300 });
+        yield* Stillness.wait(page, { quiet: "300 millis" });
         const retained = yield* Frame.recent(page);
 
         assert.isAbove(retained.length, 1);
         yield* page.click({ x: 50, y: 30 });
 
-        const moment = yield* Moment.capture(page, { frames: 2 });
+        const moment = yield* Moment.read(page, { frames: 2 });
 
         const last = moment.frames.at(-1);
 
@@ -1536,7 +1555,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           }),
         );
 
-        const moment = yield* Moment.capture(fixture.page, { since: Duration.millis(100) });
+        const moment = yield* Moment.read(fixture.page, { since: Duration.millis(100) });
 
         const image = moment.frames[0];
 

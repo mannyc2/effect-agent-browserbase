@@ -21,11 +21,12 @@
  *
  * @since 0.3.0
  */
-import { Effect, Option, Result, Schema } from "effect";
+import { Duration, Effect, Option, Result, Schema } from "effect";
 
 import type * as Browser from "../Browser.ts";
 import type { BrowserError } from "../BrowserError.ts";
 import * as Change from "../Change.ts";
+import { millisOf } from "../internal/clock.ts";
 import type * as Page from "../Page.ts";
 import * as Policy from "../policy/Policy.ts";
 import * as Snapshot from "../Snapshot.ts";
@@ -126,8 +127,8 @@ export interface Options {
   readonly initialTabs?: Tabs.Tabs | undefined;
   /** Bound on an observation's outline, in characters. Defaults to 8,000. */
   readonly maxChars?: number | undefined;
-  /** Bound on a condition wait. Defaults to 5,000 ms; an unmet wait returns the page as it is. */
-  readonly maxWaitMillis?: number | undefined;
+  /** Bound on a condition wait. Defaults to 5 seconds; an unmet wait returns the page as it is. */
+  readonly maxWait?: Duration.Input | undefined;
   /** Give every control's box in the outline, as `WxH at (x,y)` in viewport CSS pixels. */
   readonly boxes?: boolean | undefined;
   /**
@@ -442,7 +443,7 @@ const session = Effect.fnUntraced(function* (target: Target, options: Options) {
       options.task === undefined
         ? effect
         : Effect.provideService(effect, Policy.Task, options.task),
-    maxWait: options.maxWaitMillis ?? 5000,
+    maxWait: millisOf(options.maxWait ?? Duration.seconds(5)),
   } satisfies Session;
 });
 

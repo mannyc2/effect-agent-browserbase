@@ -472,7 +472,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           yield* page.click(yield* button(page, "Place order"));
           yield* Snapshot.until(page, { text: "Order placed" }, "some", 5000);
           yield* Effect.sleep(Duration.millis(200));
-          const moment = yield* Moment.capture(page, { since: Duration.seconds(2) });
+          const moment = yield* Moment.read(page, { since: Duration.seconds(2) });
           const changes = moment.changes?.changes ?? [];
           const placed = changes.find((change) => change.after === "Order placed");
           const ticker = changes.find((change) => change.subject.context.row === "BTC");
@@ -631,7 +631,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             yield* page.click(yield* button(page, "Place order"));
             yield* Snapshot.until(page, { text: "Order placed" }, "some", 5000);
             yield* Effect.sleep(Duration.millis(100));
-            const moment = yield* Moment.capture(page, { since: from });
+            const moment = yield* Moment.read(page, { since: from });
             const changes = moment.changes?.changes ?? [];
             const changed = (after: string) => changes.find((change) => change.after === after);
             const [menu, sheet, placed] = ["Share", "Share this page", "Order placed"].map(changed);

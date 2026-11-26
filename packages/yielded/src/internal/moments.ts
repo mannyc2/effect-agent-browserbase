@@ -82,7 +82,7 @@ export const make = Effect.fnUntraced(function* (
     function* (previous: Moment.Window | undefined) {
       const page = yield* look;
 
-      const moment = yield* Moment.capture(page, {
+      const moment = yield* Moment.read(page, {
         // Consecutive moments of one tab neither repeat nor miss what happened between them.
         since: previous?.page === page.id ? previous : Duration.seconds(5),
         frames: framesPerMoment,

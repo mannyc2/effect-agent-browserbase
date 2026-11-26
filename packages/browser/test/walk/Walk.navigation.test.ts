@@ -140,7 +140,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           ]);
 
           const taking = yield* Walk.step(observed, plan, 1, {
-            settle: phase === "ready" ? { quietMillis: 50 } : false,
+            settle: phase === "ready" ? { quiet: "50 millis" } : false,
             arrival: "1 second",
           }).pipe(Effect.exit, Effect.forkChild);
 

@@ -16,7 +16,7 @@
  *
  * @since 0.3.0
  */
-import { Cause, Context, Duration, Effect, Record, Result, Schema } from "effect";
+import { Cause, Context, Duration, Effect, Function, Record, Result, Schema } from "effect";
 import { type AiError, Decision, DecisionModel, LanguageModel, Prompt } from "effect/ai";
 
 import { PolicyDenied } from "../BrowserError.ts";
@@ -220,17 +220,22 @@ const unsure = (value: number) => value > 0.2 && value < 0.8;
  * `first`'s judgement, or `second`'s when `first` is unsure: a risk between 0.2 and 0.8, or a
  * likely risk whose request is. A confident mistake by `first` stands.
  */
-export const escalate =
+export const escalate: {
+  (second: Judge): (first: Judge) => Judge;
+  (first: Judge, second: Judge): Judge;
+} = Function.dual(
+  2,
   (first: Judge, second: Judge): Judge =>
-  (request) =>
-    Effect.flatMap(first(request), (judgement) => {
-      const risks = Object.values(judgement.risks);
+    (request) =>
+      Effect.flatMap(first(request), (judgement) => {
+        const risks = Object.values(judgement.risks);
 
-      return risks.some(unsure) ||
-        (risks.some((value) => value >= 0.5) && unsure(judgement.requested ?? 0))
-        ? second(request)
-        : Effect.succeed(judgement);
-    });
+        return risks.some(unsure) ||
+          (risks.some((value) => value >= 0.5) && unsure(judgement.requested ?? 0))
+          ? second(request)
+          : Effect.succeed(judgement);
+      }),
+);
 
 export interface Options {
   /** Reads what an input means. Without one, only origins and facts decide. */

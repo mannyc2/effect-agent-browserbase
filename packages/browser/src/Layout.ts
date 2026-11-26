@@ -91,8 +91,12 @@ export const measure: {
 } = Function.dual(2, (page: Page, picks: Picks) => functionsOf(page).layout(picks));
 
 /** The place a pick named, if it found one. */
-export const place = (layout: Layout, id: string): Place | undefined =>
-  layout.places.find((each) => each.id === id);
+export const place: {
+  (id: string): (layout: Layout) => Place | undefined;
+  (layout: Layout, id: string): Place | undefined;
+} = Function.dual(2, (layout: Layout, id: string): Place | undefined =>
+  layout.places.find((each) => each.id === id),
+);
 
 /** What a rehearsal does, measures, and does to put the page back. */
 export interface Rehearsal {
@@ -101,12 +105,7 @@ export interface Rehearsal {
   readonly undo: ReadonlyArray<Action>;
 }
 
-/**
- * Measure what exists only after an interaction: perform `act`, wait for the page to be ready,
- * read the layout, then perform `undo`, which runs whether or not acting and reading succeeded,
- * and is not interrupted. A failure to act or read is the rehearsal's; otherwise one to undo is.
- */
-export const rehearse = (page: Page, rehearsal: Rehearsal): Effect.Effect<Layout, BrowserError> =>
+const rehearseOn = (page: Page, rehearsal: Rehearsal): Effect.Effect<Layout, BrowserError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const measured = yield* Effect.exit(
@@ -127,3 +126,13 @@ export const rehearse = (page: Page, rehearsal: Rehearsal): Effect.Effect<Layout
         : Exit.failCause(undone.cause);
     }),
   );
+
+/**
+ * Measure what exists only after an interaction: perform `act`, wait for the page to be ready,
+ * read the layout, then perform `undo`, which runs whether or not acting and reading succeeded,
+ * and is not interrupted. A failure to act or read is the rehearsal's; otherwise one to undo is.
+ */
+export const rehearse: {
+  (rehearsal: Rehearsal): (page: Page) => Effect.Effect<Layout, BrowserError>;
+  (page: Page, rehearsal: Rehearsal): Effect.Effect<Layout, BrowserError>;
+} = Function.dual(2, rehearseOn);

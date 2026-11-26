@@ -389,10 +389,6 @@ const camera = (
     }).pipe(capture.excluding, within(operation));
 };
 
-// A duration in milliseconds, or NaN for an input that is no duration.
-const millisOf = (input: Duration.Input) =>
-  Option.match(Duration.fromInput(input), { onNone: () => Number.NaN, onSome: Duration.toMillis });
-
 // The newest screencast frame, if it shows the page as the caller asked: painted at most `maxAge`
 // ago at the earliest its timing allows, after the current document began, and with
 // `after: "input"` after the page's latest input, which a read asks in its turn, once the action
@@ -405,7 +401,7 @@ const reuse =
   (page: PageContext, bridge: Bridge, viewport: Viewport, capture: Capture.Controller) =>
   (options: FrameOptions) =>
     Effect.gen(function* () {
-      const maxAge = millisOf(options.maxAge ?? defaultMaxAge);
+      const maxAge = BrowserClock.millisOf(options.maxAge ?? defaultMaxAge);
 
       if (!(maxAge >= 0))
         return yield* refuse("frame", "maxAge must be a duration of zero or more");
@@ -531,7 +527,7 @@ export const make = Effect.fnUntraced(function* (
           onNone: () =>
             frames(
               JSON.stringify([
-                millisOf(options.maxAge ?? defaultMaxAge),
+                BrowserClock.millisOf(options.maxAge ?? defaultMaxAge),
                 options.after,
                 options.quality,
                 options.format,
@@ -579,7 +575,7 @@ export const make = Effect.fnUntraced(function* (
 
   const captureStats = (options: { readonly window?: Duration.Input | undefined } = {}) => {
     if (options.window === undefined) return capture.stats();
-    const millis = millisOf(options.window);
+    const millis = BrowserClock.millisOf(options.window);
 
     return millis > 0 && millis <= Duration.toMillis(countsKept)
       ? capture.stats(millis)
