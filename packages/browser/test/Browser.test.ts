@@ -37,7 +37,7 @@ const connect = (endpoint: string, options: Partial<Cdp.Options> = {}) =>
     const scope = yield* Scope.make();
 
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-    const browser = yield* Cdp.open({ ...options, endpoint }).pipe(Scope.provide(scope));
+    const browser = yield* Cdp.make({ ...options, endpoint }).pipe(Scope.provide(scope));
 
     return { browser, end: Scope.close(scope, Exit.void) };
   });
@@ -105,7 +105,7 @@ describe("a tab opened by input", () => {
   it.live("is tracked before the input ends, even with slow registration and evicted events", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open({ eventHistory: 1 });
+        const browser = yield* Chromium.make({ eventHistory: 1 });
         const page = yield* browser.firstPage;
 
         yield* page.goto((yield* Site).url("/form"));
@@ -142,7 +142,7 @@ describe("a tab opened by input", () => {
   it.live("registers another tab while one popup registration is held", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const page = yield* browser.firstPage;
         const registration = yield* holdPopupRegistration(browser, page);
         const context = TestCdp.nativeContext(browser);
@@ -172,7 +172,7 @@ describe("a tab opened by input", () => {
   it.live("registers every opening in a burst without revoking authority", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
 
         yield* browser.firstPage;
         const context = TestCdp.nativeContext(browser);
@@ -226,7 +226,7 @@ describe("a tab opened by input", () => {
 
           yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
 
-          const browser = yield* Chromium.open({ actionTimeout: "2 seconds" }).pipe(
+          const browser = yield* Chromium.make({ actionTimeout: "2 seconds" }).pipe(
             Scope.provide(owner),
           );
 
@@ -408,7 +408,7 @@ describe("a loss", () => {
   it.live("of a crashed page closes it, failing its calls Closed as crashed", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open({ actionTimeout: Duration.seconds(3) });
+        const browser = yield* Chromium.make({ actionTimeout: Duration.seconds(3) });
         const page = yield* browser.newPage(still("doomed"));
         const from = (yield* browser.recentEvents).length;
 
@@ -443,7 +443,7 @@ describe("a page's documents", () => {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* Site;
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const page = yield* browser.newPage(site.url("/form"));
 
         yield* Effect.promise(() =>
@@ -498,7 +498,7 @@ describe("init scripts", () => {
       Effect.gen(function* () {
         const site = yield* Site;
 
-        const browser = yield* Chromium.open({
+        const browser = yield* Chromium.make({
           initScripts: [
             {
               match: /^http:\/\/localhost:/,
@@ -740,7 +740,7 @@ describe("an address", () => {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* Site;
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const page = yield* browser.newPage(site.url("/links"));
 
         const links = (yield* page.snapshot()).text
@@ -765,7 +765,7 @@ describe("an address", () => {
 it.live("concurrent firstPage calls open exactly one initial page", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
 
       const pages = yield* Effect.all(
         Array.from({ length: 12 }, () => browser.firstPage),
@@ -781,7 +781,7 @@ it.live("concurrent firstPage calls open exactly one initial page", () =>
 it.live("publishes a failed dialog answer and closes only the affected page", () =>
   TestCdp.isolated((faults) =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
       const page = yield* browser.newPage();
 
       faults.rule(

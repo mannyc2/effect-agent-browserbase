@@ -10,7 +10,7 @@ import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("fulfills Unicode documents before opening pages and refuses invalid responses", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open({
+    const browser = yield* Chromium.make({
       requests: {
         patterns: ["https://synthetic.test/*"],
         decide: ({ url }) =>

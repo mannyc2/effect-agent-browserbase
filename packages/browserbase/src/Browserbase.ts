@@ -1,7 +1,7 @@
 /**
  * A `Browser` running on Browserbase.
  *
- * `open` creates a session and connects to it over CDP. When its scope closes it disconnects,
+ * `make` creates a session and connects to it over CDP. When its scope closes it disconnects,
  * releases the session and confirms that Browserbase reports it ended, so billing stops then
  * rather than at the session's timeout. `release` does the same sooner and says how it went:
  * `Confirmed`, or `Unconfirmed` when Browserbase still reported the session running, or could not
@@ -10,24 +10,27 @@
  * unseen until its timeout.
  *
  * A session that persists to a stored context saves to it when the session ends, so two at once
- * can lose one's changes. `open` holds the context through the `ContextLease` the application
- * provides, from before it creates such a session until Browserbase reports the session ended and
- * `contextSettle` has passed, since the save lands later and nothing acknowledges it. A writer that
- * leaves a session that saves to the context possibly running, its release `Unconfirmed`, its
- * create's answer lost or its session kept, leaves the context unsettled: the next writer first ends
- * the context's sessions, which `open` labels in their user metadata, and fails with `ContextHeld`
- * while they can't be confirmed ended. `reconcile` ends them without opening, and `verifyContext`
+ * can lose one's changes. `make` holds the context through the `ContextLease`, from before it
+ * creates such a session until Browserbase reports the session ended and `contextSettle` has
+ * passed, since the save lands later and nothing acknowledges it. A writer that leaves a session
+ * that saves to the context possibly running, its release `Unconfirmed`, its create's answer lost
+ * or its session kept, leaves the context unsettled: the next writer first ends the context's
+ * sessions, which `make` labels in their user metadata, and fails with `ContextHeld` while they
+ * can't be confirmed ended. `reconcile` ends them without opening, and `verifyContext`
  * reads a context back under the same hold, from a session that saves nothing.
  *
- * `attach` connects to a session that already runs, as from another process: its pages keep their
- * ids, so a page stored before is found again. `generations` supplies scoped resource generations
- * to the generic `Supervisor`; retry schedules and account policy belong to its caller.
+ * `layer` provides the session as `Browserbase` and its browser as `Browser`. `attach` connects to a
+ * session that already runs, as from another process: its pages keep their ids, so a page stored
+ * before is found again. `generations` supplies scoped resource generations to the generic
+ * `Supervisor`; retry schedules and account policy belong to its caller.
  *
  * @stability stable
  * @since 0.3.0
  */
 import {
   Cause,
+  Config,
+  Context,
   Data,
   DateTime,
   Duration,
@@ -54,7 +57,12 @@ import {
   type SessionOptions,
 } from "./BrowserbaseClient.ts";
 import { BrowserbaseError, Decode, isTransient } from "./BrowserbaseError.ts";
-import { ContextHeld, ContextLease, ContextRefused } from "./ContextLease.ts";
+import {
+  ContextHeld,
+  ContextLease,
+  ContextRefused,
+  type Service as Lease,
+} from "./ContextLease.ts";
 import * as CaptureConnection from "./internal/captureConnection.ts";
 import { releasing } from "./internal/releasing.ts";
 
@@ -65,7 +73,7 @@ import { releasing } from "./internal/releasing.ts";
  */
 export interface Options extends Browser.Options {
   readonly session?: SessionOptions | undefined;
-  /** Runtime-supplied Playwright CDP connection, shared by open, attach and supervision. */
+  /** Runtime-supplied Playwright CDP connection, shared by make, attach and supervision. */
   readonly connect?: Cdp.Connector | undefined;
   /** Bound on connecting to the session. Defaults to 30 seconds. */
   readonly connectTimeoutMillis?: number | undefined;
@@ -93,12 +101,23 @@ export interface Hosted {
   readonly browser: Browser.Service;
   readonly session: Session;
   /**
-   * Release the session and confirm it ended, once: `open`'s scope runs it as it closes, while
+   * Release the session and confirm it ended, once: `make`'s scope runs it as it closes, while
    * `attach`'s only disconnects. It disconnects `browser` first, which is lost as `released`, so a
    * call in flight or a capture's reader is told so. Asked again, it reports the same outcome.
    */
   readonly release: Effect.Effect<Release.Release>;
 }
+
+/**
+ * The session `layer` opened, with its browser and its release.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
+export class Browserbase extends Context.Service<Browserbase, Hosted>()(
+  "@effect-browser/browserbase/Browserbase",
+) {}
 
 /** The user metadata key naming the stored context a persisting session writes to. */
 const contextLabel = "persistsContext";
@@ -247,7 +266,7 @@ const endOrphan = (client: Service, nonce: string, settle: Duration.Duration | u
  */
 const holdContext = Effect.fnUntraced(function* (
   client: Service,
-  lease: ContextLease["Service"],
+  lease: Lease,
   id: string,
   settle: Duration.Duration,
 ) {
@@ -276,7 +295,7 @@ const holdContext = Effect.fnUntraced(function* (
 
   const letGo = (now: boolean) => set(now).pipe(Effect.andThen(Scope.close(scope, Exit.void)));
 
-  /** End the context's sessions but `except`, found by the label `open` gives them. */
+  /** End the context's sessions but `except`, found by the label `make` gives them. */
   const end = (except: ReadonlyArray<string>) =>
     unended(client, labelled(contextLabel, id)).pipe(
       Effect.flatMap((found) =>
@@ -366,7 +385,7 @@ const connect = Effect.fnUntraced(function* (
     });
   const apart = options.captureConnection !== false && /^wss?:/i.test(Redacted.value(endpoint));
 
-  return yield* Cdp.open({
+  return yield* Cdp.make({
     ...options,
     endpoint,
     id: session.id,
@@ -457,7 +476,7 @@ const start = Effect.fnUntraced(function* (
  * @category constructors
  * @since 0.3.0
  */
-export const open = Effect.fn("Browserbase.open")(function* (options: Options = {}) {
+export const make = Effect.fn("Browserbase.make")(function* (options: Options = {}) {
   return yield* start(options);
 });
 
@@ -491,8 +510,8 @@ export const attach = Effect.fn("Browserbase.attach")(function* (
 });
 
 /**
- * End a stored context's sessions, the ones `open` labelled as writing to it, and let the context
- * go once they are confirmed ended and its save has settled. `open` does this itself when a writer
+ * End a stored context's sessions, the ones `make` labelled as writing to it, and let the context
+ * go once they are confirmed ended and its save has settled. `make` does this itself when a writer
  * before it may still run; `reconcile` does it without opening, as for sessions another process
  * left running. It holds the context through the `ContextLease`, so it waits for a writer. A
  * session still running at the deadline makes it `Unconfirmed`, and leaves the context unsettled,
@@ -522,7 +541,7 @@ export const reconcile = Effect.fn("Browserbase.reconcile")(function* (
  * on its browser, and is released. The context is held through the `ContextLease` meanwhile, so
  * the read never runs beside a writer, which a site could sign out, and it reads what the last
  * writer saved, once that save settled. A session a writer before may have left saving to it is
- * ended first, as for `open`.
+ * ended first, as for `make`.
  *
  * @stability stable
  * @category combinators
@@ -608,11 +627,7 @@ export const refused = (error: unknown) =>
 export const generations = <A, E, R>(
   options: GenerationOptions<A, E, R>,
 ): Pick<
-  Supervisor.Options<
-    A,
-    OpenFailed<AcquisitionError | E>,
-    Scope.Scope | BrowserbaseClient | ContextLease | R
-  >,
+  Supervisor.Options<A, OpenFailed<AcquisitionError | E>, Scope.Scope | BrowserbaseClient | R>,
   "open" | "exclusive" | "definite"
 > => ({
   open: Effect.fnUntraced(function* () {
@@ -656,19 +671,32 @@ export const generations = <A, E, R>(
   definite: ({ error }) => refused(error),
 });
 
+const provided = (hosted: Hosted) =>
+  Context.make(Browserbase, hosted).pipe(Context.add(Browser.Browser, hosted.browser));
+
 /**
+ * A session for the layer's lifetime, as `Browserbase`, and its browser, as `Browser`.
+ *
  * @stability stable
  * @category layers
  * @since 0.3.0
  */
 export const layer = (
   options: Options = {},
+): Layer.Layer<Browserbase | Browser.Browser, AcquisitionError, BrowserbaseClient> =>
+  Layer.effectContext(Effect.map(make(options), provided));
+
+/**
+ * `layer`, with the options as `Config` values.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
+export const layerConfig = (
+  config: Config.Wrap<Options>,
 ): Layer.Layer<
-  Browser.Browser,
-  BrowserError | BrowserbaseError | ContextHeld | ContextRefused,
-  BrowserbaseClient | ContextLease
-> =>
-  Layer.effect(
-    Browser.Browser,
-    Effect.map(open(options), ({ browser }) => browser),
-  );
+  Browserbase | Browser.Browser,
+  AcquisitionError | Config.ConfigError,
+  BrowserbaseClient
+> => Layer.effectContext(Config.unwrap(config).pipe(Effect.flatMap(make), Effect.map(provided)));

@@ -15,7 +15,7 @@ const commandLine = (options: Chromium.Options) =>
   Effect.gen(function* () {
     const marker = `--effect-browser-test=${randomUUID()}`;
 
-    yield* Chromium.open({ ...options, args: [marker] });
+    yield* Chromium.make({ ...options, args: [marker] });
 
     // Every process, at full width, so no command line is cut short.
     const processes = yield* Effect.sync(() =>
@@ -55,7 +55,7 @@ it.live("leaves the process's signals to the program", () =>
     const listeners = () => signals.map((signal) => process.listenerCount(signal));
     const before = listeners();
 
-    yield* Chromium.open();
+    yield* Chromium.make();
 
     assert.deepStrictEqual(listeners(), before);
   }).pipe(Effect.scoped),
@@ -63,8 +63,8 @@ it.live("leaves the process's signals to the program", () =>
 
 it.live("gives each launch its own identity even when the Chromium version matches", () =>
   Effect.gen(function* () {
-    const first = yield* Chromium.open();
-    const second = yield* Chromium.open();
+    const first = yield* Chromium.make();
+    const second = yield* Chromium.make();
 
     assert.notStrictEqual(first.id, second.id);
     assert.notStrictEqual(first.connection, second.connection);

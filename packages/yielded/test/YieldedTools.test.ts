@@ -190,7 +190,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   // #293 discussion_r4249413869: a crop's coordinates cannot be used after selecting another tab.
   it.effect("keeps queued crops out of a newly selected tab's moment", () =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
       const site = yield* Site;
 
       yield* browser.newPage(site.url("/form"));

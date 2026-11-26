@@ -10,7 +10,7 @@
  * @stability stable
  * @since 0.3.0
  */
-import { Effect, Layer } from "effect";
+import { Config, Effect, Layer } from "effect";
 import * as Browser from "effect-browser/Browser";
 import { type BrowserError, Failed, reasonOf, undispatched } from "effect-browser/BrowserError";
 import { chromium } from "playwright-core";
@@ -68,7 +68,7 @@ const launchFailed = (cause: unknown) =>
  * @category constructors
  * @since 0.3.0
  */
-export const open = Effect.fn("Chromium.open")(function* (options: Options = {}) {
+export const make = Effect.fn("Chromium.make")(function* (options: Options = {}) {
   const launched = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: () =>
@@ -113,4 +113,16 @@ export const open = Effect.fn("Chromium.open")(function* (options: Options = {})
  * @since 0.3.0
  */
 export const layer = (options: Options = {}): Layer.Layer<Browser.Browser, BrowserError> =>
-  Layer.effect(Browser.Browser, open(options));
+  Layer.effect(Browser.Browser, make(options));
+
+/**
+ * `layer`, with the options as `Config` values.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
+export const layerConfig = (
+  config: Config.Wrap<Options>,
+): Layer.Layer<Browser.Browser, BrowserError | Config.ConfigError> =>
+  Layer.effect(Browser.Browser, Config.unwrap(config).pipe(Effect.flatMap(make)));

@@ -8,7 +8,7 @@ import * as TestCdp from "./support/TestCdp.ts";
 it.live("keeps a popup registration alive when its input caller is interrupted", () =>
   TestCdp.isolated((faults) =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
       const opener = yield* browser.firstPage;
 
       yield* opener.goto((yield* Site).url("/form"));
@@ -45,7 +45,7 @@ it.live("keeps a popup registration alive when its input caller is interrupted",
 it.live("cleans a canceled newPage allocation without canceling another registration", () =>
   TestCdp.isolated((faults) =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
 
       yield* browser.firstPage;
       const context = TestCdp.nativeContext(browser);

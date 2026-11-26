@@ -1,12 +1,14 @@
 /**
  * Who may write a stored context. A session that persists to a context saves to it when the
- * session ends, so two at once can lose one's changes. `Browserbase.open` holds a context through
+ * session ends, so two at once can lose one's changes. `Browserbase.make` holds a context through
  * its `ContextLease` from before it creates a persisting session until that session has ended and
  * its save has settled, and the next writer waits. `verifyContext` and `reconcile` hold it too.
  *
- * The lease is a port. `layer` holds contexts within the process that builds it. An application
- * whose writers run in several processes provides its own, such as an advisory lock in its
- * database, and so excludes them all.
+ * The lease is a port. Unless the application provides one, it holds contexts within this process,
+ * one lease for every writer in it. An application whose writers run in several processes provides
+ * its own, such as an advisory lock in its database, and so excludes them all. `layer` provides a
+ * lease within the process of its own, as a test does so that it inherits no context another left
+ * unsettled.
  *
  * A hold also passes on how the writer before left the context: `unsettled` while a session that
  * saves to it may still run, as when that writer's release was left unconfirmed, its create's answer
@@ -87,15 +89,6 @@ export interface Service {
   ) => Effect.Effect<Hold, ContextHeld | ContextRefused, Scope.Scope>;
 }
 
-/**
- * @stability stable
- * @category services
- * @since 0.3.0
- */
-export class ContextLease extends Context.Service<ContextLease, Service>()(
-  "@effect-browser/browserbase/ContextLease",
-) {}
-
 interface Entry {
   readonly lock: Semaphore.Semaphore;
   unsettled: boolean;
@@ -104,16 +97,12 @@ interface Entry {
 }
 
 /**
- * The lease within this process: one writer at a time for each stored context. A context it has
- * not held is presumed settled, so writers in other processes are the application's to exclude,
- * with a lease of its own. It forgets a context once nobody holds it, or waits for it, and it was
- * left settled.
- *
- * @stability stable
- * @category layers
- * @since 0.3.0
+ * A lease within this process: one writer at a time for each stored context. A context it has not
+ * held is presumed settled, so writers in other processes are the application's to exclude, with a
+ * lease of its own. It forgets a context once nobody holds it, or waits for it, and it was left
+ * settled.
  */
-export const layer: Layer.Layer<ContextLease> = Layer.sync(ContextLease, () => {
+const inProcess = (): Service => {
   const contexts = new Map<string, Entry>();
 
   const enter = (context: string) => {
@@ -134,7 +123,7 @@ export const layer: Layer.Layer<ContextLease> = Layer.sync(ContextLease, () => {
     if (entry.users === 0 && !entry.unsettled) contexts.delete(context);
   };
 
-  return ContextLease.of({
+  return {
     hold: (context) =>
       Effect.gen(function* () {
         const entry = yield* Effect.acquireRelease(
@@ -162,5 +151,25 @@ export const layer: Layer.Layer<ContextLease> = Layer.sync(ContextLease, () => {
             }),
         } satisfies Hold;
       }),
-  });
+  };
+};
+
+/**
+ * The lease that `Browserbase` holds stored contexts through; the process's own by default.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
+export const ContextLease = Context.Reference<Service>("@effect-browser/browserbase/ContextLease", {
+  defaultValue: inProcess,
 });
+
+/**
+ * A lease within this process of its own, apart from the default one that the process shares.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
+export const layer: Layer.Layer<never> = Layer.sync(ContextLease, inProcess);

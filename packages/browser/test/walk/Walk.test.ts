@@ -436,7 +436,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* DriftSite;
-        const browser = yield* Chromium.open({ eventHistory: 16 });
+        const browser = yield* Chromium.make({ eventHistory: 16 });
         const page = yield* browser.newPage(site.url("/news"));
 
         for (let index = 0; index < 20; index++) yield* page.press("Shift");

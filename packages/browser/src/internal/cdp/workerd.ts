@@ -5,7 +5,7 @@
  * @stability stable
  * @since 0.3.0
  */
-import { make } from "./connection.ts";
+import { forRuntime } from "./connection.ts";
 
 export type {
   /**
@@ -33,4 +33,4 @@ export type {
  * @category constructors
  * @since 0.3.0
  */
-export const { open, layer } = make();
+export const { make, layer, layerConfig } = forRuntime();

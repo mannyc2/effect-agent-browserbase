@@ -8,7 +8,7 @@ import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("main-world scripts bind an act to the read document and invalidate earlier reads", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
 
     const page = yield* browser.newPage(
       "data:text/html,<h1>first</h1><script>window.chart={value:1}</script>",
@@ -55,7 +55,7 @@ it.live("main-world scripts bind an act to the read document and invalidate earl
 
 it.live("scripts consult the guard and preserve sent evidence on decode or execution failure", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open({
+    const browser = yield* Chromium.make({
       guard: (request) =>
         request.action._tag === "Act"
           ? Effect.fail(new PolicyDenied({ detail: "scripts denied" }))
@@ -77,7 +77,7 @@ it.live("scripts consult the guard and preserve sent evidence on decode or execu
 
     assert.strictEqual(refused.dispatched, false);
     assert.strictEqual(refused.reason._tag, "PolicyDenied");
-    const plain = yield* (yield* Chromium.open()).newPage("data:text/html,<h1>plain</h1>");
+    const plain = yield* (yield* Chromium.make()).newPage("data:text/html,<h1>plain</h1>");
 
     const badResult = yield* Effect.flip(
       plain.act(() => "wrong", {
@@ -106,7 +106,7 @@ it.live("scripts consult the guard and preserve sent evidence on decode or execu
 
 it.live("a cancelled act retains its native reply before the next writer enters", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
     const page = yield* browser.newPage("data:text/html,<h1>cancellation</h1>");
     const started = yield* Deferred.make<void>();
 
@@ -138,7 +138,7 @@ it.live("a cancelled act retains its native reply before the next writer enters"
 // 1d6d7c7: replacing a document during an asynchronous read was misreported as script Threw.
 it.live("read retries its script after the site replaces the execution context", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
     const page = yield* browser.newPage("data:text/html,<title>before</title>");
     const native = yield* TestCdp.nativeOf(page);
     const entered = Promise.withResolvers<void>();
@@ -168,7 +168,7 @@ it.live("read retries its script after the site replaces the execution context",
 
 it.live("act reports a replaced context as uncertain input, not a script throw", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
     const page = yield* browser.newPage("data:text/html,<title>before</title>");
     const native = yield* TestCdp.nativeOf(page);
     const entered = Promise.withResolvers<void>();

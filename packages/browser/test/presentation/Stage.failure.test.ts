@@ -652,7 +652,7 @@ it.live("outgoing capture cleanup cannot time out a cut that already reached the
   TestCdp.withCdp(
     Effect.gen(function* () {
       const faults = yield* TestCdp.make();
-      const browser = yield* faults.provide(Chromium.open({ navigationTimeout: "200 millis" }));
+      const browser = yield* faults.provide(Chromium.make({ navigationTimeout: "200 millis" }));
       const stopping = Promise.withResolvers<void>();
       const gate = yield* Deferred.make<void>();
       const release = { resolve: () => Deferred.doneUnsafe(gate, Effect.void) };

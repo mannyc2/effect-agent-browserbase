@@ -50,7 +50,7 @@ const animated = html(`<body style="margin:0"><canvas id=c width=300 height=300>
 const opened = (args: ReadonlyArray<string> = []) =>
   Effect.gen(function* () {
     const proxy = yield* behindProxy(args);
-    const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+    const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
 
     return { proxy, browser };
   });
@@ -104,7 +104,7 @@ it.live("opening a browser over CDP costs 33 calls, the tab's registration one r
     Effect.gen(function* () {
       const proxy = yield* behindProxy();
 
-      const sent = (yield* sentBy(proxy, Cdp.open({ endpoint: proxy.endpoint }))).filter(
+      const sent = (yield* sentBy(proxy, Cdp.make({ endpoint: proxy.endpoint }))).filter(
         (command) => command.method !== "Target.detachFromTarget",
       );
 

@@ -38,7 +38,7 @@ it.live("guards every redirect hop and records a redacted refusal", () =>
     assert.isNotNull(address);
     const port = typeof address === "object" && address !== null ? address.port : 0;
 
-    const browser = yield* Chromium.open({
+    const browser = yield* Chromium.make({
       requests: {
         patterns: ["*blocked*"],
         decide: () =>
