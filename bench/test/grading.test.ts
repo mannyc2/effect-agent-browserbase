@@ -72,12 +72,15 @@ const describeWith = (
     readonly frameHistory?: Duration.Input;
     /** Lose every screencast frame once this many clicks begin, as a stalled screencast does. */
     readonly dropFramesAfterClicks?: number;
+    /** Wait this long before each picture read, as a loaded host can between a paint and a read. */
+    readonly readDelayMillis?: number;
   } = {},
 ) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
 
     const frameDelayMillis = options.frameDelayMillis ?? 0;
+    const readDelay = Duration.millis(options.readDelayMillis ?? 0);
     let clicks = 0;
 
     const dropping = () =>
@@ -141,7 +144,10 @@ const describeWith = (
       ...own,
       recent: own.recent.pipe(Effect.tap((frames) => Effect.sync(() => histories.push(frames)))),
       read: (options) =>
-        own.read(options).pipe(Effect.tap((frame) => Effect.sync(() => currents.push(frame)))),
+        Effect.sleep(readDelay).pipe(
+          Effect.andThen(own.read(options)),
+          Effect.tap((frame) => Effect.sync(() => currents.push(frame))),
+        ),
     }));
 
     const model = modelOf((options) =>
@@ -175,6 +181,7 @@ const describeWith = (
       prompts,
       history: histories.at(-1) ?? [],
       current: currents.at(-1),
+      reads: currents,
       frameAfter,
       events: yield* browser.recentEvents,
     };
@@ -303,71 +310,102 @@ describe("understanding evidence", () => {
     );
   }
 
-  it.live("keeps the full tumble interval, not only enough recent frames", () =>
-    Effect.gen(function* () {
-      let durationMillis = 0;
+  // A moment's picture reuses a screencast frame only while it is young, so a moment read late, as
+  // on a loaded host, ends with a fresh screenshot instead. The delayed case takes that path always.
+  for (const { title, readDelayMillis } of [
+    { title: "keeps the full tumble interval, not only enough recent frames", readDelayMillis: 0 },
+    {
+      title: "keeps the full tumble interval when the moment ends in a screenshot",
+      readDelayMillis: 400,
+    },
+  ])
+    it.live(title, () =>
+      Effect.gen(function* () {
+        let durationMillis = 0;
 
-      const { outcome, prompts, history, events, frameAfter } = yield* describeWith(
-        "tumble-win",
-        (page) =>
-          truth(page, TumbleTruth).pipe(
-            Effect.tap((state) =>
-              Effect.sync(() => {
-                durationMillis = state.durationMillis;
-                assert.strictEqual(state.tumbles, 4);
-                assert.strictEqual(state.multiplier, 10);
-              }),
+        const { outcome, prompts, history, reads, events, frameAfter } = yield* describeWith(
+          "tumble-win",
+          (page) =>
+            truth(page, TumbleTruth).pipe(
+              Effect.tap((state) =>
+                Effect.sync(() => {
+                  durationMillis = state.durationMillis;
+                  assert.strictEqual(state.tumbles, 4);
+                  assert.strictEqual(state.multiplier, 10);
+                }),
+              ),
+              Effect.andThen(tumble(page)),
             ),
-            Effect.andThen(tumble(page)),
-          ),
-        { seed: 15 },
-      );
+          { seed: 15, readDelayMillis },
+        );
 
-      assert.isTrue(outcome.pass, outcome.detail);
-      const first = history[0];
-      const last = history.at(-1);
-      const prompt = prompts[0];
-      const click = events.find((event) => event._tag === "Action" && event.name === "click");
+        assert.isTrue(outcome.pass, outcome.detail);
+        const first = history[0];
+        const last = history.at(-1);
+        const prompt = prompts[0];
+        const click = events.find((event) => event._tag === "Action" && event.name === "click");
 
-      if (first === undefined || last === undefined || prompt === undefined || click === undefined)
-        throw new Error("the tumble did not retain its frames, prompt and input event");
-      assert.isAtLeast(last.receivedAt - first.receivedAt, durationMillis - 300);
-      if (click._tag !== "Action") throw new Error("the input event is not an action");
-      assert.isBelow(first.receivedAt, click.startedAt);
+        if (
+          first === undefined ||
+          last === undefined ||
+          prompt === undefined ||
+          click === undefined
+        )
+          throw new Error("the tumble did not retain its frames, prompt and input event");
+        assert.isAtLeast(last.receivedAt - first.receivedAt, durationMillis - 300);
+        if (click._tag !== "Action") throw new Error("the input event is not an action");
+        assert.isBelow(first.receivedAt, click.startedAt);
 
-      const selected = pictures(prompt).map((image) => {
-        const frame = history.find((candidate) => candidate.data === image.data);
+        const selected = pictures(prompt).map((image) => {
+          const frame = [...history, ...reads].find((candidate) => candidate.data === image.data);
 
-        if (frame === undefined)
-          throw new Error("the description image is not one of the retained frames");
+          if (frame === undefined)
+            throw new Error("the description image is neither a retained frame nor a read");
 
-        return frame;
-      });
+          return frame;
+        });
 
-      assert.strictEqual(selected.length, 12);
-      for (let index = 1; index < selected.length; index++) {
-        const earlier = selected[index - 1];
-        const later = selected[index];
+        assert.strictEqual(selected.length, 12);
+        const final = selected.at(-1);
 
-        if (earlier === undefined || later === undefined)
-          throw new Error("the selected frame sequence is incomplete");
-        // One cascade lasts 1,800 ms; a larger gap could conceal an entire paying cascade.
-        assert.isAbove(paintTime(later), paintTime(earlier));
-        assert.isBelow(paintTime(later) - paintTime(earlier), 1800);
-      }
-      const final = selected.at(-1);
+        if (final === undefined) throw new Error("the final description image is missing");
+        const screenshot = final.timing._tag === "Screenshot";
 
-      if (final === undefined) throw new Error("the final description image is missing");
-      assert.isAtLeast(paintTime(final), frameAfter);
+        if (readDelayMillis > 0) assert.isTrue(screenshot, "the late moment reused a frame");
+        const painted = screenshot ? selected.slice(0, -1) : selected;
 
-      // Timestamp labels come from the selected Moment frames, not the whole retained history.
-      const ages = [...textOf(prompt).matchAll(/^(-[\d.]+)s:$/gm)].map(
-        (match) => Math.abs(Number(match[1])) * 1000,
-      );
+        for (let index = 1; index < painted.length; index++) {
+          const earlier = painted[index - 1];
+          const later = painted[index];
 
-      assert.isAtLeast(Math.max(...ages), durationMillis - 400);
-    }),
-  );
+          if (earlier === undefined || later === undefined)
+            throw new Error("the selected frame sequence is incomplete");
+          // One cascade lasts 1,800 ms; a larger gap could conceal an entire paying cascade.
+          assert.isAbove(paintTime(later), paintTime(earlier));
+          assert.isBelow(paintTime(later) - paintTime(earlier), 1800);
+        }
+        if (screenshot) {
+          // A screenshot has no paint time. On the host clock it began after the fixture's last
+          // change was painted, and it closes the same 1,800 ms gap.
+          const change = history.find((frame) => (frame.timestamp ?? -1) >= frameAfter);
+          const previous = painted.at(-1);
+
+          if (change === undefined || previous === undefined)
+            throw new Error(
+              "the last change's paint or the frame before the screenshot is missing",
+            );
+          assert.isAtLeast(final.hostTime - final.timing.uncertaintyMillis, change.hostTime);
+          assert.isBelow(final.hostTime - previous.hostTime, 1800);
+        } else assert.isAtLeast(paintTime(final), frameAfter);
+
+        // Timestamp labels come from the selected Moment frames, not the whole retained history.
+        const ages = [...textOf(prompt).matchAll(/^(-[\d.]+)s:$/gm)].map(
+          (match) => Math.abs(Number(match[1])) * 1000,
+        );
+
+        assert.isAtLeast(Math.max(...ages), durationMillis - 400);
+      }),
+    );
 
   it.live("fails incomplete frame evidence as infrastructure before any model call", () =>
     Effect.gen(function* () {
