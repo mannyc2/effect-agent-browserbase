@@ -1,12 +1,12 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Deferred, Duration, Effect, Fiber, Schedule, Stream, Struct } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import type { Frame, Image } from "../src/Frame.ts";
-import * as Moment from "../src/moment/Moment.ts";
 import type { Page } from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
-import * as Stillness from "../src/stillness/Stillness.ts";
+import * as Moment from "../src/timeline/Moment.ts";
+import * as Stillness from "../src/timeline/Stillness.ts";
 import { busy, busyContext } from "./support/NativeFrames.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

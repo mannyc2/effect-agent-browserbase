@@ -4,8 +4,8 @@
 import { createHash } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 
+import { BrowserbaseClient, Session } from "@effect-browser/browserbase/BrowserbaseClient";
 import { Clock, Effect, Layer, Redacted } from "effect";
-import { BrowserbaseClient, Session } from "effect-browserbase/BrowserbaseClient";
 
 import { type Command, messages, protocol } from "./Latency.ts";
 

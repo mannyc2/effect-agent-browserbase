@@ -16,7 +16,7 @@ try {
     "package.json",
   ])
     await cp(join(root, name), join(work, name), { recursive: true });
-  for (const name of ["browser", "browserbase", "agent-browser", "human-strokes"]) {
+  for (const name of ["browser", "chromium", "browserbase", "agent-browser", "human-strokes"]) {
     await mkdir(join(work, "packages", name), { recursive: true });
     for (const part of ["package.json", "src", "test"])
       await cp(join(root, "packages", name, part), join(work, "packages", name, part), {
@@ -49,16 +49,16 @@ try {
       'void import(new URL("./generated.mjs", import.meta.url).href);',
     ].join("\n"),
   );
-  await writeFile(join(work, "packages/browser/src/workerd/boundary-root.ts"), "export {};\n");
+  await writeFile(join(work, "packages/browser/src/internal/boundary-root.ts"), "export {};\n");
   // Exercise a distinct conditional kernel entry even when production shares its portable root.
   const browserManifestFile = join(work, "packages/browser/package.json");
   const browserManifest = JSON.parse(await readFile(browserManifestFile, "utf8"));
 
   browserManifest.exports["."].workerd["@effect-browser/source"] =
-    "./src/workerd/boundary-entry.ts";
+    "./src/internal/boundary-entry.ts";
   await writeFile(browserManifestFile, JSON.stringify(browserManifest));
   await writeFile(
-    join(work, "packages/browser/src/workerd/boundary-entry.ts"),
+    join(work, "packages/browser/src/internal/boundary-entry.ts"),
     'export * from "../index.ts";\nexport * from "./boundary-root.ts";\n',
   );
   const fixtures = [
@@ -149,7 +149,7 @@ try {
     [
       "unpublished sibling",
       "browser/src/presentation/Stage.ts",
-      'import type { Step as BoundaryProbe } from "../plan/data.ts";',
+      'import type { Step as BoundaryProbe } from "../walk/internal/data.ts";',
       /feature imports unpublished module/,
     ],
     [
@@ -166,19 +166,19 @@ try {
     ],
     [
       "Workers root feature export",
-      "browser/src/workerd/boundary-entry.ts",
+      "browser/src/internal/boundary-entry.ts",
       'export * as BoundaryProbe from "../presentation/Stage.ts";',
       /kernel imports feature/,
     ],
     [
       "transitive Workers root feature export",
-      "browser/src/workerd/boundary-root.ts",
+      "browser/src/internal/boundary-root.ts",
       'export * as BoundaryProbe from "../presentation/Stage.ts";',
       /kernel imports feature/,
     ],
     [
       "Workers kernel deletion typecheck",
-      "browser/src/workerd/boundary-entry.ts",
+      "browser/src/internal/boundary-entry.ts",
       'export const BoundaryProbe: never = "Workers root must be checked";',
       /TS2322/,
     ],
@@ -191,7 +191,7 @@ try {
     [
       "computed dependency",
       "browser/src/presentation/Stage.ts",
-      'void import("../plan/" + "data.ts");',
+      'void import("../walk/" + "Walk.ts");',
       /module dependency must be a string literal/,
     ],
     [
@@ -223,10 +223,28 @@ try {
       /forbidden runtime dependency/,
     ],
     [
+      "root runtime dependency",
+      "browser/src/Action.ts",
+      'import "playwright-core";',
+      /the root loads playwright-core at runtime/,
+    ],
+    [
+      "feature imports another feature's internal",
+      "browser/src/policy/Policy.ts",
+      'import "../timeline/internal/words.ts";',
+      /feature imports unpublished module/,
+    ],
+    [
+      "feature reaches a deleted feature outside the import graph",
+      "browser/src/policy/Policy.ts",
+      '/// <reference path="../presentation/Stage.ts" />',
+      /With presentation deleted/,
+    ],
+    [
       "Node builtin in kernel",
       "browser/src/Action.ts",
       'import "node:fs";',
-      /Node builtin outside a Node provider/,
+      /Node builtin in effect-browser/,
     ],
   ];
   const allowed = spawnSync(process.execPath, [join(work, "tools/check-boundaries.mjs")], {

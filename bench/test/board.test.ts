@@ -3,7 +3,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Schedule, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Moment from "effect-browser/Moment";
+import { Moment } from "effect-browser/timeline";
 
 import { tasks } from "../Catalog.ts";
 import { BoardTruth, origin, routes, serve, truth } from "../Sites.ts";

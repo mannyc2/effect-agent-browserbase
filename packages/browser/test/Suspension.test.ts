@@ -1,12 +1,12 @@
 // The accepted input-authority contract requires native drain/refusal regressions: authority
 // spans every tab, records end before suspension resolves, and lost replies remain unresolved.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 
 import { consequence } from "../src/BrowserError.ts";
 import type { Page } from "../src/Page.ts";
 import * as Stage from "../src/presentation/Stage.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const document = (title = "Input") =>

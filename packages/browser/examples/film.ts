@@ -16,15 +16,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { Data, Effect, Stream } from "effect";
 import { Browser } from "effect-browser";
 import type { RequestPolicy } from "effect-browser/Browser";
 import type { Box } from "effect-browser/BrowserEvent";
 import type { Change } from "effect-browser/Change";
-import * as Chromium from "effect-browser/Chromium";
-import * as Film from "effect-browser/Film";
 import * as Layout from "effect-browser/Layout";
 import type { Pose } from "effect-browser/Pose";
+import { Film } from "effect-browser/presentation";
 
 const rows = Array.from({ length: 30 }, (_, index) => `<p>Row ${index + 1}</p>`).join("");
 

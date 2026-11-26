@@ -4,7 +4,7 @@
 import { readFile } from "node:fs/promises";
 
 import { Effect, Random, Result } from "effect";
-import type * as Motion from "effect-browser/Motion";
+import type { Motion } from "effect-browser/presentation";
 
 import { DataError, index, inflate, retarget, select } from "./internal/strokes.ts";
 

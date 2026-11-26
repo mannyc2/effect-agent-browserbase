@@ -1,13 +1,13 @@
 /** Optional machine-latency checks. Normal tests retain the causal/ownership assertions. */
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Exit, Layer, Schema } from "effect";
 
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
+import * as Cdp from "../src/Cdp.ts";
 import type { Page } from "../src/Page.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
-import * as Stillness from "../src/stillness/Stillness.ts";
+import * as Stillness from "../src/timeline/Stillness.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

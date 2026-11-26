@@ -1,9 +1,9 @@
 // This proves the executable probe composes with real Chromium and the client fake. It cannot
 // prove Browserbase persistence: the fake reconnects to the same local browser context.
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
+import { TestBrowserbase } from "@effect-browser/browserbase/testing";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
-import * as ContextLease from "effect-browserbase/ContextLease";
-import { TestBrowserbase } from "effect-browserbase/testing";
 
 import * as Probe from "../HandoverProbe.ts";
 import * as Latency from "../Latency.ts";
@@ -28,7 +28,7 @@ describe("H2 local composition", () => {
         report.generations
           .filter((event) => event.state === "Closed")
           .map((event) => event.released),
-        ["Settled", "Settled"],
+        ["Confirmed", "Confirmed"],
       );
       assert.isNull(report.usageDeltaMinutes, "the fake is not billing evidence");
       assert.notInclude(JSON.stringify(report), endpoint.href);

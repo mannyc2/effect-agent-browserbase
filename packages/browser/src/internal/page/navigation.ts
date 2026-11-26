@@ -7,9 +7,9 @@ import { Deferred, Duration, Effect, Schedule } from "effect";
 
 import { type Action, nameOf } from "../../Action.ts";
 import { BrowserError, NavigationFailed, NotActionable, NotFound } from "../../BrowserError.ts";
-import * as Url from "../../Url.ts";
 import type { Guard } from "../input/guard.ts";
 import type { InputMarks, Perform } from "../input/perform.ts";
+import * as Url from "../url.ts";
 import { failWith, type PageContext, refuse } from "./context.ts";
 import { Current } from "./replies.ts";
 

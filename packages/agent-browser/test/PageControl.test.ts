@@ -1,11 +1,11 @@
 // The controller over a real Chromium page, called directly: no model.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { Browser } from "effect-browser/Browser";
 import { BrowserError, PolicyDenied, Timeout } from "effect-browser/BrowserError";
-import * as Chromium from "effect-browser/Chromium";
 import type * as Page from "effect-browser/Page";
-import * as Policy from "effect-browser/Policy";
+import { Policy } from "effect-browser/policy";
 
 import * as PageControl from "../src/PageControl.ts";
 import { Site, SiteLayer } from "./fixtures.ts";

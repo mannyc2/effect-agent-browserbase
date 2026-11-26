@@ -6,7 +6,7 @@
  */
 import type { Names } from "./names.inpage.ts";
 import type { TextResult } from "./reading.ts";
-import type { Walk } from "./walk.inpage.ts";
+import type { Walked } from "./walk.inpage.ts";
 
 export interface TextRequest {
   /** An element to read whole, or null for what the viewport shows. */
@@ -15,7 +15,7 @@ export interface TextRequest {
   readonly unmask: boolean;
 }
 
-export const text = (names: Names, walked: Walk) => {
+export const text = (names: Names, walked: Walked) => {
   const { isHtml, isInput, isSecret, isSelect, isTextArea, lookup } = names;
 
   // Input types whose value is a label or a choice rather than something entered.

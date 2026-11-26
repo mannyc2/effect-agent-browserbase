@@ -1,4 +1,5 @@
 // The change record: its rules over many inputs, without a page, and what it records on real pages.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Arbitrary, Duration, Effect, Layer, Schema, Stream } from "effect";
 import { type Prompt } from "effect/ai";
@@ -8,9 +9,8 @@ import { Action, Subject } from "../src/BrowserEvent.ts";
 import { Change, Changes } from "../src/Change.ts";
 import { fold, type Folded } from "../src/internal/timeline/fold.inpage.ts";
 import { type Bounds, history } from "../src/internal/timeline/history.inpage.ts";
-import * as Moment from "../src/moment/Moment.ts";
 import type { Page } from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
+import * as Moment from "../src/timeline/Moment.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

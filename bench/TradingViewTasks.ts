@@ -7,9 +7,9 @@
 // graders count only the indicators and drawings a run adds. A task may start from a study or
 // drawings its setup adds through the API; its scripted solution makes its changes as
 // `ChartInput` does, with the chart's own controls.
+import * as Chart from "@effect-browser/tradingview/Chart";
+import * as ChartInput from "@effect-browser/tradingview/ChartInput";
 import { DateTime, Effect, Schedule, Schema } from "effect";
-import * as Chart from "effect-browser-tradingview/Chart";
-import * as ChartInput from "effect-browser-tradingview/ChartInput";
 import type { RequestPolicy } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";

@@ -2,13 +2,13 @@
 import { createServer as createHttpServer } from "node:http";
 import { createServer, type Server } from "node:net";
 
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Arbitrary, Effect, Redacted } from "effect";
 
 import { BrowserError, consequence } from "../src/BrowserError.ts";
 import { DisconnectCause } from "../src/BrowserEvent.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
+import * as Cdp from "../src/Cdp.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const timeoutOf = (error: BrowserError) =>

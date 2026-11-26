@@ -22,7 +22,7 @@
 import type { Duration, Effect } from "effect";
 
 import type { BrowserError } from "./BrowserError.ts";
-import type { Point } from "./Geometry.ts";
+import type { Point } from "./internal/geometry.ts";
 import type { Content } from "./Overlay.ts";
 import type { Pose } from "./Pose.ts";
 

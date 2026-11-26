@@ -1,12 +1,12 @@
 # Browserbase
 
-`effect-browserbase` makes a [Browserbase](https://www.browserbase.com) session the same `Browser` a local Chromium is. Swap the layer; the agent and its tools don't change.
+`@effect-browser/browserbase` makes a [Browserbase](https://www.browserbase.com) session the same `Browser` a local Chromium is. Swap the layer; the agent and its tools don't change.
 
 The program from [Get started](/docs/get-started), on a Browserbase session instead of a local Chromium:
 
 :::Example
 ```ts
-import { Browserbase, BrowserbaseClient, ContextLease } from "effect-browserbase";
+import { Browserbase, BrowserbaseClient, ContextLease } from "@effect-browser/browserbase";
 
 const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
   Layer.provide(BrowserbaseClient.layerConfig()), // reads BROWSERBASE_API_KEY
@@ -17,7 +17,7 @@ const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
 program.pipe(Effect.provide([Hosted, OpenRouter]), Effect.runPromise);
 ```
 
-Run on 11 October 2026 with `npm install effect-browserbase@beta` added, and `BROWSERBASE_API_KEY` set. Browserbase lists the session, in us-west-2, as completed when the program ended:
+Run on 11 October 2026 with `npm install @effect-browser/browserbase@beta` added, and `BROWSERBASE_API_KEY` set. Browserbase lists the session, in us-west-2, as completed when the program ended:
 
 ```text output
 [20:25:37.832] INFO (#1): {
@@ -38,7 +38,7 @@ Run on 11 October 2026 with `npm install effect-browserbase@beta` added, and `BR
 
 ## Sessions you can account for
 
-The session is created when the layer is built; closing its scope asks Browserbase to release it, and waits for the outcome. A confirmed `Settled` outcome establishes that the session ended. Each create carries a nonce of its own, so a create whose answer was lost is found and ended rather than left billing until its timeout.
+The session is created when the layer is built; closing its scope asks Browserbase to release it, and waits for the outcome. A `Confirmed` outcome establishes that the session ended. Each create carries a nonce of its own, so a create whose answer was lost is found and ended rather than left billing until its timeout.
 
 `attach` connects to a running session without owning it, as from another process. `generations` supplies hosted sessions to `Supervisor.make`, which keeps a browser open across losses and session ends, as generations. The browser announces the session's end ahead of time as a `SessionEnding` event.
 

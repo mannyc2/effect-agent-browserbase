@@ -1,6 +1,7 @@
 /** One contract, run against seeded data and both real Chromium transport paths. */
 import { createServer } from "node:net";
 
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option, Scheduler, Stream } from "effect";
 import { chromium } from "playwright-core";
@@ -8,10 +9,9 @@ import { chromium } from "playwright-core";
 import { Browser, type Service } from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
 import { Subject } from "../src/BrowserEvent.ts";
+import * as Cdp from "../src/Cdp.ts";
 import { BrowserPaint, Frame } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestBrowser from "../src/testing/TestBrowser.ts";
 import * as TestPage from "../src/testing/TestPage.ts";
 

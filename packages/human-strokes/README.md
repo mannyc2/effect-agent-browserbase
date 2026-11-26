@@ -1,18 +1,18 @@
-# effect-browser-human-strokes
+# @effect-browser/human-strokes
 
 Optional recorded pointer motion for `effect-browser`: a pointer planner, for a presenter, over a
 bundled library of 32,130 human strokes. It does not change typing, pauses or input policy.
 
 ```sh
-npm install effect-browser-human-strokes@beta effect-browser@beta effect playwright-core
+npm install @effect-browser/human-strokes@beta effect-browser@beta @effect-browser/chromium@beta effect playwright-core
 ```
 
 ```ts
+import { Chromium } from "@effect-browser/chromium";
+import * as HumanStrokes from "@effect-browser/human-strokes";
 import { Effect } from "effect";
-import * as HumanStrokes from "effect-browser-human-strokes";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
-import * as Presentation from "effect-browser/Presentation";
+import { Presentation } from "effect-browser/presentation";
 
 const program = Effect.gen(function* () {
   const presenter = yield* Presentation.make({ motion: yield* HumanStrokes.motion });

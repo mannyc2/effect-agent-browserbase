@@ -1,9 +1,9 @@
 // Requested public main-world seam (21 October audit stage 6): guard, document and dispatch evidence.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Schema } from "effect";
 
 import { consequence, PolicyDenied } from "../src/BrowserError.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("main-world scripts bind an act to the read document and invalidate earlier reads", () =>

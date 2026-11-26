@@ -21,6 +21,7 @@
  * rather than throwing. `Layout`, `Change` and `Snapshot` hold their schemas. The script runs in
  * the site's own world, so it shares the globals the site's code may patch.
  */
+import { match, pickRequests, request } from "./internal/matching.ts";
 import { compose } from "./internal/page/compose.inpage.ts";
 import { overlay } from "./internal/page/overlay.inpage.ts";
 import { pose, poseRequest } from "./internal/page/pose.inpage.ts";
@@ -40,11 +41,10 @@ import { history } from "./internal/timeline/history.inpage.ts";
 import { marks } from "./internal/timeline/marks.inpage.ts";
 import { record } from "./internal/timeline/record.inpage.ts";
 import { sight } from "./internal/timeline/sight.inpage.ts";
+import { addresses } from "./internal/url.ts";
 import type { Picks } from "./Layout.ts";
-import { match, pickRequests, request } from "./Matching.ts";
 import type { FindQuery } from "./Page.ts";
 import type { Pose } from "./Pose.ts";
-import { addresses } from "./Url.ts";
 
 /**
  * The readers, the change record, the overlay and poses for the current document. Make one for

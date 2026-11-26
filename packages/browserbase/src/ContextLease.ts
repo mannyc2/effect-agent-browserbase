@@ -62,7 +62,7 @@ export interface Service {
 }
 
 export class ContextLease extends Context.Service<ContextLease, Service>()(
-  "effect-browserbase/ContextLease",
+  "@effect-browser/browserbase/ContextLease",
 ) {}
 
 interface Entry {

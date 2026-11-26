@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The packed-archive check: install the four packed packages in clean consumers, as ones from npm
+# The packed-archive check: install the five published packages in clean consumers, as ones from npm
 # would be, and check what those consumers get. TypeScript, with `skipLibCheck: false`, checks the
 # declarations of every entry point, and Node imports each one. `bun run ready` cannot see either:
 # in the workspace every package resolves from its source.
@@ -28,11 +28,11 @@ if [ $# -gt 0 ]; then
   archives="$(cd "$1" && pwd)"
 else
   archives="$work/archives"
-  for dir in browser browserbase human-strokes agent-browser; do
+  for dir in browser chromium browserbase agent-browser human-strokes; do
     (cd "$root/packages/$dir" && bun run build > /dev/null && bun pm pack --destination "$archives" --quiet > /dev/null)
   done
 fi
-names=(effect-browser effect-browserbase effect-browser-human-strokes effect-agent-browser)
+names=(effect-browser @effect-browser/chromium @effect-browser/browserbase effect-agent-browser @effect-browser/human-strokes)
 runtimes=(effect effect-browser @yielded/agent playwright-core)
 
 yielded="$(node -p "require('$root/packages/agent-browser/package.json').peerDependencies['@yielded/agent']")"
@@ -53,7 +53,8 @@ consumer="$work/consumer"
 mkdir "$consumer"
 printf '{"private":true,"type":"module"}\n' > "$consumer/package.json"
 archived=()
-for name in "${names[@]}"; do archived+=("$archives/$name-$version.tgz"); done
+# A scoped name packs as <scope>-<name>-<version>.tgz.
+for name in "${names[@]}"; do file="${name#@}"; archived+=("$archives/${file//\//-}-$version.tgz"); done
 quiet npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund \
   "${archived[@]}" "typescript@$(pin typescript)" "@types/node@$(pin @types/node)"
 quiet npm ci --prefix "$consumer" --ignore-scripts --no-audit --no-fund
@@ -63,11 +64,37 @@ mapfile -t counts < <(node -e '
 ' "$consumer/package-lock.json" "${runtimes[@]}")
 once "${counts[@]}"
 
-# Every entry point the packages export, as a consumer would import it.
+# Every entry point the packages export, as a consumer would import it: each explicit entry, and
+# each built module a pattern entry reaches that no closed (null) entry takes back.
 mapfile -t entries < <(cd "$consumer" && node -e '
-  for (const name of process.argv.slice(1))
-    for (const key of Object.keys(require(`./node_modules/${name}/package.json`).exports))
-      console.log(key === "." ? name : name + key.slice(1));
+  const { readdirSync } = require("node:fs");
+  const { join, relative, resolve } = require("node:path");
+  const target = (value) => (typeof value === "string" ? value : value && target(value.default));
+  const walk = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
+    );
+  const entries = new Set();
+  for (const name of process.argv.slice(1)) {
+    const directory = `./node_modules/${name}`;
+    for (const [key, value] of Object.entries(require(`${directory}/package.json`).exports)) {
+      if (key === "./package.json" || value === null) continue;
+      if (!key.includes("*")) {
+        entries.add(key === "." ? name : name + key.slice(1));
+        continue;
+      }
+      const [before, after] = target(value).split("*");
+      for (const file of walk(join(directory, before))) {
+        const path = relative(join(directory, before), file);
+        if (!path.endsWith(after)) continue;
+        const entry = name + key.replace("*", path.slice(0, -after.length)).slice(1);
+        try {
+          if (require.resolve(entry, { paths: [process.cwd()] }) === resolve(file)) entries.add(entry);
+        } catch {}
+      }
+    }
+  }
+  for (const entry of entries) console.log(entry);
 ' "${names[@]}")
 index=0
 for entry in "${entries[@]}"; do echo "export * as m$((index++)) from \"$entry\";"; done > "$consumer/index.ts"
@@ -118,7 +145,7 @@ printf '[install]\nlinker = "isolated"\n' > "$workspace/bunfig.toml"
 node -e '
   const { writeFileSync } = require("node:fs");
   const [workspace, yielded, archives, version, effect, playwright, typescript, types, ...names] = process.argv.slice(1);
-  const archive = (name) => `${archives}/${name}-${version}.tgz`;
+  const archive = (name) => `${archives}/${name.replace(/^@/, "").replace("/", "-")}-${version}.tgz`;
   const dependencies = { effect, "@yielded/agent": yielded, "playwright-core": playwright, typescript, "@types/node": types };
   for (const name of names) dependencies[name] = archive(name);
   // Bun reads overrides from the workspace root only.

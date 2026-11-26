@@ -58,27 +58,34 @@ bun run ready                       # fmt check, lint, typecheck, test, build
 ## Layout
 
 - `packages/browser` (`effect-browser`): the browser, pages, snapshots, frames, events and moments.
-  It depends on `effect` and `playwright-core` only. Public kernel modules live in `src/`;
-  providers and optional features have named folders and public subpaths. `src/internal/` groups
-  kernel implementation by page, pictures, input, reading and timeline. `bun run boundaries` checks
-  dependency direction and physically deletes all feature/provider folders before typechecking
-  the kernel. Published test services share an explicit four-module ownership allowlist; runtime
-  features use only public kernel contracts. Code inside the page sits in self-contained
-  `*.inpage.ts` factories, composed by `internal/page/bridge.ts` and frozen at packaging.
-- `packages/browserbase` (`effect-browserbase`): the Browserbase client and sessions as a
+  It depends on `effect` and `playwright-core` only. Public kernel modules live in `src/`, each
+  at its own path; the root exports all but `Cdp` and `Site`. Each optional feature is a folder
+  (`timeline`, `presentation`, `walk`, `policy`, `supervisor`, `testing`) whose `index.ts` is its
+  public subpath; a feature's own `internal/` is closed. `src/internal/`, also closed, groups
+  kernel implementation by CDP connection, page, pictures, input, reading and timeline.
+  `bun run boundaries` checks dependency direction and that the root loads only `effect`, then
+  physically deletes each feature folder with the features that import it, and then all of them,
+  before typechecking what remains. Features use public kernel modules and a short list of shared
+  internals; published test services also share an explicit four-module ownership allowlist. Code
+  inside the page sits in self-contained `*.inpage.ts` factories, composed by
+  `internal/page/bridge.ts` and frozen at packaging.
+- `packages/chromium` (`@effect-browser/chromium`): a local Chromium as a `Browser`, launched
+  through `playwright-core`. It depends on `effect-browser` through its public entry points.
+- `packages/browserbase` (`@effect-browser/browserbase`): the Browserbase client and sessions as a
   `Browser`. It depends on `effect-browser` through its public entry points.
 - `packages/agent-browser` (`effect-agent-browser`): `effect-browser` pages as a Yielded agent's
   browser tools, and the controller they act through. It depends on `effect-browser` through its
   public entry points and on `@yielded/agent`, pinned exactly.
-- `packages/human-strokes` (`effect-browser-human-strokes`): an optional pointer planner over
+- `packages/human-strokes` (`@effect-browser/human-strokes`): an optional pointer planner over
   recorded human strokes. It depends on `effect-browser` through its public entry points only. Its
   code is MIT; its bundled stroke data is CC BY 4.0, with attribution in its README and
   `LICENSE-data`.
-- `packages/tradingview` (`effect-browser-tradingview`): TradingView charts' data, screen points
+- `packages/tradingview` (`@effect-browser/tradingview`): TradingView charts' data, screen points
   and changes, and a Yielded agent's tools for them. It depends on `effect-browser`, and for its
   tools on `effect-agent-browser` and `@yielded/agent`, through their public entry points.
-- `bench`: private graded tasks, depending on `effect-browser`, `effect-browserbase`,
-  `effect-agent-browser` and `effect-browser-tradingview`, whose agents run on Yielded.
+- `bench`: private graded tasks, depending on `effect-browser`, `@effect-browser/chromium`,
+  `@effect-browser/browserbase`, `effect-agent-browser` and `@effect-browser/tradingview`, whose
+  agents run on Yielded.
 - `tools/`: the pinned-toolchain installer, `check-packed.sh`, which checks the packed
   packages in a clean consumer, and shared repository-only CDP test support in `tools/testing/`.
   Package test cases stay in their package; shared support does not import package-private code. Releases are `.github/workflows/publish.yml`; see

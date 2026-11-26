@@ -8,9 +8,9 @@ import { Effect } from "effect";
 import { recorded, nameOf, type Action } from "../../Action.ts";
 import { type BrowserError, InvalidRequest, NotActionable, StaleRef } from "../../BrowserError.ts";
 import { InputRequest } from "../../Page.ts";
-import * as Url from "../../Url.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext } from "../page/context.ts";
+import * as Url from "../url.ts";
 import * as Script from "./guard.inpage.ts";
 
 export interface Approval {

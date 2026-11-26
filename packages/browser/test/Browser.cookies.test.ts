@@ -3,7 +3,7 @@ import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
+import * as Cdp from "../src/Cdp.ts";
 
 it.live("cookie query reports its actual native timeout", () =>
   Effect.gen(function* () {

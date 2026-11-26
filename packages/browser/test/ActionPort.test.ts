@@ -3,8 +3,8 @@ import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 
 import type { Action } from "../src/Action.ts";
-import * as ActionPort from "../src/ActionPort.ts";
 import { Failed, undispatched } from "../src/BrowserError.ts";
+import * as ActionPort from "../src/internal/action-port.ts";
 
 const bad = (action: unknown) => action as Action;
 

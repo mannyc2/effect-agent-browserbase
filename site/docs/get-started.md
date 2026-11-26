@@ -9,12 +9,12 @@ effect-browser runs on Effect 4 and Playwright's Chromium. An agent drives pages
 :::Example
 ```sh
 mkdir top-story && cd top-story && npm init -y > /dev/null && npm pkg set type=module
-npm install @yielded/agent@0.1.0-beta.191 effect-browser@beta effect-agent-browser@beta effect@4.1.2 @effect/ai-openrouter@4.1.2 playwright-core@1.63.0
+npm install @yielded/agent@0.1.0-beta.191 effect-browser@beta @effect-browser/chromium@beta effect-agent-browser@beta effect@4.1.2 @effect/ai-openrouter@4.1.2 playwright-core@1.63.0
 npx playwright-core install chromium
 ```
 
 Captured in a fresh npm project on Linux with Node `24.14.1` and npm `11.11.0`. At capture time,
-both `@beta` packages resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
+`effect-browser` and `effect-agent-browser` resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
 `0.1.0-beta.168`, the peer before the moves to `0.1.0-beta.189` and `0.1.0-beta.191`, with Effect
 and the OpenRouter provider at `4.0.3`. Chromium was already
 installed on this host, so its install command printed nothing:
@@ -32,12 +32,12 @@ A Yielded agent runs the loop; `BrowserTools` gives it the browser tools over an
 
 :::Example
 ```ts
+import { Chromium } from "@effect-browser/chromium";
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
 import { BrowserTools } from "effect-agent-browser";
 import { Browser } from "effect-browser";
-import * as Chromium from "effect-browser/Chromium";
 import { Model } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 

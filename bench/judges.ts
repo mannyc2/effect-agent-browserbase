@@ -18,7 +18,7 @@ import {
 import { make as makeBrowser } from "effect-browser/Browser";
 import { PolicyDenied } from "effect-browser/BrowserError";
 import type { InputRequest } from "effect-browser/Page";
-import * as Policy from "effect-browser/Policy";
+import { Policy } from "effect-browser/policy";
 import { AiError } from "effect/ai";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";

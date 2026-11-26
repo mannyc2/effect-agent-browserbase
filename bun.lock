@@ -22,6 +22,9 @@
     "bench": {
       "name": "bench",
       "devDependencies": {
+        "@effect-browser/browserbase": "workspace:*",
+        "@effect-browser/chromium": "workspace:*",
+        "@effect-browser/tradingview": "workspace:*",
         "@effect/ai-openrouter": "4.1.2",
         "@effect/ai-typesafe": "4.1.2",
         "@effect/platform-node": "4.1.2",
@@ -32,8 +35,6 @@
         "effect": "4.1.2",
         "effect-agent-browser": "workspace:*",
         "effect-browser": "workspace:*",
-        "effect-browser-tradingview": "workspace:*",
-        "effect-browserbase": "workspace:*",
         "playwright-core": "1.63.0",
         "typescript": "7.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
@@ -46,6 +47,7 @@
       "name": "effect-agent-browser",
       "version": "0.3.0-beta.24",
       "devDependencies": {
+        "@effect-browser/chromium": "workspace:*",
         "@effect/vitest": "4.1.2",
         "@types/node": "26.1.2",
         "@yielded/agent": "0.1.0-beta.191",
@@ -67,6 +69,7 @@
       "name": "effect-browser",
       "version": "0.3.0-beta.24",
       "devDependencies": {
+        "@effect-browser/chromium": "workspace:*",
         "@effect/vitest": "4.1.2",
         "@types/node": "26.1.2",
         "effect": "4.1.2",
@@ -83,7 +86,27 @@
       },
     },
     "packages/browserbase": {
-      "name": "effect-browserbase",
+      "name": "@effect-browser/browserbase",
+      "version": "0.3.0-beta.24",
+      "devDependencies": {
+        "@effect/vitest": "4.1.2",
+        "@types/node": "26.1.2",
+        "effect": "4.1.2",
+        "effect-browser": "workspace:*",
+        "playwright-core": "1.63.0",
+        "typescript": "7.0.2",
+        "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+        "vite-plus": "1.1.0",
+        "vitest": "5.0.3",
+      },
+      "peerDependencies": {
+        "effect": "~4.1.2",
+        "effect-browser": "^0.3.0-beta.23",
+        "playwright-core": "^1.63.0",
+      },
+    },
+    "packages/chromium": {
+      "name": "@effect-browser/chromium",
       "version": "0.3.0-beta.24",
       "devDependencies": {
         "@effect/vitest": "4.1.2",
@@ -103,9 +126,10 @@
       },
     },
     "packages/human-strokes": {
-      "name": "effect-browser-human-strokes",
+      "name": "@effect-browser/human-strokes",
       "version": "0.3.0-beta.24",
       "devDependencies": {
+        "@effect-browser/chromium": "workspace:*",
         "@effect/vitest": "4.1.2",
         "@types/node": "26.1.2",
         "effect": "4.1.2",
@@ -122,9 +146,10 @@
       },
     },
     "packages/tradingview": {
-      "name": "effect-browser-tradingview",
+      "name": "@effect-browser/tradingview",
       "version": "0.3.0-beta.24",
       "devDependencies": {
+        "@effect-browser/chromium": "workspace:*",
         "@effect/vitest": "4.1.2",
         "@types/node": "26.1.2",
         "@yielded/agent": "0.1.0-beta.191",
@@ -159,6 +184,7 @@
       "devDependencies": {
         "@alchemy.run/cloudflare": "2.0.0-beta.85",
         "@alchemy.run/frontend-frameworks": "2.0.0-beta.85",
+        "@effect-browser/chromium": "workspace:*",
         "@effect/ai-openrouter": "4.1.2",
         "@effect/platform-node": "4.1.2",
         "@effect/vitest": "4.1.2",
@@ -242,6 +268,14 @@
     "@distilled.cloud/core": ["@distilled.cloud/core@1.0.0-rc.18", "", { "peerDependencies": { "effect": "^4.0.5" } }, "sha512-Iui60+sNl1CwUu7NKGLuFf3VC4H9xYzfm0Fc8ZQvd87qwf1sDMB3EAWZrq/QFgrwzSY16z2mJ0PNHaBUnGet8A=="],
 
     "@distilled.cloud/iceberg": ["@distilled.cloud/iceberg@1.0.0-rc.18", "", { "dependencies": { "@distilled.cloud/core": "1.0.0-rc.18" }, "peerDependencies": { "effect": "^4.0.5" } }, "sha512-XjUJ/vEOylhIZbAm85O9H6YqXKWGfVROT5BE9BGA/RXvo0bLK2+sUcjC6BoN77a99lImJkrXJuvbHBhNebObEA=="],
+
+    "@effect-browser/browserbase": ["@effect-browser/browserbase@workspace:packages/browserbase"],
+
+    "@effect-browser/chromium": ["@effect-browser/chromium@workspace:packages/chromium"],
+
+    "@effect-browser/human-strokes": ["@effect-browser/human-strokes@workspace:packages/human-strokes"],
+
+    "@effect-browser/tradingview": ["@effect-browser/tradingview@workspace:packages/tradingview"],
 
     "@effect/ai-openrouter": ["@effect/ai-openrouter@4.1.2", "", { "peerDependencies": { "effect": "^4.1.2" } }, "sha512-iWNUPM4I8t6PZIDj7biJHZF7GUaVyevIiXNOyrd7vhZ4eYeuMyIimuELH+qwPt0AKnpU72mkY11ngBranM7/Lw=="],
 
@@ -836,12 +870,6 @@
     "effect-agent-browser": ["effect-agent-browser@workspace:packages/agent-browser"],
 
     "effect-browser": ["effect-browser@workspace:packages/browser"],
-
-    "effect-browser-human-strokes": ["effect-browser-human-strokes@workspace:packages/human-strokes"],
-
-    "effect-browser-tradingview": ["effect-browser-tradingview@workspace:packages/tradingview"],
-
-    "effect-browserbase": ["effect-browserbase@workspace:packages/browserbase"],
 
     "emoji-regex": ["emoji-regex@10.6.0", "", {}, "sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A=="],
 

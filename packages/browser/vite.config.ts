@@ -15,19 +15,13 @@ export default defineConfig({
   },
   pack: {
     plugins: [pageScript(), playwrightJpeg()],
+    // Every public module is an entry, at its subpath; shared chunks go under the closed internal/.
     entry: [
       "src/*.ts",
-      "src/workerd/Cdp.ts",
-      "src/providers/{Chromium,Cdp,Released}.ts",
-      "src/supervisor/Supervisor.ts",
-      "src/presentation/*.ts",
-      "src/film/Film.ts",
-      "src/moment/Moment.ts",
-      "src/policy/Policy.ts",
-      "src/stillness/Stillness.ts",
-      "src/plan/index.ts",
-      "src/testing/index.ts",
+      "src/{timeline,presentation,walk,policy,supervisor,testing}/*.ts",
+      "src/internal/cdp/workerd.ts",
     ],
+    outputOptions: { chunkFileNames: "internal/[name]-[hash].mjs" },
     dts: { tsconfig: "tsconfig.build.json" },
     sourcemap: true,
   },

@@ -26,7 +26,7 @@ import { Effect, Option, Result, Schema } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type * as Page from "effect-browser/Page";
-import * as Policy from "effect-browser/Policy";
+import { Policy } from "effect-browser/policy";
 import { Snapshot } from "effect-browser/Snapshot";
 
 import * as AdapterState from "./AdapterState.ts";

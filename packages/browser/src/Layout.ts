@@ -11,18 +11,18 @@ import { Effect, Exit, Schema } from "effect";
 import type { Action } from "./Action.ts";
 import type { BrowserError } from "./BrowserError.ts";
 import { Box, Subject } from "./BrowserEvent.ts";
-import { Point } from "./Geometry.ts";
+import { Point } from "./internal/geometry.ts";
 import type { FindQuery, Page } from "./Page.ts";
 
 /** A match of a pick's `words`, by its box in the viewport and in the document. */
-export class Word extends Schema.Class<Word>("effect-browser/Word")({
+export class Word extends Schema.Class<Word>("effect-browser/Layout/Word")({
   text: Schema.String,
   box: Box,
   page: Box,
 }) {}
 
 /** What one pick found. */
-export class Place extends Schema.Class<Place>("effect-browser/Place")({
+export class Place extends Schema.Class<Place>("effect-browser/Layout/Place")({
   /** The pick's own name. */
   id: Schema.String,
   ref: Schema.String,

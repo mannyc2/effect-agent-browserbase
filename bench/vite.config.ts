@@ -13,6 +13,6 @@ export default defineConfig({
     testTimeout: 60_000,
     hookTimeout: 60_000,
     // Run the workspace packages from source rather than from their unbuilt dist.
-    server: { deps: { inline: ["effect-browser", "effect-browserbase"] } },
+    server: { deps: { inline: ["effect-browser", "@effect-browser/browserbase"] } },
   },
 });

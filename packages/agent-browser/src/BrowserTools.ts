@@ -41,9 +41,8 @@ import {
 } from "effect";
 import { Action } from "effect-browser/Action";
 import type { BrowserError } from "effect-browser/BrowserError";
-import type * as Moment from "effect-browser/Moment";
 import * as Page from "effect-browser/Page";
-import * as Stillness from "effect-browser/Stillness";
+import { type Moment, Stillness } from "effect-browser/timeline";
 import { Prompt, Tool, Toolkit } from "effect/ai";
 
 import type * as AdapterState from "./AdapterState.ts";

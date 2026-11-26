@@ -1,4 +1,5 @@
 /** Packaging owns page code as a closed source string, before any consumer transforms it. */
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Plugin } from "vite";
@@ -7,6 +8,10 @@ import { parseSync } from "vite/rolldown/utils";
 
 const bridge = fileURLToPath(new URL("./src/internal/page/bridge.ts", import.meta.url));
 const clock = fileURLToPath(new URL("./src/internal/page/clock.inpage.ts", import.meta.url));
+// The two shared internals whose page-safe definitions the bridge also uses.
+const url = fileURLToPath(new URL("./src/internal/url.ts", import.meta.url));
+const matching = fileURLToPath(new URL("./src/internal/matching.ts", import.meta.url));
+const shared = (path: string) => path === url || path === matching;
 
 // Each source the bridge exports, and what its frozen expression evaluates to: the installed API,
 // and the page clock's function.
@@ -39,8 +44,7 @@ const pageDefinitions = (code: string, id: string) => {
         return (
           id === bridge &&
           (node.source.value.endsWith(".inpage.ts") ||
-            node.source.value.endsWith("/Url.ts") ||
-            node.source.value.endsWith("/Matching.ts"))
+            shared(resolve(dirname(bridge), node.source.value)))
         );
       const declaration = node.type === "ExportNamedDeclaration" ? node.declaration : node;
 
@@ -52,7 +56,7 @@ const pageDefinitions = (code: string, id: string) => {
               binding.type === "Identifier" &&
               (id === bridge
                 ? ["install", "parts", "clockParts"].includes(binding.name)
-                : id.endsWith("/Url.ts")
+                : id === url
                   ? binding.name === "addresses"
                   : init?.type === "ArrowFunctionExpression"),
           ))
@@ -77,10 +81,7 @@ const closed = async (entry: string) => {
         resolveId: (asked) => (asked === name ? name : undefined),
         load: (asked) => (asked === name ? entry : undefined),
         transform: (source, asked) =>
-          asked === bridge ||
-          asked.endsWith(".inpage.ts") ||
-          asked.endsWith("/Url.ts") ||
-          asked.endsWith("/Matching.ts")
+          asked === bridge || asked.endsWith(".inpage.ts") || shared(asked)
             ? pageDefinitions(source, asked)
             : undefined,
       },

@@ -1,9 +1,9 @@
 // 1d6d7c7: repeated press validated each gap after sending input and never bounded the total.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 
-import * as Chromium from "../src/providers/Chromium.ts";
-import * as Style from "../src/Style.ts";
+import * as InputStyle from "../src/InputStyle.ts";
 
 for (const [gap, times] of [
   [20_000, 2],
@@ -19,7 +19,10 @@ for (const [gap, times] of [
 
       const result = yield* page
         .press("A", { times })
-        .pipe(Style.provide({ ...Style.plain, keyGap: Effect.succeed(gap) }), Effect.result);
+        .pipe(
+          InputStyle.provide({ ...InputStyle.plain, keyGap: Effect.succeed(gap) }),
+          Effect.result,
+        );
 
       assert.strictEqual(result._tag, "Failure");
       if (result._tag === "Failure") {

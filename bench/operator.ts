@@ -1,6 +1,6 @@
 /** Opt-in H3 with private viewer delivery; never print the capability URL or account details. */
+import { BrowserbaseClient } from "@effect-browser/browserbase/BrowserbaseClient";
 import { Console, Effect, FileSystem, Redacted, Schema } from "effect";
-import { BrowserbaseClient } from "effect-browserbase/BrowserbaseClient";
 import { Command, Flag } from "effect/cli";
 
 import { BenchError } from "./Budget.ts";

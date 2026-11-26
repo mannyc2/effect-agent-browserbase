@@ -48,7 +48,7 @@ const buy = (task: string) =>
   });
 ```
 
-Provide a `Browser`, such as `Chromium.layer()` or a Browserbase session, and a model with its
+Provide a `Browser`, such as `@effect-browser/chromium`'s `Chromium.layer()` or a Browserbase session, and a model with its
 `Model.ProviderName` and `Model.ModelName`, as the repository's
 [README](https://github.com/mannyc2/effect-agent-browserbase#readme) does.
 
@@ -112,7 +112,7 @@ the layer serves every tool either way. `make({ mode: "single" })` lets `act` ta
 - `BrowserTools.Find` holds `find`, which lists the whole page's outline lines that hold a text,
   in view or not, with their refs. Merge it into the agent's toolkit; the layer serves it either way.
 - The layer also provides `BrowserTools.Controller`, the run's controller, for an application's
-  own tools on the same tabs, as `effect-browser-tradingview`'s chart tools are: they act on the tab
+  own tools on the same tabs, as `@effect-browser/tradingview`'s chart tools are: they act on the tab
   the model sees now, with the run's task, and say what followed.
 - `boxes: true` ends each control's line in the outline with its box, `WxH at (x,y)` in viewport
   CSS pixels, so the model can match a ref to what the screenshot shows there. `changes: true`

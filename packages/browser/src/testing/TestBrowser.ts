@@ -4,12 +4,12 @@ import { Clock, Deferred, Duration, Effect, Option, Scope, Semaphore } from "eff
 import { type Service, Suspension } from "../Browser.ts";
 import { Closed, InvalidRequest, undispatched } from "../BrowserError.ts";
 import { type DisconnectCause, Disconnected, PageOpened } from "../BrowserEvent.ts";
-import { monotonicMillis } from "../Clock.ts";
+import { monotonicMillis } from "../internal/clock.ts";
 import * as Gate from "../internal/input/gate.ts";
 import * as Timeline from "../internal/timeline/events.ts";
 import type { Page } from "../Page.ts";
-import { unsupported } from "./model.ts";
-import { makeIn } from "./page.ts";
+import { unsupported } from "./internal/model.ts";
+import { makeIn } from "./internal/page.ts";
 import type * as TestPage from "./TestPage.ts";
 
 export const make = Effect.fnUntraced(function* (

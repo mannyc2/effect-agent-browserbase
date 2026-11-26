@@ -6,12 +6,12 @@
  */
 import { type Clock, Deferred, Duration, Effect, MutableRef, Option, Semaphore } from "effect";
 
-import { methods } from "../ActionPort.ts";
 import { Busy, refuse, undispatched } from "../BrowserError.ts";
 import type { ActionAnnounced } from "../BrowserEvent.ts";
-import { monotonicMillis } from "../Clock.ts";
+import * as InputStyle from "../InputStyle.ts";
+import { methods } from "../internal/action-port.ts";
+import { monotonicMillis } from "../internal/clock.ts";
 import type { Page, Point } from "../Page.ts";
-import * as Style from "../Style.ts";
 import * as Motion from "./Motion.ts";
 
 /** How long a person waits before acting, and how fast they type. */
@@ -69,14 +69,14 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
   if (
     !Number.isFinite(pacing.wordsPerMinute) ||
     pacing.wordsPerMinute <= 0 ||
-    Style.keyGap(pacing.wordsPerMinute) < 0
+    InputStyle.keyGap(pacing.wordsPerMinute) < 0
   )
     return yield* refuse("presentation", "wordsPerMinute must be positive and at most 1200");
 
   const pointer = MutableRef.make(Option.none<Point>());
   const hand = yield* Semaphore.make(1);
 
-  const planned = Style.performed({
+  const planned = InputStyle.performed({
     pointer,
     motion: options.motion ?? Motion.lognormal,
     wordsPerMinute: pacing.wordsPerMinute,
@@ -101,7 +101,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
     if (known !== undefined) return known;
     const now = () => monotonicMillis(page.clock);
 
-    const style: Style.Style = {
+    const style: InputStyle.InputStyle = {
       ...planned,
       lead:
         lead === undefined
@@ -133,7 +133,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
 
               const left =
                 (last?.clock === page.clock ? last.at : now()) +
-                (yield* Style.pause(medians[kind], spread[kind])) -
+                (yield* InputStyle.pause(medians[kind], spread[kind])) -
                 now();
 
               if (left > 0)
@@ -168,7 +168,7 @@ export const make = Effect.fn("Presentation.make")(function* (options: Options =
           }).pipe(Effect.withSpan("Presentation.hand")),
     };
 
-    const styled = Style.provide(style);
+    const styled = InputStyle.provide(style);
     const perform: Page["perform"] = (action) => styled(page.perform(action));
 
     const performed: View = {

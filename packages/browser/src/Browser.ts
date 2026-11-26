@@ -3,7 +3,7 @@
  *
  * `Browser` is a service with one implementation, built by a provider over a Playwright browser
  * context: `Chromium` launches one locally, `Cdp` connects to any DevTools endpoint and
- * `effect-browserbase` allocates a hosted one. Code written against `Browser` runs on all three.
+ * `@effect-browser/browserbase` allocates a hosted one. Code written against `Browser` runs on all three.
  * A page is named by its CDP target id, so a new connection to the same browser finds it again.
  *
  * @since 0.3.0
@@ -35,7 +35,7 @@ import {
   Timeout,
 } from "./BrowserError.ts";
 import * as Events from "./BrowserEvent.ts";
-import * as BrowserClock from "./Clock.ts";
+import * as BrowserClock from "./internal/clock.ts";
 import * as Gate from "./internal/input/gate.ts";
 import { documentScripts } from "./internal/page/bridge.ts";
 import { call, failWith, type Settings, undispatched } from "./internal/page/context.ts";
@@ -47,8 +47,8 @@ import * as PageImpl from "./internal/page/page.ts";
 import * as Port from "./internal/page/port.ts";
 import * as Requests from "./internal/page/requests.ts";
 import * as Timeline from "./internal/timeline/events.ts";
+import * as Url from "./internal/url.ts";
 import type * as Page from "./Page.ts";
-import * as Url from "./Url.ts";
 
 /** A script that documents run before their own, such as a consent-banner remover. */
 export interface InitScript {
@@ -140,7 +140,7 @@ export interface SuspendOptions {
 }
 
 /** When admitted input finished; events after `since` describe the handoff interval. */
-export class Suspension extends Schema.Class<Suspension>("effect-browser/Suspension")({
+export class Suspension extends Schema.Class<Suspension>("effect-browser/Browser/Suspension")({
   since: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   at: Schema.Finite,
 }) {}

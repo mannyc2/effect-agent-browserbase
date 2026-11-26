@@ -6,7 +6,7 @@
 import { Schema } from "effect";
 
 /** An encoded picture with its pixel dimensions. Crops also need their viewport origin. */
-export class Image extends Schema.Class<Image>("effect-browser/Image")({
+export class Image extends Schema.Class<Image>("effect-browser/Frame/Image")({
   data: Schema.Uint8Array,
   mediaType: Schema.Literals(["image/jpeg", "image/png"]),
   width: Schema.Finite,
@@ -91,7 +91,7 @@ export const sameCapture = (frame: Frame, other: Frame | undefined): boolean =>
  * what readers got, and why the rest went no further. Frames that came late are counted apart from
  * those a reader lost.
  */
-export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/CaptureStats")({
+export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Frame/CaptureStats")({
   received: Count,
   accepted: Count,
   /**

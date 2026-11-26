@@ -1,9 +1,9 @@
-// The `contract` command: the checks effect-browserbase holds its in-memory Browserbase to, run
+// The `contract` command: the checks @effect-browser/browserbase holds its in-memory Browserbase to, run
 // against Browserbase itself, so a fake that has drifted from the service shows. It opens two
 // sessions of a few seconds each, so it needs EFFECT_BROWSER_BENCH_HOSTED=1.
+import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
+import { BrowserbaseContract } from "@effect-browser/browserbase/testing";
 import { Console, Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
-import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
-import { BrowserbaseContract } from "effect-browserbase/testing";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
@@ -46,7 +46,7 @@ const line = (verdict: Verdict) =>
     : `${verdict._tag === "Broken" ? "BROKEN" : "unrun "}  ${verdict.check}: ${verdict.detail}`;
 
 /**
- * Compare the operations Browserbase publishes now with the copy effect-browserbase's shape test
+ * Compare the operations Browserbase publishes now with the copy @effect-browser/browserbase's shape test
  * reads. A difference leaves the published ones in `.work/contract/` to review and copy over.
  */
 const compareShapes = Effect.gen(function* () {
@@ -93,7 +93,7 @@ export const command = Command.make(
     spec: Flag.Boolean("spec").pipe(
       Flag.withDefault(false),
       Flag.withDescription(
-        "Instead, compare Browserbase's published OpenAPI document with the copy effect-browserbase's shape test reads: free, with no session.",
+        "Instead, compare Browserbase's published OpenAPI document with the copy @effect-browser/browserbase's shape test reads: free, with no session.",
       ),
     ),
   },
@@ -117,6 +117,6 @@ export const command = Command.make(
     }).pipe(Effect.provide(Trace.layer)),
 ).pipe(
   Command.withDescription(
-    "Run the checks effect-browserbase's fake is held to against Browserbase itself; needs EFFECT_BROWSER_BENCH_HOSTED=1 and BROWSERBASE_API_KEY.",
+    "Run the checks @effect-browser/browserbase's fake is held to against Browserbase itself; needs EFFECT_BROWSER_BENCH_HOSTED=1 and BROWSERBASE_API_KEY.",
   ),
 );

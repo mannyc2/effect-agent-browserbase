@@ -15,8 +15,8 @@ import {
 import { TestClock } from "effect/testing";
 
 import { BrowserError, Failed } from "../src/BrowserError.ts";
-import type { Estimate } from "../src/Clock.ts";
 import { Frame } from "../src/Frame.ts";
+import type { Estimate } from "../src/internal/clock.ts";
 import * as Replies from "../src/internal/page/replies.ts";
 import * as Capture from "../src/internal/pictures/capture.ts";
 import type { Transport } from "../src/internal/pictures/transport.ts";

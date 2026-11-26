@@ -1,11 +1,11 @@
 // Synthetic responses use the same bounded public request seam in Node and Workers.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Effect, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { chromium } from "playwright-core";
 
 import * as Browser from "../src/Browser.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("fulfills Unicode documents before opening pages and refuses invalid responses", () =>

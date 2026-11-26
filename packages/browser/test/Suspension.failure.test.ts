@@ -1,9 +1,9 @@
 // Independent native regressions for script-mutation acknowledgements and guards that finish
 // during a handoff. These paths do not use the keyboard's explicit reply tracking.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
 
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const owner = Effect.gen(function* () {

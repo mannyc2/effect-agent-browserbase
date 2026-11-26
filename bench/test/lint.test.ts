@@ -18,13 +18,13 @@ const other = fileURLToPath(new URL("../../packages/human-strokes/src/Probe.ts",
 new RuleTester().run("no-self-barrel-import", plugin.rules["no-self-barrel-import"], {
   valid: [
     { code: 'import * as Motion from "./Motion.ts";', filename: source },
-    { code: 'import * as Strokes from "effect-browser-human-strokes";', filename: source },
-    { code: 'import * as Motion from "effect-browser/Motion";', filename: other },
+    { code: 'import * as Strokes from "@effect-browser/human-strokes";', filename: source },
+    { code: 'import { Motion } from "effect-browser/presentation";', filename: other },
   ],
   invalid: [
-    { code: 'import * as Motion from "effect-browser/Motion";', filename: source, errors: 1 },
+    { code: 'import { Motion } from "effect-browser/presentation";', filename: source, errors: 1 },
     { code: 'import { Page } from "effect-browser";', filename: source, errors: 1 },
-    { code: 'import * as Self from "effect-browser-human-strokes";', filename: other, errors: 1 },
+    { code: 'import * as Self from "@effect-browser/human-strokes";', filename: other, errors: 1 },
     { code: 'export * from "./index.ts";', filename: source, errors: 1 },
   ],
 });

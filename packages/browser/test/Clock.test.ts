@@ -1,13 +1,13 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Clock, Duration, Effect, Layer, Schedule, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import type { Frame } from "../src/Frame.ts";
-import * as Moment from "../src/moment/Moment.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as Supervisor from "../src/supervisor/Supervisor.ts";
+import * as Moment from "../src/timeline/Moment.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

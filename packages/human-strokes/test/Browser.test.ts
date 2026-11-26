@@ -1,8 +1,8 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Random, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
-import * as Presentation from "effect-browser/Presentation";
+import { Presentation } from "effect-browser/presentation";
 
 import * as HumanStrokes from "../src/index.ts";
 

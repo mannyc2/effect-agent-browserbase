@@ -5,7 +5,7 @@
  */
 import { Context, Data, Effect, type Scope } from "effect";
 
-import { maximumSamples } from "../../Geometry.ts";
+import { maximumSamples } from "../geometry.ts";
 
 export const capacity = 64;
 

@@ -180,7 +180,7 @@ Native capture counters retain paint gaps separately from host delivery gaps. Er
 only their closed reason tag, including `Limit`; no frame bytes, page/session identifiers,
 addresses or provider error descriptions are serialized.
 
-`completed` means the whole measurement completed and provider release reported `Settled`.
+`completed` means the whole measurement completed and provider release reported `Confirmed`.
 It is not a claim about an undocumented 64 MiB limit, nor a universal acceptable gap threshold.
 Review the measurements before adopting cued output in a demanding consumer. A limit not reached
 in this run is not a verified provider limit. Retain the later usage delta separately as for H2.

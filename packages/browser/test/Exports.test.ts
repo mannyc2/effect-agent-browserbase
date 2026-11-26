@@ -1,58 +1,72 @@
-// Public entry points resolve to owned modules; internal chunks stay unreachable as package paths.
-import { existsSync, readFileSync } from "node:fs";
+// The exports follow Effect's layout: the root barrel, a module per file, an entry per feature
+// folder's index, and closed internals, where the build also puts its shared chunks.
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 import { assert, it } from "@effect/vitest";
+import { Effect } from "effect";
 
 import * as Root from "../src/index.ts";
 
-interface Entry {
-  readonly "@effect-browser/source": string;
-  readonly types: string;
-  readonly default: string;
-  readonly workerd?: Entry;
-}
-
 const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
-  readonly exports: Record<string, Entry>;
+  readonly exports: Record<string, unknown>;
 };
 
-it("exports explicit public modules whose source targets exist", () => {
-  for (const [path, target] of Object.entries(manifest.exports)) {
-    assert.notInclude(path, "*");
-    assert.notInclude(path, "internal");
-    assert.isTrue(
-      existsSync(new URL(`../${target["@effect-browser/source"]}`, import.meta.url)),
-      path,
-    );
-  }
+const source = new URL("../src/", import.meta.url);
+
+const modules = (directory: URL) =>
+  readdirSync(directory)
+    .filter((file) => file.endsWith(".ts") && file !== "index.ts")
+    .map((file) => file.slice(0, -3))
+    .toSorted();
+
+const folders = readdirSync(source, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && entry.name !== "internal")
+  .map((entry) => entry.name)
+  .toSorted();
+
+const entry = (path: string) => ({
+  "@effect-browser/source": `./src/${path}.ts`,
+  types: `./dist/${path}.d.mts`,
+  default: `./dist/${path}.mjs`,
 });
 
-it("the root exposes the portable kernel without importing optional features or providers", () => {
-  assert.deepStrictEqual(Object.keys(Root).toSorted(), [
-    "Action",
-    "ActionPort",
-    "Browser",
-    "BrowserError",
-    "BrowserEvent",
-    "Change",
-    "Clock",
-    "Frame",
-    "Geometry",
-    "Layout",
-    "Overlay",
-    "Page",
-    "PageTime",
-    "Pose",
-    "Snapshot",
-    "Style",
-    "Url",
-    "Window",
-  ]);
-  const root = manifest.exports["."]!;
-
-  assert.deepStrictEqual(root.workerd, {
-    "@effect-browser/source": root["@effect-browser/source"],
-    types: root.types,
-    default: root.default,
+it("exports modules by path, feature folders by index, and closes every internal", () => {
+  assert.deepStrictEqual(manifest.exports, {
+    "./package.json": "./package.json",
+    ".": { workerd: entry("index"), ...entry("index") },
+    "./Cdp": { workerd: entry("internal/cdp/workerd"), ...entry("Cdp") },
+    ...Object.fromEntries(folders.map((folder) => [`./${folder}`, entry(`${folder}/index`)])),
+    "./*": entry("*"),
+    "./internal/*": null,
+    ...Object.fromEntries(
+      folders
+        .filter((folder) => existsSync(new URL(`${folder}/internal/`, source)))
+        .map((folder) => [`./${folder}/internal/*`, null]),
+    ),
+    "./index": null,
+    "./*/index": null,
   });
 });
+
+it("the root holds every root module but Cdp, which loads playwright-core, and Site", () => {
+  assert.deepStrictEqual(
+    Object.keys(Root).toSorted(),
+    modules(source).filter((module) => module !== "Cdp" && module !== "Site"),
+  );
+});
+
+it.effect("each feature folder's index holds every module in the folder", () =>
+  Effect.gen(function* () {
+    for (const folder of folders) {
+      const index = yield* Effect.promise(
+        () => import(`../src/${folder}/index.ts`) as Promise<Record<string, unknown>>,
+      );
+
+      assert.deepStrictEqual(
+        Object.keys(index).toSorted(),
+        modules(new URL(`${folder}/`, source)),
+        folder,
+      );
+    }
+  }),
+);

@@ -1,3 +1,4 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it, layer } from "@effect/vitest";
 import { Clock, Deferred, Duration, Effect, Exit, Fiber, Option, Schedule, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -6,11 +7,10 @@ import { jpegjs } from "playwright-core/lib/utilsBundle";
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { Closed, Failed, undispatched } from "../src/BrowserError.ts";
+import * as Cdp from "../src/Cdp.ts";
 import type { Page } from "../src/Page.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
-import * as Stillness from "../src/stillness/Stillness.ts";
 import * as TestPage from "../src/testing/TestPage.ts";
+import * as Stillness from "../src/timeline/Stillness.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const blank = Effect.gen(function* () {

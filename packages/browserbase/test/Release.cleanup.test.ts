@@ -1,7 +1,7 @@
 // A failed local finalizer must not skip the paid provider's remote retirement.
 import { assert, it } from "@effect/vitest";
 import { Effect, Exit, Scope } from "effect";
-import * as Released from "effect-browser/Released";
+import { Release } from "effect-browser/supervisor";
 
 import { releasing } from "../src/internal/releasing.ts";
 
@@ -17,7 +17,7 @@ it.effect("attempts remote release after a local cleanup defect and reports Unco
       Effect.sync(() => {
         ended++;
 
-        return new Released.Settled();
+        return new Release.Confirmed();
       }),
     ).pipe(Effect.exit);
 

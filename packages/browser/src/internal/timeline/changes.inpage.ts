@@ -12,7 +12,7 @@
 import type { Change } from "../../Change.ts";
 import type { Known, ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
-import type { Walk } from "../reading/walk.inpage.ts";
+import type { Walked } from "../reading/walk.inpage.ts";
 import type { ChangesResult } from "./changes.ts";
 import type { Folded } from "./fold.inpage.ts";
 import type { History } from "./history.inpage.ts";
@@ -29,7 +29,7 @@ export interface ChangesRequest {
 
 export const changes = (
   names: Names,
-  walked: Walk,
+  walked: Walked,
   placing: ContextReader,
   kept: History,
   seeing: Sight,
