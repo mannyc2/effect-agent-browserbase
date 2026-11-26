@@ -1,4 +1,9 @@
-/** A bounded window of a page's events, visible changes and frames on the owning clock. */
+/**
+ * A bounded window of a page's events, visible changes and frames on the owning clock.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { Schema } from "effect";
 
 import { BrowserError } from "./BrowserError.ts";
@@ -6,7 +11,13 @@ import { BrowserEvent } from "./BrowserEvent.ts";
 import { Changes } from "./Change.ts";
 import { Frame } from "./Frame.ts";
 
-/** A page's events, changes and frames over one window of its browser's host clock. */
+/**
+ * A page's events, changes and frames over one window of its browser's host clock.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Window extends Schema.Class<Window>("effect-browser/Window")({
   page: Schema.String,
   /** Where the window starts, in host monotonic milliseconds on the owning browser’s clock. */

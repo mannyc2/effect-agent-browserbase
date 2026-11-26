@@ -8,6 +8,7 @@
  * A page is named by its CDP target id, which stays the same across reconnects, and every URL is
  * reported without its userinfo or known secret parameters.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Schema } from "effect";
@@ -15,7 +16,13 @@ import { Schema } from "effect";
 import { Action as ActionValue, Name } from "./Action.ts";
 import * as Motion from "./internal/geometry.ts";
 
-/** A page opened, and the page that opened it, as a link or `window.open` does, if one did. */
+/**
+ * A page opened, and the page that opened it, as a link or `window.open` does, if one did.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
   at: Schema.Finite,
   page: Schema.String,
@@ -26,6 +33,10 @@ export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
 /**
  * The page closed (`page`), or crashed and was closed (`crashed`). A page lost with its browser
  * has no event of its own: `Disconnected` stands for all of them.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class PageClosed extends Schema.TaggedClass<PageClosed>()("PageClosed", {
   at: Schema.Finite,
@@ -36,6 +47,10 @@ export class PageClosed extends Schema.TaggedClass<PageClosed>()("PageClosed", {
 /**
  * A tab the site opened that the library could not track, as its registration failed with
  * `detail`. A tab that closed as it opened has no event.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class PageUntracked extends Schema.TaggedClass<PageUntracked>()("PageUntracked", {
   at: Schema.Finite,
@@ -46,6 +61,10 @@ export class PageUntracked extends Schema.TaggedClass<PageUntracked>()("PageUntr
 /**
  * The page's main frame moved to `url`: into a new document, or within the current one
  * (`sameDocument`), as `pushState` and fragment links do. Frames carry the document they followed.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
   at: Schema.Finite,
@@ -60,7 +79,13 @@ export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
   sameDocument: Schema.Boolean,
 }) {}
 
-/** The page's document finished parsing (`domcontentloaded`) or loading (`load`). */
+/**
+ * The page's document finished parsing (`domcontentloaded`) or loading (`load`).
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class PageLoaded extends Schema.TaggedClass<PageLoaded>()("PageLoaded", {
   at: Schema.Finite,
   page: Schema.String,
@@ -70,18 +95,39 @@ export class PageLoaded extends Schema.TaggedClass<PageLoaded>()("PageLoaded", {
 /**
  * Why a browser was lost to its owner: its connection dropped (`connection`), its provider ended
  * its session, at or after the session's `expiresAt` (`session`), or its owner released it.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const DisconnectCause = Schema.Literals(["connection", "session", "released"]);
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type DisconnectCause = typeof DisconnectCause.Type;
 
-/** The browser was lost to its owner, with every page in it. It happens once. */
+/**
+ * The browser was lost to its owner, with every page in it. It happens once.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Disconnected extends Schema.TaggedClass<Disconnected>()("Disconnected", {
   at: Schema.Finite,
   cause: DisconnectCause,
 }) {}
 
-/** The provider ends this browser's session at `expiresAt`, a wall-clock instant. */
+/**
+ * The provider ends this browser's session at `expiresAt`, a wall-clock instant.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class SessionEnding extends Schema.TaggedClass<SessionEnding>()("SessionEnding", {
   at: Schema.Finite,
   expiresAt: Schema.DateTimeUtc,
@@ -93,6 +139,10 @@ export class SessionEnding extends Schema.TaggedClass<SessionEnding>()("SessionE
  * `column` the header over it; elsewhere, `label` is the words just before it in its row, item,
  * group or block, at most 40 characters. `heading` is the nearest heading above it, left out for
  * what is pinned to the viewport. Row, column and heading are at most 60 characters.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const SubjectContext = Schema.Struct({
   row: Schema.optional(Schema.String),
@@ -101,6 +151,11 @@ export const SubjectContext = Schema.Struct({
   heading: Schema.optional(Schema.String),
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type SubjectContext = typeof SubjectContext.Type;
 
 /**
@@ -108,6 +163,10 @@ export type SubjectContext = typeof SubjectContext.Type;
  * when it has none), its accessible name (empty when it has none), its lowercase tag and its
  * context. For a point, it is the control under the point, or else the element painted there.
  * Unlike a ref, it keeps its meaning after the page changes.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class Subject extends Schema.Class<Subject>("effect-browser/BrowserEvent/Subject")({
   role: Schema.NullOr(Schema.String),
@@ -118,13 +177,24 @@ export class Subject extends Schema.Class<Subject>("effect-browser/BrowserEvent/
 
 const Button = Schema.Literals(["left", "right", "middle"]);
 
-/** An element's box in viewport CSS pixels; it may lie partly or wholly outside the viewport. */
+/**
+ * An element's box in viewport CSS pixels; it may lie partly or wholly outside the viewport.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Box = Schema.Struct({
   ...Motion.Point.fields,
   width: Schema.Finite,
   height: Schema.Finite,
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Box = typeof Box.Type;
 
 /**
@@ -134,6 +204,10 @@ export type Box = typeof Box.Type;
  * action that failed before finding its target has neither. Point actions carry the viewport
  * point they used. `correlation` is the id its caller gave it with `Page.correlate`, such as a
  * model's tool call id.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class Action extends Schema.TaggedClass<Action>()("Action", {
   at: Schema.Finite,
@@ -166,6 +240,10 @@ const Sequence = Schema.Int.check(Schema.isGreaterThan(0));
  * target into view comes before. `x` and `y` are where the pointer goes, in viewport CSS pixels; for
  * a drag, its start. Input with no pointer travel, such as keys or typing into the focused field,
  * announces nothing.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>()("ActionAnnounced", {
   at: Schema.Finite,
@@ -178,7 +256,13 @@ export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>()("Acti
   ...Motion.Point.fields,
 }) {}
 
-/** One whole glide, published before its first input. Offsets use the host monotonic clock. */
+/**
+ * One whole glide, published before its first input. Offsets use the host monotonic clock.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlanned", {
   at: Schema.Finite,
   page: Schema.String,
@@ -190,6 +274,10 @@ export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlann
  * The submitted prefix of a glide. `plan` is its TrackPlanned envelope sequence; `dispatched`
  * counts samples. `complete` means every sample was submitted, not acknowledged by the browser.
  * The terminal point clips a canceled plan so a compositor never draws its unrealized future.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>()("TrackPerformed", {
   at: Schema.Finite,
@@ -200,6 +288,11 @@ export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>()("TrackP
   complete: Schema.Boolean,
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class PointerPressed extends Schema.TaggedClass<PointerPressed>()("PointerPressed", {
   at: Schema.Finite,
   page: Schema.String,
@@ -208,6 +301,11 @@ export class PointerPressed extends Schema.TaggedClass<PointerPressed>()("Pointe
   clickCount: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class PointerReleased extends Schema.TaggedClass<PointerReleased>()("PointerReleased", {
   at: Schema.Finite,
   page: Schema.String,
@@ -216,6 +314,11 @@ export class PointerReleased extends Schema.TaggedClass<PointerReleased>()("Poin
   clickCount: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>()("WheelScrolled", {
   at: Schema.Finite,
   page: Schema.String,
@@ -224,6 +327,11 @@ export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>()("WheelScr
   dy: Schema.Finite,
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class KeyChanged extends Schema.TaggedClass<KeyChanged>()("KeyChanged", {
   at: Schema.Finite,
   page: Schema.String,
@@ -231,20 +339,37 @@ export class KeyChanged extends Schema.TaggedClass<KeyChanged>()("KeyChanged", {
   phase: Schema.Literals(["down", "up"]),
 }) {}
 
-/** Literal text insertion has no corresponding key events, including Unicode and newlines. */
+/**
+ * Literal text insertion has no corresponding key events, including Unicode and newlines.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class TextInserted extends Schema.TaggedClass<TextInserted>()("TextInserted", {
   at: Schema.Finite,
   page: Schema.String,
   text: Schema.String,
 }) {}
 
-/** The target's CSS cursor, obtained during target resolution without another browser call. */
+/**
+ * The target's CSS cursor, obtained during target resolution without another browser call.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class CursorChanged extends Schema.TaggedClass<CursorChanged>()("CursorChanged", {
   at: Schema.Finite,
   page: Schema.String,
   cursor: Schema.String,
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const TrackEvent = Schema.Union([
   ActionAnnounced,
   TrackPlanned,
@@ -257,11 +382,20 @@ export const TrackEvent = Schema.Union([
   CursorChanged,
 ]);
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type TrackEvent = typeof TrackEvent.Type;
 
 /**
  * A JavaScript dialog appeared; its completed answer, or a failed response: an alert or a leave-page prompt accepted, a
  * confirm or a prompt dismissed, as if its Cancel were pressed.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown", {
   at: Schema.Finite,
@@ -271,8 +405,14 @@ export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown"
   answer: Schema.Literals(["accepted", "dismissed", "failed"]),
 }) {}
 
-/** A context policy refused traffic; page is present only when its containing page was established.
- * Worker and out-of-process iframe requests may omit it while retaining proven context ownership. */
+/**
+ * A context policy refused traffic; page is present only when its containing page was established.
+ * Worker and out-of-process iframe requests may omit it while retaining proven context ownership.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class RequestRefused extends Schema.TaggedClass<RequestRefused>()("RequestRefused", {
   at: Schema.Finite,
   page: Schema.optional(Schema.String),
@@ -288,6 +428,11 @@ export class RequestRefused extends Schema.TaggedClass<RequestRefused>()("Reques
   ),
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const BrowserEvent = Schema.Union([
   RequestRefused,
   PageOpened,
@@ -302,9 +447,20 @@ export const BrowserEvent = Schema.Union([
   SessionEnding,
 ]);
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type BrowserEvent = typeof BrowserEvent.Type;
 
-/** A position in the browser's one replayable event history. Sequences begin at one. */
+/**
+ * A position in the browser's one replayable event history. Sequences begin at one.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class RecordedEvent extends Schema.Class<RecordedEvent>(
   "effect-browser/BrowserEvent/RecordedEvent",
 )({

@@ -10,6 +10,7 @@
  * sets on its root. Each new document starts without it, and it is drawn again there, with what
  * it last showed, once the document has loaded. It is gone when its scope closes.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { type Effect, Schema } from "effect";
@@ -20,14 +21,28 @@ import type { Box } from "./BrowserEvent.ts";
 /**
  * What the overlay shows. `Svg` is an SVG document sized to the viewport, whose own `viewBox` maps
  * any design space onto it; its scripts and event handlers are dropped. `Empty` shows nothing.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const Content = Schema.TaggedUnion({
   Svg: { markup: Schema.String },
   Empty: {},
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Content = typeof Content.Type;
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Overlay {
   /**
    * Show `content` in place of what was shown, in one call to the page, after the actions asked

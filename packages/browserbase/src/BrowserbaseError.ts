@@ -1,11 +1,18 @@
 /**
  * The one error every Browserbase API call fails with. `reason` says what went wrong.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Schema } from "effect";
 
-/** The API key is missing, wrong or not allowed to do this (401 or 403). */
+/**
+ * The API key is missing, wrong or not allowed to do this (401 or 403).
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class Unauthorized extends Schema.TaggedError<Unauthorized>(
   "@effect-browser/browserbase/BrowserbaseError/Unauthorized",
 )("Unauthorized", {
@@ -16,7 +23,13 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>(
   }
 }
 
-/** No session, context or other resource has that id (404). */
+/**
+ * No session, context or other resource has that id (404).
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class NotFound extends Schema.TaggedError<NotFound>(
   "@effect-browser/browserbase/BrowserbaseError/NotFound",
 )("NotFound", {
@@ -27,7 +40,13 @@ export class NotFound extends Schema.TaggedError<NotFound>(
   }
 }
 
-/** Too many concurrent sessions or requests for the plan (429). Wait, then try again. */
+/**
+ * Too many concurrent sessions or requests for the plan (429). Wait, then try again.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class RateLimited extends Schema.TaggedError<RateLimited>(
   "@effect-browser/browserbase/BrowserbaseError/RateLimited",
 )("RateLimited", {
@@ -38,7 +57,13 @@ export class RateLimited extends Schema.TaggedError<RateLimited>(
   }
 }
 
-/** Any other answer that is not a success, including a redirect, which is never followed. */
+/**
+ * Any other answer that is not a success, including a redirect, which is never followed.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class Status extends Schema.TaggedError<Status>(
   "@effect-browser/browserbase/BrowserbaseError/Status",
 )("Status", {
@@ -53,6 +78,10 @@ export class Status extends Schema.TaggedError<Status>(
 /**
  * No answer arrived: the request could not be sent, or the connection failed. A request that
  * creates something may still have created it.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
  */
 export class Transport extends Schema.TaggedError<Transport>(
   "@effect-browser/browserbase/BrowserbaseError/Transport",
@@ -68,6 +97,10 @@ export class Transport extends Schema.TaggedError<Transport>(
  * The answer did not have the expected shape. For a create whose answer named its session,
  * `released` says whether the client then released that session; without it, a session may be
  * left running.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
  */
 export class Decode extends Schema.TaggedError<Decode>(
   "@effect-browser/browserbase/BrowserbaseError/Decode",
@@ -83,6 +116,10 @@ export class Decode extends Schema.TaggedError<Decode>(
 /**
  * Not a request Browserbase takes, such as an id that is not one: Browserbase refused it (400), or
  * it was refused before sending.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
  */
 export class InvalidRequest extends Schema.TaggedError<InvalidRequest>(
   "@effect-browser/browserbase/BrowserbaseError/InvalidRequest",
@@ -94,7 +131,13 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>(
   }
 }
 
-/** What went wrong, as `BrowserbaseError`'s `reason`. */
+/**
+ * What went wrong, as `BrowserbaseError`'s `reason`.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export const BrowserbaseErrorReason = Schema.Union([
   Unauthorized,
   NotFound,
@@ -105,8 +148,18 @@ export const BrowserbaseErrorReason = Schema.Union([
   InvalidRequest,
 ]);
 
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export type BrowserbaseErrorReason = typeof BrowserbaseErrorReason.Type;
 
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class BrowserbaseError extends Schema.TaggedError<BrowserbaseError>(
   "@effect-browser/browserbase/BrowserbaseError",
 )("BrowserbaseError", {
@@ -118,15 +171,33 @@ export class BrowserbaseError extends Schema.TaggedError<BrowserbaseError>(
   }
 }
 
-/** Whether a value is a `BrowserbaseError`. */
+/**
+ * Whether a value is a `BrowserbaseError`.
+ *
+ * @stability stable
+ * @category guards
+ * @since 0.3.0
+ */
 export const isBrowserbaseError: (u: unknown) => u is BrowserbaseError =
   Schema.is(BrowserbaseError);
 
-/** Whether a value is one of `BrowserbaseError`'s reasons. */
+/**
+ * Whether a value is one of `BrowserbaseError`'s reasons.
+ *
+ * @stability stable
+ * @category guards
+ * @since 0.3.0
+ */
 export const isBrowserbaseErrorReason: (u: unknown) => u is BrowserbaseErrorReason =
   Schema.is(BrowserbaseErrorReason);
 
-/** True for failures worth retrying after a pause: no answer, a rate limit or a server error. */
+/**
+ * True for failures worth retrying after a pause: no answer, a rate limit or a server error.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.3.0
+ */
 export const isTransient = (error: BrowserbaseError): boolean =>
   error.reason._tag === "Transport" ||
   error.reason._tag === "RateLimited" ||

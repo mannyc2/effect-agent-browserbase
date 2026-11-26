@@ -14,6 +14,7 @@
  * shadow roots and SVG; a value a script sets; and a class that reveals an element the record has
  * not seen before, such as a toast already on the page, though its later changes are seen.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Schema } from "effect";
@@ -23,11 +24,25 @@ import { Box, Subject } from "./BrowserEvent.ts";
 /**
  * `text` changed; `appeared` and `disappeared`, whether added or removed or shown or hidden;
  * `brief`, appeared and gone again by the window's end; `value`, a field's; `title`, the document's.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const Kind = Schema.Literals(["text", "appeared", "disappeared", "brief", "value", "title"]);
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Kind = typeof Kind.Type;
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Change extends Schema.Class<Change>("effect-browser/Change")({
   kind: Kind,
   /**
@@ -71,6 +86,11 @@ export class Change extends Schema.Class<Change>("effect-browser/Change")({
   cause: Schema.optional(Schema.Finite),
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Changes extends Schema.Class<Changes>("effect-browser/Change/Changes")({
   /** The page's document these changes belong to, as `Navigated` counts them. */
   document: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),

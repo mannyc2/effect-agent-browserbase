@@ -1,3 +1,11 @@
+/**
+ * Recorded pointer motion: a pointer planner, for a presenter, over the package's bundled human
+ * strokes.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
+
 // This Node-only loader owns one fixed package asset without adding a platform dependency or
 // requiring a caller filesystem service.
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- reads only its own package's asset
@@ -21,6 +29,10 @@ const read = Effect.tryPromise({
  * The recorded strokes as a pointer planner, for a presenter:
  * `Presentation.make({ motion: yield* HumanStrokes.motion })`. Loading reads, decompresses and
  * validates the package's own asset, with no network or path options, and fails `DataError`.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const motion: Effect.Effect<Motion.Planner, DataError> = Effect.gen(function* () {
   // No binding here holds the compressed asset, so the planner's closure keeps only the payload.

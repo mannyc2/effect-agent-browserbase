@@ -3,6 +3,9 @@
  * `make` adds its finalizer directly to its caller's scope. Each generation has its own scope;
  * its loss signal remains watched until that scope closes, after release. Optional policies
  * compose by wrapping `open`, `release` and the public generation stream.
+ *
+ * @stability stable
+ * @since 0.3.0
  */
 import {
   Clock,
@@ -38,19 +41,79 @@ import {
 } from "./internal/runtime.ts";
 
 export {
+  /**
+   * @stability stable
+   * @category models
+   * @since 0.3.0
+   */
   type Generation,
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
   InvalidWait,
+  /**
+   * @stability stable
+   * @category models
+   * @since 0.3.0
+   */
   type Lease,
+  /**
+   * @stability stable
+   * @category models
+   * @since 0.3.0
+   */
   type Opened,
+  /**
+   * @stability stable
+   * @category options
+   * @since 0.3.0
+   */
   type Options,
+  /**
+   * @stability stable
+   * @category models
+   * @since 0.3.0
+   */
   type State,
+  /**
+   * @stability stable
+   * @category models
+   * @since 0.3.0
+   */
   type Supervisor,
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
   Superseded,
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
   Unavailable,
+  /**
+   * @stability stable
+   * @category options
+   * @since 0.3.0
+   */
   type UseOptions,
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   StopReason,
 } from "./internal/contract.ts";
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.fn("Supervisor.make")(function* <A, E, R>(
   options: Options<A, E, R>,
 ): Effect.fn.Return<Supervisor<A, E>, never, Scope.Scope | Exclude<R, Scope.Scope>> {

@@ -17,6 +17,7 @@
  * never back, and what was left of each timer and frame runs in real time. `ready` and stillness
  * count an animation held part way as still running.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import type { Duration, Effect } from "effect";
@@ -26,7 +27,13 @@ import type { Point } from "./internal/geometry.ts";
 import type { Content } from "./Overlay.ts";
 import type { Pose } from "./Pose.ts";
 
-/** What else changes with page time in the same call to the page. */
+/**
+ * What else changes with page time in the same call to the page.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Step {
   /** Scroll the document to this many CSS pixels down it first, at once. */
   readonly scroll?: number | undefined;
@@ -36,6 +43,11 @@ export interface Step {
   readonly overlay?: Content | undefined;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Held {
   /**
    * Move page time on by `by`, in one call to the page, after the actions asked before it. Says

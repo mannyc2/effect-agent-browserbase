@@ -2,19 +2,36 @@
  * The tabs the tools follow in a browser, as data to save and resume: which one is shown, which
  * were seen, and each one's stable ref. Independent of browser effects.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Schema } from "effect";
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Tabs extends Schema.Class<Tabs>("effect-browser/ai/Tabs")({
   shown: Schema.optional(Schema.String),
   seen: Schema.Array(Schema.String),
   refs: Schema.Record(Schema.String, Schema.String),
 }) {}
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = (seen: ReadonlyArray<string> = []): Tabs => new Tabs({ seen, refs: {} });
 
-/** The newest unseen tab wins unless following is disabled; a closed selection falls back. */
+/**
+ * The newest unseen tab wins unless following is disabled; a closed selection falls back.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const follow = (
   state: Tabs,
   open: ReadonlyArray<string>,
@@ -43,5 +60,10 @@ export const follow = (
   };
 };
 
+/**
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const selected = (state: Tabs, open: ReadonlyArray<string>, ref: string) =>
   open.find((id) => state.refs[id] === ref);

@@ -4,6 +4,7 @@
  * Commits serialize, drain old-page input and refuse stale first frames. `shown` distinguishes
  * confirmed silence, uncertain silence and loss without treating capture silence as evidence.
  * All pages of a stage must share one owning clock; timestamps from unrelated clocks cannot mix.
+ * @stability stable
  * @since 0.3.0
  */
 import {
@@ -37,12 +38,23 @@ import { monotonicMillis } from "../internal/clock.ts";
 import type { Capture, Page } from "../Page.ts";
 import * as Lifecycle from "./internal/feed.ts";
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options extends ScreencastOptions {
   /** Bound for each first-frame wait. Defaults to 5 seconds. */
   readonly firstFrame?: Duration.Input | undefined;
 }
 
-/** A switch that took effect, on the clock shared by browser events and frames. */
+/**
+ * A switch that took effect, on the clock shared by browser events and frames.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Presented extends Schema.Class<Presented>(
   "effect-browser/presentation/Stage/Presented",
 )({
@@ -51,6 +63,11 @@ export class Presented extends Schema.Class<Presented>(
   latency: Schema.Finite,
 }) {}
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Cue {
   readonly page: Page;
   /** A frame of the current document, or the capture's failure or first-frame timeout. */
@@ -61,13 +78,24 @@ export interface Cue {
   }) => Effect.Effect<Presented, BrowserError>;
 }
 
-/** What the output establishes at nondecreasing host times; frames retain their capture times. */
+/**
+ * What the output establishes at nondecreasing host times; frames retain their capture times.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Shown =
   | { readonly _tag: "Painted"; readonly frame: Frame; readonly at: number }
   | { readonly _tag: "Still"; readonly frame: Frame; readonly at: number }
   | { readonly _tag: "Stalled"; readonly frame: Frame; readonly at: number }
   | { readonly _tag: "Gone"; readonly page: string; readonly at: number };
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Stage {
   readonly present: (
     page: Page,
@@ -378,6 +406,11 @@ const openFeed = (
     return feed;
   });
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.fn("Stage.make")(function* (
   options: Options = {},
 ): Effect.fn.Return<Stage, BrowserError, Scope.Scope> {

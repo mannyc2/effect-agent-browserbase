@@ -1,4 +1,9 @@
-/** Screen and foreground stillness over the public page capture and owning clock. */
+/**
+ * Screen and foreground stillness over the public page capture and owning clock.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { Clock, Duration, Effect, Option, Schedule, Stream } from "effect";
 
 import { Failed, refuse, Timeout, undispatched } from "../BrowserError.ts";
@@ -8,6 +13,11 @@ import { monotonicMillis } from "../internal/clock.ts";
 import type { Page } from "../Page.ts";
 import * as Motion from "./internal/pixels.ts";
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options {
   readonly still?: "screen" | "content" | "foreground" | undefined;
   readonly quietMillis: number;
@@ -151,6 +161,11 @@ const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
     yield* quiet(options.quietMillis);
   });
 
+/**
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const wait = (page: Page, options: Options) =>
   Effect.gen(function* () {
     if (!Number.isFinite(options.quietMillis) || options.quietMillis < 0)

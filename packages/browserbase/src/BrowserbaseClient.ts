@@ -10,6 +10,7 @@
  * Reads are retried twice on transient failures. Writes are not: a session create that fails in
  * transit or misses its deadline may still have created the session, which then ends at its timeout.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import {
@@ -47,8 +48,18 @@ import {
   Unauthorized,
 } from "./BrowserbaseError.ts";
 
+/**
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
+ */
 export const defaultBaseUrl = "https://api.browserbase.com";
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Session extends Schema.Class<Session>(
   "@effect-browser/browserbase/BrowserbaseClient/Session",
 )({
@@ -67,7 +78,13 @@ export class Session extends Schema.Class<Session>(
   connectUrl: Schema.optional(Schema.RedactedFromValue(Schema.String)),
 }) {}
 
-/** Links that let a person watch and control a running session. They are credentials. */
+/**
+ * Links that let a person watch and control a running session. They are credentials.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class LiveView extends Schema.Class<LiveView>(
   "@effect-browser/browserbase/BrowserbaseClient/LiveView",
 )({
@@ -84,7 +101,13 @@ export class LiveView extends Schema.Class<LiveView>(
   ),
 }) {}
 
-/** Browser state (cookies, storage, cache) kept by Browserbase for sessions to load and save. */
+/**
+ * Browser state (cookies, storage, cache) kept by Browserbase for sessions to load and save.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class StoredContext extends Schema.Class<StoredContext>(
   "@effect-browser/browserbase/BrowserbaseClient/StoredContext",
 )({
@@ -95,7 +118,13 @@ export class StoredContext extends Schema.Class<StoredContext>(
   updatedAt: Schema.optional(Schema.String),
 }) {}
 
-/** A Chrome extension uploaded to the project, which sessions load when created with its id. */
+/**
+ * A Chrome extension uploaded to the project, which sessions load when created with its id.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Extension extends Schema.Class<Extension>(
   "@effect-browser/browserbase/BrowserbaseClient/Extension",
 )({
@@ -105,6 +134,11 @@ export class Extension extends Schema.Class<Extension>(
   updatedAt: Schema.String,
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class SearchResult extends Schema.Class<SearchResult>(
   "@effect-browser/browserbase/BrowserbaseClient/SearchResult",
 )({
@@ -114,7 +148,13 @@ export class SearchResult extends Schema.Class<SearchResult>(
   publishedDate: Schema.optional(Schema.String),
 }) {}
 
-/** A page fetched without a browser. */
+/**
+ * A page fetched without a browser.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class FetchedPage extends Schema.Class<FetchedPage>(
   "@effect-browser/browserbase/BrowserbaseClient/FetchedPage",
 )({
@@ -125,7 +165,13 @@ export class FetchedPage extends Schema.Class<FetchedPage>(
   content: Schema.Union([Schema.String, Schema.Record(Schema.String, Schema.Unknown)]),
 }) {}
 
-/** A session create request, as Browserbase's API reference describes it. */
+/**
+ * A session create request, as Browserbase's API reference describes it.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface SessionOptions {
   /** Defaults to the API key's project. */
   readonly projectId?: string | undefined;
@@ -143,7 +189,13 @@ export interface SessionOptions {
   readonly browserSettings?: BrowserSettings | undefined;
 }
 
-/** Browser settings. Left unset, each takes Browserbase's default. */
+/**
+ * Browser settings. Left unset, each takes Browserbase's default.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface BrowserSettings {
   /**
    * Load a stored context. With `persist`, Browserbase saves the session's changes back to it once
@@ -166,6 +218,11 @@ export interface BrowserSettings {
   readonly ignoreCertificateErrors?: boolean | undefined;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type ProxyRule =
   | {
       readonly type: "browserbase";
@@ -187,6 +244,11 @@ export type ProxyRule =
     }
   | { readonly type: "none"; readonly domainPattern?: string | undefined };
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface FetchOptions {
   /** `raw` (the default) returns the body as is; `json` needs `schema`. */
   readonly format?: "raw" | "markdown" | "json" | undefined;
@@ -197,6 +259,11 @@ export interface FetchOptions {
   readonly proxies?: boolean | undefined;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Service {
   readonly createSession: (options?: SessionOptions) => Effect.Effect<Session, BrowserbaseError>;
   readonly getSession: (id: string) => Effect.Effect<Session, BrowserbaseError>;
@@ -239,10 +306,20 @@ export interface Service {
   ) => Effect.Effect<FetchedPage, BrowserbaseError>;
 }
 
+/**
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
 export class BrowserbaseClient extends Context.Service<BrowserbaseClient, Service>()(
   "@effect-browser/browserbase/BrowserbaseClient",
 ) {}
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options {
   readonly apiKey: Redacted.Redacted<string>;
   /** Defaults to `https://api.browserbase.com`. */
@@ -288,6 +365,11 @@ const refuseRedirects = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect
     }),
   );
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.fnUntraced(function* (options: Options) {
   const http = (yield* HttpClient.HttpClient).pipe(
     HttpClient.mapRequest(
@@ -544,12 +626,23 @@ export const make = Effect.fnUntraced(function* (options: Options) {
   });
 });
 
+/**
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layer = (
   options: Options,
 ): Layer.Layer<BrowserbaseClient, never, HttpClient.HttpClient> =>
   Layer.effect(BrowserbaseClient, make(options));
 
-/** The client configured from `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`. */
+/**
+ * The client configured from `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layerConfig = (
   options: {
     readonly apiKey?: Config.Config<Redacted.Redacted<string>> | undefined;

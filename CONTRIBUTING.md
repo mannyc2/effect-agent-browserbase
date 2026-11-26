@@ -36,6 +36,10 @@ bun run ready                       # fmt check, lint, typecheck, test, build
 - `bun run fmt` formats. `oxlint -c lint/.oxlintrc.json --fix <files>` fixes the stylistic rules
   that `fmt` leaves alone. Fix a lint finding or Effect diagnostic rather than suppress it.
 - Read `node_modules/effect/AGENTS.md` before writing Effect code.
+- Tag what a package exports as Effect does: each public export's doc carries `@stability`,
+  `@category` and `@since` (the release that adds it), and a public module's opening doc
+  `@stability` and `@since`. Lint checks it; `lint/plugins/tags.ts` lists the categories. `Film` is
+  `experimental`, the rest `stable`.
 - Tests live in each package's `test/` and run against a real local Chromium with pages served by
   the test itself. Scripted models stand in for real ones: no test calls a model or a hosted browser.
 - The bench (`bench/`) is the place for evidence about models; its README says how to run it.

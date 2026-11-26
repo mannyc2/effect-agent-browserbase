@@ -4,6 +4,7 @@
  * read with them in one call. A rehearsal measures things that exist only after an interaction,
  * and puts the page back.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Effect, Exit, Schema } from "effect";
@@ -14,14 +15,26 @@ import { Box, Subject } from "./BrowserEvent.ts";
 import { Point } from "./internal/geometry.ts";
 import type { FindQuery, Page } from "./Page.ts";
 
-/** A match of a pick's `words`, by its box in the viewport and in the document. */
+/**
+ * A match of a pick's `words`, by its box in the viewport and in the document.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Word extends Schema.Class<Word>("effect-browser/Layout/Word")({
   text: Schema.String,
   box: Box,
   page: Box,
 }) {}
 
-/** What one pick found. */
+/**
+ * What one pick found.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Place extends Schema.Class<Place>("effect-browser/Layout/Place")({
   /** The pick's own name. */
   id: Schema.String,
@@ -37,7 +50,13 @@ export class Place extends Schema.Class<Place>("effect-browser/Layout/Place")({
   words: Schema.optional(Schema.Array(Word)),
 }) {}
 
-/** A page's picked places, and the viewport, scroll and scale they were read at. */
+/**
+ * A page's picked places, and the viewport, scroll and scale they were read at.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Layout extends Schema.Class<Layout>("effect-browser/Layout")({
   page: Schema.String,
   /** The tracking connection that owns the document counter. */
@@ -64,6 +83,10 @@ export class Layout extends Schema.Class<Layout>("effect-browser/Layout")({
  * finds is a candidate, and `choose` takes one: the first in tree order (the default), the last,
  * or the smallest or largest by area. With a selector, the candidates are what it selects that
  * shows and meets the other rules, a drawing's elements among them, which `find` leaves out.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
  */
 export interface Pick extends FindQuery {
   readonly choose?: "first" | "last" | "smallest" | "largest" | undefined;
@@ -74,14 +97,32 @@ export interface Pick extends FindQuery {
   readonly words?: string | RegExp | undefined;
 }
 
-/** Picks by the names their places will carry. */
+/**
+ * Picks by the names their places will carry.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Picks = Readonly<Record<string, Pick>>;
 
-/** The place a pick named, if it found one. */
+/**
+ * The place a pick named, if it found one.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const place = (layout: Layout, id: string): Place | undefined =>
   layout.places.find((each) => each.id === id);
 
-/** What a rehearsal does, measures, and does to put the page back. */
+/**
+ * What a rehearsal does, measures, and does to put the page back.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Rehearsal {
   readonly act: ReadonlyArray<Action>;
   readonly picks: Picks;
@@ -92,6 +133,10 @@ export interface Rehearsal {
  * Measure what exists only after an interaction: perform `act`, wait for the page to be ready,
  * read the layout, then perform `undo`, which runs whether or not acting and reading succeeded,
  * and is not interrupted. A failure to act or read is the rehearsal's; otherwise one to undo is.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const rehearse = (page: Page, rehearsal: Rehearsal): Effect.Effect<Layout, BrowserError> =>
   Effect.uninterruptibleMask((restore) =>

@@ -5,11 +5,18 @@
  * refs are never reused within a page, so a ref from an old snapshot fails as stale rather than
  * naming a different element.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Schema } from "effect";
 
-/** A control the outline shows, as a value: its ref, what it is and what it holds. */
+/**
+ * A control the outline shows, as a value: its ref, what it is and what it holds.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Control extends Schema.Class<Control>("effect-browser/Snapshot/Control")({
   ref: Schema.String,
   /** Its role, such as `button` or `textbox`, or `clickable` for an element without one. */
@@ -29,6 +36,11 @@ export class Control extends Schema.Class<Control>("effect-browser/Snapshot/Cont
   editable: Schema.optional(Schema.Boolean),
 }) {}
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Snapshot extends Schema.Class<Snapshot>("effect-browser/Snapshot")({
   url: Schema.String,
   title: Schema.String,
@@ -74,6 +86,11 @@ export class Snapshot extends Schema.Class<Snapshot>("effect-browser/Snapshot")(
   }
 }
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface SnapshotOptions {
   /** Read the whole page instead of the viewport. Defaults to false. */
   readonly full?: boolean | undefined;

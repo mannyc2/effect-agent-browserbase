@@ -20,6 +20,9 @@
  * request the page cannot serve answers `{ invalid }`, and a ref it no longer has `{ stale }`,
  * rather than throwing. `Layout`, `Change` and `Snapshot` hold their schemas. The script runs in
  * the site's own world, so it shares the globals the site's code may patch.
+ *
+ * @stability stable
+ * @since 0.3.0
  */
 import { match, pickRequests, request } from "./internal/matching.ts";
 import { compose } from "./internal/page/compose.inpage.ts";
@@ -49,6 +52,10 @@ import type { Pose } from "./Pose.ts";
 /**
  * The readers, the change record, the overlay and poses for the current document. Make one for
  * each document the site shows, and `stopRecord` the last one's.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const make = () => {
   const { named, recorder, url, reads } = compose({
@@ -121,4 +128,9 @@ export const make = () => {
   };
 };
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Site = ReturnType<typeof make>;

@@ -19,6 +19,7 @@
  * whole look, when those are fewer. An action that failed before its input reached the browser is `not-dispatched`,
  * one that failed after is `possibly-dispatched`, and nothing is ever retried.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Effect, Option, Result, Schema } from "effect";
@@ -32,10 +33,22 @@ import { destination, dispatchOf, followed, told } from "./internal/receipts.ts"
 import * as Tabs from "./Tabs.ts";
 import { fromBrowserError, ToolError } from "./ToolError.ts";
 
-/** A control's ref in an observation, such as `e12`. */
+/**
+ * A control's ref in an observation, such as `e12`.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Ref = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,50}$/));
 
-/** An action on an observed control. */
+/**
+ * An action on an observed control.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Action = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("click"), ref: Ref }),
   Schema.Struct({
@@ -50,6 +63,11 @@ export const Action = Schema.Union([
   }),
 ]);
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Action = typeof Action.Type;
 
 /** A control as an observation lists it. */
@@ -65,7 +83,13 @@ const Control = Schema.Struct({
   editable: Schema.optionalKey(Schema.Boolean),
 });
 
-/** The page's outline and its controls, where the page is scrolled, and a browser's tabs. */
+/**
+ * The page's outline and its controls, where the page is scrolled, and a browser's tabs.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Observation = Schema.Struct({
   text: Schema.String,
   controls: Schema.Array(Control),
@@ -81,6 +105,11 @@ export const Observation = Schema.Struct({
   ),
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Observation = typeof Observation.Type;
 
 const Dispatch = Schema.Literals(["not-dispatched", "acknowledged", "possibly-dispatched"]);
@@ -91,6 +120,10 @@ type Dispatch = typeof Dispatch.Type;
  * What actions did: how many completed, the first one's failure, the page after them unless the
  * caller asked not to look, and whether the input reached the browser. Never replay an input
  * whose dispatch is not `not-dispatched`.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const ActionResult = Schema.Struct({
   completed: Schema.Natural,
@@ -99,6 +132,11 @@ export const ActionResult = Schema.Struct({
   dispatch: Dispatch,
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type ActionResult = typeof ActionResult.Type;
 
 /** What `control.wait` waits for, as the `wait` tool takes it. */
@@ -110,14 +148,31 @@ interface WaitRequest {
   readonly timeoutMillis: number;
 }
 
-/** What the controller does when a tab opens: see the module's comment. */
+/**
+ * What the controller does when a tab opens: see the module's comment.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Follow = "select" | "front" | "never";
 
-/** What the controller acts on: one page, or a browser's tabs. */
+/**
+ * What the controller acts on: one page, or a browser's tabs.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Target =
   | { readonly page: Page.Page }
   | { readonly browser: Browser.Service; readonly follow?: Follow | undefined };
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options {
   /** The user's task, which the input policy's judge reads as what authorizes a risky input. */
   readonly task?: string | undefined;
@@ -138,7 +193,13 @@ export interface Options {
 
 type Failing<A> = Effect.Effect<A, ToolError>;
 
-/** The controller, and the tab it acts on, which `BrowserTools` shares. */
+/**
+ * The controller, and the tab it acts on, which `BrowserTools` shares.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Controller {
   readonly actions: {
     readonly observe: Failing<Observation>;
@@ -579,7 +640,13 @@ const controlling = (context: Session): Controller["control"] => {
   };
 };
 
-/** The controller over `target`, and the tab it acts on. */
+/**
+ * The controller over `target`, and the tab it acts on.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.fnUntraced(function* (target: Target, options: Options = {}) {
   const context = yield* session(target, options);
   const { current, look, read, withTask } = context;

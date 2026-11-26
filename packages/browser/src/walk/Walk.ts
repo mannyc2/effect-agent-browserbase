@@ -18,31 +18,142 @@
  * calling, treating interruption or a missing receipt as unknown. Version 3 carries canonical typed
  * Actions. Prior string-action plans and unknown versions do not decode.
  *
+ * @stability stable
  * @since 0.3.0
  */
 export {
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   Expected,
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   Step,
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   Walk,
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   Receipt,
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   Stopped,
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
   Uncertain,
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
   ReplayError,
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
   ReplayErrorReason,
+  /**
+   * @stability stable
+   * @category guards
+   * @since 0.3.0
+   */
   isReplayError,
+  /**
+   * @stability stable
+   * @category guards
+   * @since 0.3.0
+   */
   isReplayErrorReason,
 } from "./internal/data.ts";
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export { fromEvents } from "./internal/record.ts";
+
+/**
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export { locate } from "./internal/targets.ts";
 
 export {
+  /**
+   * @stability stable
+   * @category combinators
+   * @since 0.3.0
+   */
   replay,
+  /**
+   * @stability stable
+   * @category combinators
+   * @since 0.3.0
+   */
   restore,
+  /**
+   * @stability stable
+   * @category combinators
+   * @since 0.3.0
+   */
   step,
+  /**
+   * @stability stable
+   * @category predicates
+   * @since 0.3.0
+   */
   repeatable,
+  /**
+   * @stability stable
+   * @category options
+   * @since 0.3.0
+   */
   type StepOptions,
+  /**
+   * @stability stable
+   * @category options
+   * @since 0.3.0
+   */
   type ReplayOptions,
 } from "./internal/execute.ts";
 
-export { Ambiguous, Drifted, Missing } from "./internal/choose.ts";
+export {
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
+  Ambiguous,
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
+  Drifted,
+  /**
+   * @stability stable
+   * @category errors
+   * @since 0.3.0
+   */
+  Missing,
+} from "./internal/choose.ts";

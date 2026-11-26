@@ -1,11 +1,18 @@
 /**
  * Pictures of a page: screenshots, and screencast frames stamped with the browser's clock.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Schema } from "effect";
 
-/** An encoded picture with its pixel dimensions. Crops also need their viewport origin. */
+/**
+ * An encoded picture with its pixel dimensions. Crops also need their viewport origin.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Image extends Schema.Class<Image>("effect-browser/Frame/Image")({
   data: Schema.Uint8Array,
   mediaType: Schema.Literals(["image/jpeg", "image/png"]),
@@ -16,14 +23,26 @@ export class Image extends Schema.Class<Image>("effect-browser/Frame/Image")({
 const Nonnegative = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
-/** Native CDP paint time mapped to the owning host clock, with transport uncertainty retained. */
+/**
+ * Native CDP paint time mapped to the owning host clock, with transport uncertainty retained.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class BrowserPaint extends Schema.TaggedClass<BrowserPaint>()("BrowserPaint", {
   timestamp: Schema.Finite,
   hostTime: Schema.Finite,
   uncertaintyMillis: Nonnegative,
 }) {}
 
-/** A screenshot's host capture interval; it has no native browser paint timestamp. */
+/**
+ * A screenshot's host capture interval; it has no native browser paint timestamp.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Screenshot extends Schema.TaggedClass<Screenshot>()("Screenshot", {
   hostTime: Schema.Finite,
   uncertaintyMillis: Nonnegative,
@@ -33,6 +52,10 @@ export class Screenshot extends Schema.TaggedClass<Screenshot>()("Screenshot", {
  * An image and its timing evidence. Paint time and screenshot capture time cannot be confused in
  * serialized data. `receivedAt` records delivery on the owning host's monotonic clock; it does
  * not make an old paint current.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   page: Schema.String,
@@ -74,7 +97,13 @@ export class Frame extends Schema.Class<Frame>("effect-browser/Frame")({
   }
 }
 
-/** Equal capture lineage survives an image copy; untagged pictures retain object identity only. */
+/**
+ * Equal capture lineage survives an image copy; untagged pictures retain object identity only.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.3.0
+ */
 export const sameCapture = (frame: Frame, other: Frame | undefined): boolean =>
   other !== undefined &&
   (frame === other ||
@@ -90,6 +119,10 @@ export const sameCapture = (frame: Frame, other: Frame | undefined): boolean =>
  * A page's capture counts, over its life or a window of the latest minute: what Chromium sent,
  * what readers got, and why the rest went no further. Frames that came late are counted apart from
  * those a reader lost.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Frame/CaptureStats")({
   received: Count,
@@ -135,6 +168,10 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Fra
  * Settings for a page's one native capture. Readers that join a running capture share its
  * settings: one without options accepts them, and one whose explicit options differ fails with
  * `InvalidRequest`.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
  */
 export interface ScreencastOptions {
   /** JPEG quality, 0 to 100. Defaults to 80. */

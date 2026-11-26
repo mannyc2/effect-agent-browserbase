@@ -6,6 +6,7 @@
  * `@effect-browser/browserbase` allocates a hosted one. Code written against `Browser` runs on all three.
  * A page is named by its CDP target id, so a new connection to the same browser finds it again.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import {
@@ -50,7 +51,13 @@ import * as Timeline from "./internal/timeline/events.ts";
 import * as Url from "./internal/url.ts";
 import type * as Page from "./Page.ts";
 
-/** A script that documents run before their own, such as a consent-banner remover. */
+/**
+ * A script that documents run before their own, such as a consent-banner remover.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface InitScript {
   /**
    * The documents that run it, by a pattern their address (`location.href`) matches; every
@@ -61,7 +68,13 @@ export interface InitScript {
   readonly source: string;
 }
 
-/** Consumer-owned decision for one request caught by a narrow URL pattern. */
+/**
+ * Consumer-owned decision for one request caught by a narrow URL pattern.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type RequestDecision =
   | { readonly _tag: "Allowed" }
   | { readonly _tag: "Refused"; readonly reason: string }
@@ -73,6 +86,11 @@ export type RequestDecision =
       readonly body: string;
     };
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface RequestPolicy {
   readonly patterns: ReadonlyArray<string>;
   /**
@@ -89,6 +107,11 @@ export interface RequestPolicy {
   readonly timeout?: Duration.Input | undefined;
 }
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options {
   /** Fixed viewport applied before each existing or newly opened page registers. */
   readonly viewport?: { readonly width: number; readonly height: number } | undefined;
@@ -129,17 +152,33 @@ export interface Options {
   readonly maxPages?: number | undefined;
 }
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface EventOptions {
   /** Resume after this sequence; 0 replays from the beginning if it is still retained. */
   readonly after?: number | undefined;
 }
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface SuspendOptions {
   /** Finite, nonnegative drain bound; defaults to the browser's navigationTimeout. */
   readonly drain?: Duration.Input | undefined;
 }
 
-/** When admitted input finished; events after `since` describe the handoff interval. */
+/**
+ * When admitted input finished; events after `since` describe the handoff interval.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Suspension extends Schema.Class<Suspension>("effect-browser/Browser/Suspension")({
   since: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   at: Schema.Finite,
@@ -152,6 +191,10 @@ export class Suspension extends Schema.Class<Suspension>("effect-browser/Browser
  * on the connection that drives the page. It is read-only. A page's session on it sends the
  * capture's commands alone, and the page's own session keeps its focus emulation, which keeps a
  * tab behind painting.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
  */
 export interface CaptureSource {
   /**
@@ -180,6 +223,11 @@ export interface CaptureSource {
   >;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Service {
   /** The provider's session id, or a local id. */
   readonly id: string;
@@ -217,6 +265,11 @@ export interface Service {
   readonly recentEvents: Effect.Effect<ReadonlyArray<Events.BrowserEvent>>;
 }
 
+/**
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
 export class Browser extends Context.Service<Browser, Service>()("effect-browser/Browser") {}
 
 /** The settings every page shares, and how many events the browser keeps, from its options. */
@@ -633,6 +686,10 @@ const runtime = Effect.fnUntraced(function* (
  * tracks its pages and events, for as long as the surrounding scope is open. Each page's protocol
  * session, capture and listeners end when that page closes or when the scope does, so a closed
  * tab retains nothing and the context keeps none of them afterwards.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const make = Effect.fn("Browser.make")(function* (
   context: BrowserContext,

@@ -13,6 +13,7 @@
  * screenshot's pixels. Mouse and keyboard input share a bounded pipeline, so pacing does not wait
  * for each protocol reply. Target lookup happens before the input is sent.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { type Clock, type Duration, Effect, Schema, type Scope, type Stream } from "effect";
@@ -40,12 +41,29 @@ import type { Poses } from "./Pose.ts";
 import { type Snapshot, type SnapshotOptions } from "./Snapshot.ts";
 import type { Window } from "./Window.ts";
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Point = Motion.Point;
 
-/** A ref from a snapshot, such as `"e12"`, or a viewport point. */
+/**
+ * A ref from a snapshot, such as `"e12"`, or a viewport point.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Target = string | Point;
 
-/** An integer rectangle in viewport CSS pixels. */
+/**
+ * An integer rectangle in viewport CSS pixels.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Region extends Schema.Class<Region>("effect-browser/Page/Region")({
   x: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   y: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -53,14 +71,26 @@ export class Region extends Schema.Class<Region>("effect-browser/Page/Region")({
   height: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
-/** A crop and its viewport origin: add that origin to a point read from the crop. */
+/**
+ * A crop and its viewport origin: add that origin to a point read from the crop.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Zoom extends Schema.Class<Zoom>("effect-browser/Page/Zoom")({
   page: Schema.String,
   region: Region,
   image: Image,
 }) {}
 
-/** The target as it read before input. Point coordinates are never snapped to another position. */
+/**
+ * The target as it read before input. Point coordinates are never snapped to another position.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class ResolvedTarget extends Schema.Class<ResolvedTarget>(
   "effect-browser/Page/ResolvedTarget",
 )({
@@ -73,15 +103,43 @@ export class ResolvedTarget extends Schema.Class<ResolvedTarget>(
   href: Schema.optional(Schema.String),
 }) {}
 
-/** Action options share the execution codec. */
+/**
+ * Action options share the execution codec.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type ClickOptions = typeof ClickOptionsSchema.Type;
+
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type TypeOptions = typeof TypeOptionsSchema.Type;
+
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type PressOptions = typeof PressOptionsSchema.Type;
+
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export type ScrollOptions = typeof ScrollOptionsSchema.Type;
 
 /**
  * How current a picture must be. The newest screencast frame serves when it qualifies, at no cost;
  * otherwise a new screenshot is taken.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
  */
 export interface FrameOptions {
   /**
@@ -97,7 +155,13 @@ export interface FrameOptions {
   readonly after?: "input" | undefined;
 }
 
-/** A screenshot reuses only a frame painted after the page's latest input, as `after: "input"`. */
+/**
+ * A screenshot reuses only a frame painted after the page's latest input, as `after: "input"`.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ScreenshotOptions {
   /** The oldest a reused frame may be, as for `frame`. Defaults to 250 milliseconds. */
   readonly maxAge?: Duration.Input | undefined;
@@ -114,7 +178,13 @@ export interface ScreenshotOptions {
   readonly scale?: "css" | "device" | undefined;
 }
 
-/** How a page paints for a scope; see `Page.paint`. */
+/**
+ * How a page paints for a scope; see `Page.paint`.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Paint {
   /** Device pixels to each CSS pixel, more than 0 and at most 4. The layout keeps its size. */
   readonly scale?: number | undefined;
@@ -125,6 +195,10 @@ export interface Paint {
 /**
  * What `find` looks for. Every rule given must hold; with none, it finds every element in scope
  * that has a role or is a control.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
  */
 export interface FindQuery {
   /** Narrow matching to this CSS selector. Invalid CSS fails InvalidRequest. */
@@ -155,6 +229,10 @@ export interface FindQuery {
 /**
  * An element's state as its markup gives it: `checked` for what can be checked, `expanded`,
  * `selected` and `pressed` where the page says either way, and `level` for headings.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const ElementState = Schema.Struct({
   disabled: Schema.Boolean,
@@ -166,9 +244,20 @@ export const ElementState = Schema.Struct({
   level: Schema.optional(Schema.Int),
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type ElementState = typeof ElementState.Type;
 
-/** An element `find` found: a ref for the actions, what it is, where it is and its state. */
+/**
+ * An element `find` found: a ref for the actions, what it is, where it is and its state.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Found extends Schema.Class<Found>("effect-browser/Page/Found")({
   ref: Schema.String,
   subject: Subject,
@@ -178,6 +267,11 @@ export class Found extends Schema.Class<Found>("effect-browser/Page/Found")({
   state: ElementState,
 }) {}
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface TextOptions {
   /** `"viewport"` (the default) reads what the viewport shows; a ref reads that element whole. */
   readonly scope?: string | undefined;
@@ -187,7 +281,13 @@ export interface TextOptions {
   readonly unmask?: boolean | undefined;
 }
 
-/** What a page showed as text: a line per block, with table cells apart by tabs. */
+/**
+ * What a page showed as text: a line per block, with table cells apart by tabs.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Text extends Schema.Class<Text>("effect-browser/Page/Text")({
   url: Schema.String,
   title: Schema.String,
@@ -198,13 +298,24 @@ export class Text extends Schema.Class<Text>("effect-browser/Page/Text")({
   at: Schema.Finite,
 }) {}
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ReadyOptions {
   /** How long recorded content must stay unchanged. Screen stillness is a separate feature. */
   readonly quietMillis?: number | undefined;
   readonly timeout?: Duration.Input | undefined;
 }
 
-/** The window `changes` reads, and whether to show what fields hold. */
+/**
+ * The window `changes` reads, and whether to show what fields hold.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ChangesOptions {
   /**
    * Where the window starts: the changes a previous read returned, to continue exactly where they
@@ -222,7 +333,13 @@ export interface ChangesOptions {
   readonly unmask?: boolean | undefined;
 }
 
-/** The window `window` reads, and whether to show what fields hold. */
+/**
+ * The window `window` reads, and whether to show what fields hold.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface WindowOptions {
   /**
    * Where the window starts: a previous window, to continue exactly where it ended; a frame, at its
@@ -243,6 +360,10 @@ export interface WindowOptions {
  * What the library knows of a page now, without asking it, each part with when it learned it, in
  * host monotonic milliseconds: a part's age is `at` less its time. Text read before the current
  * document began is left out, since it tells of a document that has gone.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class State extends Schema.Class<State>("effect-browser/Page/State")({
   page: Schema.String,
@@ -282,9 +403,18 @@ export class State extends Schema.Class<State>("effect-browser/Page/State")({
  *
  * Facts never come from what an element's text says. What an input means, such as a payment
  * or a deletion, takes a judge that reads the evidence in the {@link InputRequest}.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const Fact = Guard.Fact;
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export type Fact = typeof Fact.Type;
 
 /**
@@ -296,6 +426,10 @@ export type Fact = typeof Fact.Type;
  * field is replaced with {@link redacted}, here and in the recorded `Action`, and its key events
  * record `Unidentified` keys; `press` records the keys it is given. Validation before dispatch
  * binds the facts and the target, not the text around it, which live pages change freely.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Page/InputRequest")({
   page: Schema.String,
@@ -342,12 +476,20 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Pag
 /**
  * What replaces text typed into a `secret` field, in requests and in the recorded `Action`, and a
  * credential's value in every address the library reports.
+ *
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
  */
 export const redacted = Url.withheld;
 
 /**
  * Run page operations without waiting their turn: on a page busy with other operations, each fails
  * `Busy` at once, and `Browser.newPage` on a browser with `maxPages` open fails `Limit` at once.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
   Effect.provideService(effect, FailFast, true);
@@ -355,24 +497,51 @@ export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect
 /**
  * Give every action `effect` performs a caller's id, such as a model's tool call id, which its
  * recorded `Action` carries as `correlation`.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const correlate =
   (id: string) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
     Effect.provideService(effect, Correlation, id);
 
-/** Succeed to allow, fail to deny, or await an external signal to hold the input. */
+/**
+ * Succeed to allow, fail to deny, or await an external signal to hold the input.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
-/** What a wait requires of the query's matches. */
+/**
+ * What a wait requires of the query's matches.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type UntilWant = "some" | "none" | { readonly other: string };
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface UntilResult {
   readonly met: boolean;
   readonly mark: string;
 }
 
-/** Scoped access to one page's shared capture and its current-document evidence. */
+/**
+ * Scoped access to one page's shared capture and its current-document evidence.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Capture {
   readonly stream: Stream.Stream<Frame, BrowserError>;
   readonly current: Frame | undefined;
@@ -384,18 +553,34 @@ export interface Capture {
   }) => Effect.Effect<CaptureStats, BrowserError>;
 }
 
-/** Script values cross the page boundary through the caller's Schema. A bundler may rewrite functions. */
+/**
+ * Script values cross the page boundary through the caller's Schema. A bundler may rewrite functions.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ScriptOptions<A, Arg> {
   readonly arg: Arg;
   readonly result: Schema.Codec<A, unknown>;
 }
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface ActOptions<A, Arg> extends ScriptOptions<A, Arg> {
   readonly document: number;
   /** Supplying the read's connection also refuses a document counter from another connection. */
   readonly connection?: string | undefined;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Page {
   /** Decode and perform a data action through the same policy and lane as the named methods. */
   readonly perform: (action: Action) => Effect.Effect<ResolvedTarget | string | void, BrowserError>;

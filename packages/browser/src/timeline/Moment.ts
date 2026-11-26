@@ -22,6 +22,7 @@
  * A moment's picture is the newest frame if it was painted after the page's latest input and
  * completed action, at most 250 ms ago, else a new screenshot timed by its capture.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Duration, Effect, Option, Result, Schema } from "effect";
@@ -35,18 +36,32 @@ import type * as Page from "../Page.ts";
 import { Snapshot, type SnapshotOptions } from "../Snapshot.ts";
 import { describe, named, quoted, where } from "./internal/words.ts";
 
+/**
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export { Window } from "../Window.ts";
 import { Window } from "../Window.ts";
 
 /**
  * A window that ends at a picture of the page, its last frame, unless `missing` says why it has
  * none. Its frames are a few, spread over the window, so that it still begins where it starts.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export class Moment extends Window.extend<Moment>("effect-browser/timeline/Moment")({
   /** The page's outline at the end of the window, when the capture asked for it. */
   snapshot: Schema.optional(Snapshot),
 }) {}
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface CaptureOptions {
   /**
    * Where the window starts, as for `Page.window`: a previous window or moment, so that consecutive
@@ -88,6 +103,11 @@ const pictureOf = Effect.fnUntraced(function* (page: Page.Page) {
     : frame;
 });
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const capture = Effect.fn("Moment.capture")(function* (
   page: Page.Page,
   options: CaptureOptions = {},
@@ -148,7 +168,13 @@ export const capture = Effect.fn("Moment.capture")(function* (
 const recordOf = ({ changes }: Window) =>
   changes !== undefined && changes.from < changes.until ? changes : undefined;
 
-/** What a window says of its page at its end: what was still in flux, and what had settled. */
+/**
+ * What a window says of its page at its end: what was still in flux, and what had settled.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Account {
   /**
    * How long, in milliseconds, the page had been still at the end: since the last change in view
@@ -184,6 +210,10 @@ const underWay = (change: Change, until: number) => {
  * An account of the window's page at its end: how long it had been still, and which of its
  * changes were still under way and which had settled. A window whose record saw none of it has
  * neither.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const account = (window: Window): Account => {
   const record = recordOf(window);
@@ -426,6 +456,10 @@ const happened = (moment: Moment): ReadonlyArray<string> => {
  * frames captioned with their times, the last one "the moment" where it is the picture at its end.
  * Give a model its task with `Prompt.setSystem`, and add what the caller knows about the page as
  * more text.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const toPrompt = (moment: Moment): Prompt.Prompt => {
   const count = moment.frames.length;
@@ -465,5 +499,11 @@ export const toPrompt = (moment: Moment): Prompt.Prompt => {
   ]);
 };
 
-/** Describe one change using the same prose as moment prompts. */
+/**
+ * Describe one change using the same prose as moment prompts.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export { describe as describeChange } from "./internal/words.ts";

@@ -27,10 +27,20 @@ import type { Held, Step } from "../PageTime.ts";
 /**
  * What a frame shows over the page, and, on held time, where the page is scrolled to then and how
  * its elements are posed, with the page's poses open.
+ *
+ * @stability experimental
+ * @category models
+ * @since 0.3.0
  */
 export type At = Step;
 
-/** Frames at `fps` from `from` (0 by default) until before `to`, or at these times, in ms. */
+/**
+ * Frames at `fps` from `from` (0 by default) until before `to`, or at these times, in ms.
+ *
+ * @stability experimental
+ * @category models
+ * @since 0.3.0
+ */
 export type Times =
   | { readonly fps: number; readonly from?: number | undefined; readonly to: number }
   | ReadonlyArray<number>;
@@ -38,12 +48,21 @@ export type Times =
 /**
  * Where film time comes from: a held page, stepped to each frame; a page's own seek, given each
  * frame's time; or real time from the film's start, each frame taken when its time comes.
+ *
+ * @stability experimental
+ * @category models
+ * @since 0.3.0
  */
 export type Time =
   | Held
   | { readonly seek: (t: number) => Effect.Effect<void, BrowserError> }
   | "real";
 
+/**
+ * @stability experimental
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options<E = never> {
   readonly times: Times;
   readonly time: Time;
@@ -73,16 +92,33 @@ export interface Options<E = never> {
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const Millis = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 
-/** An input to send at film time `t`, in ms, with the caller's name for it. */
+/**
+ * An input to send at film time `t`, in ms, with the caller's name for it.
+ *
+ * @stability experimental
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Contact = Schema.Struct({
   t: Millis,
   action: Action,
   label: Schema.optional(Schema.String),
 });
 
+/**
+ * @stability experimental
+ * @category models
+ * @since 0.3.0
+ */
 export type Contact = typeof Contact.Type;
 
-/** An input as it was sent, at its film time. */
+/**
+ * An input as it was sent, at its film time.
+ *
+ * @stability experimental
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Sent extends Schema.Class<Sent>("effect-browser/presentation/Film/Sent")({
   t: Millis,
   label: Schema.optional(Schema.String),
@@ -93,7 +129,13 @@ export class Sent extends Schema.Class<Sent>("effect-browser/presentation/Film/S
   document: Count,
 }) {}
 
-/** The page's move to a new document, at the film time of the first frame that found it. */
+/**
+ * The page's move to a new document, at the film time of the first frame that found it.
+ *
+ * @stability experimental
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Passage extends Schema.Class<Passage>("effect-browser/presentation/Film/Passage")({
   t: Millis,
   /** The address of the document it left. */
@@ -106,7 +148,13 @@ export class Passage extends Schema.Class<Passage>("effect-browser/presentation/
   layout: Layout,
 }) {}
 
-/** One frame: its picture at film time `t`, in ms, and what taking it cost in real time. */
+/**
+ * One frame: its picture at film time `t`, in ms, and what taking it cost in real time.
+ *
+ * @stability experimental
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Shot extends Schema.Class<Shot>("effect-browser/presentation/Film/Shot")({
   index: Count,
   t: Millis,
@@ -132,7 +180,13 @@ export class Shot extends Schema.Class<Shot>("effect-browser/presentation/Film/S
   at: Schema.Finite,
 }) {}
 
-/** What a film cost, from its shots. */
+/**
+ * What a film cost, from its shots.
+ *
+ * @stability experimental
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Summary extends Schema.Class<Summary>("effect-browser/presentation/Film/Summary")({
   frames: Count,
   retries: Count,
@@ -261,6 +315,10 @@ const keyOf = (content: Content | undefined) =>
 /**
  * Frames of `page` at `times`, one at a time: each moves the page to its film time, draws what
  * `at` gives there when it changed, and takes a new screenshot, again after one that times out.
+ *
+ * @stability experimental
+ * @category constructors
+ * @since 0.3.0
  */
 export const frames = <E = never>(
   page: Page,
@@ -368,7 +426,13 @@ export const frames = <E = never>(
     }),
   );
 
-/** Run a film's shots, which a caller has usually written out on the way, to what they cost. */
+/**
+ * Run a film's shots, which a caller has usually written out on the way, to what they cost.
+ *
+ * @stability experimental
+ * @category combinators
+ * @since 0.3.0
+ */
 export const summary = <E, R>(shots: Stream.Stream<Shot, E, R>): Effect.Effect<Summary, E, R> =>
   Stream.runFold(
     shots,
