@@ -89,9 +89,8 @@ path, such as `effect-browser/timeline/Moment`.
   `Hosted` (`browser`, `session` and `release`), beside `Browser`.
 - `ContextLease.ContextLease` is a `Context.Reference` rather than a service class. Its default is
   one lease shared by every writer in the process, so `Browserbase.make`, `layer`, `generations`,
-  `reconcile` and `verifyContext` require only `BrowserbaseClient`, and a program no longer
-  provides `ContextLease.layer`. That layer still gives a program a lease of its own, as a
-  `Layer<never>`.
+  `reconcile` and `verifyContext` require only `BrowserbaseClient`, and a program need not provide
+  `ContextLease.layer`. That layer still gives a program a lease of its own, as a `Layer<never>`.
 - `Browser.newPage(url?)` opens a page in the `Browser` the context holds, as `HttpClient.get`
   calls the client the context holds.
 
