@@ -18,7 +18,7 @@ it.live("reattachment gives document evidence a fresh connection identity", () =
   Effect.gen(function* () {
     const proxy = yield* behindProxy();
 
-    const one = yield* Cdp.open({ endpoint: proxy.endpoint, id: "same-session" }).pipe(
+    const one = yield* Cdp.make({ endpoint: proxy.endpoint, id: "same-session" }).pipe(
       Random.withSeed("reconnect"),
     );
 
@@ -28,7 +28,7 @@ it.live("reattachment gives document evidence a fresh connection identity", () =
     yield* page.goto(html("two"));
     const before = yield* first(page);
 
-    const two = yield* Cdp.open({ endpoint: proxy.endpoint, id: "same-session" }).pipe(
+    const two = yield* Cdp.make({ endpoint: proxy.endpoint, id: "same-session" }).pipe(
       Random.withSeed("reconnect"),
     );
 

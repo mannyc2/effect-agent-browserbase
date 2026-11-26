@@ -11,7 +11,7 @@ for (const [gap, times] of [
 ] as const)
   it.live(`refuses repeated press gap ${gap} x ${times} before any keydown`, () =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
 
       const page = yield* browser.newPage(
         "data:text/html,<script>window.presses=0;onkeydown=()=>window.presses++</script>",

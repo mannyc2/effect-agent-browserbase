@@ -219,6 +219,9 @@ export interface Service {
 
 export class Browser extends Context.Service<Browser, Service>()("effect-browser/Browser") {}
 
+/** Open a page in the context's `Browser`, at `url` when given. */
+export const newPage = (url?: string) => Effect.flatMap(Browser, (browser) => browser.newPage(url));
+
 /** The settings every page shares, and how many events the browser keeps, from its options. */
 const settingsOf = Effect.fnUntraced(function* (options: Options) {
   const invalid = (detail: string) => undispatched("make", new InvalidRequest({ detail }));

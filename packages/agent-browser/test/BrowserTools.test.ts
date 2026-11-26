@@ -385,7 +385,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
   for (const vision of [true, "moments"] as const)
     it.effect(`keeps queued crops out of a newly selected tab with vision ${vision}`, () =>
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const site = yield* Site;
 
         yield* browser.newPage(site.url("/form"));

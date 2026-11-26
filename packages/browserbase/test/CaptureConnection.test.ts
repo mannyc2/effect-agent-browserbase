@@ -30,7 +30,7 @@ const hosted = <A, E, R>(
   use: (hosted: Browserbase.Hosted) => Effect.Effect<A, E, R>,
   options: Browserbase.Options = {},
 ) =>
-  Browserbase.open(options).pipe(
+  Browserbase.make(options).pipe(
     Effect.flatMap(use),
     Effect.scoped,
     Effect.provide(

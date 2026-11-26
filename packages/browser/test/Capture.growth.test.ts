@@ -8,7 +8,7 @@ import * as TestCdp from "./support/TestCdp.ts";
 it.live("an implicit capture follows viewport growth beyond its initial cap", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
-      const browser = yield* Chromium.open({ viewport: { width: 400, height: 300 } });
+      const browser = yield* Chromium.make({ viewport: { width: 400, height: 300 } });
 
       const page = yield* browser.newPage(
         "data:text/html,<body><script>setInterval(()=>document.body.style.background=`hsl(${Date.now()%360} 80%25 50%25)`,30)</script>",

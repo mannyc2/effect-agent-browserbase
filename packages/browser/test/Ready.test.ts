@@ -612,7 +612,7 @@ it.live("is never ready on a tab behind another that paints nothing", () =>
       const proxy = yield* behindProxy();
 
       proxy.swallow = (command) => command.method === "Emulation.setFocusEmulationEnabled";
-      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
       const behind = yield* browser.newPage("data:text/html,<h1>Prepared off stage</h1>");
 
       yield* browser.newPage("data:text/html,<h1>On stage</h1>");
@@ -645,7 +645,7 @@ it.live("never takes a stalled connection for a still screen", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
       const proxy = yield* behindProxy();
-      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
 
       for (const still of ["screen", "foreground"] as const)
         for (const [toward, slow] of [
@@ -695,7 +695,7 @@ it.live(
     TestCdp.withCdp(
       Effect.gen(function* () {
         const proxy = yield* behindProxy();
-        const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+        const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
         const page = yield* browser.newPage(ticking);
 
         yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
@@ -722,7 +722,7 @@ for (const failure of [
 ]) {
   it.live("stillness retains a capture " + failure.reason._tag + " before its deadline", () =>
     Effect.gen(function* () {
-      const browser = yield* Chromium.open();
+      const browser = yield* Chromium.make();
       const original = yield* browser.newPage("data:text/html,<h1>Ready</h1>");
       let finalized = false;
 
@@ -793,7 +793,7 @@ for (const [name, options] of [
 
 it.live("page.ready refuses invalid quiet intervals", () =>
   Effect.gen(function* () {
-    const browser = yield* Chromium.open();
+    const browser = yield* Chromium.make();
     const page = yield* browser.newPage("data:text/html,<h1>Ready</h1>");
 
     for (const quietMillis of [-1, Number.NaN, Infinity]) {
@@ -810,7 +810,7 @@ it.live("page.ready refuses invalid quiet intervals", () =>
 it.live("foreground motion after navigation cannot inherit the previous document's mask", () =>
   Effect.gen(function* () {
     const faults = yield* TestCdp.make();
-    const browser = yield* faults.provide(Chromium.open());
+    const browser = yield* faults.provide(Chromium.make());
     const page = yield* browser.newPage();
 
     const native = yield* faults.native(page.id);
