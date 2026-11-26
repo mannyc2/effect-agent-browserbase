@@ -1,6 +1,6 @@
 /** Serializable tab selection and context placement, independent of browser effects. */
 import { Schema } from "effect";
-import { Zoom } from "effect-browser/Page";
+import { Zoom } from "effect-browser/Frame";
 import { Snapshot } from "effect-browser/Snapshot";
 import { Window } from "effect-browser/Window";
 import { Prompt } from "effect/ai";

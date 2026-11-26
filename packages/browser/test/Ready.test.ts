@@ -8,6 +8,7 @@ import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { Closed, Failed, undispatched } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as TestPage from "../src/testing/TestPage.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
@@ -59,11 +60,14 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
   requestAnimationFrame(draw);
 </script>`,
         );
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-        yield* page.state.pipe(
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* Frame.recent(page).pipe(
           Effect.repeat({
             schedule: Schedule.spaced("10 millis"),
-            until: (state) => state.frame !== undefined,
+            until: (frames) => frames.length > 0,
           }),
           Effect.timeout("5 seconds"),
         );
@@ -95,9 +99,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         yield* Effect.sleep("20 millis");
 
-        const picture = yield* page
-          .zoom({ x: 5, y: 5, width: 160, height: 90 })
-          .pipe(Effect.forkScoped);
+        const picture = yield* Frame.zoom(page, { x: 5, y: 5, width: 160, height: 90 }).pipe(
+          Effect.forkScoped,
+        );
 
         yield* Deferred.await(entered).pipe(Effect.timeout("5 seconds"));
         assert.strictEqual(yield* outcome("300 millis"), "Timeout");
@@ -429,15 +433,19 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             }, color),
           );
 
+        const capture = yield* Frame.capture(page);
+
         const paint = (color: string) =>
           Effect.gen(function* () {
-            const before = (yield* page.captureStats()).accepted;
+            const before = (yield* capture.stats()).accepted;
 
             yield* draw(color);
-            yield* page.captureStats().pipe(
+            yield* capture.stats().pipe(
               Effect.flatMap(({ accepted }) =>
-                page.state.pipe(
-                  Effect.map(({ frame }) => {
+                Frame.recent(page).pipe(
+                  Effect.map((frames) => {
+                    const frame = frames.at(-1);
+
                     if (accepted <= before || frame === undefined) return false;
                     const picture = jpegjs.decode(frame.data, { useTArray: true });
                     const green = picture.data[(50 * picture.width + 100) * 4 + 1];
@@ -457,7 +465,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             );
           });
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* capture.stream.pipe(Stream.runDrain, Effect.forkScoped);
         yield* paint("black");
 
         const waiting = yield* Stillness.wait(page, {
@@ -478,7 +486,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         // CI #38297573716 showed that a resize need not arrive within 200 ms. Wait for its
         // actual viewport lookup, then hold that answer while ready establishes its reference.
-        const before = yield* page.captureStats();
+        const before = yield* capture.stats();
 
         resize = "waiting";
 
@@ -509,7 +517,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           waitFor("resize viewport request"),
           Effect.ensuring(Fiber.interrupt(repainting)),
         );
-        const heldFrames = yield* page.captureStats();
+        const heldFrames = yield* capture.stats();
 
         assert.isAbove(heldFrames.received, before.received);
         assert.strictEqual(heldFrames.accepted, before.accepted);
@@ -527,7 +535,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* Effect.sleep("350 millis");
         viewportReply.resolve();
 
-        const adopted = yield* page.captureStats().pipe(
+        const adopted = yield* capture.stats().pipe(
           Effect.repeat({
             schedule: Schedule.spaced("5 millis"),
             until: ({ accepted }) => accepted > before.accepted,
@@ -550,7 +558,10 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       const page = yield* blank;
 
       yield* show(page, stage(moving, seconds));
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+      yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
       yield* Effect.sleep("800 millis");
       yield* page.click({ x: 200, y: 150 });
 
@@ -654,7 +665,10 @@ it.live("never takes a stalled connection for a still screen", () =>
         ] as const) {
           const page = yield* browser.newPage(reels(slow));
 
-          yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+          yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
           yield* Effect.sleep(Duration.millis(300));
           const clicked = yield* browser.now;
 
@@ -698,11 +712,14 @@ it.live(
         const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
         const page = yield* browser.newPage(ticking);
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-        yield* page.state.pipe(
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* Frame.recent(page).pipe(
           Effect.repeat({
             schedule: Schedule.spaced("10 millis"),
-            until: (state) => state.frame !== undefined,
+            until: (frames) => frames.length > 0,
           }),
         );
         yield* page.changes();
@@ -726,10 +743,10 @@ for (const failure of [
       const original = yield* browser.newPage("data:text/html,<h1>Ready</h1>");
       let finalized = false;
 
-      const page: Page = {
-        ...original,
+      const page = yield* TestPage.withPictures(original, (own) => ({
+        ...own,
         capture: (options) =>
-          original.capture(options).pipe(
+          own.capture(options).pipe(
             Effect.map((capture) => ({
               ...capture,
               stream: Stream.fail(failure).pipe(
@@ -741,7 +758,7 @@ for (const failure of [
               ),
             })),
           ),
-      };
+      }));
 
       const result = yield* Stillness.wait(page, {
         quietMillis: 10,
@@ -827,8 +844,10 @@ it.live("foreground motion after navigation cannot inherit the previous document
       ),
     );
     yield* page.goto("https://foreground.test/first");
-    yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
-    yield* page.captureStats().pipe(
+    const capture = yield* Frame.capture(page);
+
+    yield* capture.stream.pipe(Stream.runDrain, Effect.forkScoped);
+    yield* capture.stats().pipe(
       Effect.repeat({
         schedule: Schedule.spaced("10 millis"),
         until: ({ accepted }) => accepted >= 8,
@@ -847,9 +866,10 @@ it.live("foreground motion after navigation cannot inherit the previous document
 
     yield* page.click(link!.ref);
     const state = yield* page.state;
+    const frame = (yield* Frame.recent(page)).at(-1);
 
-    assert.notStrictEqual(state.frame?.document, state.document, "new document paint is withheld");
-    assert.isDefined(state.frame, "the previous capture remains visible in history");
+    assert.notStrictEqual(frame?.document, state.document, "new document paint is withheld");
+    assert.isDefined(frame, "the previous capture remains visible in history");
     const sampled = yield* Deferred.make<void>();
 
     const observed: Page = {

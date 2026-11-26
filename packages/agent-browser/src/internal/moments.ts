@@ -9,7 +9,7 @@ import { AgentInputError } from "@yielded/agent/agent-error";
 import type { RunContextRequest } from "@yielded/agent/run-options";
 import { Duration, Effect, Ref } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
-import type { Image } from "effect-browser/Frame";
+import type { Image, Zoom } from "effect-browser/Frame";
 import type * as Page from "effect-browser/Page";
 import { Moment } from "effect-browser/timeline";
 import { Prompt } from "effect/ai";
@@ -32,7 +32,7 @@ const file = (image: Image) =>
  * in pictures of `scale` pixels to a CSS pixel.
  */
 export const cropped = (
-  crops: ReadonlyArray<Page.Zoom>,
+  crops: ReadonlyArray<Zoom>,
   page: string,
   scale = 1,
 ): ReadonlyArray<Prompt.UserMessagePart> => {
@@ -55,7 +55,7 @@ export const cropped = (
 };
 
 /** A moment's stable account and its separately retained, time-labeled pictures. */
-const shown = (moment: Moment.Moment, crops: ReadonlyArray<Page.Zoom>, turn: number) => {
+const shown = (moment: Moment.Moment, crops: ReadonlyArray<Zoom>, turn: number) => {
   const label = text(
     `Moment before turn ${turn}. Pictures mentioned below are separate references, shown only for the latest three moments.`,
   );
@@ -103,7 +103,7 @@ const shown = (moment: Moment.Moment, crops: ReadonlyArray<Page.Zoom>, turn: num
  */
 export const make = Effect.fnUntraced(function* (
   look: Effect.Effect<Page.Page, BrowserError>,
-  crops: Effect.Effect<ReadonlyArray<Page.Zoom>>,
+  crops: Effect.Effect<ReadonlyArray<Zoom>>,
   onMoment: (moment: Moment.Moment) => Effect.Effect<void>,
   initial: AdapterState.Moments = AdapterState.moments(),
 ) {

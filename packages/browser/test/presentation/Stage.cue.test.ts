@@ -5,7 +5,7 @@ import { Duration, Effect, Exit, Fiber, Option, Schedule, Scope, Stream } from "
 
 import { Browser } from "../../src/Browser.ts";
 import { Closed, consequence } from "../../src/BrowserError.ts";
-import type { Frame } from "../../src/Frame.ts";
+import * as Frame from "../../src/Frame.ts";
 import * as Stage from "../../src/presentation/Stage.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
@@ -31,7 +31,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       const revealed = yield* browser.newPage("data:text/html,<h1>Prepared reveal</h1>");
       const stage = yield* Stage.make();
       const seen: Array<Stage.Shown> = [];
-      const frames: Array<Frame> = [];
+      const frames: Array<Frame.Frame> = [];
 
       yield* stage.shown({ hold: "100 millis" }).pipe(
         Stream.runForEach((value) => Effect.sync(() => void seen.push(value))),
@@ -143,14 +143,16 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       assert.deepStrictEqual(consequence(pageGone), { lost: "page", repeat: "safe" });
       const owner = yield* Scope.fork(yield* Effect.scope);
       const cue = yield* stage.cue(page).pipe(Scope.provide(owner));
+      // A lease the cue's owner also holds, for counts that outlive it.
+      const { stats } = yield* Frame.capture(page).pipe(Scope.provide(owner));
 
       yield* cue.ready;
       yield* Scope.close(owner, Exit.void);
       yield* Effect.sleep("100 millis");
-      const before = yield* page.captureStats();
+      const before = yield* stats();
 
       yield* Effect.sleep("200 millis");
-      assert.strictEqual((yield* page.captureStats()).received, before.received);
+      assert.strictEqual((yield* stats()).received, before.received);
       const failure = yield* Effect.flip(cue.commit());
 
       assert.deepStrictEqual(yield* stage.current, Option.some(onAir));

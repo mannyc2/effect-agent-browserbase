@@ -5,7 +5,7 @@ import { Effect, Fiber, Schedule, Stream } from "effect";
 
 import { make as makeBrowser } from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
-import type { Frame, Image } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -35,9 +35,11 @@ it.live("a cached frame from the prior document cannot win on its clock stamp", 
 
       const site = yield* Site;
       const page = yield* browser.newPage(site.url("/spinning"));
-      const frames: Array<Frame> = [];
+      const frames: Array<Frame.Frame> = [];
 
-      const capture = yield* page.screencast().pipe(
+      const capture = yield* Stream.unwrap(
+        Effect.map(Frame.capture(page), ({ stream }) => stream),
+      ).pipe(
         Stream.runForEach((frame) => Effect.sync(() => void frames.push(frame))),
         Effect.forkScoped,
       );
@@ -59,9 +61,9 @@ it.live("a cached frame from the prior document cannot win on its clock stamp", 
       assert.isBelow(old.document, state.document);
       assert.isAbove(old.hostTime - old.timing.uncertaintyMillis, state.committedAt ?? 0);
 
-      const reads: ReadonlyArray<Effect.Effect<Image, BrowserError>> = [
-        page.screenshot(),
-        Effect.map(page.frame(), (frame) => frame.image),
+      const reads: ReadonlyArray<Effect.Effect<Frame.Image, BrowserError>> = [
+        Effect.map(Frame.read(page, { after: "input" }), (frame) => frame.image),
+        Effect.map(Frame.read(page), (frame) => frame.image),
       ];
 
       for (const read of reads) {

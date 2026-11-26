@@ -3,6 +3,7 @@ import { Clock, Deferred, Duration, Effect, Stream } from "effect";
 
 import { Browser } from "../../src/Browser.ts";
 import type { BrowserEvent } from "../../src/BrowserEvent.ts";
+import * as Frame from "../../src/Frame.ts";
 import * as BrowserClock from "../../src/internal/clock.ts";
 import * as Openings from "../../src/internal/page/openings.ts";
 import * as PageImpl from "../../src/internal/page/page.ts";
@@ -251,14 +252,12 @@ export const setup = Effect.fnUntraced(function* (
     track,
     mapping,
     /** A capture maps the browser's clock, as on any watched page; input never measures it. */
-    mapClock: page
-      .screencast()
-      .pipe(
-        Stream.take(1),
-        Stream.runDrain,
-        Effect.timeout("10 seconds"),
-        Effect.andThen(Effect.sync(() => dispatches.splice(0))),
-      ),
+    mapClock: Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+      Stream.take(1),
+      Stream.runDrain,
+      Effect.timeout("10 seconds"),
+      Effect.andThen(Effect.sync(() => dispatches.splice(0))),
+    ),
     age: (millis: number) => {
       ahead += millis;
     },

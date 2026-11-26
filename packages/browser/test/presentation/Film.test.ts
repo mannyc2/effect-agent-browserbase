@@ -7,9 +7,10 @@ import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../../src/Browser.ts";
 import { Failed, Timeout, undispatched } from "../../src/BrowserError.ts";
-import type { Image } from "../../src/Frame.ts";
+import type * as Frame from "../../src/Frame.ts";
 import type { Page } from "../../src/Page.ts";
 import * as Film from "../../src/presentation/Film.ts";
+import * as TestPage from "../../src/testing/TestPage.ts";
 
 const blank = Effect.gen(function* () {
   const browser = yield* Browser;
@@ -70,7 +71,7 @@ const slide = `<style>
 </style><button id=go onclick="box.classList.add('go')">go</button><div id=box></div>`;
 
 // The first column on row `y` whose pixel `matches`, or -1.
-const column = (image: Image, y: number, matches: (rgb: readonly number[]) => boolean) => {
+const column = (image: Frame.Image, y: number, matches: (rgb: readonly number[]) => boolean) => {
   const decoded = jpegjs.decode(image.data, { useTArray: true });
 
   for (let x = 0; x < decoded.width; x++) {
@@ -366,19 +367,17 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
 
       yield* show(page, slide);
 
-      // The page, whose second screenshot fails for `reason`.
-      const flaky = (reason: Timeout | Failed): Page => {
+      // The page, whose second picture fails for `reason`.
+      const flaky = (reason: Timeout | Failed) => {
         let calls = 0;
 
-        return {
-          ...page,
-          screenshot: (options) =>
+        return TestPage.withPictures(page, (own) => ({
+          ...own,
+          read: (options) =>
             Effect.suspend(() =>
-              ++calls === 2
-                ? Effect.fail(undispatched("screenshot", reason))
-                : page.screenshot(options),
+              ++calls === 2 ? Effect.fail(undispatched("frame", reason)) : own.read(options),
             ),
-        };
+        }));
       };
 
       const film = (on: Page, retries?: number) =>
@@ -386,16 +385,16 @@ layer(Chromium.layer({ pageTime: true, viewport: { width: 400, height: 300 } }),
           Film.frames(on, { times: [0, 10, 20], time: { seek: () => Effect.void }, retries }),
         );
 
-      const summary = yield* film(flaky(new Timeout({ millis: 10 })));
+      const summary = yield* film(yield* flaky(new Timeout({ millis: 10 })));
 
       assert.strictEqual(summary.frames, 3);
       assert.strictEqual(summary.retries, 1);
       assert.strictEqual(
-        (yield* Effect.flip(film(flaky(new Timeout({ millis: 10 })), 0))).reason._tag,
+        (yield* Effect.flip(film(yield* flaky(new Timeout({ millis: 10 })), 0))).reason._tag,
         "Timeout",
       );
       assert.strictEqual(
-        (yield* Effect.flip(film(flaky(new Failed({ detail: "gone" }))))).reason._tag,
+        (yield* Effect.flip(film(yield* flaky(new Failed({ detail: "gone" }))))).reason._tag,
         "Failed",
       );
     }),

@@ -5,13 +5,14 @@
  * navigation.
  * Features use the same documented Page contract as consumers.
  */
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 
 import type { Frame } from "../../Frame.ts";
 import { type Page, State } from "../../Page.ts";
 import * as ActionPort from "../action-port.ts";
 import * as Actions from "../input/actions.ts";
 import * as Pictures from "../pictures/pictures.ts";
+import { Pictures as Slot } from "../pictures/slot.ts";
 import * as Layouts from "../reading/layout.ts";
 import * as Reading from "../reading/reading.ts";
 import * as Ready from "../reading/ready.ts";
@@ -44,8 +45,8 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const viewports = lane.shared<Effect.Success<Page["viewport"]>>("viewport", true);
 
   // What the page's parts already know, asking it nothing: its documents as its own session saw
-  // them, the newest frame, and the viewport's text as last read since the document began.
-  const state = Effect.map(capture.latest, (latest) => {
+  // them, and the viewport's text as last read since the document began.
+  const state = Effect.sync(() => {
     const { document, url } = bridge.frameTag();
     const committedAt = page.activity.documentAt;
 
@@ -57,7 +58,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       document,
       committedAt: Number.isFinite(committedAt) ? committedAt : undefined,
       load: bridge.loaded(),
-      frame: Option.getOrUndefined(latest),
       overlay: overlay.drawn(),
       text: reading.viewedSince(committedAt),
     });
@@ -95,16 +95,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     clock: page.clock,
     afterInput,
     until: reading.until,
-    capture: (options) =>
-      capture.open(options).pipe(
-        Effect.map((lease) => ({
-          ...lease,
-          isCurrent: current,
-          confirm,
-          sync: capture.sync,
-          stats: pictures.captureStats,
-        })),
-      ),
     id,
     url: Effect.sync(() => Url.redact(playwright.url())),
     title: titles("", navigation.title.pipe(within("title"))).pipe(span("Page.title"), owned),
@@ -112,10 +102,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     // Playwright answers once the page has closed, and at once for one already closed.
     close: native("close", () => playwright.close()),
     snapshot: reading.snapshot,
-    screenshot: pictures.screenshot,
-    frame: pictures.frame,
-    zoom: pictures.zoom,
-    paint: pictures.paint,
     viewport: viewports("", viewport.viewportFor("viewport").pipe(within("viewport"))).pipe(
       span("Page.viewport"),
       owned,
@@ -130,11 +116,23 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     window: Window.make(page, changes, capture.recent),
     state,
     ready: Ready.make(page, bridge),
-    screencast: capture.stream,
-    captureStats: pictures.captureStats,
-    recentFrames: capture.recent,
     recentEvents: options.recentEvents,
   };
 
-  return assembled;
+  return Slot.with(assembled, {
+    read: pictures.frame,
+    zoom: pictures.zoom,
+    capture: (options) =>
+      capture.open(options).pipe(
+        Effect.map((lease) => ({
+          ...lease,
+          isCurrent: current,
+          confirm,
+          sync: capture.sync,
+          stats: pictures.captureStats,
+        })),
+      ),
+    recent: capture.recent,
+    paint: pictures.paint,
+  });
 });

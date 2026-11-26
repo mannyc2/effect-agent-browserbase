@@ -32,12 +32,12 @@ import {
   Timeout,
   undispatched,
 } from "../BrowserError.ts";
-import type { CaptureStats, Frame, ScreencastOptions } from "../Frame.ts";
+import * as Frame from "../Frame.ts";
 import { monotonicMillis } from "../internal/clock.ts";
-import type { Capture, Page } from "../Page.ts";
+import type { Page } from "../Page.ts";
 import * as Lifecycle from "./internal/feed.ts";
 
-export interface Options extends ScreencastOptions {
+export interface Options extends Frame.ScreencastOptions {
   /** Bound for each first-frame wait. Defaults to 5 seconds. */
   readonly firstFrame?: Duration.Input | undefined;
 }
@@ -63,9 +63,9 @@ export interface Cue {
 
 /** What the output establishes at nondecreasing host times; frames retain their capture times. */
 export type Shown =
-  | { readonly _tag: "Painted"; readonly frame: Frame; readonly at: number }
-  | { readonly _tag: "Still"; readonly frame: Frame; readonly at: number }
-  | { readonly _tag: "Stalled"; readonly frame: Frame; readonly at: number }
+  | { readonly _tag: "Painted"; readonly frame: Frame.Frame; readonly at: number }
+  | { readonly _tag: "Still"; readonly frame: Frame.Frame; readonly at: number }
+  | { readonly _tag: "Stalled"; readonly frame: Frame.Frame; readonly at: number }
   | { readonly _tag: "Gone"; readonly page: string; readonly at: number };
 
 export interface Stage {
@@ -79,30 +79,30 @@ export interface Stage {
     readonly hold: Duration.Input;
   }) => Stream.Stream<Shown, BrowserError>;
   /** Capture-timed current-page paint; use `shown` for output time. Readers retain 16 frames. */
-  readonly frames: Stream.Stream<Frame>;
+  readonly frames: Stream.Stream<Frame.Frame>;
   readonly current: Effect.Effect<Option.Option<Page>>;
   readonly stats: (options?: {
     readonly window?: Duration.Input | undefined;
-  }) => Effect.Effect<Option.Option<CaptureStats>, BrowserError>;
+  }) => Effect.Effect<Option.Option<Frame.CaptureStats>, BrowserError>;
 }
 
 interface Feed {
   readonly page: Page;
-  capture: Capture | undefined;
+  capture: Frame.Capture | undefined;
   readonly scope: Scope.Closeable;
-  readonly changed: PubSub.PubSub<Frame>;
+  readonly changed: PubSub.PubSub<Frame.Frame>;
   state: Lifecycle.State;
   fiber: Fiber.Fiber<void, BrowserError> | undefined;
 }
 interface Paint {
   readonly feed: Feed;
-  readonly frame: Frame;
+  readonly frame: Frame.Frame;
   readonly at: number;
 }
 
 interface Evidence {
   readonly feed: Feed;
-  readonly frame: Frame;
+  readonly frame: Frame.Frame;
   readonly value: Shown;
 }
 
@@ -198,7 +198,7 @@ const ordered = () => {
 };
 
 /** A terminal capture can know the connection is gone before the page receives its close event. */
-const confirm = (feed: Feed, frame: Frame) => {
+const confirm = (feed: Feed, frame: Frame.Frame) => {
   const exit = feed.fiber?.pollUnsafe();
 
   const failure =
@@ -214,7 +214,7 @@ const confirm = (feed: Feed, frame: Frame) => {
 const evidence = (
   output: PubSub.PubSub<Paint>,
   current: () =>
-    | { readonly feed: Feed; readonly frame: Frame; readonly changedAt: number }
+    | { readonly feed: Feed; readonly frame: Frame.Frame; readonly changedAt: number }
     | undefined,
   now: () => number,
   hold: Duration.Duration,
@@ -305,9 +305,9 @@ const evidence = (
 const openFeed = (
   page: Page,
   owner: Scope.Scope,
-  settings: ScreencastOptions,
+  settings: Frame.ScreencastOptions,
   current: () => Feed | undefined,
-  publish: (feed: Feed, frame: Frame) => Effect.Effect<unknown>,
+  publish: (feed: Feed, frame: Frame.Frame) => Effect.Effect<unknown>,
 ) =>
   Effect.gen(function* () {
     const scope = yield* Scope.fork(owner);
@@ -317,7 +317,7 @@ const openFeed = (
       page,
       capture: undefined,
       scope,
-      changed: yield* PubSub.sliding<Frame>({ capacity: 1, replay: 1 }),
+      changed: yield* PubSub.sliding<Frame.Frame>({ capacity: 1, replay: 1 }),
       state: Lifecycle.initial,
       fiber: undefined,
     };
@@ -330,7 +330,7 @@ const openFeed = (
     );
     yield* Effect.addFinalizer(() => (current() === feed ? Effect.void : stop(feed)));
 
-    const accept = (frame: Frame) =>
+    const accept = (frame: Frame.Frame) =>
       Effect.gen(function* () {
         const state = yield* page.state;
 
@@ -350,7 +350,7 @@ const openFeed = (
       Effect.gen(function* () {
         update(feed, { _tag: "Reset" });
 
-        const capture = yield* page.capture(settings);
+        const capture = yield* Frame.capture(page, settings);
 
         feed.capture = capture;
         const { stream, current: frame } = capture;
@@ -410,14 +410,14 @@ export const make = Effect.fn("Stage.make")(function* (
   const switching = ordered();
 
   let showing:
-    | { readonly feed: Feed; readonly presented: Presented; frame: Frame; changedAt: number }
+    | { readonly feed: Feed; readonly presented: Presented; frame: Frame.Frame; changedAt: number }
     | undefined;
 
   let painted = Number.NEGATIVE_INFINITY;
 
   yield* Effect.addFinalizer(() => PubSub.shutdown(output));
 
-  const publish = (feed: Feed, frame: Frame, at = frame.hostTime) =>
+  const publish = (feed: Feed, frame: Frame.Frame, at = frame.hostTime) =>
     Effect.suspend(() => {
       painted = Math.max(painted, at);
       if (showing !== undefined) {
@@ -536,9 +536,12 @@ export const make = Effect.fn("Stage.make")(function* (
     },
     frames: Stream.fromPubSub(output).pipe(Stream.map(({ frame }) => frame)),
     current: Effect.sync(() => Option.fromNullishOr(showing?.feed.page)),
-    stats: (options = {}) =>
-      showing === undefined
+    stats: (options = {}) => {
+      const capture = showing?.feed.capture;
+
+      return capture === undefined
         ? Effect.succeedNone
-        : Effect.asSome(showing.feed.page.captureStats({ window: options.window ?? "1 second" })),
+        : Effect.asSome(capture.stats({ window: options.window ?? "1 second" }));
+    },
   } satisfies Stage;
 });

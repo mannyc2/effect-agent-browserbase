@@ -45,13 +45,7 @@ const openers = new Set(["Chromium.open", "Browserbase.open", "Latency.open"]);
 
 // Looks at a page outside any tool call: the agent's observation after each turn, an arm's own
 // picture or outline, and a moment's capture.
-const looks = new Set([
-  "Page.observe",
-  "Page.screenshot",
-  "Page.snapshot",
-  "Page.frame",
-  "Moment.capture",
-]);
+const looks = new Set(["Page.observe", "Page.snapshot", "Frame.read", "Moment.capture"]);
 
 const isTool = (span: Tracer.Span) =>
   span.attributes.get("gen_ai.operation.name") === "execute_tool";

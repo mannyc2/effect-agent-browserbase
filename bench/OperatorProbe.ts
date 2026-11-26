@@ -1,6 +1,7 @@
 /** H3: a person signs in through a private viewer while automated input remains suspended. */
 import { Effect, Schema, Stream } from "effect";
 import type * as Browser from "effect-browser/Browser";
+import * as Frame from "effect-browser/Frame";
 
 import { refuse } from "./Budget.ts";
 import * as Fixtures from "./FixtureRoutes.ts";
@@ -105,7 +106,7 @@ export const make = <E, R>(
                       : Effect.fail(error),
                 }),
               );
-              yield* scratch.screenshot();
+              yield* Frame.read(scratch, { after: "input" });
               checks.reads++;
               checks.signedIn = false;
               for (const page of yield* browser.pages) {

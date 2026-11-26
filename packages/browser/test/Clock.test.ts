@@ -4,7 +4,7 @@ import { Clock, Duration, Effect, Layer, Schedule, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
-import type { Frame } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Supervisor from "../src/supervisor/Supervisor.ts";
 import * as Moment from "../src/timeline/Moment.ts";
@@ -108,9 +108,9 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
           yield* page.goto((yield* Site).url("/form"));
 
-          const frames = yield* page
-            .screencast()
-            .pipe(Stream.take(1), Stream.runCollect, Effect.timeout(Duration.seconds(10)));
+          const frames = yield* Stream.unwrap(
+            Effect.map(Frame.capture(page), ({ stream }) => stream),
+          ).pipe(Stream.take(1), Stream.runCollect, Effect.timeout(Duration.seconds(10)));
 
           const frame = frames[0];
 
@@ -188,7 +188,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         const page = yield* browser.firstPage;
 
         yield* page.goto((yield* Site).url("/form"));
-        const frame = yield* page.frame();
+        const frame = yield* Frame.read(page);
 
         yield* Effect.yieldNow;
         const opened = states.find((event) => event.state._tag === "Open");
@@ -201,7 +201,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         time.monotonic = 5500;
         yield* sessions.rotate().pipe(Effect.provide(TestClock.layer()));
         const rotated = yield* sessions.use(({ value }) => Effect.succeed(value));
-        const after = yield* (yield* rotated.firstPage).frame();
+        const after = yield* Frame.read(yield* rotated.firstPage);
 
         yield* Effect.yieldNow;
         const next = states.find((event) => event.number === 2 && event.state._tag === "Open");
@@ -222,12 +222,12 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const time = { wall: 1_900_000_000_000, monotonic: 5000 };
         const { page } = yield* setup(controlledClock(yield* Clock.Clock, time));
-        const frames: Array<Frame> = [];
+        const frames: Array<Frame.Frame> = [];
 
         yield* page.goto(
           "data:text/html,<canvas id=c width=300 height=300></canvas><script>const g=c.getContext('2d');(function f(t){g.fillStyle='hsl('+(t/5%360)+',80%,50%)';g.fillRect(0,0,300,300);requestAnimationFrame(f)})(0)</script>",
         );
-        yield* page.screencast().pipe(
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
           Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
           Effect.forkScoped,
         );

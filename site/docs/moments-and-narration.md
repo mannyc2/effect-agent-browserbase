@@ -13,7 +13,7 @@ A screenshot says what a page shows; a **moment** says what it showed and what c
 const watch = Effect.gen(function* () {
   const page = yield* (yield* Browser.Browser).firstPage;
 
-  yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+  yield* Frame.capture(page);
   yield* page.goto("https://lichess.org/tv");
   yield* Effect.sleep("5 seconds");
 

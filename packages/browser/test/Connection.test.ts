@@ -4,15 +4,17 @@ import { Effect, Exit, Option, Random, Schema, Stream } from "effect";
 
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import * as Cdp from "../src/Cdp.ts";
-import { Frame } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 
 const html = (title: string) => `data:text/html,${encodeURIComponent(`<h1>${title}</h1>`)}`;
 
 const first = (page: Page) =>
-  page
-    .screencast()
-    .pipe(Stream.runHead, Effect.map(Option.getOrThrow), Effect.timeout("5 seconds"));
+  Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+    Stream.runHead,
+    Effect.map(Option.getOrThrow),
+    Effect.timeout("5 seconds"),
+  );
 
 it.live("reattachment gives document evidence a fresh connection identity", () =>
   Effect.gen(function* () {
@@ -34,7 +36,7 @@ it.live("reattachment gives document evidence a fresh connection identity", () =
 
     const reattached = Option.getOrThrow(yield* two.page(page.id));
     const after = yield* first(reattached);
-    const screenshot = yield* reattached.frame();
+    const screenshot = yield* Frame.read(reattached);
 
     assert.isString(one.connection);
     assert.isAbove(one.connection.length, 0);
@@ -47,8 +49,8 @@ it.live("reattachment gives document evidence a fresh connection identity", () =
     assert.strictEqual(after.connection, two.connection);
     assert.strictEqual(screenshot.connection, two.connection);
 
-    const wire = yield* Schema.encodeEffect(Frame)(after);
-    const json = Schema.fromJsonString(Schema.toCodecJson(Frame));
+    const wire = yield* Schema.encodeEffect(Frame.Frame)(after);
+    const json = Schema.fromJsonString(Schema.toCodecJson(Frame.Frame));
     const serialized = yield* Schema.encodeEffect(json)(after);
     const decoded = yield* Schema.decodeEffect(json)(serialized);
 
@@ -59,7 +61,7 @@ it.live("reattachment gives document evidence a fresh connection identity", () =
     const { connection: _connection, ...ambiguous } = wire;
 
     assert.isTrue(
-      Exit.isFailure(yield* Schema.decodeUnknownEffect(Frame)(ambiguous).pipe(Effect.exit)),
+      Exit.isFailure(yield* Schema.decodeUnknownEffect(Frame.Frame)(ambiguous).pipe(Effect.exit)),
     );
   }),
 );

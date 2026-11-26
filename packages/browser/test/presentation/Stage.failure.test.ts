@@ -17,9 +17,8 @@ import {
 import { TestClock } from "effect/testing";
 
 import { Browser, make as makeBrowser } from "../../src/Browser.ts";
-import { BrowserError, Closed, consequence } from "../../src/BrowserError.ts";
+import { BrowserError, Closed, consequence, refuse } from "../../src/BrowserError.ts";
 import { Frame, Screenshot } from "../../src/Frame.ts";
-import type { Page } from "../../src/Page.ts";
 import * as Stage from "../../src/presentation/Stage.ts";
 import * as TestPage from "../../src/testing/TestPage.ts";
 import * as TestCdp from "../support/TestCdp.ts";
@@ -61,8 +60,8 @@ const scripted = Effect.fnUntraced(function* (
     { id, session: "scripted", connection: "fixture-connection" },
   );
 
-  const page: Page = {
-    ...test.page,
+  const page = yield* TestPage.withPictures(test.page, (own) => ({
+    ...own,
     capture: () =>
       Effect.succeed({
         stream: source,
@@ -75,9 +74,9 @@ const scripted = Effect.fnUntraced(function* (
             return false;
           }),
         sync: Effect.void,
-        stats: test.page.captureStats,
+        stats: () => refuse("captureStats", "a scripted capture keeps no counts"),
       }),
-  };
+  }));
 
   const paintAt = (at: number) =>
     Queue.offer(

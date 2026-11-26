@@ -1,5 +1,5 @@
 /** A scoped, seeded Page for deterministic stories. Effects are explicit data, never page code. */
-import { Clock, Deferred, Duration, Effect, Exit, Scope, Stream } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Scope } from "effect";
 
 import { type Action, nameOf, targetOf, recorded } from "../../Action.ts";
 import { type BrowserError, Closed, NotActionable, undispatched } from "../../BrowserError.ts";
@@ -8,6 +8,7 @@ import { checked, methods } from "../../internal/action-port.ts";
 import { monotonicMillis } from "../../internal/clock.ts";
 import type { Gate } from "../../internal/input/gate.ts";
 import * as Lane from "../../internal/page/lane.ts";
+import { Pictures } from "../../internal/pictures/slot.ts";
 import * as Timeline from "../../internal/timeline/events.ts";
 import * as Url from "../../internal/url.ts";
 import { type Page, ResolvedTarget, State, Text, type UntilResult } from "../../Page.ts";
@@ -314,24 +315,12 @@ export const makeIn = Effect.fnUntraced(function* (
           url: Url.redact(model.get().url ?? "about:blank"),
         }),
     ),
-    screenshot: (options) =>
-      options === undefined
-        ? Effect.map(evidence.frame(), (frame) => frame.image)
-        : unsupported("screenshot"),
-    frame: evidence.frame,
-    zoom: () => unsupported("zoom"),
     layout: () => unsupported("layout"),
     overlay: unsupported("overlay"),
     poses: unsupported("poses"),
     hold: unsupported("hold"),
-    paint: () => unsupported("paint"),
     ready: () =>
       model.get().ready === true ? read("ready", () => undefined) : unsupported("ready"),
-    capture: evidence.capture,
-    screencast: (options) =>
-      Stream.unwrap(Effect.map(evidence.capture(options), (capture) => capture.stream)),
-    captureStats: () => unsupported("captureStats"),
-    recentFrames: evidence.recentFrames,
     changes: evidence.changes,
     window: () => unsupported("window"),
     recentEvents: Effect.map(timeline.recent, (records) =>
@@ -348,7 +337,13 @@ export const makeIn = Effect.fnUntraced(function* (
   );
 
   return {
-    page,
+    page: Pictures.with(page, {
+      read: evidence.frame,
+      zoom: () => unsupported("zoom"),
+      capture: evidence.capture,
+      recent: evidence.recentFrames,
+      paint: () => unsupported("paint"),
+    }),
     emitFrame: evidence.emitFrame,
     event: (event: Events.BrowserEvent) =>
       Effect.sync(() => {

@@ -1,9 +1,15 @@
 /** Explicit picture and change evidence; bounded delivery and the production change fold. */
-import { Duration, Effect, Option, PubSub, Stream, type Take } from "effect";
+import { Duration, Effect, Option, PubSub, type Scope, Stream, type Take } from "effect";
 
 import { type BrowserError, InvalidRequest, NotFound, undispatched } from "../../BrowserError.ts";
 import { Change, Changes } from "../../Change.ts";
-import { type Frame, sameCapture } from "../../Frame.ts";
+import {
+  type Capture,
+  type Frame,
+  type FrameOptions,
+  sameCapture,
+  type ScreencastOptions,
+} from "../../Frame.ts";
 import { fold } from "../../internal/timeline/fold.inpage.ts";
 import type { Page } from "../../Page.ts";
 import * as Model from "./model.ts";
@@ -46,9 +52,12 @@ export const make = Effect.fnUntraced(function* (options: {
       yield* PubSub.publish(feed, [frame]);
     });
 
-  const frame: Page["frame"] = (asked) =>
+  // A seeded page shows only the frames its story emits, so its newest current one is the frame
+  // after its latest input too; a new picture, as a PNG or in device pixels, it cannot take.
+  const frame = (asked?: FrameOptions): Effect.Effect<Frame, BrowserError> =>
     Effect.suspend(() => {
-      if (asked?.after !== undefined) return unsupported("frame:after");
+      if (asked?.format === "png") return unsupported("frame:format");
+      if (asked?.scale === "device") return unsupported("frame:scale");
       const age = Duration.fromInput(asked?.maxAge ?? Duration.millis(250));
 
       const found = frames.findLast(
@@ -118,7 +127,7 @@ export const make = Effect.fnUntraced(function* (options: {
       });
     });
 
-  const capture: Page["capture"] = (asked) =>
+  const capture = (asked?: ScreencastOptions): Effect.Effect<Capture, BrowserError, Scope.Scope> =>
     asked?.quality === undefined && asked?.size === undefined
       ? Effect.gen(function* () {
           yield* model.check("capture");

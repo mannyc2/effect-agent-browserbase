@@ -6,6 +6,7 @@ import { Duration, Effect, Stream } from "effect";
 import { PNG } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
+import * as Frame from "../src/Frame.ts";
 import * as Layout from "../src/Layout.ts";
 import type { Page } from "../src/Page.ts";
 import * as Film from "../src/presentation/Film.ts";
@@ -106,14 +107,14 @@ layer(Chromium.layer({ pageTime: true, deviceScaleFactor: 2 }), {
           .read(Buffer.from(data))
           .data.some((value, index) => index % 4 !== 3 && value < 200);
 
-      const picture = yield* tab.screenshot({ clip, format: "png", scale: "device" });
+      const { image: picture } = yield* Frame.zoom(tab, clip, { format: "png", scale: "device" });
 
       assert.deepStrictEqual([picture.width, picture.height], [180, 100]);
       assert.isTrue(inked(picture.data), "the box's picture");
       const poses = yield* tab.poses;
 
       yield* poses.set([{ ref: place.ref, sx: 0, sy: 0 }]);
-      const lifted = yield* tab.screenshot({ clip, format: "png", scale: "device" });
+      const { image: lifted } = yield* Frame.zoom(tab, clip, { format: "png", scale: "device" });
 
       assert.isFalse(inked(lifted.data), "nothing where the box was");
       assert.deepStrictEqual((yield* tab.changes({ since: recorded })).changes, []);

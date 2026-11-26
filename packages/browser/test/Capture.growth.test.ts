@@ -3,6 +3,7 @@ import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Effect, Schedule, Stream } from "effect";
 
+import * as Frame from "../src/Frame.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("an implicit capture follows viewport growth beyond its initial cap", () =>
@@ -14,14 +15,14 @@ it.live("an implicit capture follows viewport growth beyond its initial cap", ()
         "data:text/html,<body><script>setInterval(()=>document.body.style.background=`hsl(${Date.now()%360} 80%25 50%25)`,30)</script>",
       );
 
-      const first = yield* page.capture();
+      const first = yield* Frame.capture(page);
 
       yield* first.stream.pipe(Stream.take(1), Stream.runDrain);
       yield* Effect.promise(() =>
         TestCdp.nativePage(page).setViewportSize({ width: 800, height: 600 }),
       );
 
-      const grown = yield* page.recentFrames.pipe(
+      const grown = yield* Frame.recent(page).pipe(
         Effect.map((frames) => frames.find((frame) => frame.width === 800 && frame.height === 600)),
         Effect.repeat({
           until: (value) => value !== undefined,
@@ -31,7 +32,7 @@ it.live("an implicit capture follows viewport growth beyond its initial cap", ()
       );
 
       assert.isDefined(grown);
-      const joining = yield* page.capture({ size: { width: 800, height: 600 } });
+      const joining = yield* Frame.capture(page, { size: { width: 800, height: 600 } });
 
       assert.strictEqual(joining.current?.width, 800);
     }).pipe(Effect.scoped),

@@ -10,7 +10,7 @@ import { chromium } from "playwright-core";
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
-import type { Frame } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -135,9 +135,12 @@ it.live("captures an unsized page at its CSS viewport and reuses current frames"
       );
       const viewport = yield* page.viewport;
 
-      yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+      yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
       yield* Effect.sleep("500 millis");
-      const { frame } = yield* page.state;
+      const frame = (yield* Frame.recent(page)).at(-1);
 
       if (frame === undefined) return yield* Effect.die("no frame came");
 
@@ -146,9 +149,9 @@ it.live("captures an unsized page at its CSS viewport and reuses current frames"
       let reused = 0;
 
       for (let index = 0; index < 5; index++) {
-        const shot = yield* page.screenshot();
+        const shot = yield* Frame.read(page, { after: "input" });
 
-        if ((yield* page.recentFrames).some((recent) => recent.data === shot.data)) reused++;
+        if ((yield* Frame.recent(page)).some((recent) => recent.data === shot.data)) reused++;
         yield* Effect.sleep("50 millis");
       }
       assert.isAbove(reused, 0);
@@ -169,16 +172,17 @@ it.live("keeps a crop's frames out of a running capture, but not the page's own"
         Effect.gen(function* () {
           const page = yield* browser.newPage(`data:text/html,${encodeURIComponent(body)}`);
           const { width, height } = yield* page.viewport;
-          const frames: Array<Frame> = [];
+          const frames: Array<Frame.Frame> = [];
           const replies: Array<number> = [];
+          const capture = yield* Frame.capture(page);
 
-          yield* page.screencast().pipe(
+          yield* capture.stream.pipe(
             Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
             Effect.forkScoped,
           );
           yield* Effect.sleep("500 millis");
           for (let index = 0; index < 10; index++) {
-            yield* page.zoom({ x: 5, y: 5, width: 160, height: 90 });
+            yield* Frame.zoom(page, { x: 5, y: 5, width: 160, height: 90 });
             replies.push(yield* browser.now);
             yield* Effect.sleep("250 millis");
           }
@@ -189,7 +193,7 @@ it.live("keeps a crop's frames out of a running capture, but not the page's own"
             afterCrops: frames.filter((frame) =>
               replies.some((at) => frame.receivedAt >= at && frame.receivedAt <= at + 40),
             ),
-            stats: yield* page.captureStats(),
+            stats: yield* capture.stats(),
           };
         });
 
@@ -247,10 +251,10 @@ it.live("keeps the screen another session emulates through crops and pictures", 
         }),
       );
       assert.deepStrictEqual(yield* reads, [1280, 720, true]);
-      yield* page.zoom({ x: 10, y: 10, width: 160, height: 90 });
+      yield* Frame.zoom(page, { x: 10, y: 10, width: 160, height: 90 });
       assert.deepStrictEqual(yield* reads, [1280, 720, true]);
-      yield* page.zoom({ x: 40, y: 20, width: 90, height: 160 });
-      yield* page.screenshot({ maxAge: 0 });
+      yield* Frame.zoom(page, { x: 40, y: 20, width: 90, height: 160 });
+      yield* Frame.read(page, { maxAge: 0 });
       assert.deepStrictEqual(yield* reads, [1280, 720, true]);
     }).pipe(Effect.scoped),
   ),
@@ -278,13 +282,13 @@ it.live("leaves the page's view as it was after crops asked together", () =>
         other.send("Page.captureScreenshot", { format: "png" }).then(({ data }) => data),
       );
 
-      yield* page.screenshot({ maxAge: 0 });
+      yield* Frame.read(page, { maxAge: 0 });
       const before = yield* whole;
 
       yield* Effect.all(
         [
-          page.zoom({ x: 10, y: 10, width: 200, height: 100 }),
-          page.zoom({ x: 300, y: 50, width: 120, height: 300 }),
+          Frame.zoom(page, { x: 10, y: 10, width: 200, height: 100 }),
+          Frame.zoom(page, { x: 300, y: 50, width: 120, height: 300 }),
         ],
         { concurrency: "unbounded" },
       );

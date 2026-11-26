@@ -4,6 +4,7 @@ import { Duration, Effect } from "effect";
 import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
 import * as TestCdp from "./support/TestCdp.ts";
@@ -79,7 +80,7 @@ const x = (page: Page) =>
 
 // The left edge of the red box a new screenshot shows on its row.
 const redFrom = (page: Page) =>
-  page.screenshot({ maxAge: 0, quality: 100 }).pipe(
+  Frame.read(page, { maxAge: 0, quality: 100 }).pipe(
     Effect.map((image) => {
       const decoded = jpegjs.decode(image.data, { useTArray: true });
       const row = 125 * decoded.width * 4;

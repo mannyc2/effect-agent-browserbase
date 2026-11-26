@@ -34,10 +34,12 @@ const sharedInternals = new Set([
   "internal/matching.ts",
   "internal/url.ts",
 ]);
-// Test services share exactly the ownership algorithms they contract-test; runtime features get no exception.
+// Test services share exactly the ownership algorithms they contract-test, and the slots a page
+// keeps for its modules' functions; runtime features get no exception.
 const testingPlumbing = new Set([
   "internal/input/gate.ts",
   "internal/page/lane.ts",
+  "internal/pictures/slot.ts",
   "internal/timeline/events.ts",
   "internal/timeline/fold.inpage.ts",
 ]);

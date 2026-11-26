@@ -5,8 +5,9 @@ import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Exit, Layer, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
-import type { Frame } from "effect-browser/Frame";
+import type * as Frame from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
+import { TestPage } from "effect-browser/testing";
 import type { LanguageModel, Model, Prompt, Response } from "effect/ai";
 
 import { noCalls } from "../Budget.ts";
@@ -124,22 +125,24 @@ const describeWith = (
     const page = yield* browser.firstPage;
 
     const prompts: Array<Prompt.Prompt> = [];
-    const histories: Array<ReadonlyArray<Frame>> = [];
-    const currents: Array<Frame> = [];
+    const histories: Array<ReadonlyArray<Frame.Frame>> = [];
+    const currents: Array<Frame.Frame> = [];
     let frameAfter = 0;
 
-    const observed: Page = {
+    const clicking: Page = {
       ...page,
       click: (...target) =>
         Effect.sync(() => {
           clicks++;
         }).pipe(Effect.andThen(page.click(...target))),
-      recentFrames: page.recentFrames.pipe(
-        Effect.tap((frames) => Effect.sync(() => histories.push(frames))),
-      ),
-      frame: (options) =>
-        page.frame(options).pipe(Effect.tap((frame) => Effect.sync(() => currents.push(frame)))),
     };
+
+    const observed = yield* TestPage.withPictures(clicking, (own) => ({
+      ...own,
+      recent: own.recent.pipe(Effect.tap((frames) => Effect.sync(() => histories.push(frames)))),
+      read: (options) =>
+        own.read(options).pipe(Effect.tap((frame) => Effect.sync(() => currents.push(frame)))),
+    }));
 
     const model = modelOf((options) =>
       // The scripted model reads the fixture it describes; a failure there is the test's own.
@@ -180,7 +183,7 @@ const describeWith = (
     Effect.provide(Chromium.layer({ frameHistory: options.frameHistory ?? frameHistory })),
   );
 
-const paintTime = (frame: Frame): number => {
+const paintTime = (frame: Frame.Frame): number => {
   if (frame.timing._tag !== "BrowserPaint")
     throw new Error("benchmark evidence requires a native browser paint");
 

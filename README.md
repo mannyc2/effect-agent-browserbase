@@ -140,7 +140,7 @@ const VideoPrompt = Schema.Struct({
 const watch = Effect.gen(function* () {
   const page = yield* (yield* Browser.Browser).firstPage;
 
-  yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+  yield* Frame.capture(page);
   yield* page.goto("https://example.com/live-chart");
   yield* Effect.sleep("5 seconds");
 
@@ -219,7 +219,7 @@ on a browser's tabs. `PageControl.make` gives the controller alone, for a host w
 - The browser answers dialogs itself, so `respond_dialog` is left out and the port refuses it.
   Yielded's `screenshot` tool is left out too: the pictures before each turn replace it. A host
   that wants a PNG takes one from the controller's `current` page with
-  `page.screenshot({ format: "png" })`.
+  `Frame.read(page, { format: "png" })`.
 - The run is Yielded's: its policy bounds turns, tool calls, time and spend, and it adds approval,
   context management, durable runs and run events. See its
   [documentation](https://github.com/yielded-dev/agent).
@@ -259,7 +259,7 @@ on a browser's tabs. `PageControl.make` gives the controller alone, for a host w
 - Events, frame arrivals and moments share the owning browser’s host monotonic clock in milliseconds.
   `Browser.now` reads that clock. These stamps measure elapsed time, not calendar dates.
   Native frames map browser paint to `hostTime` with explicit uncertainty; screenshot timing has
-  separate provenance. `Page.captureStats` reports frame gaps, filtering, late frames apart from
+  separate provenance. A capture's `stats` report frame gaps, filtering, late frames apart from
   lost ones and the acknowledgement backlog, over a page's life or a window of the latest minute.
 - `Browser.events()` carries the timed input track for the consumer’s cursor rendering: complete
   glide plans, submission receipts, button and key phases, wheel input and cursor shape. Each page
