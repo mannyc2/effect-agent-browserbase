@@ -65,7 +65,7 @@ const llmsTxt = () =>
     "",
     `> ${site.tagline}`,
     "",
-    "effect-browser drives Chromium or a Browserbase session from Effect: pages, a compact outline a model can act on, screencast frames, and moments, an account in pictures and words of what a page showed over a window of time. Agents run on Yielded Agent. Every page below is markdown.",
+    "effect-browser drives Chromium or a Browserbase session from Effect: pages, a compact outline a model can act on, screencast frames, and moments, an account in pictures and words of what a page showed over a window of time. An agent's browser tools run in any effect/ai loop, or on Yielded Agent. Every page below is markdown.",
     "",
     ...(["Start", "Guides", "Site"] as const).flatMap((section) => [
       `## ${section}`,

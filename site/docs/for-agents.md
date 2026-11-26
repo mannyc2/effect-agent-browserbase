@@ -9,7 +9,7 @@ This site is written to be read by agents as well as people. Everything a page s
 - A page served as HTML names its markdown in a `Link` header and in a `<link rel="alternate" type="text/markdown">` in its head.
 - [/llms.txt](/llms.txt) lists every page with a one-line summary and its markdown link.
 - [/llms-full.txt](/llms-full.txt) is every page in one file.
-- [/api/v1/pages.json](/api/v1/pages.json) lists the pages as JSON: slug, title, summary and both URLs.
+- [/api/v1/pages.json](/api/v1/pages.json) lists the pages as JSON: slug, title, summary, section and both URLs.
 
 A replay embedded in a page appears in its markdown as links to the replay's data files, and `/replay/<id>.md` describes any replay. `robots.txt` allows all crawlers and signals `ai-train=yes, search=yes, ai-input=yes`.
 

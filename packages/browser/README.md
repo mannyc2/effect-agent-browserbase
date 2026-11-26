@@ -44,7 +44,7 @@ README says what that risks and how signals end the browser.
 | `Film`         | `effect-browser/presentation` | A page filmed as a function of time: frames, inputs on their frames, passages     |
 | `Walk`         | `effect-browser/walk`         | A walk recorded from a page's events, replayed on a fresh page by subject         |
 | `Policy`       | `effect-browser/policy`       | Judges that read what an input means, and a guard that acts on them unattended    |
-| `Supervisor`   | `effect-browser/supervisor`   | A browser kept open across losses and session ends, as generations                |
+| `Supervisor`   | `effect-browser/supervisor`   | A resource, such as a browser, kept serving across losses and rotation            |
 | `Release`      | `effect-browser/supervisor`   | What a provider said of a release: `Confirmed` or `Unconfirmed`                   |
 | `TestBrowser`  | `effect-browser/testing`      | A seeded browser over the production lane, suspension gate and event timeline     |
 | `TestPage`     | `effect-browser/testing`      | A deterministic page seeded from data, without page code                          |
@@ -546,11 +546,12 @@ never plans a glide: its pointer jumps, or moves in eight short steps while drag
 For recorded human strokes, install the optional `@effect-browser/human-strokes` package and give
 its planner to the presenter:
 
+<!-- prettier-ignore -->
 ```ts
 import * as HumanStrokes from "@effect-browser/human-strokes";
 import { Presentation } from "effect-browser/presentation";
 
-const presenter = yield * Presentation.make({ motion: yield * HumanStrokes.motion });
+const presenter = yield* Presentation.make({ motion: yield* HumanStrokes.motion });
 ```
 
 That package bundles 32,130 attributed CC BY 4.0 strokes, preserving their original sample times.
@@ -568,8 +569,9 @@ nothing, for example keys, or typing into the focused field.
 
 A presenter's `lead` runs after the announcement and before the glide:
 
+<!-- prettier-ignore -->
 ```ts
-const presenter = yield * Presentation.make({ lead: (announced) => performer.arrive(announced) });
+const presenter = yield* Presentation.make({ lead: (announced) => performer.arrive(announced) });
 ```
 
 Use it to give whatever is shown performing the input, such as a character, time to arrive. It
@@ -649,12 +651,13 @@ Closing an abandoned cue stops its capture. `present(page, { at })` is the conve
 and committing in one call. A stage uses the first page's owning clock; cueing a page with a
 different clock fails `InvalidRequest`, since host times from those clocks cannot be compared.
 
+<!-- prettier-ignore -->
 ```ts
 // Inside a scoped program: lineSent yields Some(hostTime) when the line goes out, or None if dropped.
-const cue = yield * stage.cue(page);
-yield * cue.ready;
-const sent = yield * lineSent;
-if (Option.isSome(sent)) yield * cue.commit({ at: sent.value });
+const cue = yield* stage.cue(page);
+yield* cue.ready;
+const sent = yield* lineSent;
+if (Option.isSome(sent)) yield* cue.commit({ at: sent.value });
 ```
 
 Commits serialize in call order. A switch waits until `at` and for admitted old-page input and
@@ -870,8 +873,9 @@ Unknown consequential input requires positive durable evidence before continuati
 section above describes that recovery contract. `Snapshot.until` provides the underlying bounded
 observation without deciding whether an action may be repeated:
 
+<!-- prettier-ignore -->
 ```ts
-const observed = yield * Snapshot.until(page, { text: "Order 42" }, "some", "5 seconds");
+const observed = yield* Snapshot.until(page, { text: "Order 42" }, "some", "5 seconds");
 ```
 
 The mark from `Snapshot.until` compares matching elements' text, values and states except focus. Keep it
@@ -935,15 +939,15 @@ New and queued writes fail `Suspended`, with
 Already-held authority refuses input before invoking an input guard; a guard already waiting is
 checked again at admission. Reads, captures and events continue.
 
+<!-- prettier-ignore -->
 ```ts
-yield *
-  Effect.gen(function* () {
-    const paused = yield* browser.suspend();
-    // An event reader can resume from paused.since; paused.at is host monotonic time.
-    const page = yield* browser.firstPage;
-    yield* Frame.read(page);
-    yield* operatorDone;
-  }).pipe(Effect.scoped);
+yield* Effect.gen(function* () {
+  const paused = yield* browser.suspend();
+  // An event reader can resume from paused.since; paused.at is host monotonic time.
+  const page = yield* browser.firstPage;
+  yield* Frame.read(page);
+  yield* operatorDone;
+}).pipe(Effect.scoped);
 // Input resumes after this scope, provided no other suspension still holds it.
 ```
 
@@ -1003,6 +1007,11 @@ film time however long the last one took to picture. Each part is a module of it
   scroll, poses and overlay, sends the `inputs` due on that frame, and takes a screenshot. A
   document that replaces the page is a `Passage`: the film holds its time while it loads, measures
   its layout with the film's `picks`, and passes it to `at` from then on.
+
+`Film` is `@stability experimental`, so Effect's language service warns (`experimentalApiUsage`)
+at each use of it. A project whose build denies warnings allows it among the
+`@effect/language-service` plugin's options in its tsconfig, as this repository's
+`tsconfig.base.json` does: `"allowedExperimentalApis": ["effect-browser/presentation/Film"]`.
 
 ```ts
 const film = Effect.gen(function* () {

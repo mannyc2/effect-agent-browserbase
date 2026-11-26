@@ -2,9 +2,241 @@
 
 Each release lists what changed since the release before it. From 0.3 on, `effect-browser`,
 `effect-browserbase` and `effect-browser-human-strokes` are released together at one version, and
-`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them. Where a release was checked beyond
-`bun run ready`, its entry ends with how. Entries before 0.3 are short summaries drawn from the
-release tags.
+`effect-agent-browser`, rebuilt on Yielded Agent, rejoins them. From `0.3.0-beta.25` they are
+`effect-browser` and the `@effect-browser` scope's `chromium`, `browserbase`, `human-strokes` and
+`yielded`. Where a release was checked beyond `bun run ready`, its entry ends with how. Entries
+before 0.3 are short summaries drawn from the release tags.
+
+## 0.3.0-beta.25
+
+**Breaking.** The packages move into the `@effect-browser` scope, Chromium becomes a package of its
+own, the core's features become subpaths, and an agent's browser tools move into the core as
+`effect-browser/ai`, for any `effect/ai` loop (#324, #327). The Page's reading, pictures and filming
+become functions in their types' modules (#326, #333). Errors take identifiers and guards (#329),
+and constructors and layers take Effect's names and shapes (#325). Names that read two ways are
+renamed, durations are `Duration.Input` and more functions are `dual` (#334), and every public
+export is tagged as Effect tags its own (#332). There are no aliases or shims: each name this entry
+gives as removed or renamed is gone, and the entry says what replaced it.
+
+### Packages
+
+| `0.3.0-beta.24`                        | This release                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------ |
+| `effect-browser`                       | `effect-browser`                                                         |
+| `effect-browser/Chromium`              | `@effect-browser/chromium`                                               |
+| `effect-browserbase`                   | `@effect-browser/browserbase`                                            |
+| `effect-browser-human-strokes`         | `@effect-browser/human-strokes`                                          |
+| `effect-agent-browser`                 | `effect-browser/ai` for the tools, `@effect-browser/yielded` for Yielded |
+| `effect-browser-tradingview` (private) | `@effect-browser/tradingview` (private)                                  |
+
+- `@effect-browser/chromium` holds `Chromium`, `effect-browser/Chromium`'s module, whose `open` is
+  `make` (below). It peers on `effect`, `effect-browser` and `playwright-core`.
+- `@effect-browser/yielded` is only the Yielded binding of `effect-browser/ai`'s tools, and the only
+  package that depends on `@yielded/agent`, still `0.1.0-beta.191` exactly. `effect-browser` gains
+  no dependency.
+- Every package's exports follow Effect's layout: the root, each module by its path (`"./*"`), an
+  entry for each feature folder, and closed `internal` paths. `@effect-browser/human-strokes`'
+  `motion` is also at `@effect-browser/human-strokes/HumanStrokes`.
+
+### Subpaths of `effect-browser`
+
+A feature is a folder whose index is its subpath, and each of its modules can also be imported by
+path, such as `effect-browser/timeline/Moment`.
+
+| `0.3.0-beta.24`                                                         | This release                                                           |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `effect-browser/Moment`, `/Stillness`                                   | `effect-browser/timeline`                                              |
+| `effect-browser/Presentation`, `/Stage`, `/Film`, `/Motion`             | `effect-browser/presentation`; `Film` is experimental                  |
+| `effect-browser/Plan`                                                   | `effect-browser/walk`, as `Walk`                                       |
+| `effect-browser/Policy`                                                 | `effect-browser/policy`                                                |
+| `effect-browser/Supervisor`, `/Released`                                | `effect-browser/supervisor`, `Released` as `Release`                   |
+| `effect-browser/Style`                                                  | `InputStyle`, in the root and at `effect-browser/InputStyle`           |
+| `effect-agent-browser`, `/BrowserTools`, `/PageControl`, `/PromptCache` | `effect-browser/ai`                                                    |
+| `effect-agent-browser/testing`                                          | `effect-browser/testing`: `TestModel`, `HttpCassette` and `Story`      |
+| `effect-agent-browser/AdapterState`                                     | `effect-browser/ai`'s `Tabs` and `@effect-browser/yielded`'s `Moments` |
+| `effect-browser/ActionPort`, `/Clock`, `/Geometry`, `/Matching`, `/Url` | Closed, with no public replacement                                     |
+
+- The root no longer exports `ActionPort`, `Clock`, `Geometry`, `Url` or `Style`, and exports
+  `InputStyle` and the new `Text`. `Geometry`'s `Plan`, `Planner`, `Point`, `Sample`,
+  `maximumDurationMillis` and `maximumSamples` are still in `Motion`; its `normal` is gone.
+- `effect-browser/Cdp`, with its `workerd` condition, `effect-browser/Site`,
+  `effect-browser/testing` and the root's modules keep their paths. Neither `Cdp` nor `Site` is in
+  the root.
+
+### Renamed
+
+- `Plan` is `Walk`: the class `Walk`, `take` is `step` and `TakeOptions` is `StepOptions`. Its
+  other names stay: `fromEvents`, `replay`, `restore`, `locate`, `repeatable`, `Step`, `Receipt`,
+  `Stopped`, `Uncertain`, `Expected`, `Ambiguous`, `Drifted`, `Missing`, `ReplayError` and
+  `ReplayOptions`. Its spans are `Walk.step`, `Walk.replay`, `Walk.restore` and `Walk.locate`.
+- `Released` is `Release`, and its `Settled` is `Confirmed`, with the tag `"Confirmed"`.
+  `Unconfirmed` stays.
+- `Style` is `InputStyle`, its type `Style` is `InputStyle`, and its other names stay.
+- `Supervisor.Why` is `Supervisor.StopReason`.
+- `BrowserError.Reason` is `BrowserError.BrowserErrorReason`, and `BrowserbaseError.Reason` is
+  `BrowserbaseError.BrowserbaseErrorReason`.
+- `TestBrowserbase.Release` is `TestBrowserbase.ReleaseAnswer`.
+- `AdapterState`, which `effect-agent-browser/testing` also exported, is split: `tabs`, `Tabs`,
+  `follow` and `selected` are `Tabs.make`, `Tabs.Tabs`, `Tabs.follow` and `Tabs.selected` in
+  `effect-browser/ai`; `moments`, `Moments`, `Placed`, `place` and `weave` are `Moments.make`,
+  `Moments.Moments`, `Moments.Placed`, `Moments.place` and `Moments.weave` in
+  `@effect-browser/yielded`; and `Seed` and `load` are `YieldedTools.Seed` and `YieldedTools.load`.
+- `PageControl.useError` is `ToolError.fromBrowserError`.
+- The member `Page.clock` is `Page.hostClock`: it is the owning browser's host clock, where
+  Playwright's `page.clock` fakes a page's timers.
+- `Moment.capture` is `Moment.read`, and `Moment.CaptureOptions` is `Moment.MomentOptions`. Its span
+  is `Moment.read`, which the bench and the site's player count as a look.
+
+### The Page
+
+`Page` keeps 24 members, for identity, order, time and input. Reading, pictures and filming are
+functions in the modules of the types they return, each taking the page first; those with other
+arguments are `dual`, so `Effect.flatMap(browser.firstPage, Snapshot.read({ full: true }))` works.
+A new capability follows the same rule: `Page` gains a member only for identity, order, time or
+input. The duplicates among the pictures are gone.
+
+| `0.3.0-beta.24`                   | This release                                              |
+| --------------------------------- | --------------------------------------------------------- |
+| `page.snapshot(options)`          | `Snapshot.read(page, options)`                            |
+| `page.find(query)`                | `Snapshot.find(page, query)`                              |
+| `page.until(query, want, millis)` | `Snapshot.until(page, query, want, timeout)`              |
+| `page.text(options)`              | `Text.read(page, options)`, in the new root module `Text` |
+| `page.layout(picks)`              | `Layout.measure(page, picks)`                             |
+| `page.changes(options)`           | `Change.read(page, options)`                              |
+| `page.window(options)`            | `Window.read(page, options)`                              |
+| `page.overlay`                    | `Overlay.make(page)`                                      |
+| `page.poses`                      | `Pose.make(page)`                                         |
+| `page.hold`                       | `PageTime.hold(page)`                                     |
+| `page.frame(options)`             | `Frame.read(page, options)`                               |
+| `page.screenshot(options)`        | `Frame.read(page, { ...options, after: "input" })`        |
+| `page.zoom(region, options)`      | `Frame.zoom(page, region, options)`                       |
+| `page.capture(options)`           | `Frame.capture(page, options)`                            |
+| `page.screencast(options)`        | The `stream` of `Frame.capture(page, options)`            |
+| `page.captureStats(options)`      | A capture's `stats(options)`                              |
+| `page.recentFrames`               | `Frame.recent(page)`                                      |
+| `page.paint(options)`             | `Frame.paint(page, options)`                              |
+| `state.overlay`                   | `Overlay.drawn(page)`, an `Option`                        |
+| `state.text`                      | Removed: `Text.read` reads the text                       |
+| `state.frame`                     | Removed: the newest of `Frame.recent(page)`               |
+
+- Their types move with them: `Page.FindQuery`, `ElementState`, `Found`, `UntilWant` and
+  `UntilResult` to `Snapshot`; `Page.Text` and `TextOptions` to `Text`; `Page.ChangesOptions` to
+  `Change`; `Page.WindowOptions` to `Window`; and `Page.Region`, `Zoom`, `FrameOptions`, `Paint`
+  and `Capture` to `Frame`. `Found` is identified as `effect-browser/Snapshot/Found`, `Text` as
+  `effect-browser/Text`, and `Region` and `Zoom` as `effect-browser/Frame/Region` and
+  `effect-browser/Frame/Zoom`.
+- `Page.ScreenshotOptions` is gone: `Frame.FrameOptions` takes its `quality`, `format` and `scale`,
+  and a PNG or device-pixel read never reuses a screencast frame, as before. A clipped screenshot
+  is `Frame.zoom`. A capture's `stats` still counts over the page's life and answers after the
+  capture's scope has closed.
+- A picture that fails reports the operation `"frame"`, the agent's picture before each turn
+  included, which reported `"screenshot"`.
+- `effect-browser/testing` adds `TestPage.withPictures` and `TestPage.Pictures`, which replace a
+  seeded page's picture functions by `Frame`'s names.
+- Their spans follow: `Page.snapshot` is `Snapshot.read`, `Page.find` `Snapshot.find`,
+  `Page.expect` `Snapshot.until`, `Page.text` `Text.read`, `Page.layout` `Layout.measure`,
+  `Page.changes` `Change.read`, `Page.window` `Window.read`, `Page.frame` `Frame.read` and
+  `Page.zoom` `Frame.zoom`; `Page.screenshot` is gone.
+
+### Constructors and layers
+
+- `Cdp.open`, `Chromium.open` and `Browserbase.open` are `make`, and so is the `workerd` entry's
+  `open`; their spans are `Cdp.make`, `Chromium.make` and `Browserbase.make`. Each module also has
+  `layerConfig`, which takes its options as `Config` values, with a secret such as a CDP endpoint
+  as `Config.Redacted`.
+- `Browserbase.layer` provides `Browserbase.Browserbase`, a new service holding the session's
+  `Hosted` (`browser`, `session` and `release`), beside `Browser`.
+- `ContextLease.ContextLease` is a `Context.Reference` rather than a service class. Its default is
+  one lease shared by every writer in the process, so `Browserbase.make`, `layer`, `generations`,
+  `reconcile` and `verifyContext` require only `BrowserbaseClient`, and a program need not provide
+  `ContextLease.layer`. That layer still gives a program a lease of its own, as a `Layer<never>`.
+- `Browser.newPage(url?)` opens a page in the `Browser` the context holds, as `HttpClient.get`
+  calls the client the context holds.
+
+### Durations and `dual`
+
+- Options that took milliseconds take a `Duration.Input`, under a name without `Millis`:
+  `Page.ReadyOptions.quietMillis` and `Stillness.Options.quietMillis` are `quiet`,
+  `Cdp.Options.connectTimeoutMillis` and `Browserbase.Options.connectTimeoutMillis` are
+  `connectTimeout`, and `PageControl.Options.maxWaitMillis` is `maxWait`. `Snapshot.until`'s timeout
+  and `InputStyle.eased`'s duration take a `Duration.Input` too. A plain number still means
+  milliseconds, and a NaN is refused.
+- `Frame.read` refuses a `maxAge` that is NaN or holds one, with `InvalidRequest`, as it refused a
+  negative one. It read it as zero and took a new picture.
+- Recorded data and Schema classes stay in milliseconds, so recordings decode as before: an
+  `Action`'s `holdMillis`, a frame's and a capture's stats, a window's `since` and `until`, and
+  error fields such as `Busy.waitedMillis`. So do the tools' parameters, `TypingEvent` and
+  `WheelStep`'s `afterMillis`, Film's time axis, Playwright's `ConnectOptions.timeout`,
+  Browserbase's API seconds and the `Site` page script's API.
+- These are `dual`, taking their subject first or last in a pipe: `Action.recorded`,
+  `InputStyle.provide`, `Layout.place`, `Layout.rehearse`, `Page.correlate`, `Policy.escalate`,
+  `Film.frames`, `Tabs.follow`, `Tabs.selected`, `Moment.read`, `Stillness.wait`, `Walk.step`,
+  `Walk.replay`, `Walk.restore`, `Walk.locate`, `Moments.place`, `Moments.weave`, and
+  `@effect-browser/tradingview`'s `Chart` and `ChartInput` functions. `Page.correlate(effect, id)`
+  joins `Page.correlate(id)`.
+- `Page.isPage` tells a page from other values; a `dual` whose other arguments are optional uses it.
+  `Walk.RestoreOptions` names what `Walk.restore` takes.
+
+### The agent's tools
+
+- `effect-browser/ai` holds `BrowserTools`, `PageControl` and `PromptCache`, with `Tabs` and
+  `ToolError`. The tools run in any `effect/ai` loop. Their names, descriptions and parameters are
+  unchanged.
+- A failed tool answers the model with a `ToolError`, whose `_tag` is `"ToolError"` where it was
+  Yielded's `"BrowserUseError"`. Its `code`, `message` and `dispatch` are unchanged.
+- `BrowserTools.Pictures` is a service the tools' layer provides: `next` gives the pictures for the
+  coming turn, which a loop adds to that request alone, and `crops` the crops queued for a page.
+- `@effect-browser/yielded`'s `YieldedTools.make` gives the same toolkits, and a layer that loads
+  the pictures as Yielded's run context. `vision: "moments"` leaves `BrowserTools.Vision` for
+  `YieldedTools.Vision`, and the layer options `initialMoments` and `onMoment` leave
+  `BrowserTools.LayerOptions` for `YieldedTools.LayerOptions`.
+- `@effect-browser/tradingview`'s `ChartTools` fail with `ToolError` and run in a plain `effect/ai`
+  loop; the package no longer depends on Yielded.
+
+### Doc tags
+
+Every public export carries `@since 0.3.0`, `@category` and `@stability`, as Effect tags its own,
+and every public module and barrel entry `@since` and `@stability`. `Film` is
+`@stability experimental`, and the rest `stable`. Effect's language service warns
+(`experimentalApiUsage`) at each use of `Film`, so a project whose build denies warnings allows it
+in its tsconfig, among the `@effect/language-service` plugin's options:
+`"allowedExperimentalApis": ["effect-browser/presentation/Film"]`.
+
+### Errors and identifiers
+
+- Public Schema classes, errors, services and references are identified by their path,
+  `<package>/<folder>/<Module>/<Name>`, and a module's main class by `<package>/<folder>/<Module>`:
+  `effect-browser/Frame/Region`, which was `effect-browser/Region`, `effect-browser/BrowserError`,
+  `effect-browser/BrowserError/Timeout`, `effect-browser/walk/Walk/ReplayError`,
+  `@effect-browser/browserbase/BrowserbaseError/NotFound`. Identifiers are not encoded, so encoded
+  values and recordings decode as before.
+- Effect sets an error's `name` to its identifier, so `String(error)`, stacks and `Cause.pretty`
+  read `effect-browser/BrowserError: …` where they read `BrowserError: …`. `message` is unchanged,
+  and so is what the tools tell a model.
+- `Schema.is` of one package's error no longer accepts another's error of the same tag:
+  `BrowserError.NotFound` accepted Browserbase's `NotFound`, and each package's reasons accepted the
+  other's `NotFound` and `InvalidRequest`.
+- Guards: `BrowserError.isBrowserError` and `isBrowserErrorReason`,
+  `BrowserbaseError.isBrowserbaseError` and `isBrowserbaseErrorReason`, `Walk.isReplayError` and
+  `isReplayErrorReason`, with `Walk.ReplayErrorReason` naming the walk's reasons,
+  `ToolError.isToolError` and `TestModel.isScriptError`.
+- The 19 `BrowserEvent` classes, `Frame`'s `BrowserPaint` and `Screenshot`, and `Release`'s
+  `Confirmed` and `Unconfirmed` have identifiers too, such as
+  `effect-browser/BrowserEvent/Navigated` and `effect-browser/supervisor/Release/Confirmed`. Their
+  tags are unchanged, so recorded events and frames decode as before.
+- `Supervisor.InvalidWait` is a Schema error rather than a `Data.TaggedError`, with the same
+  `detail`.
+- `@effect-browser/human-strokes`' `DataError` has the tag `DataError`, where it had
+  `HumanStrokesDataError`.
+
+### Checks
+
+`bun run boundaries` now deletes each feature folder on its own, with the features that import it,
+and typechecks the rest; checks that the root's runtime loads only `effect`; and refuses
+`@yielded/agent` in any package but `@effect-browser/yielded`. The core's tests require every public
+Schema class to have an identifier equal to its path, and lint requires the doc tags. The packed
+check covers the five published names, 60 entry points, in a clean npm project and in a Bun
+workspace. No hosted or paid check has run on this release.
 
 ## 0.3.0-beta.24
 

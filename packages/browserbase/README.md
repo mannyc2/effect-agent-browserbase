@@ -101,22 +101,21 @@ in its scope. The value returned by `build` is exactly the lease's `value`. A fa
 its scope and releases the session before returning `OpenFailed`, whose `error` preserves the
 original typed failure and whose optional `cleanup` describes that attempt alone.
 
+<!-- prettier-ignore -->
 ```ts
 import { Supervisor } from "effect-browser/supervisor";
 import * as Text from "effect-browser/Text";
 
-const sessions =
-  yield *
-  Supervisor.make({
-    ...Browserbase.generations({
-      session: { timeout: 60 * 60 },
-      build: ({ browser, session }) =>
-        browser.firstPage.pipe(Effect.map((page) => ({ page, session }))),
-    }),
-    reopen: Schedule.exponential("1 second").pipe(Schedule.upTo({ duration: "5 minutes" })),
-  });
+const sessions = yield* Supervisor.make({
+  ...Browserbase.generations({
+    session: { timeout: 60 * 60 },
+    build: ({ browser, session }) =>
+      browser.firstPage.pipe(Effect.map((page) => ({ page, session }))),
+  }),
+  reopen: Schedule.exponential("1 second").pipe(Schedule.upTo({ duration: "5 minutes" })),
+});
 
-const text = yield * sessions.use(({ value }) => Text.read(value.page));
+const text = yield* sessions.use(({ value }) => Text.read(value.page));
 ```
 
 Sessions persisting to a stored context are exclusive. Rotation revokes admitted work, awaits its
@@ -133,7 +132,7 @@ restart adoption or keep-past-scope mode. Explicit `attach` and `session.keepAli
 operations for a consumer that owns that policy.
 
 Keep pages that must close before provider release in `use` callback scopes. Resources acquired by
-`build` close after provider release. Fake-provider ordering tests establish local ordering; they
+`build` close before provider release, including when the build fails. Fake-provider ordering tests establish local ordering; they
 do not establish hosted context-save timing or billing. The included-hours-only
 [H2 recipe](../../docs/HOSTED_CHECKS.md) is a separate hosted check.
 
@@ -236,18 +235,17 @@ what `check` gave. It holds the context meanwhile, so it reads what the last wri
 that save has settled, and never runs beside a writer that a site could sign out; a session a
 writer before may have left saving to the context is ended first.
 
+<!-- prettier-ignore -->
 ```ts
-const signedIn =
-  yield *
-  Browserbase.verifyContext(contextId, (browser) =>
-    Effect.gen(function* () {
-      const page = yield* browser.firstPage;
+const signedIn = yield* Browserbase.verifyContext(contextId, (browser) =>
+  Effect.gen(function* () {
+    const page = yield* browser.firstPage;
 
-      yield* page.goto("https://example.com/account");
+    yield* page.goto("https://example.com/account");
 
-      return (yield* Text.read(page)).text.includes("Sign out");
-    }),
-  );
+    return (yield* Text.read(page)).text.includes("Sign out");
+  }),
+);
 ```
 
 A persisting generation reopens through the same lease and reconciliation path. Its permanent

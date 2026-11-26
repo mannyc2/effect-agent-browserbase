@@ -24,6 +24,8 @@ A browser opened with `pageTime` installs a clock in each page before its own sc
 
 `Film.frames(page, options)` is a stream of shots. At each film time it asks the caller for the scroll, poses and overlay of that frame, sends the inputs due on it, and takes a screenshot. A click, a key, a drag or a hover lands on its frame, and the page answers on that frame. A link that loads a new document is a passage: the film holds its time while the page loads, reads the new page's layout, and goes on. Each shot carries the host time its picture was taken. What an input changed comes from `Change.read`, each change with the box to frame it by, on the same clock, so the first shot at or after a change is the first that shows it.
 
+`Film` is experimental, so Effect's language service warns (`experimentalApiUsage`) at each use of it. A project whose build denies warnings allows it among the `@effect/language-service` plugin's options in its tsconfig: `"allowedExperimentalApis": ["effect-browser/presentation/Film"]`.
+
 The frames are pictures, and encoding them is the caller's. `Frame.paint` sets an attached browser's device pixels per CSS pixel for sharper frames, and hides scrollbars.
 
 ## Moving the page's own elements
@@ -34,4 +36,4 @@ The frames are pictures, and encoding them is the caller's. `Frame.paint` sets a
 
 `effect-browser/Site` runs the same readers, change record, overlay and poses in a site's own bundle, on its own document. It has no protocol and loads no `effect`, and is about 16 KB gzipped. A site acts through its own app and notes each act, so the changes it brings name it as their cause. It can render a character into a layer of its own that no reader reads. What needs the protocol stays out: trusted input, screenshots, filming and held time.
 
-The package README's [Filming a page](https://github.com/mannyc2/effect-agent-browserbase/blob/main/packages/browser/README.md#filming-a-page) and [A site that owns its page](https://github.com/mannyc2/effect-agent-browserbase/blob/main/packages/browser/README.md#a-site-that-owns-its-page) sections show the code, and `packages/browser/examples/film.ts` films a small site end to end, locally or on Browserbase.
+The package README's [Filming a page](https://github.com/mannyc2/effect-agent-browserbase/blob/main/packages/browser/README.md#filming-a-page) and [A site that owns its page](https://github.com/mannyc2/effect-agent-browserbase/blob/main/packages/browser/README.md#a-site-that-owns-its-page) sections show the code, and `packages/browser/examples/film.ts` films a small site end to end on a local Chromium, serving it through the request policy so a hosted browser can film it too.

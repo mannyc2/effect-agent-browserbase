@@ -384,7 +384,7 @@ a code given inside a sentence.
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has
-`maxSteps` turns and eight tool calls a turn, and calls run one at a time. The tools are pinned to
+`maxSteps` turns and at most eight times as many tool calls, and calls run one at a time. The tools are pinned to
 the task's page, so none offers `select_tab`. A run's steps come from its events. A streamed model
 request is sent and charged as one completion, so the budget sees every call. Arms 3 (parsed
 frames) and 4 (a local grounder) are not built.

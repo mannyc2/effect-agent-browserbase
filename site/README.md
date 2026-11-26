@@ -1,6 +1,6 @@
 # site
 
-The docs site for effect-browser, its narrated Polymarket demo, and a player for recorded runs. A
+The docs site for effect-browser, its narrated demos, and a player for recorded runs. A
 [Foldkit](https://foldkit.dev) app on Cloudflare, deployed with [Alchemy](https://alchemy.run): the
 CAFE stack.
 

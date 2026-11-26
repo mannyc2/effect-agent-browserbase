@@ -1,6 +1,6 @@
 {
   "name": "@effect-browser/browserbase",
-  "version": "0.3.0-beta.24",
+  "version": "0.3.0-beta.25",
   "description": "Browserbase for effect-browser: hosted browser sessions, contexts, web search and page fetch.",
   "license": "MIT",
   "repository": {
@@ -56,7 +56,7 @@
   },
   "peerDependencies": {
     "effect": "~4.1.2",
-    "effect-browser": "^0.3.0-beta.23",
+    "effect-browser": "^0.3.0-beta.25",
     "playwright-core": "^1.63.0"
   },
   "engines": {

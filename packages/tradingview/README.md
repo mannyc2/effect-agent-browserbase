@@ -64,13 +64,12 @@ After its input, each reads the chart back. Where the chart put a point elsewher
 missing, the API corrects or makes the change, and the result says how through `via`: `"input"`,
 `"corrected"` or `"api"`.
 
+<!-- prettier-ignore -->
 ```ts
-const drawn =
-  yield *
-  ChartInput.draw(page, {
-    shape: "fib_retracement",
-    points: [low, high],
-  });
+const drawn = yield* ChartInput.draw(page, {
+  shape: "fib_retracement",
+  points: [low, high],
+});
 // drawn.via: "input" when the toolbar and two clicks made it where asked.
 ```
 
