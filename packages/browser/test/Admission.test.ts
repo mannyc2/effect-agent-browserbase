@@ -10,6 +10,7 @@ import * as Lane from "../src/internal/page/lane.ts";
 import * as Input from "../src/internal/page/replies.ts";
 import { failFast, type Page } from "../src/Page.ts";
 import { maximumSamples } from "../src/presentation/Motion.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 interface Receipt {
@@ -725,7 +726,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), { excludeTestServices: true })(
               .click({ x: 5, y: 5 })
               .pipe(Effect.flip, Effect.forkChild);
 
-            const fast = yield* Effect.flip(failFast(navigating.snapshot()));
+            const fast = yield* Effect.flip(failFast(Snapshot.read(navigating)));
 
             assert.deepStrictEqual([fast.reason._tag, fast.dispatched], ["Busy", false]);
             yield* other.click({ x: 5, y: 5 });
@@ -874,7 +875,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), { excludeTestServices: true })(
             { times: 1 },
           );
           const before = faults.calls.length;
-          const reading = yield* page.snapshot().pipe(Effect.forkChild);
+          const reading = yield* Snapshot.read(page).pipe(Effect.forkChild);
 
           yield* faults.waitUntil((calls) =>
             calls

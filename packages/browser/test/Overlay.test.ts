@@ -1,11 +1,16 @@
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Fiber, Schedule } from "effect";
+import { Duration, Effect, Fiber, Option, Schedule } from "effect";
 import { jpegjs } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
+import * as Change from "../src/Change.ts";
+import * as Layout from "../src/Layout.ts";
 import type { Content } from "../src/Overlay.ts";
+import * as Overlay from "../src/Overlay.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -46,7 +51,7 @@ const page400 = `<style>body { margin: 0; width: 400px; height: 300px }</style>`
 layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 } })), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
-})("Page.overlay", (it) => {
+})("Overlay.make", (it) => {
   it.effect("draws over the page, in its pictures, and passes input through to it", () =>
     Effect.gen(function* () {
       const page = yield* blank;
@@ -56,12 +61,12 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
         `${page400}<button id=under style="position:absolute;left:0;top:0;width:400px;height:300px">Under</button>
 <script>under.onclick = () => { document.title = "pressed" }</script>`,
       );
-      const overlay = yield* page.overlay;
+      const overlay = yield* Overlay.make(page);
       const drawn = yield* overlay.draw(square);
 
       assert.strictEqual(drawn.length, 1);
       assert.deepStrictEqual({ ...drawn[0] }, { x: 20, y: 20, width: 60, height: 60 });
-      assert.deepStrictEqual((yield* page.state).overlay, drawn);
+      assert.deepStrictEqual(yield* Overlay.drawn(page), Option.some(drawn));
       assert.isTrue(red(yield* colorAt(page, 50, 50)));
 
       yield* page.click({ x: 50, y: 50 });
@@ -69,7 +74,7 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
 
       yield* overlay.draw({ _tag: "Empty" });
       assert.isFalse(red(yield* colorAt(page, 50, 50)));
-      assert.isUndefined((yield* page.state).overlay);
+      assert.isTrue(Option.isNone(yield* Overlay.drawn(page)));
     }),
   );
 
@@ -78,8 +83,8 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
       const page = yield* blank;
 
       yield* show(page, `${page400}<h1>Page words</h1><div>A plain div</div>`);
-      yield* page.changes();
-      const overlay = yield* page.overlay;
+      yield* Change.read(page);
+      const overlay = yield* Overlay.make(page);
 
       for (const x of [20, 60, 100])
         yield* overlay.draw(
@@ -87,12 +92,12 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
             `<style>@keyframes grow { from { opacity: 0 } to { opacity: 1 } } rect { animation: grow 10s }</style><rect x="${x}" y="100" width="40" height="40" fill="red"/><text x="10" y="200">Secret overlay words</text><foreignObject x="0" y="220" width="200" height="40"><button xmlns="http://www.w3.org/1999/xhtml">Overlay button</button></foreignObject>`,
           ),
         );
-      const changes = yield* page.changes();
-      const found = yield* page.find({ scope: "document" });
-      const words = yield* page.find({ text: "Secret overlay words", scope: "document" });
-      const snapshot = yield* page.snapshot({ full: true });
-      const text = yield* page.text();
-      const layout = yield* page.layout({ div: { selector: "div", choose: "last" } });
+      const changes = yield* Change.read(page);
+      const found = yield* Snapshot.find(page, { scope: "document" });
+      const words = yield* Snapshot.find(page, { text: "Secret overlay words", scope: "document" });
+      const snapshot = yield* Snapshot.read(page, { full: true });
+      const text = yield* Text.read(page);
+      const layout = yield* Layout.measure(page, { div: { selector: "div", choose: "last" } });
 
       assert.deepStrictEqual(changes.changes, []);
       assert.deepStrictEqual(
@@ -111,7 +116,7 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
   it.effect("keeps the page's styles out, under a strict style-src as well", () =>
     Effect.gen(function* () {
       const page = yield* blank;
-      const overlay = yield* page.overlay;
+      const overlay = yield* Overlay.make(page);
 
       yield* show(
         page,
@@ -136,10 +141,10 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
       yield* show(page, `${page400}<p>First</p>`);
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const overlay = yield* page.overlay;
+          const overlay = yield* Overlay.make(page);
 
           yield* overlay.draw(square);
-          const second = yield* Effect.flip(Effect.scoped(page.overlay));
+          const second = yield* Effect.flip(Effect.scoped(Overlay.make(page)));
 
           assert.strictEqual(second.reason._tag, "InvalidRequest");
           yield* show(page, `${page400}<p>Second</p>`);
@@ -154,10 +159,10 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
         }),
       );
       assert.isFalse(red(yield* colorAt(page, 50, 50)));
-      assert.isUndefined((yield* page.state).overlay);
+      assert.isTrue(Option.isNone(yield* Overlay.drawn(page)));
 
       const again = yield* Effect.scoped(
-        page.overlay.pipe(Effect.flatMap((overlay) => overlay.draw(square))),
+        Overlay.make(page).pipe(Effect.flatMap((overlay) => overlay.draw(square))),
       );
 
       assert.strictEqual(again.length, 1);
@@ -169,7 +174,7 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
       const page = yield* blank;
 
       yield* show(page, `${page400}<p>Still page</p>`);
-      const overlay = yield* page.overlay;
+      const overlay = yield* Overlay.make(page);
       let x = 0;
 
       const moving = yield* Effect.forkScoped(

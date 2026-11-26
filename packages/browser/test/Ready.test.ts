@@ -8,7 +8,9 @@ import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { Closed, Failed, undispatched } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Change from "../src/Change.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestPage from "../src/testing/TestPage.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
 import * as TestCdp from "./support/TestCdp.ts";
@@ -705,7 +707,7 @@ it.live(
             until: (state) => state.frame !== undefined,
           }),
         );
-        yield* page.changes();
+        yield* Change.read(page);
         proxy.withhold = (method) => method === "Page.screencastFrame";
         const started = yield* browser.now;
 
@@ -843,7 +845,7 @@ it.live("foreground motion after navigation cannot inherit the previous document
     );
 
     yield* Effect.addFinalizer(() => Effect.sync(resume));
-    const [link] = yield* page.find({ role: "link", name: "Next" });
+    const [link] = yield* Snapshot.find(page, { role: "link", name: "Next" });
 
     yield* page.click(link!.ref);
     const state = yield* page.state;

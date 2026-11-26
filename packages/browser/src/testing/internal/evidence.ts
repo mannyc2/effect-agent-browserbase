@@ -2,7 +2,7 @@
 import { Duration, Effect, Option, PubSub, Stream, type Take } from "effect";
 
 import { type BrowserError, InvalidRequest, NotFound, undispatched } from "../../BrowserError.ts";
-import { Change, Changes } from "../../Change.ts";
+import { Change, Changes, type ChangesOptions } from "../../Change.ts";
 import { type Frame, sameCapture } from "../../Frame.ts";
 import { fold } from "../../internal/timeline/fold.inpage.ts";
 import type { Page } from "../../Page.ts";
@@ -63,7 +63,7 @@ export const make = Effect.fnUntraced(function* (options: {
         : Effect.as(model.check("frame"), found);
     });
 
-  const changes: Page["changes"] = (asked) =>
+  const changes = (asked?: ChangesOptions): Effect.Effect<Changes, BrowserError> =>
     Effect.gen(function* () {
       yield* model.check("changes");
       const start = asked?.since;

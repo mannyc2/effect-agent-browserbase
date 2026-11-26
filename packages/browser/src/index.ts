@@ -87,4 +87,10 @@ export * as Snapshot from "./Snapshot.ts";
  * @stability stable
  * @since 0.3.0
  */
+export * as Text from "./Text.ts";
+
+/**
+ * @stability stable
+ * @since 0.3.0
+ */
 export * as Window from "./Window.ts";

@@ -18,12 +18,12 @@ import { fileURLToPath } from "node:url";
 
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { Data, Effect, Stream } from "effect";
-import { Browser } from "effect-browser";
+import { Browser, Overlay, PageTime } from "effect-browser";
 import type { RequestPolicy } from "effect-browser/Browser";
 import type { Box } from "effect-browser/BrowserEvent";
-import type { Change } from "effect-browser/Change";
+import * as Change from "effect-browser/Change";
 import * as Layout from "effect-browser/Layout";
-import type { Pose } from "effect-browser/Pose";
+import * as Pose from "effect-browser/Pose";
 import { Film } from "effect-browser/presentation";
 
 const rows = Array.from({ length: 30 }, (_, index) => `<p>Row ${index + 1}</p>`).join("");
@@ -190,7 +190,7 @@ export const film = <E>(write: (shot: Film.Shot) => Effect.Effect<void, E>) =>
       yield* page.paint({ scrollbars: false });
       yield* page.goto(`${origin}/`);
       yield* page.ready();
-      const layout = yield* page.layout(picks);
+      const layout = yield* Layout.measure(page, picks);
       const docs = Layout.place(layout, "docs");
       const usage = Layout.place(layout, "usage");
       const lede = Layout.place(layout, "lede");
@@ -262,7 +262,7 @@ export const film = <E>(write: (shot: Film.Shot) => Effect.Effect<void, E>) =>
       ];
 
       // The tab squashes as it is pressed, and the command box dips as the copy lands on it.
-      const posesAt = (t: number, scroll: number): Array<Pose> => {
+      const posesAt = (t: number, scroll: number): Array<Pose.Pose> => {
         const squash = pulse(t, 1200, 250);
         const dip = pulse(t, 2900, 250);
         const tab = { x: middle(usage.page).x, y: usage.page.y + usage.page.height - scroll };
@@ -278,16 +278,16 @@ export const film = <E>(write: (shot: Film.Shot) => Effect.Effect<void, E>) =>
 
       // What changed after each contact on this page, read 100 ms of film time after it, and
       // framed for 700 ms from then.
-      let since = yield* page.changes();
+      let since = yield* Change.read(page);
       const due = new Set(inputs.filter(({ label }) => label !== "docs").map(({ t }) => t + 100));
-      const changed: Array<{ readonly from: number; readonly change: Change }> = [];
+      const changed: Array<{ readonly from: number; readonly change: Change.Change }> = [];
 
       const look = (t: number) =>
         Effect.gen(function* () {
           for (const at of due)
             if (t >= at) {
               due.delete(at);
-              since = yield* page.changes({ since });
+              since = yield* Change.read(page, { since });
               for (const change of since.changes) changed.push({ from: t, change });
             }
         });
@@ -306,10 +306,10 @@ export const film = <E>(write: (shot: Film.Shot) => Effect.Effect<void, E>) =>
           )}<circle cx="${ring.x}" cy="${ring.y}" r="${radius}" fill="none" stroke="rgb(230, 60, 30)" stroke-width="5"/></svg>`,
       });
 
-      const time = yield* page.hold;
-      const overlay = yield* page.overlay;
+      const time = yield* PageTime.hold(page);
+      const overlay = yield* Overlay.make(page);
 
-      yield* page.poses;
+      yield* Pose.make(page);
 
       const summary = yield* Film.frames(page, {
         times: { fps: 30, to: 8000 },

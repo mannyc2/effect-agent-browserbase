@@ -7,6 +7,7 @@ import { Effect, Fiber, Layer, Schedule, Schema, Stream } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
+import * as Snapshot from "effect-browser/Snapshot";
 import { Stillness } from "effect-browser/timeline";
 
 import { behindProxy, type Command, type Proxy } from "../../../tools/testing/cdp-proxy.ts";
@@ -117,7 +118,7 @@ it.live(
           const frames = yield* recorded(page);
 
           from = proxy.commands.length;
-          yield* page.snapshot();
+          yield* Snapshot.read(page);
           assert.strictEqual(sentOn(proxy, control, from).length, 1);
           assert.isEmpty(sentOn(proxy, capturing, from));
           yield* Effect.sleep("300 millis");
@@ -136,7 +137,7 @@ it.live(
           // connection.
           const still = yield* browser.newPage(html("<p>Still</p>"));
 
-          yield* still.snapshot();
+          yield* Snapshot.read(still);
           yield* recorded(still);
           from = proxy.commands.length;
           yield* Stillness.wait(still, { quietMillis: 200 });
@@ -187,7 +188,7 @@ it.live(
             ["screencast", "Failed", false],
           );
           // The page and its own session stand.
-          yield* page.snapshot();
+          yield* Snapshot.read(page);
           yield* firstFrame(page);
           assert.strictEqual(proxy.connected, 3);
         }),

@@ -25,6 +25,8 @@ import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
 import * as Url from "../src/internal/url.ts";
 import { type Page, redacted } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
+import * as Text from "../src/Text.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -109,7 +111,7 @@ describe("a tab opened by input", () => {
         const page = yield* browser.firstPage;
 
         yield* page.goto((yield* Site).url("/form"));
-        const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
+        const [link] = yield* Snapshot.find(page, { role: "link", name: "Open in a new tab" });
         const registration = yield* holdPopupRegistration(browser, page);
         const clicking = yield* Effect.forkChild(page.click(link?.ref ?? ""));
 
@@ -233,7 +235,7 @@ describe("a tab opened by input", () => {
           const page = yield* browser.firstPage;
 
           yield* page.goto((yield* Site).url("/form"));
-          const [link] = yield* page.find({ role: "link", name: "Open in a new tab" });
+          const [link] = yield* Snapshot.find(page, { role: "link", name: "Open in a new tab" });
           const registration = yield* holdPopupRegistration(browser, page);
           const clicking = yield* Effect.forkChild(Effect.flip(page.click(link?.ref ?? "")));
 
@@ -346,7 +348,7 @@ describe("a loss", () => {
           TestCdp.nativeContext(browser).route(site.url("/late"), () => requested.resolve()),
         );
         yield* holdRenderer(page, 2000);
-        const reading = yield* Effect.forkChild(Effect.flip(page.text()));
+        const reading = yield* Effect.forkChild(Effect.flip(Text.read(page)));
 
         proxy.hold = (command) => (command.method === "Page.getNavigationHistory" ? 250 : 0);
         // The browser answers a title while the renderer is busy, but transport can exceed 100 ms.
@@ -363,7 +365,7 @@ describe("a loss", () => {
           [yield* Fiber.join(reading), false],
           [yield* Fiber.join(navigating), true],
           [yield* Fiber.join(watching), false],
-          [yield* Effect.flip(page.snapshot()), false],
+          [yield* Effect.flip(Snapshot.read(page)), false],
         ] as const) {
           assert.deepStrictEqual(lossOf(error), { reason: "Closed", cause: "connection" });
           assert.strictEqual(error.dispatched, dispatched);
@@ -395,7 +397,7 @@ describe("a loss", () => {
         );
         proxy.drop();
         assert.strictEqual(yield* browser.disconnected, "session");
-        assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
+        assert.deepStrictEqual(lossOf(yield* Effect.flip(Text.read(page))), {
           reason: "Closed",
           cause: "session",
         });
@@ -417,7 +419,7 @@ describe("a loss", () => {
         );
 
         void session.send("Page.crash").catch(() => undefined);
-        assert.deepStrictEqual(lossOf(yield* Effect.flip(page.text())), {
+        assert.deepStrictEqual(lossOf(yield* Effect.flip(Text.read(page))), {
           reason: "Closed",
           cause: "crashed",
         });
@@ -523,7 +525,7 @@ describe("init scripts", () => {
         assert.deepStrictEqual(yield* marks(loopback), [null, true]);
         assert.deepStrictEqual(yield* marks(named), ["localhost", true]);
 
-        const [link] = yield* named.find({ role: "link", name: "Open in a new tab" });
+        const [link] = yield* Snapshot.find(named, { role: "link", name: "Open in a new tab" });
 
         yield* named.click(link?.ref ?? "");
 
@@ -743,7 +745,7 @@ describe("an address", () => {
         const browser = yield* Chromium.make();
         const page = yield* browser.newPage(site.url("/links"));
 
-        const links = (yield* page.snapshot()).text
+        const links = (yield* Snapshot.read(page)).text
           .split("\n")
           .filter((line) => line.includes("->"));
 

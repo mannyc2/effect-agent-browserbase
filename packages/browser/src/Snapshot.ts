@@ -8,7 +8,13 @@
  * @stability stable
  * @since 0.3.0
  */
-import { Schema } from "effect";
+import { type Effect, Function, Schema } from "effect";
+
+import type { BrowserError } from "./BrowserError.ts";
+import { Box, Subject } from "./BrowserEvent.ts";
+import type { Point } from "./internal/geometry.ts";
+import { functionsOf, isPage } from "./internal/page/functions.ts";
+import type { Page } from "./Page.ts";
 
 /**
  * A control the outline shows, as a value: its ref, what it is and what it holds.
@@ -109,3 +115,155 @@ export interface SnapshotOptions {
    */
   readonly boxes?: boolean | undefined;
 }
+
+/**
+ * What `find` looks for. Every rule given must hold; with none, it finds every element in scope
+ * that has a role or is a control.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export interface FindQuery {
+  /** Narrow matching to this CSS selector. Invalid CSS fails InvalidRequest. */
+  readonly selector?: string | undefined;
+  /** Require a visible match, optionally enabled. */
+  readonly state?: "visible" | "enabled" | undefined;
+  /** An ARIA role, such as `"button"` or `"heading"`, ignoring case. */
+  readonly role?: string | undefined;
+  /**
+   * The accessible name: a string that reads the same once spaces are collapsed and case folded,
+   * or a pattern found in it.
+   */
+  readonly name?: string | RegExp | undefined;
+  /**
+   * Text it shows, ignoring case and spacing, or a pattern. Text inside a control or a heading is
+   * that control's or heading's, and only the smallest element showing it matches, not every
+   * element around it.
+   */
+  readonly text?: string | RegExp | undefined;
+  /** Whole words in its context (row, column, label or heading), ignoring case and spacing. */
+  readonly near?: string | undefined;
+  /** Only what a point action at this viewport point would reach: the control there, or else what is painted there. */
+  readonly at?: Point | undefined;
+  /** The viewport (the default), or the whole document. */
+  readonly scope?: "viewport" | "document" | undefined;
+}
+
+/**
+ * An element's state as its markup gives it: `checked` for what can be checked, `expanded`,
+ * `selected` and `pressed` where the page says either way, and `level` for headings.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
+export const ElementState = Schema.Struct({
+  disabled: Schema.Boolean,
+  focused: Schema.Boolean,
+  checked: Schema.optional(Schema.Boolean),
+  expanded: Schema.optional(Schema.Boolean),
+  selected: Schema.optional(Schema.Boolean),
+  pressed: Schema.optional(Schema.Boolean),
+  level: Schema.optional(Schema.Int),
+});
+
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type ElementState = typeof ElementState.Type;
+
+/**
+ * An element `find` found: a ref for the actions, what it is, where it is and its state.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
+export class Found extends Schema.Class<Found>("effect-browser/Snapshot/Found")({
+  ref: Schema.String,
+  subject: Subject,
+  /** Its box, rounded. Reading the document, it may be out of view. */
+  box: Box,
+  inViewport: Schema.Boolean,
+  state: ElementState,
+}) {}
+
+/**
+ * The page's outline: one line per control, heading or text block, with a ref for each control,
+ * in one call to the page.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
+export const read: {
+  (options?: SnapshotOptions): (page: Page) => Effect.Effect<Snapshot, BrowserError>;
+  (page: Page, options?: SnapshotOptions): Effect.Effect<Snapshot, BrowserError>;
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, options?: SnapshotOptions) => functionsOf(page).snapshot(options),
+);
+
+/**
+ * The elements that match a query, in tree order, with refs the actions take, in one call to the
+ * page. All that match are returned, so a caller tells them apart by their context; none is an
+ * empty result, not a failure.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
+export const find: {
+  (query?: FindQuery): (page: Page) => Effect.Effect<ReadonlyArray<Found>, BrowserError>;
+  (page: Page, query?: FindQuery): Effect.Effect<ReadonlyArray<Found>, BrowserError>;
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, query?: FindQuery) => functionsOf(page).find(query),
+);
+
+/**
+ * What a wait requires of the query's matches.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type UntilWant = "some" | "none" | { readonly other: string };
+
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export interface UntilResult {
+  readonly met: boolean;
+  readonly mark: string;
+}
+
+/**
+ * Wait, in one call to the page, until what `query` matches is as `want` says or `millis` pass.
+ * Replaced documents share one deadline. Unmet is `met: false`; an empty mark means no stable
+ * document could be sampled.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
+export const until: {
+  (
+    query: FindQuery,
+    want: UntilWant,
+    millis: number,
+  ): (page: Page) => Effect.Effect<UntilResult, BrowserError>;
+  (
+    page: Page,
+    query: FindQuery,
+    want: UntilWant,
+    millis: number,
+  ): Effect.Effect<UntilResult, BrowserError>;
+} = Function.dual(4, (page: Page, query: FindQuery, want: UntilWant, millis: number) =>
+  functionsOf(page).until(query, want, millis),
+);

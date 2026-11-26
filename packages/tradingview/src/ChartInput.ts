@@ -24,7 +24,8 @@
  * @since 0.3.0
  */
 import { Effect, Schema } from "effect";
-import type { Found, Page } from "effect-browser/Page";
+import type { Page } from "effect-browser/Page";
+import * as Snapshot from "effect-browser/Snapshot";
 
 import * as Chart from "./Chart.ts";
 import { drawings } from "./internal/drawings.ts";
@@ -63,15 +64,16 @@ const menuItem = (shape: Chart.Shape) =>
   `[data-role="menuitem"][data-name="LineTool${drawings[shape][1]}"]`;
 
 // A menu item past the viewport's foot comes into view as its menu is wheeled, as a person would.
-const scrolledTo = (page: Page, selector: string, entry: Found) =>
+const scrolledTo = (page: Page, selector: string, entry: Snapshot.Found) =>
   Effect.gen(function* () {
     const { height } = yield* page.viewport;
     let current = entry;
 
     for (let turn = 0; turn < 4 && current.box.y + current.box.height > height - 2; turn++) {
-      const last = (yield* page.find({ selector: '[data-role="menuitem"]', state: "visible" })).at(
-        -1,
-      );
+      const last = (yield* Snapshot.find(page, {
+        selector: '[data-role="menuitem"]',
+        state: "visible",
+      })).at(-1);
 
       if (last === undefined) break;
       yield* page.scroll({ at: last.ref, dy: current.box.y + current.box.height - height + 40 });

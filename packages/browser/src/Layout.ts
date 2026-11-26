@@ -7,13 +7,15 @@
  * @stability stable
  * @since 0.3.0
  */
-import { Effect, Exit, Schema } from "effect";
+import { Effect, Exit, Function, Schema } from "effect";
 
 import type { Action } from "./Action.ts";
 import type { BrowserError } from "./BrowserError.ts";
 import { Box, Subject } from "./BrowserEvent.ts";
 import { Point } from "./internal/geometry.ts";
-import type { FindQuery, Page } from "./Page.ts";
+import { functionsOf } from "./internal/page/functions.ts";
+import type { Page } from "./Page.ts";
+import type { FindQuery } from "./Snapshot.ts";
 
 /**
  * A match of a pick's `words`, by its box in the viewport and in the document.
@@ -79,10 +81,11 @@ export class Layout extends Schema.Class<Layout>("effect-browser/Layout")({
 }) {}
 
 /**
- * A `find` query that names one thing. Its scope defaults to the whole document. Every element it
- * finds is a candidate, and `choose` takes one: the first in tree order (the default), the last,
- * or the smallest or largest by area. With a selector, the candidates are what it selects that
- * shows and meets the other rules, a drawing's elements among them, which `find` leaves out.
+ * A `Snapshot.find` query that names one thing. Its scope defaults to the whole document. Every
+ * element it finds is a candidate, and `choose` takes one: the first in tree order (the default),
+ * the last, or the smallest or largest by area. With a selector, the candidates are what it
+ * selects that shows and meets the other rules, a drawing's elements among them, which
+ * `Snapshot.find` leaves out.
  *
  * @stability stable
  * @category models
@@ -105,6 +108,20 @@ export interface Pick extends FindQuery {
  * @since 0.3.0
  */
 export type Picks = Readonly<Record<string, Pick>>;
+
+/**
+ * Where each pick is, in one call to the page: its box unrounded, in the viewport and in the
+ * document, the boxes of words in it, and the viewport, scroll and scale they were read at. A
+ * pick that finds nothing is listed as missing, not a failure.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
+export const measure: {
+  (picks: Picks): (page: Page) => Effect.Effect<Layout, BrowserError>;
+  (page: Page, picks: Picks): Effect.Effect<Layout, BrowserError>;
+} = Function.dual(2, (page: Page, picks: Picks) => functionsOf(page).layout(picks));
 
 /**
  * The place a pick named, if it found one.
@@ -145,7 +162,7 @@ export const rehearse = (page: Page, rehearsal: Rehearsal): Effect.Effect<Layout
         restore(
           Effect.forEach(rehearsal.act, page.perform, { discard: true }).pipe(
             Effect.andThen(page.ready()),
-            Effect.andThen(page.layout(rehearsal.picks)),
+            Effect.andThen(measure(page, rehearsal.picks)),
           ),
         ),
       );

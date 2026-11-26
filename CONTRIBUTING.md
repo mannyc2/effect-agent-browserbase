@@ -71,7 +71,7 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   `bun run boundaries` checks dependency direction and that the root loads only `effect`, then
   physically deletes each feature folder with the features that import it, and then all of them,
   before typechecking what remains. Features use public kernel modules and a short list of shared
-  internals; published test services also share an explicit four-module ownership allowlist. Code
+  internals; published test services also share an explicit five-module allowlist. Code
   inside the page sits in self-contained `*.inpage.ts` factories, composed by
   `internal/page/bridge.ts` and frozen at packaging.
 - `packages/chromium` (`@effect-browser/chromium`): a local Chromium as a `Browser`, launched

@@ -20,6 +20,7 @@ import * as Window from "../timeline/window.ts";
 import * as Url from "../url.ts";
 import * as Bridge from "./bridge.ts";
 import * as Context from "./context.ts";
+import { Implementation, key } from "./functions.ts";
 import * as Navigation from "./navigation.ts";
 import * as Overlay from "./overlay.ts";
 import * as Poses from "./pose.ts";
@@ -44,7 +45,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const viewports = lane.shared<Effect.Success<Page["viewport"]>>("viewport", true);
 
   // What the page's parts already know, asking it nothing: its documents as its own session saw
-  // them, the newest frame, and the viewport's text as last read since the document began.
+  // them, and the newest frame.
   const state = Effect.map(capture.latest, (latest) => {
     const { document, url } = bridge.frameTag();
     const committedAt = page.activity.documentAt;
@@ -58,8 +59,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       committedAt: Number.isFinite(committedAt) ? committedAt : undefined,
       load: bridge.loaded(),
       frame: Option.getOrUndefined(latest),
-      overlay: overlay.drawn(),
-      text: reading.viewedSince(committedAt),
     });
   });
 
@@ -89,12 +88,24 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   );
 
   const assembled: Page = {
+    [key]: new Implementation({
+      snapshot: reading.snapshot,
+      find: reading.find,
+      until: reading.until,
+      text: reading.text,
+      layout: Layouts.make(page, bridge),
+      changes,
+      window: Window.make(page, changes, capture.recent),
+      overlay: overlay.lease,
+      drawn: Effect.sync(() => Option.fromUndefinedOr(overlay.drawn())),
+      poses: poses.lease,
+      hold: Time.make(page, bridge, overlay, poses).hold,
+    }),
     ...Scripts.make(page, bridge, input),
     ...ActionPort.methods(perform),
     perform,
     clock: page.clock,
     afterInput,
-    until: reading.until,
     capture: (options) =>
       capture.open(options).pipe(
         Effect.map((lease) => ({
@@ -111,7 +122,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     bringToFront: native("bringToFront", () => playwright.bringToFront()),
     // Playwright answers once the page has closed, and at once for one already closed.
     close: native("close", () => playwright.close()),
-    snapshot: reading.snapshot,
     screenshot: pictures.screenshot,
     frame: pictures.frame,
     zoom: pictures.zoom,
@@ -120,14 +130,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       span("Page.viewport"),
       owned,
     ),
-    find: reading.find,
-    layout: Layouts.make(page, bridge),
-    overlay: overlay.lease,
-    poses: poses.lease,
-    hold: Time.make(page, bridge, overlay, poses).hold,
-    text: reading.text,
-    changes,
-    window: Window.make(page, changes, capture.recent),
     state,
     ready: Ready.make(page, bridge),
     screencast: capture.stream,

@@ -1,7 +1,7 @@
 /**
  * Filming a page as a function of time: a new screenshot at each time a caller asks for, of the
  * page as it is at that film time, with what the caller draws over it then. Film time comes from
- * a held page (`Page.hold`), which steps to each frame however long the last one took, so a
+ * a held page (`PageTime.hold`), which steps to each frame however long the last one took, so a
  * frame costs one call to step the page and one screenshot; from a page that seeks itself; or
  * from real time. The frames are pictures; encoding them is the caller's.
  *
@@ -19,7 +19,7 @@ import { type BrowserError, refuse } from "../BrowserError.ts";
 import { Image } from "../Frame.ts";
 import { monotonicMillis } from "../internal/clock.ts";
 import { Point } from "../internal/geometry.ts";
-import { Layout, type Picks } from "../Layout.ts";
+import * as Layout from "../Layout.ts";
 import type { Content, Overlay } from "../Overlay.ts";
 import { type Page, ResolvedTarget, type ScreenshotOptions } from "../Page.ts";
 import type { Held, Step } from "../PageTime.ts";
@@ -71,7 +71,7 @@ export interface Options<E = never> {
     | ((t: number, film: { readonly passages: ReadonlyArray<Passage> }) => Effect.Effect<At, E>)
     | undefined;
   /** What to measure in each new document the film arrives in. */
-  readonly picks?: Picks | undefined;
+  readonly picks?: Layout.Picks | undefined;
   /**
    * Inputs sent at their film times, in time order, each before the first frame at or after it:
    * the page is moved to its time, and on held time it answers as its time is stepped on. One that
@@ -145,7 +145,7 @@ export class Passage extends Schema.Class<Passage>("effect-browser/presentation/
   /** Real milliseconds from the film's last step on the page before to the document's being ready. */
   loadedAfter: Millis,
   /** The new document's layout, ready, with the film's `picks`. */
-  layout: Layout,
+  layout: Layout.Layout,
 }) {}
 
 /**
@@ -358,7 +358,7 @@ export const frames = <E = never>(
 
           if (document === seen) return undefined;
           yield* page.ready();
-          const layout = yield* page.layout(options.picks ?? {});
+          const layout = yield* Layout.measure(page, options.picks ?? {});
           const loadedAfter = now() - stepped;
 
           skip(loadedAfter);

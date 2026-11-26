@@ -8,8 +8,10 @@ import { Clock, Duration, Effect, Option, Schedule, Stream } from "effect";
 
 import { Failed, refuse, Timeout, undispatched } from "../BrowserError.ts";
 import type { Box } from "../BrowserEvent.ts";
+import * as Change from "../Change.ts";
 import type { Frame } from "../Frame.ts";
 import { monotonicMillis } from "../internal/clock.ts";
+import * as Overlay from "../Overlay.ts";
 import type { Page } from "../Page.ts";
 import * as Motion from "./internal/pixels.ts";
 
@@ -91,7 +93,8 @@ const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
         // unanswered with no frame coming.
         const look = Effect.gen(function* () {
           const stats = yield* capture.stats();
-          const { frame: latest, overlay } = yield* page.state;
+          const { frame: latest } = yield* page.state;
+          const overlay = Option.getOrUndefined(yield* Overlay.drawn(page));
           const comparing = foreground || overlay !== undefined;
           const arrived = stats.received !== counts.received;
           const unseen = stats.accepted - counts.accepted;
@@ -137,7 +140,7 @@ const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
             if (
               (yield* look) >= millis &&
               (foreground ||
-                (yield* page.state).overlay !== undefined ||
+                Option.isSome(yield* Overlay.drawn(page)) ||
                 counts.received === before)
             )
               return;
@@ -152,7 +155,7 @@ const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
 
     yield* page.afterInput(Effect.void);
     if (options.still === "content") {
-      yield* page.changes();
+      yield* Change.read(page);
       yield* Effect.sleep(Duration.millis(options.quietMillis));
 
       return yield* settled();

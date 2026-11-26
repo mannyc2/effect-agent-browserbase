@@ -46,8 +46,8 @@ import { record } from "./internal/timeline/record.inpage.ts";
 import { sight } from "./internal/timeline/sight.inpage.ts";
 import { addresses } from "./internal/url.ts";
 import type { Picks } from "./Layout.ts";
-import type { FindQuery } from "./Page.ts";
 import type { Pose } from "./Pose.ts";
+import type { FindQuery } from "./Snapshot.ts";
 
 /**
  * The readers, the change record, the overlay and poses for the current document. Make one for
