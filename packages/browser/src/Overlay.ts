@@ -10,6 +10,7 @@
  * sets on its root. Each new document starts without it, and it is drawn again there, with what
  * it last showed, once the document has loaded. It is gone when its scope closes.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { type Effect, type Option, Schema, type Scope } from "effect";
@@ -22,14 +23,28 @@ import type { Page } from "./Page.ts";
 /**
  * What the overlay shows. `Svg` is an SVG document sized to the viewport, whose own `viewBox` maps
  * any design space onto it; its scripts and event handlers are dropped. `Empty` shows nothing.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
  */
 export const Content = Schema.TaggedUnion({
   Svg: { markup: Schema.String },
   Empty: {},
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Content = typeof Content.Type;
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Overlay {
   /**
    * Show `content` in place of what was shown, in one call to the page, after the actions asked
@@ -41,6 +56,10 @@ export interface Overlay {
 /**
  * A layer over the page to draw into, for the scope, that the library's readers never read.
  * One at a time: a second while one is open fails `InvalidRequest`.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const make = (page: Page): Effect.Effect<Overlay, BrowserError, Scope.Scope> =>
   functionsOf(page).overlay;
@@ -48,6 +67,10 @@ export const make = (page: Page): Effect.Effect<Overlay, BrowserError, Scope.Sco
 /**
  * Where the overlay's drawing was last drawn, in viewport CSS pixels, at no call to the page;
  * none with nothing shown.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const drawn = (page: Page): Effect.Effect<Option.Option<ReadonlyArray<Box>>> =>
   functionsOf(page).drawn;

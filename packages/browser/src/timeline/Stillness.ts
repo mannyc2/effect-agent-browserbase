@@ -1,4 +1,9 @@
-/** Screen and foreground stillness over the public page capture and owning clock. */
+/**
+ * Screen and foreground stillness over the public page capture and owning clock.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { Clock, Duration, Effect, Function, Option, Schedule, Stream } from "effect";
 
 import { type BrowserError, Failed, refuse, Timeout, undispatched } from "../BrowserError.ts";
@@ -10,6 +15,11 @@ import * as Overlay from "../Overlay.ts";
 import type { Page } from "../Page.ts";
 import * as Motion from "./internal/pixels.ts";
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options {
   readonly still?: "screen" | "content" | "foreground" | undefined;
   /** How long the screen, or the content, must stay still. */
@@ -188,6 +198,10 @@ const waitStill = (page: Page, options: Options) =>
  * Wait for a ready page to stay still for `quiet`: its screen, by default, with no screencast frame
  * coming; its `"foreground"`, allowing motion it showed before its latest input; or its
  * `"content"`, with no visible change recorded. Fails `Timeout` after `timeout`.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
  */
 export const wait: {
   (options: Options): (page: Page) => Effect.Effect<void, BrowserError>;

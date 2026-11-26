@@ -18,6 +18,7 @@
  * one inside another posed element is posed about its point as if the outer one were not. A new
  * document starts with none.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { type Effect, Schema, type Scope } from "effect";
@@ -27,7 +28,13 @@ import { Point } from "./internal/geometry.ts";
 import { functionsOf } from "./internal/page/functions.ts";
 import type { Page } from "./Page.ts";
 
-/** How an element is posed. A part left out changes nothing: no move, a scale of 1, no turn. */
+/**
+ * How an element is posed. A part left out changes nothing: no move, a scale of 1, no turn.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export const Pose = Schema.Struct({
   /** The element, by a ref from the page's current document, such as a `Layout` place's. */
   ref: Schema.String,
@@ -41,8 +48,18 @@ export const Pose = Schema.Struct({
   origin: Schema.optional(Point),
 });
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Pose = typeof Pose.Type;
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Poses {
   /**
    * Pose these elements, in one call to the page, and take the pose off every other. A ref the
@@ -55,6 +72,10 @@ export interface Poses {
  * Pose the page's own elements for the scope, moved, turned and scaled as a caller says, and put
  * back when the scope closes. One lease at a time: a second while one is open fails
  * `InvalidRequest`.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const make = (page: Page): Effect.Effect<Poses, BrowserError, Scope.Scope> =>
   functionsOf(page).poses;

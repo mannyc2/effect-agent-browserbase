@@ -15,6 +15,7 @@
  * )
  * ```
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Effect, Layer, Option, Predicate, Schema } from "effect";
@@ -53,7 +54,13 @@ const markHistory = (messages: ReadonlyArray<unknown>) => {
 
 const Completion = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
 
-/** Marks the chat completions sent through the `HttpClient` it is given; other requests pass. */
+/**
+ * Marks the chat completions sent through the `HttpClient` it is given; other requests pass.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layer: Layer.Layer<HttpClient.HttpClient, never, HttpClient.HttpClient> = Layer.effect(
   HttpClient.HttpClient,
   Effect.map(HttpClient.HttpClient, (http) =>

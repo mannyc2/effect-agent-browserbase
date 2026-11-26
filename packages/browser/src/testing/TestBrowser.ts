@@ -1,4 +1,9 @@
-/** A seeded browser whose pages use the production lane, suspension gate and event timeline. */
+/**
+ * A seeded browser whose pages use the production lane, suspension gate and event timeline.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { Clock, Deferred, Duration, Effect, Option, Scope, Semaphore } from "effect";
 
 import { type Service, Suspension } from "../Browser.ts";
@@ -12,6 +17,11 @@ import { unsupported } from "./internal/model.ts";
 import { makeIn } from "./internal/page.ts";
 import type * as TestPage from "./TestPage.ts";
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.fnUntraced(function* (
   seeds: ReadonlyArray<TestPage.Seed> = [],
   options: {

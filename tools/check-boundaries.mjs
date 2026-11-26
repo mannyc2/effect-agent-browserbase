@@ -338,6 +338,8 @@ const typecheck = async (deleted, entries) => {
       filter: (path) => !deleted.has(relative(source, path).split("/")[0]),
     });
     await symlink(join(root, "node_modules"), join(work, "node_modules"), "dir");
+    // The manifest names each module as the language service's API allowlist does.
+    await cp(join(core, "package.json"), join(work, "package.json"));
     const remaining =
       entries ?? (await files(join(work, "src"))).map((file) => relative(work, file));
     await writeFile(

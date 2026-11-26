@@ -1,4 +1,9 @@
-/** A bounded window of a page's events, visible changes and frames on the owning clock. */
+/**
+ * A bounded window of a page's events, visible changes and frames on the owning clock.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { type Duration, type Effect, Function, Schema } from "effect";
 
 import { BrowserError } from "./BrowserError.ts";
@@ -8,7 +13,13 @@ import { Frame } from "./Frame.ts";
 import { functionsOf } from "./internal/page/functions.ts";
 import type { Page } from "./Page.ts";
 
-/** A page's events, changes and frames over one window of its browser's host clock. */
+/**
+ * A page's events, changes and frames over one window of its browser's host clock.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Window extends Schema.Class<Window>("effect-browser/Window")({
   page: Schema.String,
   /** Where the window starts, in host monotonic milliseconds on the owning browser’s clock. */
@@ -31,7 +42,13 @@ export class Window extends Schema.Class<Window>("effect-browser/Window")({
   missing: Schema.Array(BrowserError),
 }) {}
 
-/** The window `read` reads, and whether to show what fields hold. */
+/**
+ * The window `read` reads, and whether to show what fields hold.
+ *
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface WindowOptions {
   /**
    * Where the window starts: a previous window, to continue exactly where it ended; a frame, at its
@@ -52,6 +69,10 @@ export interface WindowOptions {
  * The page's events, changes and frames over a window: the frames and events it keeps, at no
  * call, and its changes, in one call, the first starting its record as `Change.read` does. A part
  * that cannot be read is missing, with why; the window fails only for bounds that are not finite.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export const read: {
   (options: WindowOptions): (page: Page) => Effect.Effect<Window, BrowserError>;

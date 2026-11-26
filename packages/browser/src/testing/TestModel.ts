@@ -1,13 +1,28 @@
-/** Prompt-aware model scripts with per-layer request evidence and explicit exhaustion. */
+/**
+ * Prompt-aware model scripts with per-layer request evidence and explicit exhaustion.
+ *
+ * @stability stable
+ * @since 0.3.0
+ */
 import { Context, Effect, Layer, Predicate, Ref, Schema, Stream } from "effect";
 import { AiError, LanguageModel, Model, type Prompt, type Response, type Tool } from "effect/ai";
 
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class ScriptError extends Schema.TaggedError<ScriptError>(
   "effect-browser/testing/TestModel/ScriptError",
 )("ScriptError", {
   detail: Schema.String,
 }) {}
 
+/**
+ * @stability stable
+ * @category guards
+ * @since 0.3.0
+ */
 export const isScriptError = Schema.is(ScriptError);
 
 const normalized = (value: unknown): unknown =>
@@ -21,9 +36,20 @@ const normalized = (value: unknown): unknown =>
         )
       : (value ?? null);
 
-/** Canonical JSON for request identity; object key order never changes a match. */
+/**
+ * Canonical JSON for request identity; object key order never changes a match.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const canonical = (value: unknown): string => JSON.stringify(normalized(value));
 
+/**
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const fingerprint = (tools: ReadonlyArray<Tool.Any>): string =>
   canonical(
     tools
@@ -35,6 +61,11 @@ export const fingerprint = (tools: ReadonlyArray<Tool.Any>): string =>
       .toSorted((left, right) => left.name.localeCompare(right.name)),
   );
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Request {
   readonly turn: number;
   readonly options: LanguageModel.ProviderOptions;
@@ -43,14 +74,29 @@ export interface Request {
   readonly toolsFingerprint: string;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export interface Reply {
   readonly parts: ReadonlyArray<Response.PartEncoded>;
   /** Override delivery to model pacing, stalls, or a broken-off stream without changing generation. */
   readonly stream?: Stream.Stream<Response.StreamPartEncoded, AiError.AiError> | undefined;
 }
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type Turn = (request: Request) => Effect.Effect<Reply, ScriptError | AiError.AiError>;
 
+/**
+ * @stability stable
+ * @category services
+ * @since 0.3.0
+ */
 export class TestModel extends Context.Service<
   TestModel,
   {
@@ -66,7 +112,13 @@ const failed = (error: ScriptError) =>
     reason: new AiError.InvalidRequestError({ description: error.detail }),
   });
 
-/** Translate the finite response vocabulary at the streaming provider boundary. */
+/**
+ * Translate the finite response vocabulary at the streaming provider boundary.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const streamed = (
   parts: ReadonlyArray<Response.PartEncoded>,
 ): ReadonlyArray<Response.StreamPartEncoded> =>
@@ -90,23 +142,44 @@ export const streamed = (
     return [part];
   });
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const finish = (reason: "stop" | "tool-calls" = "stop"): Response.PartEncoded => ({
   type: "finish",
   reason,
   usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
 });
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const text = (value: string): ReadonlyArray<Response.PartEncoded> => [
   { type: "text", text: value },
   finish(),
 ];
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const reply = (
   parts: ReadonlyArray<Response.PartEncoded>,
   stream?: Reply["stream"],
 ): Reply => ({ parts, stream });
 
-/** Call ids are explicit or local to a scripted turn; there is no process-global counter. */
+/**
+ * Call ids are explicit or local to a scripted turn; there is no process-global counter.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const call = (name: string, params: unknown, id = ""): Response.PartEncoded => ({
   type: "tool-call",
   id,
@@ -114,10 +187,20 @@ export const call = (name: string, params: unknown, id = ""): Response.PartEncod
   params,
 });
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const calling = (
   ...calls: ReadonlyArray<Response.PartEncoded>
 ): ReadonlyArray<Response.PartEncoded> => [...calls, finish("tool-calls")];
 
+/**
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const textOf = (prompt: Prompt.Prompt): string =>
   prompt.content
     .flatMap((message) =>
@@ -133,7 +216,13 @@ export const textOf = (prompt: Prompt.Prompt): string =>
     )
     .join("\n");
 
-/** Ref allocation belongs to Layer construction, so rebuilding the layer starts the script afresh. */
+/**
+ * Ref allocation belongs to Layer construction, so rebuilding the layer starts the script afresh.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layer = (
   turns: ReadonlyArray<Turn> | { readonly respond: Turn },
   options: {

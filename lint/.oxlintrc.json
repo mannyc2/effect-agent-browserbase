@@ -12,6 +12,7 @@
     { "name": "stylistic", "specifier": "./plugins/style.js" },
     { "name": "exports", "specifier": "./plugins/exports.ts" },
     { "name": "directives", "specifier": "./plugins/directives.ts" },
+    { "name": "tags", "specifier": "./plugins/tags.ts" },
     { "name": "vite-plus", "specifier": "vite-plus/oxlint-plugin" }
   ],
   "options": { "typeAware": true },
@@ -115,6 +116,8 @@
       "files": ["**/packages/*/src/**/*.ts"],
       "rules": {
         "exports/no-self-barrel-import": "error",
+        // Each public export's doc carries `@stability`, `@category` and `@since`, as Effect's do.
+        "tags/public": "error",
         "eslint/no-restricted-properties": [
           "error",
           // Library code never unwraps: each accessor below throws or leaves the caller's fiber.

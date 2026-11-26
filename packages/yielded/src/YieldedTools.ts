@@ -13,6 +13,7 @@
  *
  * `Seed` is a finished run's thread with the tools' state, to continue from.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { RunContextPreparation } from "@yielded/agent/run-options";
@@ -30,9 +31,18 @@ import * as Moments from "./Moments.ts";
  * What the model sees of the page: `BrowserTools.Vision`, or `"moments"`, in its thread, what the
  * tab did since its previous turn, with frames from a running screencast, or one screenshot
  * without one.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
  */
 export type Vision = BrowserTools.Vision | "moments";
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface LayerOptions extends Omit<BrowserTools.LayerOptions, "vision"> {
   /** What the model sees of the page; `true` by default. Moments' frames keep the CSS pixels. */
   readonly vision?: Vision | undefined;
@@ -95,6 +105,10 @@ const batchedTools = binding(BrowserTools.make());
 /**
  * The tools and their layer. `"batched"`, the default, lets `act` take up to eight actions; with
  * `"single"`, it takes one.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
  */
 export function make(options?: { readonly mode?: "batched" }): typeof batchedTools;
 export function make(options: { readonly mode: "single" }): typeof singleTools;
@@ -103,7 +117,13 @@ export function make(options: { readonly mode?: "single" | "batched" } = {}) {
   return options.mode === "single" ? singleTools : batchedTools;
 }
 
-/** Finished conversation and adapter context; in-flight agent runs remain owned by Yielded. */
+/**
+ * Finished conversation and adapter context; in-flight agent runs remain owned by Yielded.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
 export class Seed extends Schema.Class<Seed>("@effect-browser/yielded/YieldedTools/Seed")({
   history: Prompt.Prompt,
   threadId: Schema.optional(Schema.String),
@@ -113,4 +133,9 @@ export class Seed extends Schema.Class<Seed>("@effect-browser/yielded/YieldedToo
   observations: Schema.Array(Snapshot),
 }) {}
 
+/**
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const load = Schema.decodeUnknownEffect(Schema.toCodecJson(Seed));

@@ -5,6 +5,7 @@
  * for a browser operation that failed. The tools return it as their result (`failureMode:
  * "return"`), so the model reads it and the run goes on.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Schema } from "effect";
@@ -12,6 +13,11 @@ import { Schema } from "effect";
 import type { BrowserError } from "../BrowserError.ts";
 import { dispatchOf, told } from "./internal/receipts.ts";
 
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class ToolError extends Schema.TaggedError<ToolError>("effect-browser/ai/ToolError")(
   "ToolError",
   {
@@ -22,9 +28,20 @@ export class ToolError extends Schema.TaggedError<ToolError>("effect-browser/ai/
   },
 ) {}
 
+/**
+ * @stability stable
+ * @category guards
+ * @since 0.3.0
+ */
 export const isToolError = Schema.is(ToolError);
 
-/** A browser operation's failure as the tools report it. */
+/**
+ * A browser operation's failure as the tools report it.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const fromBrowserError = (error: BrowserError) =>
   new ToolError({
     code: error.reason._tag === "InvalidRequest" ? "invalid" : "browser",

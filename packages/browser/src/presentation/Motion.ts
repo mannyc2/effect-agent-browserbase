@@ -2,6 +2,7 @@
  * Pointer motion as a complete, bounded schedule, independent of browser input and transport. A
  * presenter takes a planner as a value: `lognormal` here, or another, such as recorded strokes.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Effect, Random } from "effect";
@@ -15,13 +16,43 @@ import {
 } from "../internal/geometry.ts";
 
 export {
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   Point,
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   Sample,
+  /**
+   * @stability stable
+   * @category schemas
+   * @since 0.3.0
+   */
   Plan,
+  /**
+   * @stability stable
+   * @category constants
+   * @since 0.3.0
+   */
   maximumSamples,
+  /**
+   * @stability stable
+   * @category constants
+   * @since 0.3.0
+   */
   maximumDurationMillis,
 } from "../internal/geometry.ts";
 
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
 export type { Planner } from "../internal/geometry.ts";
 
 // These are the research's tuned two-stroke parameters. Width scaling was not evaluated, so the
@@ -134,5 +165,9 @@ const plan: Planner["plan"] = Effect.fnUntraced(function* (from, to) {
 /**
  * The research's tuned two-stroke sigma-lognormal model: a fast stroke toward the target and a
  * slower one that homes in on it, with a little bend, drawn from `Random`.
+ *
+ * @stability stable
+ * @category constants
+ * @since 0.3.0
  */
 export const lognormal: Planner = { plan };

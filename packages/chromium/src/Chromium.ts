@@ -7,6 +7,7 @@
  * Signals are the program's to handle: run it with `NodeRuntime.runMain`, which interrupts it on
  * SIGINT and SIGTERM, so the browser closes with its scope.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Config, Effect, Layer } from "effect";
@@ -14,6 +15,11 @@ import * as Browser from "effect-browser/Browser";
 import { type BrowserError, Failed, reasonOf, undispatched } from "effect-browser/BrowserError";
 import { chromium } from "playwright-core";
 
+/**
+ * @stability stable
+ * @category options
+ * @since 0.3.0
+ */
 export interface Options extends Browser.Options {
   /** Defaults to true. */
   readonly headless?: boolean | undefined;
@@ -55,7 +61,13 @@ const launchFailed = (cause: unknown) =>
       )
     : failed("launch", launchTimeoutMillis)(cause);
 
-/** Launch Chromium and open a `Browser` over a fresh context. */
+/**
+ * Launch Chromium and open a `Browser` over a fresh context.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const make = Effect.fn("Chromium.make")(function* (options: Options = {}) {
   const launched = yield* Effect.acquireRelease(
     Effect.tryPromise({
@@ -93,11 +105,23 @@ export const make = Effect.fn("Chromium.make")(function* (options: Options = {})
   return yield* Browser.make(context, { provider: "chromium" }, options);
 });
 
-/** A `Browser` Layer that launches Chromium when built and closes it when released. */
+/**
+ * A `Browser` Layer that launches Chromium when built and closes it when released.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layer = (options: Options = {}): Layer.Layer<Browser.Browser, BrowserError> =>
   Layer.effect(Browser.Browser, make(options));
 
-/** `layer`, with the options as `Config` values. */
+/**
+ * `layer`, with the options as `Config` values.
+ *
+ * @stability stable
+ * @category layers
+ * @since 0.3.0
+ */
 export const layerConfig = (
   config: Config.Wrap<Options>,
 ): Layer.Layer<Browser.Browser, BrowserError | Config.ConfigError> =>

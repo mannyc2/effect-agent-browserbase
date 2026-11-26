@@ -6,6 +6,7 @@
  * reached the browser first. `consequence` says what that leaves: what was lost, and whether the
  * call can be repeated. `message` is a sentence for operators.
  *
+ * @stability stable
  * @since 0.3.0
  */
 import { Effect, Schema } from "effect";
@@ -13,7 +14,13 @@ import { Effect, Schema } from "effect";
 import { DisconnectCause } from "./BrowserEvent.ts";
 import * as Url from "./internal/url.ts";
 
-/** The operation did not finish in time. */
+/**
+ * The operation did not finish in time.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class Timeout extends Schema.TaggedError<Timeout>("effect-browser/BrowserError/Timeout")(
   "Timeout",
   {
@@ -28,6 +35,10 @@ export class Timeout extends Schema.TaggedError<Timeout>("effect-browser/Browser
 /**
  * The operation waited its turn behind others on its page and was not given one in time, or was
  * asked to fail fast: the page may be well, only busy.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
  */
 export class Busy extends Schema.TaggedError<Busy>("effect-browser/BrowserError/Busy")("Busy", {
   waitedMillis: Schema.Finite,
@@ -41,7 +52,13 @@ export class Busy extends Schema.TaggedError<Busy>("effect-browser/BrowserError/
   }
 }
 
-/** Input is withheld by a scoped suspension; nothing was dispatched. */
+/**
+ * Input is withheld by a scoped suspension; nothing was dispatched.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class Suspended extends Schema.TaggedError<Suspended>(
   "effect-browser/BrowserError/Suspended",
 )("Suspended", {}) {
@@ -50,7 +67,13 @@ export class Suspended extends Schema.TaggedError<Suspended>(
   }
 }
 
-/** The browser has as many pages open as `maxPages` allows, and none closed in time. */
+/**
+ * The browser has as many pages open as `maxPages` allows, and none closed in time.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class Limit extends Schema.TaggedError<Limit>("effect-browser/BrowserError/Limit")("Limit", {
   maxPages: Schema.Int,
 }) {
@@ -59,7 +82,13 @@ export class Limit extends Schema.TaggedError<Limit>("effect-browser/BrowserErro
   }
 }
 
-/** A ref from an earlier snapshot no longer names an element on the page. */
+/**
+ * A ref from an earlier snapshot no longer names an element on the page.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class StaleRef extends Schema.TaggedError<StaleRef>("effect-browser/BrowserError/StaleRef")(
   "StaleRef",
   {
@@ -71,7 +100,13 @@ export class StaleRef extends Schema.TaggedError<StaleRef>("effect-browser/Brows
   }
 }
 
-/** What the operation looked for is not on the page. */
+/**
+ * What the operation looked for is not on the page.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class NotFound extends Schema.TaggedError<NotFound>("effect-browser/BrowserError/NotFound")(
   "NotFound",
   {
@@ -83,7 +118,13 @@ export class NotFound extends Schema.TaggedError<NotFound>("effect-browser/Brows
   }
 }
 
-/** The element exists but cannot take this input: covered, disabled, hidden or the wrong kind. */
+/**
+ * The element exists but cannot take this input: covered, disabled, hidden or the wrong kind.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class NotActionable extends Schema.TaggedError<NotActionable>(
   "effect-browser/BrowserError/NotActionable",
 )("NotActionable", {
@@ -94,7 +135,13 @@ export class NotActionable extends Schema.TaggedError<NotActionable>(
   }
 }
 
-/** A navigation failed, for example on a DNS error or a refused connection. */
+/**
+ * A navigation failed, for example on a DNS error or a refused connection.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class NavigationFailed extends Schema.TaggedError<NavigationFailed>(
   "effect-browser/BrowserError/NavigationFailed",
 )("NavigationFailed", {
@@ -117,6 +164,10 @@ const closedBy = {
 /**
  * The page is gone: it was closed (`page`) or crashed, or its browser was lost for one of the
  * browser's `DisconnectCause`s.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
  */
 export class Closed extends Schema.TaggedError<Closed>("effect-browser/BrowserError/Closed")(
   "Closed",
@@ -129,7 +180,13 @@ export class Closed extends Schema.TaggedError<Closed>("effect-browser/BrowserEr
   }
 }
 
-/** The request itself is invalid, such as a ref that is not a ref or a point off the screen. */
+/**
+ * The request itself is invalid, such as a ref that is not a ref or a point off the screen.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class InvalidRequest extends Schema.TaggedError<InvalidRequest>(
   "effect-browser/BrowserError/InvalidRequest",
 )("InvalidRequest", {
@@ -140,7 +197,13 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>(
   }
 }
 
-/** The input policy refused the action before any input was sent. */
+/**
+ * The input policy refused the action before any input was sent.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class PolicyDenied extends Schema.TaggedError<PolicyDenied>(
   "effect-browser/BrowserError/PolicyDenied",
 )("PolicyDenied", {
@@ -153,7 +216,13 @@ export class PolicyDenied extends Schema.TaggedError<PolicyDenied>(
   }
 }
 
-/** The input policy did not release its hold within its own bound. */
+/**
+ * The input policy did not release its hold within its own bound.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class PolicyTimeout extends Schema.TaggedError<PolicyTimeout>(
   "effect-browser/BrowserError/PolicyTimeout",
 )("PolicyTimeout", {
@@ -164,7 +233,13 @@ export class PolicyTimeout extends Schema.TaggedError<PolicyTimeout>(
   }
 }
 
-/** The requested event cursor fell behind the browser's bounded replay history. */
+/**
+ * The requested event cursor fell behind the browser's bounded replay history.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class EventHistoryExpired extends Schema.TaggedError<EventHistoryExpired>(
   "effect-browser/BrowserError/EventHistoryExpired",
 )("EventHistoryExpired", {
@@ -177,7 +252,13 @@ export class EventHistoryExpired extends Schema.TaggedError<EventHistoryExpired>
   }
 }
 
-/** The browser, the connection or the provider failed in a way the other reasons do not cover. */
+/**
+ * The browser, the connection or the provider failed in a way the other reasons do not cover.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class Failed extends Schema.TaggedError<Failed>("effect-browser/BrowserError/Failed")(
   "Failed",
   {
@@ -189,7 +270,13 @@ export class Failed extends Schema.TaggedError<Failed>("effect-browser/BrowserEr
   }
 }
 
-/** Caller code threw in the page's main world. Its source and payload stay private. */
+/**
+ * Caller code threw in the page's main world. Its source and payload stay private.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class Threw extends Schema.TaggedError<Threw>("effect-browser/BrowserError/Threw")(
   "Threw",
   {},
@@ -199,7 +286,13 @@ export class Threw extends Schema.TaggedError<Threw>("effect-browser/BrowserErro
   }
 }
 
-/** What went wrong, as `BrowserError`'s `reason`. */
+/**
+ * What went wrong, as `BrowserError`'s `reason`.
+ *
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export const BrowserErrorReason = Schema.Union([
   Timeout,
   Busy,
@@ -218,8 +311,18 @@ export const BrowserErrorReason = Schema.Union([
   Threw,
 ]);
 
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export type BrowserErrorReason = typeof BrowserErrorReason.Type;
 
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
 export class BrowserError extends Schema.TaggedError<BrowserError>("effect-browser/BrowserError")(
   "BrowserError",
   {
@@ -233,10 +336,22 @@ export class BrowserError extends Schema.TaggedError<BrowserError>("effect-brows
   }
 }
 
-/** Whether a value is a `BrowserError`. */
+/**
+ * Whether a value is a `BrowserError`.
+ *
+ * @stability stable
+ * @category guards
+ * @since 0.3.0
+ */
 export const isBrowserError: (u: unknown) => u is BrowserError = Schema.is(BrowserError);
 
-/** Whether a value is one of `BrowserError`'s reasons. */
+/**
+ * Whether a value is one of `BrowserError`'s reasons.
+ *
+ * @stability stable
+ * @category guards
+ * @since 0.3.0
+ */
 export const isBrowserErrorReason: (u: unknown) => u is BrowserErrorReason =
   Schema.is(BrowserErrorReason);
 
@@ -247,13 +362,23 @@ export const isBrowserErrorReason: (u: unknown) => u is BrowserErrorReason =
  * taken effect, so look first, as a walk's expectation does; `"pointless"`, as it fails again unless
  * something changes, such as
  * a new ref; or `"resume"`, reading events again from a newer cursor.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
  */
 export interface Consequence {
   readonly lost: "nothing" | "page" | "session";
   readonly repeat: "safe" | "check" | "pointless" | "resume";
 }
 
-/** What `error` leaves, from its reason and whether it was dispatched alone. */
+/**
+ * What `error` leaves, from its reason and whether it was dispatched alone.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.3.0
+ */
 export const consequence = ({ reason, dispatched }: BrowserError): Consequence => {
   const repeat = dispatched ? "check" : "safe";
 
@@ -283,19 +408,43 @@ export const consequence = ({ reason, dispatched }: BrowserError): Consequence =
   }
 };
 
-/** A failure before any of the operation's input reached the page. */
+/**
+ * A failure before any of the operation's input reached the page.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const undispatched = (operation: string, reason: BrowserErrorReason) =>
   new BrowserError({ operation, reason, dispatched: false });
 
-/** Fail an operation before dispatch, preserving its typed reason. */
+/**
+ * Fail an operation before dispatch, preserving its typed reason.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const failWith = (operation: string, reason: BrowserErrorReason) =>
   Effect.fail(undispatched(operation, reason));
 
-/** Refuse an invalid request before sending anything. */
+/**
+ * Refuse an invalid request before sending anything.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const refuse = (operation: string, detail: string) =>
   failWith(operation, new InvalidRequest({ detail }));
 
-/** Translate a protocol/provider failure, redacting diagnostic addresses by default. */
+/**
+ * Translate a protocol/provider failure, redacting diagnostic addresses by default.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const reasonOf = (
   cause: unknown,
   timeoutMillis?: number,
@@ -318,7 +467,13 @@ export const reasonOf = (
   return new Failed({ detail: line.replace(/^[\w.]+: /, "") });
 };
 
-/** A native call whose action wrapper owns any later dispatch evidence. */
+/**
+ * A native call whose action wrapper owns any later dispatch evidence.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.3.0
+ */
 export const call = <A>(
   operation: string,
   run: () => Promise<A>,
