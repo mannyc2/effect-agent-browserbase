@@ -3,14 +3,15 @@ import { assert, it } from "@effect/vitest";
 import { Arbitrary, Deferred, Effect, Fiber, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
-import { BrowserPaint, Frame } from "../../src/Frame.ts";
+import * as Frame from "../../src/Frame.ts";
 import { monotonicMillis } from "../../src/internal/clock.ts";
 import * as Lifecycle from "../../src/presentation/internal/feed.ts";
 import * as Stage from "../../src/presentation/Stage.ts";
 import * as TestPage from "../../src/testing/TestPage.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 
 const frame = (page: string, document = 0, at = 0) =>
-  new Frame({
+  new Frame.Frame({
     page,
     document,
     session: "test-browser",
@@ -20,7 +21,7 @@ const frame = (page: string, document = 0, at = 0) =>
     width: 10,
     height: 10,
     receivedAt: at,
-    timing: new BrowserPaint({ timestamp: at / 1000, hostTime: at, uncertaintyMillis: 0 }),
+    timing: new Frame.BrowserPaint({ timestamp: at / 1000, hostTime: at, uncertaintyMillis: 0 }),
   });
 
 it.prop(
@@ -60,10 +61,9 @@ it.effect("publishes only current-document paint and stops retired feeds after a
     const delayed = yield* Deferred.make<void>();
     let held = false;
 
-    const page = {
-      ...first.page,
-      capture: (options?: Parameters<typeof first.page.capture>[0]) =>
-        Effect.map(first.page.capture(options), (capture) => ({
+    const page = PageFunctions.replace(first.page, {
+      capture: (options) =>
+        Effect.map(Frame.capture(first.page, options), (capture) => ({
           ...capture,
           stream: capture.stream.pipe(
             Stream.mapEffect((frame) =>
@@ -71,11 +71,11 @@ it.effect("publishes only current-document paint and stops retired feeds after a
             ),
           ),
         })),
-    };
+    });
 
-    const probe = yield* first.page.capture();
+    const probe = yield* Frame.capture(first.page);
     const stage = yield* Stage.make();
-    const frames: Array<Frame> = [];
+    const frames: Array<Frame.Frame> = [];
 
     yield* stage.frames.pipe(
       Stream.runForEach((frame) =>

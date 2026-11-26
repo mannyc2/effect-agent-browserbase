@@ -16,13 +16,13 @@ import {
   TrackEvent,
 } from "../../src/BrowserEvent.ts";
 import * as Change from "../../src/Change.ts";
-import { BrowserPaint, Frame, Screenshot } from "../../src/Frame.ts";
+import * as Frame from "../../src/Frame.ts";
 import { boundsOf, within } from "../../src/internal/timeline/window.ts";
-import type { Page } from "../../src/Page.ts";
 import * as Snapshot from "../../src/Snapshot.ts";
 import * as Moment from "../../src/timeline/Moment.ts";
 import * as Window from "../../src/Window.ts";
 import { Site, SiteLayer } from "../fixtures.ts";
+import * as PageFunctions from "../support/PageFunctions.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
 const texts = (prompt: Prompt.Prompt) =>
@@ -38,12 +38,12 @@ const pictures = (prompt: Prompt.Prompt) =>
   );
 
 const shot = (hostTime: number, byte: number) =>
-  new Frame({
+  new Frame.Frame({
     page: "p1",
     session: "s1",
     connection: "fixture-connection",
     data: new Uint8Array([0xff, 0xd8, byte]),
-    timing: new Screenshot({ hostTime, uncertaintyMillis: 0 }),
+    timing: new Frame.Screenshot({ hostTime, uncertaintyMillis: 0 }),
     receivedAt: hostTime,
     width: 800,
     height: 600,
@@ -301,9 +301,9 @@ const framesAt = (at: ReadonlyArray<number>) =>
 
 /** A screencast frame: a paint, at its host time. */
 const paintedAt = (hostTime: number) =>
-  new Frame({
+  new Frame.Frame({
     ...shot(hostTime, 3),
-    timing: new BrowserPaint({ timestamp: hostTime + 1e12, hostTime, uncertaintyMillis: 1 }),
+    timing: new Frame.BrowserPaint({ timestamp: hostTime + 1e12, hostTime, uncertaintyMillis: 1 }),
   });
 
 // How a bound is asked: a host time, a frame's paint or, for a start, a previous window's end or a
@@ -334,7 +334,7 @@ describe("a window", () => {
       const first = within({ since: a, until: b }, tracks.events, tracks.frames);
       const second = within({ since: b, until: c }, tracks.events, tracks.frames);
 
-      const at = (frames: ReadonlyArray<Frame>, time: number) =>
+      const at = (frames: ReadonlyArray<Frame.Frame>, time: number) =>
         frames.filter((frame) => frame.hostTime === time);
 
       // Every event after the first's start, up to the second's end, once and in order, apart
@@ -555,7 +555,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* start("/slots");
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         yield* Effect.sleep(Duration.millis(300));
         yield* page.click({ x: 300, y: 320 });
         yield* Effect.sleep(Duration.millis(400));
@@ -699,11 +702,11 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         if (action?._tag !== "Action" || navigation?._tag !== "Navigated")
           return yield* Effect.die("missing native navigation evidence");
         assert.isBelow(navigation.at, action.at);
-        const picture = yield* page.frame({ maxAge: 0 });
+        const picture = yield* Frame.read(page, { maxAge: 0 });
 
-        const painted = new Frame({
+        const painted = new Frame.Frame({
           ...picture,
-          timing: new Screenshot({
+          timing: new Frame.Screenshot({
             hostTime: (navigation.at + action.at) / 2,
             uncertaintyMillis: 0,
           }),
@@ -716,11 +719,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           until: (action.startedAt + navigation.at) / 2,
         });
 
-        const cached: Page = {
-          ...page,
+        const cached = PageFunctions.replace(page, {
           frame: (options) =>
-            options?.maxAge === 0 ? page.frame(options) : Effect.succeed(painted),
-        };
+            options?.maxAge === 0 ? Frame.read(page, options) : Effect.succeed(painted),
+        });
 
         const moment = yield* Moment.read(cached, { since: during });
         const following = yield* Moment.read(page, { since: moment });
@@ -744,7 +746,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       Effect.gen(function* () {
         const page = yield* start("/slots");
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         yield* Effect.sleep(Duration.millis(300));
         yield* page.click({ x: 300, y: 320 });
         yield* Effect.sleep(Duration.millis(1500));
@@ -807,7 +812,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             }, shown),
           );
 
-        yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         yield* Change.read(page);
         yield* price("$1");
         yield* Effect.sleep(Duration.millis(300));
@@ -819,7 +827,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         yield* page.click(menu?.ref ?? "no menu");
         yield* Effect.sleep(Duration.millis(2900));
         const window = yield* Window.read(page, { since: Duration.seconds(2), until });
-        const kept = { events: yield* page.recentEvents, frames: yield* page.recentFrames };
+        const kept = { events: yield* page.recentEvents, frames: yield* Frame.recent(page) };
 
         assert.deepStrictEqual([window.since, window.until], [until - 2000, until]);
         assert.isEmpty(window.missing);

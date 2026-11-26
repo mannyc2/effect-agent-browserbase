@@ -6,6 +6,7 @@ import { Duration, Effect, Fiber, Option } from "effect";
 
 import { behindProxy } from "../../../../tools/testing/cdp-proxy.ts";
 import * as Cdp from "../../src/Cdp.ts";
+import * as Frame from "../../src/Frame.ts";
 import * as Stage from "../../src/presentation/Stage.ts";
 import { animated, collect, eventually, session } from "../support/NativeFrames.ts";
 import * as TestCdp from "../support/TestCdp.ts";
@@ -206,7 +207,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* stage.present(page);
         yield* eventually(Effect.sync(() => frames.length >= 3));
         for (let index = 0; index < 8; index++) {
-          yield* page.zoom({ x: 10 * index, y: 0, width: 120, height: 200 });
+          yield* Frame.zoom(page, { x: 10 * index, y: 0, width: 120, height: 200 });
           yield* Effect.sleep("50 millis");
         }
         yield* Effect.sleep("300 millis");

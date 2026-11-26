@@ -6,6 +6,7 @@ import { type Browser, chromium } from "playwright-core";
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { BrowserError } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Frame from "../src/Frame.ts";
 import * as WorkerCdp from "../src/internal/cdp/workerd.ts";
 import * as Snapshot from "../src/Snapshot.ts";
 import { nativeConnect } from "./nativeConnector.ts";
@@ -74,7 +75,7 @@ it.live("uses the supplied connector and disconnects without ending its remote b
 
       yield* page.goto("data:text/html,<button>Runtime</button>");
       assert.include((yield* Snapshot.read(page)).text, 'button "Runtime"');
-      assert.isAbove((yield* page.frame()).data.length, 100);
+      assert.isAbove((yield* Frame.read(page)).data.length, 100);
     }).pipe(Effect.scoped);
 
     assert.deepStrictEqual(calls, [
@@ -196,7 +197,7 @@ it.live("connects through the global WebSocket using Playwright's public CDP tra
 
     yield* page.goto("data:text/html,<button>Native</button>");
     assert.include((yield* Snapshot.read(page)).text, 'button "Native"');
-    assert.isAbove((yield* page.frame()).data.length, 100);
+    assert.isAbove((yield* Frame.read(page)).data.length, 100);
   }).pipe(Effect.scoped),
 );
 

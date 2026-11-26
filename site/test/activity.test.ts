@@ -24,16 +24,16 @@ describe("activityOf", () => {
     const activity = activityOf([
       span("run", null, "demo.take", 0, 100),
       span("agent", "run", "invoke_agent bench-arm-5", 1, 90),
-      span("shot", "agent", "Page.screenshot", 2, 3),
+      span("shot", "agent", "Frame.read", 2, 3),
       span("model", "agent", "AgentRuntime.model", 3, 10),
       span("click", "agent", "execute_tool click_at", 10, 12),
       span("still", "agent", "execute_tool wait_still", 12, 20),
       span("done", "agent", "execute_tool done", 20, 21),
       // bea3a16 omitted arm 6's automatic looks from the replay.
       span("moment", "agent", "Moment.read", 22, 25),
-      span("frame", "moment", "Page.frame", 23, 24),
+      span("frame", "moment", "Frame.read", 23, 24),
       // The narrator's pictures are not the agent's looks.
-      span("narrator", "run", "Page.screenshot", 5, 6),
+      span("narrator", "run", "Frame.read", 5, 6),
       span("narrated-moment", "run", "Moment.read", 26, 27),
     ]);
 

@@ -9,6 +9,7 @@ import { Arbitrary, Effect, Redacted } from "effect";
 import { BrowserError, consequence } from "../src/BrowserError.ts";
 import { DisconnectCause } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Frame from "../src/Frame.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const timeoutOf = (error: BrowserError) =>
@@ -81,9 +82,9 @@ it.live("a screenshot timeout reports the action timeout", () =>
         }),
       );
 
-      const error = yield* Effect.flip(page.screenshot({ maxAge: 0 }));
+      const error = yield* Effect.flip(Frame.read(page, { maxAge: 0 }));
 
-      assert.deepStrictEqual([error.operation, timeoutOf(error)], ["screenshot", 1000]);
+      assert.deepStrictEqual([error.operation, timeoutOf(error)], ["frame", 1000]);
     }).pipe(Effect.scoped),
   ),
 );

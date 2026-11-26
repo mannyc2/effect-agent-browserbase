@@ -8,8 +8,15 @@ import { Duration, Effect, Option, Result, Schedule, Schema, type Scope } from "
 import { Base64 } from "effect/encoding";
 
 import { BrowserError, Failed, InvalidRequest } from "../../BrowserError.ts";
-import { Frame, Image, Screenshot } from "../../Frame.ts";
-import { type FrameOptions, type Paint, Region, type ScreenshotOptions, Zoom } from "../../Page.ts";
+import {
+  Frame,
+  type FrameOptions,
+  Image,
+  type Paint,
+  Region,
+  Screenshot,
+  Zoom,
+} from "../../Frame.ts";
 import * as BrowserClock from "../clock.ts";
 import type { Point } from "../geometry.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
@@ -61,7 +68,7 @@ export const pngSize = (bytes: Uint8Array): Size | undefined => {
 export type Format = "jpeg" | "png";
 
 // A picture's pixels: CSS pixels, or the screen's own.
-type Scale = NonNullable<ScreenshotOptions["scale"]>;
+type Scale = NonNullable<FrameOptions["scale"]>;
 
 // The part of `Page.getLayoutMetrics` a clip needs: the visual viewport's place in the document and
 // its pinch scale, and the content's size in device and CSS pixels, whose ratio is the device's.
@@ -382,25 +389,23 @@ const camera = (
     }).pipe(capture.excluding, within(operation));
 };
 
-// A duration in milliseconds, or NaN for an input that is no duration.
-const millisOf = (input: Duration.Input) =>
-  Option.match(Duration.fromInput(input), { onNone: () => Number.NaN, onSome: Duration.toMillis });
-
 // The newest screencast frame, if it shows the page as the caller asked: painted at most `maxAge`
 // ago at the earliest its timing allows, after the current document began, and with
 // `after: "input"` after the page's latest input, which a read asks in its turn, once the action
 // in flight has ended. It must have the viewport's size, as a new picture would. A screencast sends
 // only changes and can miss a final paint, so a frame is only ever as current as its age, and a
 // page that keeps painting while the next document loads leaves its own frames newest when the
-// navigation returns.
+// navigation returns. A screencast frame is a JPEG of the viewport's CSS size, so a PNG or a
+// picture in device pixels is always new.
 const reuse =
   (page: PageContext, bridge: Bridge, viewport: Viewport, capture: Capture.Controller) =>
-  (operation: string, options: FrameOptions) =>
+  (options: FrameOptions) =>
     Effect.gen(function* () {
-      const maxAge = millisOf(options.maxAge ?? defaultMaxAge);
+      const maxAge = BrowserClock.millisOf(options.maxAge ?? defaultMaxAge);
 
       if (!(maxAge >= 0))
-        return yield* refuse(operation, "maxAge must be a duration of zero or more");
+        return yield* refuse("frame", "maxAge must be a duration of zero or more");
+      if (options.format === "png" || options.scale === "device") return Option.none<Frame>();
       const latest = yield* capture.latest;
       const known = viewport.knownViewport();
       const { activity } = page;
@@ -476,57 +481,31 @@ export const make = Effect.fnUntraced(function* (
   const picture = camera(page, viewport, capture, emulated);
   const reusable = reuse(page, bridge, viewport, capture);
   // Pictures in flight are shared, never kept: their callers say how old one may be.
-  const screenshots = lane.shared<Image>("screenshot", false);
   const frames = lane.shared<Frame>("frame", false);
-
-  // A caller that acts and then looks must see what its action did, so a screenshot waits for the
-  // action in flight and reuses only a frame painted after the page's latest input.
-  const screenshot = (options: ScreenshotOptions = {}) =>
-    screenshots(
-      JSON.stringify([
-        millisOf(options.maxAge ?? defaultMaxAge),
-        options.clip,
-        options.quality,
-        options.format,
-        options.scale,
-      ]),
-      Effect.gen(function* () {
-        // A reused frame is a JPEG of the viewport's CSS size, so a PNG or a device picture is new.
-        const reused =
-          options.clip === undefined && options.format !== "png" && options.scale !== "device"
-            ? yield* reusable("screenshot", { maxAge: options.maxAge, after: "input" })
-            : Option.none<Frame>();
-
-        const image = Option.isSome(reused)
-          ? reused.value.image
-          : yield* picture(
-              "screenshot",
-              options.quality ?? 80,
-              options.clip,
-              options.format,
-              options.scale,
-            );
-
-        yield* Effect.annotateCurrentSpan({ source: sourceOf(reused), bytes: image.data.length });
-
-        return image;
-      }),
-    ).pipe(span("Page.screenshot"), owned);
 
   // A new screenshot has no paint time, only the host interval in which it was taken.
   const taken = (options: FrameOptions) =>
     Effect.gen(function* () {
-      const reused = yield* reusable("frame", options);
+      const reused = yield* reusable(options);
 
       yield* Effect.annotateCurrentSpan("source", sourceOf(reused));
       if (Option.isSome(reused)) return reused.value;
       const startedAt = now();
-      const image = yield* picture("frame", 80);
+
+      const image = yield* picture(
+        "frame",
+        options.quality ?? 80,
+        undefined,
+        options.format,
+        options.scale,
+      );
+
       const finishedAt = now();
 
       return new Frame({
         page: id,
         data: image.data,
+        mediaType: image.mediaType,
         timing: new Screenshot({
           hostTime: startedAt + (finishedAt - startedAt) / 2,
           uncertaintyMillis: (finishedAt - startedAt) / 2,
@@ -541,25 +520,31 @@ export const make = Effect.fnUntraced(function* (
   // A frame of a stated age that the screencast has costs nothing and waits for no action; one
   // that must follow the latest input, or a new screenshot, waits for the action in flight.
   const frame = (options: FrameOptions = {}) =>
-    (options.after === "input"
-      ? Effect.succeed(Option.none<Frame>())
-      : reusable("frame", options)
-    ).pipe(
+    (options.after === "input" ? Effect.succeed(Option.none<Frame>()) : reusable(options)).pipe(
       Effect.flatMap(
         Option.match({
           onSome: (reused) => Effect.as(Effect.annotateCurrentSpan("source", "frame"), reused),
           onNone: () =>
             frames(
-              JSON.stringify([millisOf(options.maxAge ?? defaultMaxAge), options.after]),
+              JSON.stringify([
+                BrowserClock.millisOf(options.maxAge ?? defaultMaxAge),
+                options.after,
+                options.quality,
+                options.format,
+                options.scale,
+              ]),
               taken(options),
             ),
         }),
       ),
-      span("Page.frame"),
+      span("Frame.read"),
       owned,
     );
 
-  const zoom = (requested: Region, options: Pick<ScreenshotOptions, "scale"> = {}) =>
+  const zoom = (
+    requested: Region,
+    options: Pick<FrameOptions, "quality" | "format" | "scale"> = {},
+  ) =>
     lane
       .read("zoom")(
         Effect.gen(function* () {
@@ -574,16 +559,23 @@ export const make = Effect.fnUntraced(function* (
 
           if (region.x + region.width > size.width || region.y + region.height > size.height)
             return yield* refuse("zoom", "the crop must fit entirely within the viewport");
-          const image = yield* picture("zoom", 80, region, "jpeg", options.scale);
+
+          const image = yield* picture(
+            "zoom",
+            options.quality ?? 80,
+            region,
+            options.format,
+            options.scale,
+          );
 
           return new Zoom({ page: id, region, image });
         }).pipe(within("zoom")),
       )
-      .pipe(span("Page.zoom"), owned);
+      .pipe(span("Frame.zoom"), owned);
 
   const captureStats = (options: { readonly window?: Duration.Input | undefined } = {}) => {
     if (options.window === undefined) return capture.stats();
-    const millis = millisOf(options.window);
+    const millis = BrowserClock.millisOf(options.window);
 
     return millis > 0 && millis <= Duration.toMillis(countsKept)
       ? capture.stats(millis)
@@ -594,5 +586,5 @@ export const make = Effect.fnUntraced(function* (
   // change record's times need it.
   const estimate = mapping.current(calibrateClock);
 
-  return { capture, screenshot, frame, zoom, captureStats, estimate, paint: emulated.paint };
+  return { capture, frame, zoom, captureStats, estimate, paint: emulated.paint };
 });

@@ -30,7 +30,7 @@ import { Prompt } from "effect/ai";
 import { type BrowserError, refuse } from "../BrowserError.ts";
 import { type Action } from "../BrowserEvent.ts";
 import { type Change, type Changes } from "../Change.ts";
-import { type Frame } from "../Frame.ts";
+import * as Frame from "../Frame.ts";
 import * as Page from "../Page.ts";
 import * as Snapshot from "../Snapshot.ts";
 import { describe, named, quoted, where } from "./internal/words.ts";
@@ -43,7 +43,7 @@ import * as Window from "../Window.ts";
  * none. Its frames are a few, spread over the window, so that it still begins where it starts.
  */
 export class Moment extends Window.Window.extend<Moment>("effect-browser/timeline/Moment")({
-  /** The page's outline at the end of the window, when the capture asked for it. */
+  /** The page's outline at the end of the window, when the read asked for it. */
   snapshot: Schema.optional(Snapshot.Snapshot),
 }) {}
 
@@ -68,24 +68,24 @@ export interface MomentOptions {
 }
 
 /** Pick `count` frames spread evenly over `frames`, always including the last. */
-const spread = (frames: ReadonlyArray<Frame>, count: number): ReadonlyArray<Frame> => {
+const spread = (frames: ReadonlyArray<Frame.Frame>, count: number): ReadonlyArray<Frame.Frame> => {
   if (frames.length <= count) return frames;
   if (count <= 1) return frames.slice(-1);
   const step = (frames.length - 1) / (count - 1);
 
   return Array.from({ length: count }, (_, index) => frames[Math.round(index * step)]).filter(
-    (frame): frame is Frame => frame !== undefined,
+    (frame): frame is Frame.Frame => frame !== undefined,
   );
 };
 
 // An action ends after its navigation settles, which can follow the last paint. A fresh picture
 // keeps that completed action inside the moment without moving events between adjacent windows.
 const pictureOf = Effect.fnUntraced(function* (page: Page.Page) {
-  const frame = yield* page.frame({ after: "input" });
+  const frame = yield* Frame.read(page, { after: "input" });
   const events = yield* page.recentEvents;
 
   return events.some((event) => event._tag === "Action" && event.at > frame.hostTime)
-    ? yield* page.frame({ maxAge: 0 })
+    ? yield* Frame.read(page, { maxAge: 0 })
     : frame;
 });
 

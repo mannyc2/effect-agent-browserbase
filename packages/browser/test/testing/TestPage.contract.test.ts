@@ -6,7 +6,7 @@ import { TestClock } from "effect/testing";
 import { BrowserError, Timeout } from "../../src/BrowserError.ts";
 import { Subject } from "../../src/BrowserEvent.ts";
 import * as Change from "../../src/Change.ts";
-import { Frame, BrowserPaint } from "../../src/Frame.ts";
+import * as Frame from "../../src/Frame.ts";
 import { failFast } from "../../src/Page.ts";
 import * as Snapshot from "../../src/Snapshot.ts";
 import * as TestBrowser from "../../src/testing/TestBrowser.ts";
@@ -246,12 +246,12 @@ it.effect("streams only owned frames and folds explicitly seeded change historie
       ],
     });
 
-    const frame = new Frame({
+    const frame = new Frame.Frame({
       page: test.page.id,
       session: "test-browser",
       connection: "test-connection",
       data: new Uint8Array([1]),
-      timing: new BrowserPaint({ timestamp: 0, hostTime: 0, uncertaintyMillis: 0 }),
+      timing: new Frame.BrowserPaint({ timestamp: 0, hostTime: 0, uncertaintyMillis: 0 }),
       receivedAt: 0,
       width: 20,
       height: 20,
@@ -259,7 +259,7 @@ it.effect("streams only owned frames and folds explicitly seeded change historie
       url: "about:blank",
     });
 
-    const capture = yield* test.page.capture();
+    const capture = yield* Frame.capture(test.page);
 
     // Acquisition, rather than starting a stream reader, begins its bounded retention.
     yield* test.emitFrame(frame);
@@ -277,10 +277,10 @@ it.effect("streams only owned frames and folds explicitly seeded change historie
     );
     assert.deepStrictEqual(yield* Fiber.join(waiting), [frame]);
     assert.strictEqual(capture.current, frame);
-    assert.strictEqual(yield* test.page.frame(), frame);
+    assert.strictEqual(yield* Frame.read(test.page), frame);
 
     const refused = yield* Effect.flip(
-      test.emitFrame(new Frame({ ...frame, connection: "foreign" })),
+      test.emitFrame(new Frame.Frame({ ...frame, connection: "foreign" })),
     );
 
     assert.strictEqual(refused.reason._tag, "InvalidRequest");
@@ -294,7 +294,7 @@ it.effect("streams only owned frames and folds explicitly seeded change historie
     yield* test.document({});
     assert.isFalse(capture.isCurrent(frame));
     assert.isUndefined(capture.current);
-    assert.strictEqual((yield* Effect.flip(test.page.frame())).reason._tag, "NotFound");
+    assert.strictEqual((yield* Effect.flip(Frame.read(test.page))).reason._tag, "NotFound");
   }),
 );
 
@@ -363,8 +363,8 @@ for (const cause of ["page", "session"] as const)
     Effect.gen(function* () {
       const test = yield* TestBrowser.make([{}]);
       const page = yield* test.browser.firstPage;
-      const active = yield* page.capture();
-      const buffered = yield* page.capture();
+      const active = yield* Frame.capture(page);
+      const buffered = yield* Frame.capture(page);
       const canceled = yield* active.stream.pipe(Stream.runDrain, Effect.forkScoped);
 
       yield* Fiber.interrupt(canceled);

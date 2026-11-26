@@ -1,5 +1,5 @@
 /**
- * One browser tab: navigation, pictures and input.
+ * One browser tab: navigation and input.
  *
  * `Page` gains a member only for identity, order, time or input. Everything else a page does is a
  * function in the module of what it returns, taking the page first, such as `Snapshot.read(page)`,
@@ -19,15 +19,7 @@
  *
  * @since 0.3.0
  */
-import {
-  type Clock,
-  type Duration,
-  Effect,
-  Function,
-  Schema,
-  type Scope,
-  type Stream,
-} from "effect";
+import { type Clock, type Duration, Effect, Function, Schema } from "effect";
 
 import {
   Action,
@@ -38,7 +30,6 @@ import {
 } from "./Action.ts";
 import { type BrowserError, type PolicyDenied } from "./BrowserError.ts";
 import { Box, type BrowserEvent, PageLoaded, Subject } from "./BrowserEvent.ts";
-import { type CaptureStats, Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import * as Motion from "./internal/geometry.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
@@ -54,21 +45,6 @@ export type Point = Motion.Point;
 
 /** A ref from a snapshot, such as `"e12"`, or a viewport point. */
 export type Target = string | Point;
-
-/** An integer rectangle in viewport CSS pixels. */
-export class Region extends Schema.Class<Region>("effect-browser/Page/Region")({
-  x: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  y: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  width: Schema.Int.check(Schema.isGreaterThan(0)),
-  height: Schema.Int.check(Schema.isGreaterThan(0)),
-}) {}
-
-/** A crop and its viewport origin: add that origin to a point read from the crop. */
-export class Zoom extends Schema.Class<Zoom>("effect-browser/Page/Zoom")({
-  page: Schema.String,
-  region: Region,
-  image: Image,
-}) {}
 
 /** The target as it read before input. Point coordinates are never snapped to another position. */
 export class ResolvedTarget extends Schema.Class<ResolvedTarget>(
@@ -88,49 +64,6 @@ export type ClickOptions = typeof ClickOptionsSchema.Type;
 export type TypeOptions = typeof TypeOptionsSchema.Type;
 export type PressOptions = typeof PressOptionsSchema.Type;
 export type ScrollOptions = typeof ScrollOptionsSchema.Type;
-
-/**
- * How current a picture must be. The newest screencast frame serves when it qualifies, at no cost;
- * otherwise a new screenshot is taken.
- */
-export interface FrameOptions {
-  /**
-   * The oldest a reused frame may be, from its paint, at the earliest its timing allows, to now.
-   * Defaults to 250 milliseconds; 0 always takes a new screenshot.
-   */
-  readonly maxAge?: Duration.Input | undefined;
-  /**
-   * `"input"`: reuse only a frame painted after this page's latest input, including input of an
-   * interrupted action, and never while an action is changing the page. For a caller that has
-   * just acted on the page.
-   */
-  readonly after?: "input" | undefined;
-}
-
-/** A screenshot reuses only a frame painted after the page's latest input, as `after: "input"`. */
-export interface ScreenshotOptions {
-  /** The oldest a reused frame may be, as for `frame`. Defaults to 250 milliseconds. */
-  readonly maxAge?: Duration.Input | undefined;
-  /** A region of the viewport, captured in CSS pixels at the viewport's own scale; always new. */
-  readonly clip?: Box | undefined;
-  /** JPEG quality, 0 to 100. Defaults to 80. */
-  readonly quality?: number | undefined;
-  /** `"jpeg"`, the default, or `"png"`, which is always a new picture. */
-  readonly format?: "jpeg" | "png" | undefined;
-  /**
-   * `"css"`, the default, a picture pixel per CSS pixel; `"device"`, the screen's own pixels, as
-   * many to a CSS pixel as its device scale factor, which is always a new picture.
-   */
-  readonly scale?: "css" | "device" | undefined;
-}
-
-/** How a page paints for a scope; see `Page.paint`. */
-export interface Paint {
-  /** Device pixels to each CSS pixel, more than 0 and at most 4. The layout keeps its size. */
-  readonly scale?: number | undefined;
-  /** False hides the page's scrollbars from its next document on, and its layout takes their room. */
-  readonly scrollbars?: boolean | undefined;
-}
 
 export interface ReadyOptions {
   /** How long recorded content must stay unchanged. Screen stillness is a separate feature. */
@@ -156,8 +89,6 @@ export class State extends Schema.Class<State>("effect-browser/Page/State")({
   committedAt: Schema.optional(Schema.Finite),
   /** How far that document has loaded, as the page's own session heard; absent until parsed. */
   load: Schema.optional(PageLoaded),
-  /** The newest screencast frame, of whichever document it names. */
-  frame: Schema.optional(Frame),
 }) {}
 
 /**
@@ -268,18 +199,6 @@ export const correlate: {
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
-/** Scoped access to one page's shared capture and its current-document evidence. */
-export interface Capture {
-  readonly stream: Stream.Stream<Frame, BrowserError>;
-  readonly current: Frame | undefined;
-  readonly isCurrent: (frame: Frame) => boolean;
-  readonly confirm: (frame: Frame) => Effect.Effect<boolean, BrowserError>;
-  readonly sync: Effect.Effect<void, BrowserError>;
-  readonly stats: (options?: {
-    readonly window?: Duration.Input | undefined;
-  }) => Effect.Effect<CaptureStats, BrowserError>;
-}
-
 /** Script values cross the page boundary through the caller's Schema. A bundler may rewrite functions. */
 export interface ScriptOptions<A, Arg> {
   readonly arg: Arg;
@@ -323,10 +242,6 @@ export interface Page {
   readonly afterInput: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | BrowserError, R>;
-  /** A scoped lease starts capture immediately, independently of its first frame. */
-  readonly capture: (
-    options?: ScreencastOptions,
-  ) => Effect.Effect<Capture, BrowserError, Scope.Scope>;
   /** The page's CDP target id: the same page has it again after a reconnect to its browser. */
   readonly id: string;
   /** The page's address, without its userinfo or known secret parameters. */
@@ -347,24 +262,6 @@ export interface Page {
   readonly close: Effect.Effect<void, BrowserError>;
 
   /**
-   * A picture of the viewport, in CSS pixels: a screencast frame painted since the page's latest
-   * input, if one qualifies, or a new one. A caller that has just acted sees what its action did.
-   */
-  readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
-  /**
-   * The viewport with its timing: the newest screencast frame if it qualifies, else a new
-   * screenshot timed by the host interval in which it was taken.
-   */
-  readonly frame: (options?: FrameOptions) => Effect.Effect<Frame, BrowserError>;
-  /**
-   * A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels.
-   * With `scale: "device"` its picture has the screen's own pixels, as a screenshot's would.
-   */
-  readonly zoom: (
-    region: Region,
-    options?: Pick<ScreenshotOptions, "scale">,
-  ) => Effect.Effect<Zoom, BrowserError>;
-  /**
    * The viewport's size in CSS pixels, the space of points, crops and page scrolls. Over CDP the
    * page reports it, within the action timeout.
    */
@@ -374,19 +271,9 @@ export interface Page {
   >;
   /**
    * What the library knows of the page now, at no call and with no wait for its turn: where it is,
-   * its document and how far it has loaded, and its newest frame.
+   * its document and how far it has loaded.
    */
   readonly state: Effect.Effect<State>;
-  /**
-   * Paint the page at `scale` device pixels to each CSS pixel, or without its scrollbars, for a
-   * scope: a screenshot with `scale: "device"` then has that many more pixels, while the layout,
-   * its boxes and input keep their CSS pixels. Scrollbars go from the next document on, and come
-   * back from the next after the scope, so paint, then load the page, then measure it. One at a
-   * time. A browser this library launched paints at the scale of its launch (Chromium's
-   * `deviceScaleFactor`), and refuses another.
-   */
-  readonly paint: (options: Paint) => Effect.Effect<void, BrowserError, Scope.Scope>;
-
   readonly click: (
     target: Target,
     options?: ClickOptions,
@@ -414,21 +301,6 @@ export interface Page {
    * Fails Timeout after timeout, 15 seconds by default.
    */
   readonly ready: (options?: ReadyOptions) => Effect.Effect<void, BrowserError>;
-
-  /**
-   * Screencast frames for as long as the stream runs. Concurrent streams share one screencast and
-   * its settings; explicit options that differ from a running screencast's fail with InvalidRequest.
-   */
-  readonly screencast: (options?: ScreencastOptions) => Stream.Stream<Frame, BrowserError>;
-  /**
-   * What this page's captures received, delivered and dropped, over its life or the latest
-   * `window`, which reaches back at most a minute; a longer one is an `InvalidRequest`.
-   */
-  readonly captureStats: (options?: {
-    readonly window?: Duration.Input | undefined;
-  }) => Effect.Effect<CaptureStats, BrowserError>;
-  /** Screencast frames painted within `frameHistory` of the newest, oldest first. */
-  readonly recentFrames: Effect.Effect<ReadonlyArray<Frame>>;
   /** This page's events among the browser's latest `eventHistory`, oldest first. */
   readonly recentEvents: Effect.Effect<ReadonlyArray<BrowserEvent>>;
 }

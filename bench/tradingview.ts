@@ -25,6 +25,7 @@ import {
 import { Browser } from "effect-browser/Browser";
 import { isBrowserError } from "effect-browser/BrowserError";
 import type * as BrowserEvent from "effect-browser/BrowserEvent";
+import * as Frame from "effect-browser/Frame";
 import { Presentation } from "effect-browser/presentation";
 import { Walk } from "effect-browser/walk";
 import { Command, Flag } from "effect/cli";
@@ -176,7 +177,7 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
 
     yield* fs.writeFile(
       path.join(run.directory, `${id}.start.png`),
-      (yield* page.screenshot()).data,
+      (yield* Frame.read(page, { after: "input" })).data,
     );
 
     let answer = "";
@@ -209,7 +210,10 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
 
     const end = yield* TradingView.state(page);
 
-    yield* fs.writeFile(path.join(run.directory, `${id}.end.png`), (yield* page.screenshot()).data);
+    yield* fs.writeFile(
+      path.join(run.directory, `${id}.end.png`),
+      (yield* Frame.read(page, { after: "input" })).data,
+    );
     if (steps.length > 0)
       yield* fs.writeFileString(
         path.join(run.directory, `${id}.steps.jsonl`),
