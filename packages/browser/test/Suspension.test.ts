@@ -54,7 +54,7 @@ describe("Scoped browser input authority", () => {
         const faults = yield* TestCdp.make();
 
         const browser = yield* faults.provide(
-          Chromium.open({ actionTimeout: "2 seconds", navigationTimeout: "2 seconds" }),
+          Chromium.make({ actionTimeout: "2 seconds", navigationTimeout: "2 seconds" }),
         );
 
         const arrived = Promise.withResolvers<void>();
@@ -121,7 +121,7 @@ describe("Scoped browser input authority", () => {
       Effect.gen(function* () {
         let judged = 0;
 
-        const browser = yield* Chromium.open({
+        const browser = yield* Chromium.make({
           guard: () =>
             Effect.sync(() => {
               judged += 1;
@@ -198,7 +198,7 @@ describe("Scoped browser input authority", () => {
     () =>
       TestCdp.withCdp(
         Effect.gen(function* () {
-          const browser = yield* Chromium.open();
+          const browser = yield* Chromium.make();
           const page = yield* browser.newPage(document());
           const other = yield* browser.newPage(document("Other"));
           const held = yield* scope;
@@ -240,7 +240,7 @@ describe("Scoped browser input authority", () => {
     it.live(`keeps canceled ${kind} replies draining and removes a timed-out suspension`, () =>
       TestCdp.withCdp(
         Effect.gen(function* () {
-          const browser = yield* Chromium.open({
+          const browser = yield* Chromium.make({
             navigationTimeout: kind === "press" ? "40 millis" : "2 seconds",
           });
 
@@ -284,7 +284,7 @@ describe("Scoped browser input authority", () => {
   it.live("abandons an interrupted drain and fails Closed when the browser is lost", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
         const page = yield* browser.newPage(document());
         const reply = yield* delayedReply(page, "press");
         const input = yield* page.press("a").pipe(Effect.forkChild);

@@ -234,7 +234,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
   it.effect("answers unmet at one deadline while documents keep replacing its context", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
-        const host = yield* Chromium.open({ actionTimeout: "150 millis" });
+        const host = yield* Chromium.make({ actionTimeout: "150 millis" });
         const page = yield* host.newPage((yield* Site).url("/replacing"));
         const first = (yield* page.state).document;
         const result = yield* Snapshot.until(page, { text: "Never present" }, "some", 120);

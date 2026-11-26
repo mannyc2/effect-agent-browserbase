@@ -61,7 +61,7 @@ it.live("passes the connector through open, layer, attach and supervised generat
       });
 
     yield* Effect.gen(function* () {
-      const { browser, session } = yield* Browserbase.open(options);
+      const { browser, session } = yield* Browserbase.make(options);
 
       yield* read(browser);
       yield* Effect.gen(function* () {
@@ -95,7 +95,7 @@ it.live("passes the connector through open, layer, attach and supervised generat
 
 it.effect("releases a failed custom connection and preserves its sanitized failure", () =>
   Effect.gen(function* () {
-    const error = yield* Browserbase.open({
+    const error = yield* Browserbase.make({
       connect: async (url) => {
         throw new Error(`Native transport refused ${url}`);
       },
@@ -122,7 +122,7 @@ it.effect("releases its session when opening is interrupted inside the custom co
     let signal: AbortSignal | undefined;
 
     const opening = yield* Effect.forkChild(
-      Browserbase.open({
+      Browserbase.make({
         connect: (_url, options) =>
           new Promise<PlaywrightBrowser>(() => {
             signal = options.signal;

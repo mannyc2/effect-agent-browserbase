@@ -19,7 +19,7 @@ for (const overlap of ["none", "navigate", "cancel", "close"] as const)
     () =>
       Effect.gen(function* () {
         const faults = yield* TestCdp.make();
-        const browser = yield* faults.provide(Chromium.open());
+        const browser = yield* faults.provide(Chromium.make());
 
         const page = yield* faults.provide(
           browser.newPage(html('<div role="status" id="status">First</div>')),
@@ -103,7 +103,7 @@ it.effect("idle expiry waits for navigation and later changes renew the recorder
     const faults = yield* TestCdp.make();
 
     const browser = yield* faults.provide(
-      Chromium.open({ actionTimeout: "500 millis", navigationTimeout: "20 seconds" }),
+      Chromium.make({ actionTimeout: "500 millis", navigationTimeout: "20 seconds" }),
     );
 
     const page = yield* faults.provide(browser.newPage(html("<title>First</title>")));
@@ -152,7 +152,7 @@ it.effect("idle expiry waits for navigation and later changes renew the recorder
 it.effect("native recorder cleanup failure remains visible to later changes", () =>
   Effect.gen(function* () {
     const faults = yield* TestCdp.make();
-    const browser = yield* faults.provide(Chromium.open());
+    const browser = yield* faults.provide(Chromium.make());
     const page = yield* faults.provide(browser.newPage(html("<title>First</title>")));
 
     yield* Change.read(page);

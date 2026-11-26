@@ -165,7 +165,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const proxy = yield* behindProxy();
-        const browser = yield* Cdp.open({ endpoint: proxy.endpoint, actionTimeout: "1 second" });
+        const browser = yield* Cdp.make({ endpoint: proxy.endpoint, actionTimeout: "1 second" });
         const page = yield* browser.firstPage;
 
         yield* page.goto(

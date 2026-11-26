@@ -164,7 +164,7 @@ it.live("keeps a crop's frames out of a running capture, but not the page's own"
   TestCdp.withCdp(
     Effect.gen(function* () {
       const proxy = yield* behindProxy();
-      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
 
       const zoomed = (body: string) =>
         Effect.gen(function* () {
@@ -222,7 +222,7 @@ it.live("keeps the screen another session emulates through crops and pictures", 
   TestCdp.withCdp(
     Effect.gen(function* () {
       const proxy = yield* behindProxy();
-      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
       const page = yield* browser.newPage("data:text/html,<h1>Screen</h1>");
 
       const other = yield* Effect.promise(() =>
@@ -265,7 +265,7 @@ it.live("leaves the page's view as it was after crops asked together", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
       const proxy = yield* behindProxy();
-      const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
 
       const page = yield* browser.newPage(
         "data:text/html,<body style='margin:0;background:linear-gradient(90deg,white,navy)'><h1>View</h1></body>",
@@ -331,7 +331,7 @@ it.live("keeps a page behind painting with its own focus emulation", () =>
           proxy.swallow = (command) =>
             command.method === "Emulation.setFocusEmulationEnabled" &&
             (plantedOff || !proxy.attached.has(command.sessionId ?? ""));
-          const browser = yield* Cdp.open({ endpoint: proxy.endpoint });
+          const browser = yield* Cdp.make({ endpoint: proxy.endpoint });
           const page = yield* browser.newPage(painting);
 
           // The newest tab is in front.
@@ -357,12 +357,12 @@ it.live("reads every later document after another connection takes over a page",
       const earlier = yield* Scope.make();
 
       yield* Effect.addFinalizer(() => Scope.close(earlier, Exit.void));
-      const first = yield* Cdp.open({ endpoint: proxy.endpoint }).pipe(Scope.provide(earlier));
+      const first = yield* Cdp.make({ endpoint: proxy.endpoint }).pipe(Scope.provide(earlier));
       const opened = yield* first.newPage(still("one"));
 
       assert.include((yield* Snapshot.read(opened)).text, "one");
 
-      const later = yield* Cdp.open({ endpoint: proxy.endpoint });
+      const later = yield* Cdp.make({ endpoint: proxy.endpoint });
       const page = Option.getOrThrow(yield* later.page(opened.id));
 
       assert.include((yield* Snapshot.read(page)).text, "one");

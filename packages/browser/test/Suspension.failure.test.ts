@@ -20,7 +20,7 @@ describe("Input suspension failure boundaries", () => {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const faults = yield* TestCdp.make();
-        const browser = yield* faults.provide(Chromium.open());
+        const browser = yield* faults.provide(Chromium.make());
         const arrived = Promise.withResolvers<void>();
         const gate = yield* Deferred.make<void>();
         const release = { resolve: () => Deferred.doneUnsafe(gate, Effect.void) };
@@ -87,7 +87,7 @@ describe("Input suspension failure boundaries", () => {
         const entered = yield* Deferred.make<void>();
         const allow = yield* Deferred.make<void>();
 
-        const browser = yield* Chromium.open({
+        const browser = yield* Chromium.make({
           guard: () =>
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(allow))),
         });

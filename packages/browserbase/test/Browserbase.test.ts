@@ -5,6 +5,8 @@ import type { AddressInfo } from "node:net";
 
 import { assert, describe, it } from "@effect/vitest";
 import {
+  Config,
+  ConfigProvider,
   Context,
   Deferred,
   Effect,
@@ -594,7 +596,7 @@ describe("Browserbase", () => {
         baseUrl: "http://127.0.0.1:9",
       }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, silent)));
 
-      const open = Browserbase.open().pipe(
+      const open = Browserbase.make().pipe(
         Effect.scoped,
         Effect.provide(Layer.merge(client, ContextLease.layer)),
       );
@@ -621,8 +623,8 @@ describe("Browserbase", () => {
 
       yield* Effect.gen(function* () {
         // The first open's session runs on; the second's create answer is lost.
-        yield* Browserbase.open();
-        const error = yield* Effect.flip(Browserbase.open().pipe(Effect.scoped));
+        yield* Browserbase.make();
+        const error = yield* Effect.flip(Browserbase.make().pipe(Effect.scoped));
 
         assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Transport"]);
         assert.deepStrictEqual(
@@ -639,7 +641,7 @@ describe("Browserbase", () => {
   it.effect("looks for a lost create's session until Browserbase lists it, and ends it", () =>
     Effect.gen(function* () {
       const error = yield* finish(
-        yield* Effect.forkChild(Effect.flip(Browserbase.open().pipe(Effect.scoped))),
+        yield* Effect.forkChild(Effect.flip(Browserbase.make().pipe(Effect.scoped))),
       );
 
       assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Transport"]);
@@ -652,7 +654,7 @@ describe("Browserbase", () => {
 
   it.effect("releases a created session whose answer does not decode", () =>
     Effect.gen(function* () {
-      const error = yield* Browserbase.open().pipe(Effect.scoped, Effect.flip);
+      const error = yield* Browserbase.make().pipe(Effect.scoped, Effect.flip);
       const [session] = yield* kept;
 
       assert.deepStrictEqual([step(error), reason(error)], ["createSession", "Decode"]);
@@ -698,10 +700,12 @@ describe("Browserbase", () => {
       yield* Effect.gen(function* () {
         yield* Effect.gen(function* () {
           const browser = yield* Browser;
+          const hosted = yield* Browserbase.Browserbase;
           const page = yield* browser.firstPage;
 
           yield* page.goto("data:text/html,<title>Hosted</title><button>Go</button>");
           assert.deepStrictEqual([browser.id, browser.provider], [...(yield* ids), "browserbase"]);
+          assert.deepStrictEqual([hosted.browser, hosted.session.id], [browser, browser.id]);
           assert.include((yield* Snapshot.read(page)).text, 'button "Go"');
         }).pipe(Effect.provide(Browserbase.layer({ session: { timeout: 300 } })));
         const [id] = yield* ids;
@@ -719,13 +723,34 @@ describe("Browserbase", () => {
     }),
   );
 
+  it.live("reads its options as config", () =>
+    Effect.gen(function* () {
+      const connectUrl = yield* chromiumEndpoint;
+
+      yield* Effect.gen(function* () {
+        const hosted = yield* Browserbase.Browserbase;
+        const [session] = yield* kept;
+
+        assert.deepStrictEqual([hosted.session.id, session?.options.timeout], [session?.id, 300]);
+      }).pipe(
+        Effect.provide(
+          Browserbase.layerConfig({ session: { timeout: Config.Int("SESSION_TIMEOUT") } }),
+        ),
+        Effect.provide([
+          hostedFake({ connectUrl }),
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ SESSION_TIMEOUT: "300" })),
+        ]),
+      );
+    }),
+  );
+
   it.live("reports an early release as settled, and the scope's close releases nothing more", () =>
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;
 
       yield* Effect.gen(function* () {
         yield* Effect.gen(function* () {
-          const hosted = yield* Browserbase.open();
+          const hosted = yield* Browserbase.make();
 
           assert.strictEqual((yield* hosted.release)._tag, "Confirmed");
           assert.deepStrictEqual(
@@ -748,7 +773,7 @@ describe("Browserbase", () => {
 
       yield* Effect.gen(function* () {
         const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
-        const open = Browserbase.open({ session: persisting(id) }).pipe(Effect.scoped, Effect.flip);
+        const open = Browserbase.make({ session: persisting(id) }).pipe(Effect.scoped, Effect.flip);
 
         // The first session's release stays pending past its deadline, so it may still save.
         assert.strictEqual(step(yield* finish(yield* Effect.forkChild(open))), "connect");
@@ -807,7 +832,7 @@ describe("Browserbase", () => {
       ] as const;
 
       yield* Effect.gen(function* () {
-        const open = Browserbase.open({ session: persisting("context-reads") }).pipe(
+        const open = Browserbase.make({ session: persisting("context-reads") }).pipe(
           Effect.scoped,
           Effect.flip,
         );
@@ -834,7 +859,7 @@ describe("Browserbase", () => {
       const connectUrl = yield* nowhere;
 
       yield* Effect.gen(function* () {
-        const open = Browserbase.open({ session: persisting("context-lost") }).pipe(
+        const open = Browserbase.make({ session: persisting("context-lost") }).pipe(
           Effect.scoped,
           Effect.flip,
         );
@@ -874,7 +899,7 @@ describe("Browserbase", () => {
             client.createContext(),
           );
 
-          const open = Browserbase.open({ session: persisting(id) }).pipe(
+          const open = Browserbase.make({ session: persisting(id) }).pipe(
             Effect.scoped,
             Effect.flip,
           );
@@ -924,12 +949,13 @@ describe("Browserbase", () => {
     Effect.gen(function* () {
       const connectUrl = yield* chromiumEndpoint;
 
+      // No lease is provided: both hold the context through the process's own.
       yield* Effect.gen(function* () {
         const { id } = yield* Effect.flatMap(BrowserbaseClient, (client) => client.createContext());
         const writing = yield* Scope.make();
         const settle = { contextSettle: "10 millis" } as const;
 
-        yield* Browserbase.open({ session: persisting(id), ...settle }).pipe(
+        yield* Browserbase.make({ session: persisting(id), ...settle }).pipe(
           Scope.provide(writing),
         );
         const reconciling = yield* Effect.forkChild(Browserbase.reconcile(id, settle));
@@ -943,7 +969,7 @@ describe("Browserbase", () => {
         assert.isUndefined(reconciling.pollUnsafe());
         yield* Scope.close(writing, Exit.void);
         assert.strictEqual((yield* Fiber.join(reconciling))._tag, "Confirmed");
-      }).pipe(Effect.provide(hostedFake({ connectUrl })));
+      }).pipe(Effect.provide(TestBrowserbase.layer({ connectUrl })));
     }),
   );
 });
@@ -996,7 +1022,7 @@ describe("Browserbase's stored contexts", () => {
       yield* Effect.gen(function* () {
         const { id } = yield* createContext;
 
-        const write = Browserbase.open({
+        const write = Browserbase.make({
           session: persisting(id),
           contextSettle: "20 millis",
         }).pipe(Effect.scoped);
@@ -1035,7 +1061,7 @@ describe("Browserbase's stored contexts", () => {
           client.createSession({ ...persisting(id), userMetadata: { persistsContext: id } }),
         );
 
-        yield* Browserbase.open({ session: persisting(id), contextSettle: "10 millis" }).pipe(
+        yield* Browserbase.make({ session: persisting(id), contextSettle: "10 millis" }).pipe(
           Effect.scoped,
         );
         const requests = yield* asked;
@@ -1068,7 +1094,7 @@ describe("Browserbase's stored contexts", () => {
             Effect.as(browser.id),
           );
 
-        yield* Browserbase.open({ session: persisting(id), ...settle }).pipe(
+        yield* Browserbase.make({ session: persisting(id), ...settle }).pipe(
           Scope.provide(writing),
         );
         const reading = yield* Effect.forkChild(Browserbase.verifyContext(id, signedIn, settle));
@@ -1104,7 +1130,7 @@ describe("Browserbase's stored contexts", () => {
           request.startsWith("GET /v1/sessions?"),
         );
 
-        yield* Browserbase.open({ session: persisting(id), ...settle }).pipe(Effect.scoped);
+        yield* Browserbase.make({ session: persisting(id), ...settle }).pipe(Effect.scoped);
         assert.deepStrictEqual(
           (yield* asked).filter((request) => request.startsWith("GET /v1/sessions?")),
           searches,
@@ -1281,7 +1307,7 @@ describe("Browserbase.generations", () => {
       };
 
       for (const operation of [
-        Effect.asVoid(Browserbase.open({ session: persisting(id) })),
+        Effect.asVoid(Browserbase.make({ session: persisting(id) })),
         Browserbase.verifyContext(id, () => Effect.die("verification must not run")),
         Effect.asVoid(Browserbase.reconcile(id)),
       ]) {

@@ -7,7 +7,6 @@
 // were taken.
 import * as Browserbase from "@effect-browser/browserbase/Browserbase";
 import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
-import * as ContextLease from "@effect-browser/browserbase/ContextLease";
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import {
   Cause,
@@ -24,6 +23,7 @@ import {
   Schema,
 } from "effect";
 import { Browser } from "effect-browser/Browser";
+import { isBrowserError } from "effect-browser/BrowserError";
 import type * as BrowserEvent from "effect-browser/BrowserEvent";
 import { Presentation } from "effect-browser/presentation";
 import { Walk } from "effect-browser/walk";
@@ -112,9 +112,7 @@ const flags = {
 const stopped = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
 
-  return error instanceof Error && ["BrowserError", "ReplayError"].includes(error.name)
-    ? error.message
-    : errorText(cause);
+  return isBrowserError(error) || Walk.isReplayError(error) ? error.message : errorText(cause);
 };
 
 /**
@@ -327,7 +325,6 @@ export const command = Command.make(
               userMetadata: metadata,
             },
           }).pipe(
-            Layer.provide(ContextLease.layer),
             Layer.provide(
               BrowserbaseClient.layerConfig().pipe(Layer.provide(FetchHttpClient.layer)),
             ),

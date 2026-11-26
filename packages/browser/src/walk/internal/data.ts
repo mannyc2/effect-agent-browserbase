@@ -92,18 +92,34 @@ export class Stopped extends Schema.Class<Stopped>("effect-browser/walk/Walk/Sto
 }) {}
 
 /** Repeating this step could repeat an unresolved effect; the consumer must reconcile it. */
-export class Uncertain extends Schema.TaggedError<Uncertain>()("Uncertain", {
-  detail: Schema.String,
-}) {
+export class Uncertain extends Schema.TaggedError<Uncertain>("effect-browser/walk/Walk/Uncertain")(
+  "Uncertain",
+  {
+    detail: Schema.String,
+  },
+) {
   override get message() {
     return this.detail;
   }
 }
 
+/** Why replay stopped, as `ReplayError`'s `reason`. */
+export const ReplayErrorReason = Schema.Union([
+  Missing,
+  Ambiguous,
+  Drifted,
+  BrowserError,
+  Uncertain,
+]);
+
+export type ReplayErrorReason = typeof ReplayErrorReason.Type;
+
 /** Where replay stopped, counting steps from 0, why, and the steps that completed before it. */
-export class ReplayError extends Schema.TaggedError<ReplayError>()("ReplayError", {
+export class ReplayError extends Schema.TaggedError<ReplayError>(
+  "effect-browser/walk/Walk/ReplayError",
+)("ReplayError", {
   step: Schema.Int,
-  reason: Schema.Union([Missing, Ambiguous, Drifted, BrowserError, Uncertain]),
+  reason: ReplayErrorReason,
   input: Schema.Literals(["unsent", "unknown"]),
   receipts: Schema.Array(Receipt),
 }) {
@@ -115,3 +131,10 @@ export class ReplayError extends Schema.TaggedError<ReplayError>()("ReplayError"
     return `step ${this.step} failed: ${this.reason.message}`;
   }
 }
+
+/** Whether a value is a `ReplayError`. */
+export const isReplayError: (u: unknown) => u is ReplayError = Schema.is(ReplayError);
+
+/** Whether a value is one of `ReplayError`'s reasons. */
+export const isReplayErrorReason: (u: unknown) => u is ReplayErrorReason =
+  Schema.is(ReplayErrorReason);

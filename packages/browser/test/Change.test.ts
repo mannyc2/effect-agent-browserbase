@@ -580,7 +580,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         TestCdp.withCdp(
           Effect.gen(function* () {
             const faults = yield* TestCdp.make();
-            const browser = yield* faults.provide(Chromium.open());
+            const browser = yield* faults.provide(Chromium.make());
             const page = yield* browser.newPage((yield* Site).url("/desk"));
 
             yield* page.bringToFront;

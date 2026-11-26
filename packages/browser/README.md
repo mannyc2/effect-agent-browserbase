@@ -76,7 +76,7 @@ function in its job's module.
 
 ## Runtime CDP connectors
 
-`Cdp.open` and `Cdp.layer` accept `connect: Cdp.Connector`, a callback receiving the endpoint and
+`Cdp.make` and `Cdp.layer` accept `connect: Cdp.Connector`, a callback receiving the endpoint and
 `{ timeout, headers, signal }` and returning a real Playwright CDP `Browser`. Node uses
 `playwright-core`'s `chromium.connectOverCDP` by default. A consumer can supply a connector using
 its runtime's WebSocket implementation to avoid Playwright's Node WebSocket transport.
@@ -142,7 +142,9 @@ const nativeConnect: Cdp.Connector = async (endpoint, { timeout, headers, signal
 };
 ```
 
-Pass `nativeConnect` as `connect` to `Cdp.open` or `Cdp.layer`, or to the Browserbase options.
+Pass `nativeConnect` as `connect` to `Cdp.make` or `Cdp.layer`, or to the Browserbase options.
+`Cdp.layerConfig` takes the same options as `Config` values, such as
+`{ endpoint: Config.Redacted("CDP_ENDPOINT") }` for an endpoint that is a credential.
 
 The `workerd` export condition selects a CDP entry without the Node transport. It requires
 `connect`; omitting it fails with `BrowserError` reason `InvalidRequest`. The root entry loads only
@@ -389,9 +391,10 @@ A press recorded on a subject resolves and focuses it before sending keys. Text 
 typed into a secret field is typed only into one. An element step never falls back to coordinates.
 A step recorded at a point presses the same place within the element found, brought into view
 first, and only when a press there reaches that element, not something over it. Replay stops at
-the first step it cannot take, with a `ReplayError` naming the step and why: `Missing`,
-`Ambiguous`, `Drifted` (nothing with the subject's role and name repeats its context, or the walk
-did not arrive at the recorded site), the step's `BrowserError`, or `Uncertain`. Arrival waits
+the first step it cannot take, with a `ReplayError` naming the step and why, its
+`ReplayErrorReason`: `Missing`, `Ambiguous`, `Drifted` (nothing with the subject's role and name
+repeats its context, or the walk did not arrive at the recorded site), the step's `BrowserError`,
+or `Uncertain`; `Walk.isReplayError` tells one from other failures. Arrival waits
 are bounded by `arrival` (five seconds by default), including redirects after an action. A zero
 wait makes one read without polling; that read retains the page operation's own timeout.
 Each `Action` now records its ending address, so a bounded event history can still record the site
@@ -612,7 +615,7 @@ cancellation; a wrapper's timeout cannot surrender their authority.
 
 ```ts
 import { Effect, Stream } from "effect";
-import { Browser } from "effect-browser/Browser";
+import * as Browser from "effect-browser/Browser";
 import type { Frame } from "effect-browser/Frame";
 import { Presentation, Stage } from "effect-browser/presentation";
 
@@ -621,7 +624,7 @@ declare const encode: (frame: Frame) => Effect.Effect<void>; // the application'
 const program = Effect.gen(function* () {
   const stage = yield* Stage.make({ quality: 80 });
   const presenter = yield* Presentation.make();
-  const page = yield* (yield* Browser).newPage("https://example.com");
+  const page = yield* Browser.newPage("https://example.com");
   yield* stage.frames.pipe(Stream.runForEach(encode), Effect.forkScoped);
   const shown = yield* stage.present(page); // Presented { page, at, latency }
   yield* presenter.view(page).click("e12"); // glides, then clicks, as a person would
@@ -831,6 +834,7 @@ A page's `id` is its CDP target id. A new connection to the same browser, as aft
 finds each page under the id it had, with `browser.page(id)`; a stored id the browser no longer
 finds is a page that closed. `browser.pages` lists the open pages in the order the browser began
 tracking them, and `browser.firstPage` gives the first, opening one when there is none.
+`Browser.newPage(url)` opens a page in the context's browser, as `browser.newPage(url)` does.
 
 A page's life is told on the browser's timeline. `PageOpened`; `Navigated` for every move of its
 main frame, `sameDocument` for one within the document, such as `pushState`, with `document`
@@ -858,7 +862,9 @@ A failure on a page that is gone is `Closed` with its cause: `page`, `crashed`, 
 `page`, or the `session` with its pages), and whether to `repeat` the call: `safe`, as nothing
 reached the browser; `check` its effect first, as it may have taken place; `pointless` as it is,
 such as with a stale ref; or `resume` reading events from a newer cursor. `message` is a sentence
-for operators, and the browser tools tell a model what to do about the failure.
+for operators, and the browser tools tell a model what to do about the failure. The reasons make up
+`BrowserErrorReason`, and `isBrowserError` and `isBrowserErrorReason` tell them from other values.
+As Effect's do, each error names itself by its path, such as `effect-browser/BrowserError/Timeout`.
 
 `Walk.step` checks an authored expected effect before input and after a dispatched failure.
 Unknown consequential input requires positive durable evidence before continuation; the `Walk`
@@ -1084,7 +1090,7 @@ const program = Effect.gen(function* () {
   const sessions = yield* Supervisor.make({
     open: () =>
       Effect.gen(function* () {
-        const browser = yield* Chromium.open();
+        const browser = yield* Chromium.make();
 
         return { value: browser, lost: browser.disconnected };
       }),
@@ -1314,7 +1320,7 @@ page's script (`Page.evaluate`) and its registration (`Page.register`). Each pag
 `bytesOut` and `bytesIn` (their parameters and results as JSON) and `waitedMillis`, how long at
 least one call awaited its reply. An operation inside another counts toward both. Calls Playwright
 makes on its own sessions, such as navigation, are not counted. `Chromium.launch`, `Cdp.connect` and
-`Browser.newPage` cover opening a browser; `Browserbase.open` records its session's id and region,
+`Browser.newPage` cover opening a browser; `Browserbase.make` records its session's id and region,
 `Browserbase.release` a release and its outcome, and `Browserbase.holdContext` the wait for a
 stored context another session writes to. `Page.calibrateClock` maps the browser's clock onto the
 host's with three probes, each a `Page.evaluate` of `clock`, and records the fastest answered

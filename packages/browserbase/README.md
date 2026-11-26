@@ -7,42 +7,45 @@
 npm install @effect-browser/browserbase@beta effect-browser@beta effect playwright-core
 ```
 
-- `Browserbase`: `open` and `layer` create a session and request its release when their scope
-  closes. Closing waits for the outcome; an `Unconfirmed` session may still run and bill.
+- `Browserbase`: `make` and `layer` create a session and request its release when their scope
+  closes. Closing waits for the outcome; an `Unconfirmed` session may still run and bill. `layer`
+  provides the session as the `Browserbase` service and its browser as `Browser`; `layerConfig`
+  takes the same options as `Config` values.
   `attach` connects to a running session without taking ownership of it, as from another process:
   that is resume, of a session created with `keepAlive`. `generations` supplies hosted acquisitions
   to the generic `Supervisor.make` core. `reconcile`
   ends a stored context's sessions, and `verifyContext` reads a stored context back.
-- `ContextLease`: who may write a stored context. `ContextLease.layer` lets one writer at a time
-  hold each context in this process; an application provides its own to exclude writers across
-  processes. A persisting open that will not write to a context whose sessions may still save to
-  it fails with `ContextHeld`. A custom lease can refuse a writer permanently with `ContextRefused`;
-  `open`, `verifyContext` and `reconcile` preserve that error, and supervision stops retrying it.
+- `ContextLease`: who may write a stored context. By default one writer at a time holds each
+  context in this process; an application provides its own lease to exclude writers across
+  processes, and `ContextLease.layer` gives a test a lease of its own. A persisting open that will
+  not write to a context whose sessions may still save to it fails with `ContextHeld`. A custom lease can refuse a writer permanently with `ContextRefused`;
+  `make`, `verifyContext` and `reconcile` preserve that error, and supervision stops retrying it.
 - `BrowserbaseClient`: sessions, Live View, stored contexts, extensions, Search and Fetch.
   `layerConfig()` reads `BROWSERBASE_API_KEY` and, optionally, `BROWSERBASE_BASE_URL`.
-- `BrowserbaseError`: one error with a reason: `Unauthorized`, `NotFound`, `RateLimited`, `Status`,
-  `Transport`, `Decode` or `InvalidRequest`. A request Browserbase refuses as malformed, such as a
+- `BrowserbaseError`: one error with a reason, a `BrowserbaseErrorReason`: `Unauthorized`,
+  `NotFound`, `RateLimited`, `Status`, `Transport`, `Decode` or `InvalidRequest`;
+  `isBrowserbaseError` and `isBrowserbaseErrorReason` tell them from other values, including the
+  core's own `NotFound` and `InvalidRequest`. A request Browserbase refuses as malformed, such as a
   session id that is not a UUID, is `InvalidRequest`, as is one this client refuses before sending.
   A create whose answer named its session but did not decode is `Decode` with `released`, whether
   the client released that session.
 
-`open`, `layer`, `generations`, `reconcile` and `verifyContext` need a `ContextLease`, and the client:
+`make`, `layer`, `generations`, `reconcile` and `verifyContext` need the client:
 
 ```ts
 const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
   Layer.provide(BrowserbaseClient.layerConfig()),
-  Layer.provide(ContextLease.layer),
   Layer.provide(FetchHttpClient.layer),
 );
 ```
 
-`open`, `layer`, `attach`, `generations` and `verifyContext` accept `connect`, the same
+`make`, `layer`, `attach`, `generations` and `verifyContext` accept `connect`, the same
 [`Cdp.Connector`](../browser/README.md#runtime-cdp-connectors) used by the browser core. It receives
 the session's endpoint, the connection deadline and its cancellation signal, and returns a real
 Playwright CDP browser. This lets a Bun consumer use a native WebSocket connector, or a Workers
 consumer use a compatible Playwright implementation, while Browserbase keeps owning session
 creation, capture and release. A failed or interrupted custom connection still releases a session
-that `open` created. The separate capture connection already uses the global `WebSocket`.
+that `make` created. The separate capture connection already uses the global `WebSocket`.
 
 Select the `workerd` package export condition when bundling for Workers and supply `connect`:
 the worker entry imports no Playwright Node transport and has no default connector. This seam
@@ -62,25 +65,26 @@ and its caller can stop. Only `GET` requests are retried, twice, after a transie
 create that fails in transit is not resent, because it may have created the session. Connect URLs and the Live View debugger URL are `Redacted`: keep them away from
 models and logs. A failed connect names only the connect URL's scheme, host and port.
 
-Each create `open` sends carries a nonce of its own in the session's user metadata, `createNonce`.
+Each create `make` sends carries a nonce of its own in the session's user metadata, `createNonce`.
 A create whose answer was lost, or that Browserbase answered 5xx or 408, may still have made a
-session that nobody can see, and that bills until its timeout: `open` looks for it by its nonce,
+session that nobody can see, and that bills until its timeout: `make` looks for it by its nonce,
 again and again for up to 30 seconds, since Browserbase can list a new session late, ends it, and
 then fails with the create's error. `generations` attaches that attempt's cleanup outcome to
 `OpenFailed.cleanup`, including when a found session could not be confirmed ended.
 
-`open` and `attach` record the session's id and region on their spans, so a trace finds its
+`make` and `attach` record the session's id and region on their spans, so a trace finds its
 session in Browserbase's dashboard (`https://browserbase.com/sessions/<id>`).
 
 ## Releases
 
-`open` and `attach` give a `Hosted`: the `browser`, Browserbase's `session`, and `release`. A
+`make` and `attach` give a `Hosted`: the `browser`, Browserbase's `session`, and `release`, which a
+program built on `layer` reads as `yield* Browserbase.Browserbase`. A
 release first disconnects the browser, which is lost as `released`, so a call in flight or a
 capture's reader says the session was released, not that the connection Browserbase then cuts was
 lost. It asks Browserbase to end the session and then reads it until Browserbase reports it ended,
 trying both again a second apart for up to a minute, and says how it went: `Confirmed`, or
 `Unconfirmed` when the session still ran, or Browserbase could not be asked, at the deadline. An
-unconfirmed session may still bill until its timeout. `open`'s scope releases its session as it
+unconfirmed session may still bill until its timeout. `make`'s scope releases its session as it
 closes, so closing the scope waits for the release: up to a minute while Browserbase confirms the
 end, and for a session that saves to a stored context `contextSettle` longer, 10 seconds by
 default. `release` does it sooner and gives the outcome as a value, and the scope then asks
@@ -195,11 +199,11 @@ const program = Effect.gen(function* () {
 ```
 
 Two sessions saving to one context at once can lose one's changes, and sites may sign a session out
-when another uses its login. So a persisting `open` holds the context through the `ContextLease`,
+when another uses its login. So a persisting `make` holds the context through the `ContextLease`,
 and another writer waits. It takes the hold before it creates the session, and the writer's release
 keeps it until Browserbase reports the session ended and then `contextSettle` (10 seconds by
 default) longer, because the save lands after the session ends and Browserbase does not
-acknowledge it. `ContextLease.layer` excludes writers in this process. To exclude writers in other
+acknowledge it. The default lease excludes writers in this process. To exclude writers in other
 processes, provide a `ContextLease` of your own, such as an advisory lock in your database: `hold`
 holds a context for a scope, waiting while another holds it, and passes on how the writer before
 left it. `attach` never holds a context. `deleteContext` is permanent.
@@ -213,7 +217,7 @@ const Lease = Layer.succeed(ContextLease.ContextLease, {
 
 An `Unconfirmed` release or a create whose answer was lost can leave a session still saving to
 the context. Each leaves the context unsettled, through the lease, and the next
-writer clears it before it writes: it ends the context's sessions, which `open` labels with
+writer clears it before it writes: it ends the context's sessions, which `make` labels with
 `persistsContext: <context id>` in Browserbase's user metadata, confirms they ended, waits
 `contextSettle` and goes on. While they cannot be confirmed ended it fails with `ContextHeld`, which
 leaves the context unsettled, so the open after it tries again. A lost create's own open ends that

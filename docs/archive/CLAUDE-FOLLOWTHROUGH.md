@@ -1,5 +1,7 @@
 # Claude review follow-through
 
+> Archived. It describes the code as it was on 22 October 2026, at `e903f55`, not as it is now.
+
 The requested Claude review examined PR #308 at
 `1d6d7c735c55cc8d96ca2a06fe54dbd0032be187`. The implementation below was developed in a
 separate worktree while that source remained frozen. Findings were checked against source and

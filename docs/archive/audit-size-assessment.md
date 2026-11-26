@@ -1,5 +1,7 @@
 # Source size assessment
 
+> Archived. It describes the code as it was on 22 October 2026, at `e903f55`, not as it is now.
+
 **Superseded by the Claude review follow-through.** The user authorized removing the aggregate
 source-line gate when safe, substantive simplifications could not recover the gap without
 regressions. The Action and Window cleanups remove unnecessary machinery, but the inspected

@@ -20,25 +20,34 @@ import { match } from "../../internal/matching.ts";
 import type { Found } from "../../Snapshot.ts";
 
 /** Nothing on the page has the step's role and name. */
-export class Missing extends Schema.TaggedError<Missing>()("Missing", {}) {
+export class Missing extends Schema.TaggedError<Missing>("effect-browser/walk/Walk/Missing")(
+  "Missing",
+  {},
+) {
   override get message() {
     return "nothing on the page has the recorded role and name";
   }
 }
 
 /** Several elements match the step's subject equally well, and nothing tells them apart. */
-export class Ambiguous extends Schema.TaggedError<Ambiguous>()("Ambiguous", {
-  count: Schema.Int,
-}) {
+export class Ambiguous extends Schema.TaggedError<Ambiguous>("effect-browser/walk/Walk/Ambiguous")(
+  "Ambiguous",
+  {
+    count: Schema.Int,
+  },
+) {
   override get message() {
     return `${this.count} elements match the recorded subject equally well`;
   }
 }
 
 /** The page is not where the recording was: another site, or no element with its context. */
-export class Drifted extends Schema.TaggedError<Drifted>()("Drifted", {
-  detail: Schema.String,
-}) {
+export class Drifted extends Schema.TaggedError<Drifted>("effect-browser/walk/Walk/Drifted")(
+  "Drifted",
+  {
+    detail: Schema.String,
+  },
+) {
   override get message() {
     return this.detail;
   }
