@@ -11,9 +11,10 @@ its entry ends with how. Entries before 0.3 are short summaries drawn from the r
 
 **Breaking.** The packages move into the `@effect-browser` scope, Chromium becomes a package of its
 own, the core's features become subpaths, and an agent's browser tools move into the core as
-`effect-browser/ai`, for any `effect/ai` loop (#324, #327). Errors take identifiers and guards
-(#329), and constructors and layers take Effect's names and shapes (#325). There are no aliases or shims: each name this entry gives as removed or renamed is gone,
-and the entry says what replaced it.
+`effect-browser/ai`, for any `effect/ai` loop (#324, #327). The Page's reading and filming become
+functions in their types' modules (#326). Errors take identifiers and guards (#329), and
+constructors and layers take Effect's names and shapes (#325). There are no aliases or shims: each
+name this entry gives as removed or renamed is gone, and the entry says what replaced it.
 
 ### Packages
 
@@ -54,7 +55,7 @@ path, such as `effect-browser/timeline/Moment`.
 | `effect-browser/ActionPort`, `/Clock`, `/Geometry`, `/Matching`, `/Url` | Closed, with no public replacement                                     |
 
 - The root no longer exports `ActionPort`, `Clock`, `Geometry`, `Url` or `Style`, and exports
-  `InputStyle`. `Geometry`'s `Plan`, `Planner`, `Point`, `Sample`, `maximumDurationMillis` and
+  `InputStyle` and the new `Text`. `Geometry`'s `Plan`, `Planner`, `Point`, `Sample`, `maximumDurationMillis` and
   `maximumSamples` are still in `Motion`; its `normal` is gone.
 - `effect-browser/Cdp`, with its `workerd` condition, `effect-browser/Site`, `effect-browser/testing`
   and the root's modules keep their paths. Neither `Cdp` nor `Site` is in the root.
@@ -78,6 +79,36 @@ path, such as `effect-browser/timeline/Moment`.
   `Moments.weave` in `@effect-browser/yielded`; and `Seed` and `load` are `YieldedTools.Seed` and
   `YieldedTools.load`.
 - `PageControl.useError` is `ToolError.fromBrowserError`.
+
+### The Page
+
+`Page` keeps its members for identity, order, time and input. Reading and filming are functions in
+the modules of the types they return, each taking the page first; the seven with other arguments
+are `dual`, so `Effect.flatMap(browser.firstPage, Snapshot.read({ full: true }))` works. A new
+capability follows the same rule: `Page` gains a member only for identity, order, time or input.
+
+| `0.3.0-beta.24`                   | This release                                              |
+| --------------------------------- | --------------------------------------------------------- |
+| `page.snapshot(options)`          | `Snapshot.read(page, options)`                            |
+| `page.find(query)`                | `Snapshot.find(page, query)`                              |
+| `page.until(query, want, millis)` | `Snapshot.until(page, query, want, millis)`               |
+| `page.text(options)`              | `Text.read(page, options)`, in the new root module `Text` |
+| `page.layout(picks)`              | `Layout.measure(page, picks)`                             |
+| `page.changes(options)`           | `Change.read(page, options)`                              |
+| `page.window(options)`            | `Window.read(page, options)`                              |
+| `page.overlay`                    | `Overlay.make(page)`                                      |
+| `page.poses`                      | `Pose.make(page)`                                         |
+| `page.hold`                       | `PageTime.hold(page)`                                     |
+| `state.overlay`                   | `Overlay.drawn(page)`, an `Option`                        |
+| `state.text`                      | Removed: `Text.read` reads the text                       |
+
+- Their types move with them: `Page.FindQuery`, `ElementState`, `Found`, `UntilWant` and
+  `UntilResult` to `Snapshot`; `Page.Text` and `TextOptions` to `Text`; `Page.ChangesOptions` to
+  `Change`; and `Page.WindowOptions` to `Window`. `Found` is identified as
+  `effect-browser/Snapshot/Found` and `Text` as `effect-browser/Text`.
+- Their spans follow: `Page.snapshot` is `Snapshot.read`, `Page.find` `Snapshot.find`,
+  `Page.expect` `Snapshot.until`, `Page.text` `Text.read`, `Page.layout` `Layout.measure`,
+  `Page.changes` `Change.read` and `Page.window` `Window.read`.
 
 ### Constructors and layers
 
@@ -109,6 +140,14 @@ path, such as `effect-browser/timeline/Moment`.
   `BrowserTools.LayerOptions` for `YieldedTools.LayerOptions`.
 - `@effect-browser/tradingview`'s `ChartTools` fail with `ToolError` and run in a plain `effect/ai`
   loop; the package no longer depends on Yielded.
+
+### Doc tags
+
+Every public export carries `@since 0.3.0`, `@category` and `@stability`, as Effect tags its own.
+`Film` is `@stability experimental`, and the rest `stable`. Effect's language service warns
+(`experimentalApiUsage`) at each use of `Film`, so a project whose build denies warnings allows it
+in its tsconfig, among the `@effect/language-service` plugin's options:
+`"allowedExperimentalApis": ["effect-browser/presentation/Film"]`.
 
 ### Errors and identifiers
 

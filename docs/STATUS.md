@@ -39,19 +39,23 @@ each of its modules also has a path of its own, such as `effect-browser/Page`:
   Navigation, input (`click`, `hover`, `drag`, `type`, `press`, `scroll`, `select`), a typed
   `Action` through `perform`, the caller's own code in the page through `read` and `act`, and
   `ready`, which waits for the page's own evidence that it is ready to be shown. `state` says what
-  the library already knows of the page, at no call. The text the viewport shows is read with
-  field values masked unless asked for, and secret fields' always.
-- `Snapshot`: the outline a model reads, whose controls carry refs the actions take; the elements a
-  query of role, name, text and context finds, each with its subject; and a wait, in the page,
-  until a query is met.
+  the library already knows of the page, at no call. `Page` gains a member only for identity,
+  order, time or input; reading and filming are functions in the modules below, each taking the
+  page first.
+- `Snapshot`: the outline a model reads, whose controls carry refs the actions take
+  (`Snapshot.read`); the elements a query of role, name, text and context finds, each with its
+  subject (`Snapshot.find`); and a wait, in the page, until a query is met (`Snapshot.until`).
+- `Text`: the text the viewport shows, or one element whole (`Text.read`), with field values masked
+  unless asked for, and secret fields' always.
 - `Frame`: pictures with their timing. Screencast frames, screenshots and crops, each placed on the
   host clock with an explicit uncertainty, and a page's capture counters.
 - `Change` and `Window`: what visibly changed on a page over a window, element by element, recorded
-  in the page from the first read on; and a page's events, changes and frames over one window of
-  its browser's clock.
+  in the page from the first read on (`Change.read`); and a page's events, changes and frames over
+  one window of its browser's clock (`Window.read`).
 - `Layout`, `Overlay`, `Pose` and `PageTime`, for filming: where picked things and their words are,
-  as data; a layer over the page that draws a caller's SVG and that no reader reads; the page's own
-  elements moved, turned and scaled; and the page's own time, held and stepped.
+  as data (`Layout.measure`); a layer over the page that draws a caller's SVG and that no reader
+  reads (`Overlay.make`); the page's own elements moved, turned and scaled (`Pose.make`); and the
+  page's own time, held and stepped (`PageTime.hold`).
 - `BrowserEvent`, `BrowserError`, `Action` and `InputStyle`: the events; typed failures, each with
   a reason, whether its input was dispatched and what it leaves (`consequence`); typed actions,
   shared by input, guards, event records and walks; and how input is sent, plainly or performed for
@@ -73,7 +77,8 @@ The subpaths:
   page, with one drawn pointer, a person's reaction times and typing near 70 WPM; `Stage`, the
   source of a live output, switched between pages with their captures overlapping; `Motion`, the
   pointer planner, a value; and `Film`, a page filmed on its own held time with each input on its
-  frame, which is experimental.
+  frame. `Film` is experimental, so Effect's language service warns at each use of it unless a
+  project allows it (the changelog says how).
 - `effect-browser/walk`: `Walk`, a page's walk recorded from its events and replayed on a fresh page
   by subject, with no model call. It never resends consequential input whose effect is unknown.
 - `effect-browser/policy`: `Policy`, judges over `effect/ai` (`reviewer` on a `LanguageModel`,

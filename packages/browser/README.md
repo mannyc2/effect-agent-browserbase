@@ -1005,6 +1005,11 @@ film time however long the last one took to picture. Each part is a module of it
   document that replaces the page is a `Passage`: the film holds its time while it loads, measures
   its layout with the film's `picks`, and passes it to `at` from then on.
 
+`Film` is `@stability experimental`, so Effect's language service warns (`experimentalApiUsage`)
+at each use of it. A project whose build denies warnings allows it among the
+`@effect/language-service` plugin's options in its tsconfig, as this repository's
+`tsconfig.base.json` does: `"allowedExperimentalApis": ["effect-browser/presentation/Film"]`.
+
 ```ts
 const film = Effect.gen(function* () {
   const time = yield* PageTime.hold(page);
