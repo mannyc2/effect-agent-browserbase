@@ -36,7 +36,7 @@ export {
   Superseded,
   Unavailable,
   type UseOptions,
-  Why,
+  StopReason,
 } from "./contract.ts";
 
 export const make = Effect.fn("Supervisor.make")(function* <A, E, R>(

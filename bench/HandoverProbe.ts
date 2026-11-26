@@ -251,7 +251,7 @@ export const make = Effect.fnUntraced(function* (runId: string) {
         (session) => terminal(session.status) && session.endedAt !== undefined,
       ) &&
       released.length === 2 &&
-      released.every((release) => release === "Settled");
+      released.every((release) => release === "Confirmed");
 
     return {
       runId,

@@ -7,7 +7,7 @@ import { failFast } from "../src/Page.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Stage from "../src/presentation/Stage.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
-import * as Style from "../src/Style.ts";
+import * as InputStyle from "../src/Style.ts";
 import { unpaused } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -161,8 +161,8 @@ it.live("custom styles are decoded before focus or pointer input", () =>
 
     const [field] = yield* page.find({ role: "textbox", name: "Text" });
 
-    const badTyping: Style.Style = {
-      ...Style.plain,
+    const badTyping: InputStyle.InputStyle = {
+      ...InputStyle.plain,
       typing: () =>
         Effect.succeed([
           { phase: "down", key: "a", afterMillis: 10 },
@@ -170,14 +170,14 @@ it.live("custom styles are decoded before focus or pointer input", () =>
         ]),
     };
 
-    const badWheel: Style.Style = {
-      ...Style.plain,
+    const badWheel: InputStyle.InputStyle = {
+      ...InputStyle.plain,
       wheel: () => Effect.succeed([{ dx: 0, dy: 20, afterMillis: -1 }]),
     };
 
     for (const action of [
-      page.type("a", { into: field!.ref }).pipe(Style.provide(badTyping), Effect.asVoid),
-      page.scroll({ dy: 20 }).pipe(Style.provide(badWheel)),
+      page.type("a", { into: field!.ref }).pipe(InputStyle.provide(badTyping), Effect.asVoid),
+      page.scroll({ dy: 20 }).pipe(InputStyle.provide(badWheel)),
     ]) {
       const result = yield* action.pipe(Effect.exit);
 

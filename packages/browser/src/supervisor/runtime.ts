@@ -15,7 +15,7 @@ import {
   type Tracer,
 } from "effect";
 
-import { Settled, Unconfirmed } from "../providers/Released.ts";
+import { Confirmed, Unconfirmed } from "../providers/Released.ts";
 import {
   InvalidWait,
   type Lease,
@@ -24,14 +24,14 @@ import {
   type Supervisor,
   Superseded,
   Unavailable,
-  type Why,
+  type StopReason,
 } from "./contract.ts";
 import * as Lifecycle from "./lifecycle.ts";
 
 export interface Runtime<A> {
   readonly opened: Opened<A>;
   readonly scope: Scope.Closeable;
-  readonly ending: Deferred.Deferred<Why>;
+  readonly ending: Deferred.Deferred<StopReason>;
 }
 
 export type Hold = object;
@@ -84,7 +84,7 @@ export const opening =
         );
 
         if (Exit.isSuccess(exit)) {
-          const ending = Deferred.makeUnsafe<Why>();
+          const ending = Deferred.makeUnsafe<StopReason>();
 
           yield* apply({ _tag: "Opened", number, value: { opened: exit.value, scope, ending } });
 
@@ -133,11 +133,11 @@ export const opening =
 /** A provider failure or a failed scope close always leaves an Unconfirmed outcome. */
 export const releasing = <A, E>(apply: Apply<A, E>, links: ReadonlyArray<Tracer.SpanLink>) =>
   Effect.fnUntraced(
-    function* (live: Lifecycle.Live<Runtime<A>, Hold>, why: Why) {
+    function* (live: Lifecycle.Live<Runtime<A>, Hold>, why: StopReason) {
       const { opened, scope } = live.value;
 
       const outcome = yield* Effect.suspend(
-        () => opened.release?.(why) ?? Effect.succeed(new Settled()),
+        () => opened.release?.(why) ?? Effect.succeed(new Confirmed()),
       ).pipe(
         Effect.catchCause((cause) =>
           Effect.succeed(new Unconfirmed({ detail: `the release failed: ${describe(cause)}` })),
@@ -147,7 +147,7 @@ export const releasing = <A, E>(apply: Apply<A, E>, links: ReadonlyArray<Tracer.
       const closed = yield* Effect.exit(Scope.close(scope, Exit.void));
 
       const released =
-        Exit.isSuccess(closed) || outcome._tag !== "Settled"
+        Exit.isSuccess(closed) || outcome._tag !== "Confirmed"
           ? outcome
           : new Unconfirmed({ detail: `its scope failed to close: ${describe(closed.cause)}` });
 

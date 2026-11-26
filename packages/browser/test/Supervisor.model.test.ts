@@ -3,9 +3,9 @@
 import { assert, it } from "@effect/vitest";
 import { Arbitrary, Schema } from "effect";
 
-import * as Released from "../src/providers/Released.ts";
+import * as Release from "../src/providers/Released.ts";
 import * as Core from "../src/supervisor/lifecycle.ts";
-import type { State, Why } from "../src/supervisor/Supervisor.ts";
+import type { State, StopReason } from "../src/supervisor/Supervisor.ts";
 
 type Phase = "none" | "trying" | "failed" | "open" | "ending" | "ended";
 type Tag = State<string>["_tag"];
@@ -37,7 +37,7 @@ interface World {
   opening: Opening | undefined;
   retired: boolean;
   readonly opened: Set<number>;
-  readonly ended: Map<number, Why>;
+  readonly ended: Map<number, StopReason>;
   readonly releasing: Set<number>;
   readonly released: Set<number>;
   readonly lost: Set<number>;
@@ -314,8 +314,8 @@ const enabled = (world: World): ReadonlyArray<readonly [string, () => void]> => 
           number,
           released:
             number % 3 === 0
-              ? new Released.Unconfirmed({ detail: `${number} may run` })
-              : new Released.Settled(),
+              ? new Release.Unconfirmed({ detail: `${number} may run` })
+              : new Release.Confirmed(),
         });
       },
     ]);

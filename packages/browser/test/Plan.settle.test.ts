@@ -7,7 +7,7 @@ import { Duration, Effect, Exit, Schedule } from "effect";
 
 import { Browser } from "../src/Browser.ts";
 import { Subject } from "../src/BrowserEvent.ts";
-import * as Plan from "../src/plan/index.ts";
+import * as Walk from "../src/plan/index.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
 import * as Stillness from "../src/stillness/Stillness.ts";
 
@@ -58,7 +58,7 @@ const open = Effect.fnUntraced(function* (url?: string) {
 });
 
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(30) })(
-  "Plan readiness",
+  "Walk readiness",
   (it) => {
     it.effect("returns acknowledged final input while the resulting page keeps changing", () =>
       Effect.gen(function* () {
@@ -66,16 +66,16 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
         const page = yield* open();
         const url = fixture.url("/shop");
 
-        const plan = Plan.Plan.new([
-          new Plan.Step({ action: { _tag: "Goto", url: url }, url }),
-          new Plan.Step({ action: { _tag: "Click", target: "e0" }, url, subject: named("Buy") }),
+        const plan = Walk.Walk.new([
+          new Walk.Step({ action: { _tag: "Goto", url: url }, url }),
+          new Walk.Step({ action: { _tag: "Click", target: "e0" }, url, subject: named("Buy") }),
         ]);
 
         // On a busy host a still page can take longer than the refusal's second to show its quiet.
         const steady = { ...settle, timeout: "10 seconds" } as const;
 
-        yield* Plan.take(page, plan, 0, { settle: steady });
-        const result = yield* Plan.take(page, plan, 1, { settle: steady }).pipe(Effect.exit);
+        yield* Walk.step(page, plan, 0, { settle: steady });
+        const result = yield* Walk.step(page, plan, 1, { settle: steady }).pipe(Effect.exit);
         const bought = () => fixture.requests.filter((path) => path === "/bought").length;
 
         // The step returns once the click is acknowledged; the request the click sent may still be
@@ -103,16 +103,16 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
           const fixture = yield* site();
           const page = yield* open();
           const url = fixture.url("/live");
-          const opening = new Plan.Step({ action: { _tag: "Goto", url: url }, url });
-          const receipt = yield* Plan.take(page, Plan.Plan.new([opening]), 0, { settle });
+          const opening = new Walk.Step({ action: { _tag: "Goto", url: url }, url });
+          const receipt = yield* Walk.step(page, Walk.Walk.new([opening]), 0, { settle });
 
           assert.strictEqual(receipt.outcome, "taken");
 
-          const error = yield* Plan.take(
+          const error = yield* Walk.step(
             page,
-            Plan.Plan.new([
+            Walk.Walk.new([
               opening,
-              new Plan.Step({
+              new Walk.Step({
                 action: { _tag: "Click", target: "e0" },
                 url,
                 subject: named("Buy"),
@@ -140,16 +140,16 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(3
 
           const page = yield* open(previous);
 
-          const receipts = yield* Plan.replay(
+          const receipts = yield* Walk.replay(
             page,
-            Plan.Plan.new([
-              new Plan.Step({ action: { _tag: "Goto", url: form }, url: form }),
-              new Plan.Step({
+            Walk.Walk.new([
+              new Walk.Step({ action: { _tag: "Goto", url: form }, url: form }),
+              new Walk.Step({
                 action: { _tag: "Click", target: "e0" },
                 url: form,
                 subject: named("Save"),
               }),
-              new Plan.Step({
+              new Walk.Step({
                 action:
                   action === "navigate"
                     ? { _tag: "Goto", url: destination }

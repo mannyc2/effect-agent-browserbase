@@ -9,7 +9,7 @@ import * as Input from "../src/internal/page/replies.ts";
 import { failFast, type Page } from "../src/Page.ts";
 import { maximumSamples } from "../src/presentation/Motion.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
-import * as Style from "../src/Style.ts";
+import * as InputStyle from "../src/Style.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 interface Receipt {
@@ -789,12 +789,12 @@ layer(TestCdp.provideLayer(Chromium.layer()), { excludeTestServices: true })(
           const other = yield* browser.newPage(blank);
           const released = yield* Deferred.make<void>();
 
-          const style: Style.Style = {
-            ...Style.plain,
+          const style: InputStyle.InputStyle = {
+            ...InputStyle.plain,
             shown: true,
             typing: (text) =>
               Effect.succeed(
-                [...text].flatMap((key, index): ReadonlyArray<Style.TypingEvent> => [
+                [...text].flatMap((key, index): ReadonlyArray<InputStyle.TypingEvent> => [
                   { key, phase: "down", afterMillis: index === 0 ? 0 : 200 + index * 160 },
                   { key, phase: "up", afterMillis: index === 0 ? 100 : 300 + index * 160 },
                 ]),
@@ -811,7 +811,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), { excludeTestServices: true })(
 
           const typed = yield* typing
             .type("x".repeat(58))
-            .pipe(Style.provide(style), Effect.forkChild);
+            .pipe(InputStyle.provide(style), Effect.forkChild);
 
           yield* faults
             .waitUntil((calls) =>

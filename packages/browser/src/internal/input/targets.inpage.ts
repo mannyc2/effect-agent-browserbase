@@ -9,12 +9,12 @@ import { Box, Subject } from "../../BrowserEvent.ts";
 import { Point } from "../../Geometry.ts";
 import type { ContextReader } from "../reading/context.inpage.ts";
 import type { Names } from "../reading/names.inpage.ts";
-import type { Walk } from "../reading/walk.inpage.ts";
+import type { Walked } from "../reading/walk.inpage.ts";
 
 export type ResolvedPoint = typeof ResolvedPointSchema.Type;
 export type PointResult = typeof PointResultSchema.Type;
 
-export const targets = (names: Names, walked: Walk, placing: ContextReader) => {
+export const targets = (names: Names, walked: Walked, placing: ContextReader) => {
   const { describe, isDisabled, lookup, nameOf, parentOf, roleOf } = names;
   const { boxOf, controlOf, hitAt } = walked;
   const { contextOf } = placing;

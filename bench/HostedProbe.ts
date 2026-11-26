@@ -139,7 +139,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
     () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6,
   );
 
-  let release: "Settled" | "Unconfirmed" | undefined;
+  let release: "Confirmed" | "Unconfirmed" | undefined;
 
   yield* Effect.scoped(
     Effect.gen(function* () {
@@ -189,7 +189,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
       return evidence
         .write("result.json", {
           ...evidence.setup,
-          status: Exit.isSuccess(exit) && release === "Settled" ? "completed" : "incomplete",
+          status: Exit.isSuccess(exit) && release === "Confirmed" ? "completed" : "incomplete",
           release,
           failure,
           ...observed.evidence(),
@@ -199,7 +199,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
     }),
   );
   yield* Console.log(`${evidence.setup.kind.toUpperCase()} evidence: ${evidence.directory}`);
-  if (release !== "Settled")
+  if (release !== "Confirmed")
     return yield* refuse(
       "Provider release is unconfirmed; reconcile this run before any new session",
     );

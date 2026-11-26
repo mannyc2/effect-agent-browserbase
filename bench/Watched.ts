@@ -3,7 +3,7 @@ import { type Cause, Deferred, Effect, Exit, Option, Scope } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
-import * as Plan from "effect-browser/Plan";
+import * as Walk from "effect-browser/Plan";
 import * as Stage from "effect-browser/Stage";
 import type * as Supervisor from "effect-browser/Supervisor";
 
@@ -51,8 +51,8 @@ export const make = Effect.fn("Watched.make")(function* <A, E>(
 
   const prepare = Effect.fn("Watched.prepare")(function* (
     id: string,
-    walk: Plan.Plan,
-    options: Plan.TakeOptions = {},
+    walk: Walk.Walk,
+    options: Walk.StepOptions = {},
   ) {
     const owner = yield* Effect.scope;
 
@@ -61,7 +61,7 @@ export const make = Effect.fn("Watched.make")(function* <A, E>(
 
     const ready = yield* Deferred.make<
       Prepared<A>,
-      | Plan.ReplayError
+      | Walk.ReplayError
       | BrowserError
       | Supervisor.Unavailable<E>
       | Supervisor.InvalidWait
@@ -79,7 +79,7 @@ export const make = Effect.fn("Watched.make")(function* <A, E>(
               Effect.ignore(page.close),
             );
 
-            yield* Plan.restore(page, walk, options);
+            yield* Walk.restore(page, walk, options);
             yield* Deferred.succeed(ready, {
               id,
               page,
@@ -136,12 +136,12 @@ export const make = Effect.fn("Watched.make")(function* <A, E>(
 
   const perform = Effect.fn("Watched.perform")(function* (
     prepared: Prepared<A>,
-    plan: Plan.Plan,
-    from: number | Plan.Stopped,
+    plan: Walk.Walk,
+    from: number | Walk.Stopped,
     stop: Deferred.Deferred<void>,
-    options: Plan.TakeOptions = {},
+    options: Walk.StepOptions = {},
   ) {
-    const receipts: Array<Plan.Receipt> = [];
+    const receipts: Array<Walk.Receipt> = [];
     let at = from;
 
     while ((typeof at === "number" ? at : at.step) < plan.steps.length) {
@@ -151,13 +151,13 @@ export const make = Effect.fn("Watched.make")(function* <A, E>(
         return {
           receipts,
           stopped: Option.some(
-            typeof at === "number" ? new Plan.Stopped({ step: index, input: "unsent" }) : at,
+            typeof at === "number" ? new Walk.Stopped({ step: index, input: "unsent" }) : at,
           ),
         };
 
-      const receipt = yield* Plan.take(prepared.page, plan, at, options).pipe(
+      const receipt = yield* Walk.step(prepared.page, plan, at, options).pipe(
         Effect.mapError(
-          (error) => new Plan.ReplayError({ ...error, receipts: [...receipts, ...error.receipts] }),
+          (error) => new Walk.ReplayError({ ...error, receipts: [...receipts, ...error.receipts] }),
         ),
       );
 
@@ -165,7 +165,7 @@ export const make = Effect.fn("Watched.make")(function* <A, E>(
       at = index + 1;
     }
 
-    return { receipts, stopped: Option.none<Plan.Stopped>() };
+    return { receipts, stopped: Option.none<Walk.Stopped>() };
   });
 
   return {

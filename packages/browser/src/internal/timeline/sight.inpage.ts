@@ -10,11 +10,11 @@
  */
 import type { Names } from "../reading/names.inpage.ts";
 import type { Texts } from "../reading/text.inpage.ts";
-import type { Walk } from "../reading/walk.inpage.ts";
+import type { Walked } from "../reading/walk.inpage.ts";
 import type { Sample, Shown } from "./fold.inpage.ts";
 import type { History } from "./history.inpage.ts";
 
-export const sight = (names: Names, walked: Walk, texts: Texts, kept: History) => {
+export const sight = (names: Names, walked: Walked, texts: Texts, kept: History) => {
   const { clean } = names;
   const { visible } = walked;
   // Whether each watched element was in view as the page last rendered it, and whether the style

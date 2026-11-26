@@ -6,7 +6,7 @@ import { type BrowserError, InvalidRequest, undispatched } from "../BrowserError
 import type { Page, ReadyOptions, Target } from "../Page.ts";
 import * as Stillness from "../stillness/Stillness.ts";
 import { type Ambiguous, Drifted, type Missing } from "./choose.ts";
-import { type Plan, Step, Receipt, Stopped, Uncertain, ReplayError } from "./data.ts";
+import { type Walk, Step, Receipt, Stopped, Uncertain, ReplayError } from "./data.ts";
 import { aim, locate } from "./targets.ts";
 
 const invalid = (detail: string) => undispatched("replay", new InvalidRequest({ detail }));
@@ -92,7 +92,7 @@ const dispatch = (
   );
 };
 
-export interface TakeOptions {
+export interface StepOptions {
   /** How each step waits first, except an opening navigation, or false. No final-step wait. */
   readonly settle?: ReadyOptions | false | undefined;
   readonly inputs?: Readonly<Record<string, string>> | undefined;
@@ -103,12 +103,12 @@ export interface TakeOptions {
   readonly arrival?: Duration.Input | undefined;
 }
 
-export interface ReplayOptions extends TakeOptions {
+export interface ReplayOptions extends StepOptions {
   readonly from?: number | Stopped | undefined;
 }
 
 /**
- * Input that can be repeated without repeating a commitment. `take` also validates a Checked
+ * Input that can be repeated without repeating a commitment. `step` also validates a Checked
  * target's boolean state before input. Back/reload can resubmit a form.
  */
 export const repeatable = (step: Step): boolean =>
@@ -202,11 +202,11 @@ const checkEffect = (
  * can skip it. An interrupted call remains interrupted; persist begun-before-call in the consumer
  * and treat a missing receipt as Stopped{input: "unknown"}, including after process restart.
  */
-export const take = Effect.fn("Plan.take")(function* (
+export const step = Effect.fn("Walk.step")(function* (
   page: Page,
-  plan: Plan,
+  plan: Walk,
   at: number | Stopped,
-  options: TakeOptions = {},
+  options: StepOptions = {},
 ): Effect.fn.Return<Receipt, ReplayError> {
   const index = typeof at === "number" ? at : at.step;
   let input: Stopped["input"] = typeof at === "number" ? "unsent" : at.input;
@@ -339,8 +339,8 @@ export const take = Effect.fn("Plan.take")(function* (
 
 const run = Effect.fnUntraced(function* (
   page: Page,
-  plan: Plan,
-  options: TakeOptions,
+  plan: Walk,
+  options: StepOptions,
   from: number | Stopped,
   until: number,
   restoring: boolean,
@@ -384,7 +384,7 @@ const run = Effect.fnUntraced(function* (
         ? from
         : index;
 
-    const receipt = yield* take(page, plan, at, options).pipe(
+    const receipt = yield* step(page, plan, at, options).pipe(
       Effect.mapError((error) => new ReplayError({ ...error, receipts: [...receipts] })),
     );
 
@@ -395,17 +395,17 @@ const run = Effect.fnUntraced(function* (
 });
 
 /** Take a plan's steps from a fresh index or durable stopping point, returning completed receipts. */
-export const replay = (page: Page, plan: Plan, options: ReplayOptions = {}) =>
+export const replay = (page: Page, plan: Walk, options: ReplayOptions = {}) =>
   run(page, plan, options, options.from ?? 0, plan.steps.length, false).pipe(
-    Effect.withSpan("Plan.replay"),
+    Effect.withSpan("Walk.replay"),
   );
 
 /** Restore prior steps on a fresh page; unresolved commitments require positive durable evidence. */
 export const restore = (
   page: Page,
-  plan: Plan,
-  options: TakeOptions & { readonly upTo?: number | undefined } = {},
+  plan: Walk,
+  options: StepOptions & { readonly upTo?: number | undefined } = {},
 ) =>
   run(page, plan, options, 0, options.upTo ?? plan.steps.length, true).pipe(
-    Effect.withSpan("Plan.restore"),
+    Effect.withSpan("Walk.restore"),
   );

@@ -9,7 +9,7 @@ import { choose, Drifted } from "./choose.ts";
 const invalid = (detail: string) => undispatched("replay", new InvalidRequest({ detail }));
 
 /**
- * The one element on the page that a subject names, by role, name and context (see `Plan`),
+ * The one element on the page that a subject names, by role, name and context (see `Walk`),
  * looking again for two seconds while the page may still be drawing it.
  */
 export const locate = (page: Page, subject: Subject) =>
@@ -27,7 +27,7 @@ export const locate = (page: Page, subject: Subject) =>
         while: (error) => error._tag !== "BrowserError",
       }),
       Effect.provideService(Clock.Clock, page.clock),
-      Effect.withSpan("Plan.locate", { attributes: { role: subject.role ?? "" } }),
+      Effect.withSpan("Walk.locate", { attributes: { role: subject.role ?? "" } }),
     );
 
 /**

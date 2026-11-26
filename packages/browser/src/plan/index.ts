@@ -12,7 +12,7 @@
  * it. Text typed into focus was typed into the focused field, which replay finds the same way, and
  * text typed into a secret field goes into nothing else. An element step never falls back to
  * coordinates, and a step recorded at a point acts there only while the element found for it still
- * covers that point. `take` and `replay` return receipts; failure preserves a stopping point and
+ * covers that point. `step` and `replay` return receipts; failure preserves a stopping point and
  * earlier receipts. Unknown consequential input is never resent. Only a positive durable read-back
  * can reconcile it; restoration follows the same rule. The consumer journals begun steps before
  * calling, treating interruption or a missing receipt as unknown. Version 3 carries canonical typed
@@ -20,16 +20,16 @@
  *
  * @since 0.3.0
  */
-export { Expected, Step, Plan, Receipt, Stopped, Uncertain, ReplayError } from "./data.ts";
+export { Expected, Step, Walk, Receipt, Stopped, Uncertain, ReplayError } from "./data.ts";
 export { fromEvents } from "./record.ts";
 export { locate } from "./targets.ts";
 
 export {
   replay,
   restore,
-  take,
+  step,
   repeatable,
-  type TakeOptions,
+  type StepOptions,
   type ReplayOptions,
 } from "./execute.ts";
 

@@ -21,11 +21,11 @@ import * as Motion from "../src/presentation/Motion.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
-import * as Style from "../src/Style.ts";
+import * as InputStyle from "../src/Style.ts";
 import { Site, SiteLayer, unpaused } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
-const performed = Style.performed({
+const performed = InputStyle.performed({
   pointer: MutableRef.make(Option.none()),
   motion: Motion.lognormal,
   wordsPerMinute: 70,
@@ -35,7 +35,7 @@ const average = (numbers: ReadonlyArray<number>) =>
   numbers.reduce((total, number) => total + number, 0) / numbers.length;
 
 // The text typing produces: insertions, and keys pressed down, with Backspace removing one.
-const replay = (events: ReadonlyArray<Style.TypingEvent>) =>
+const replay = (events: ReadonlyArray<InputStyle.TypingEvent>) =>
   events
     .flatMap((event) =>
       event.phase === "insert" ? [...event.key] : event.phase === "down" ? [event.key] : [],
@@ -157,7 +157,7 @@ describe("Presentation's style", () => {
 
   it.effect("eases a wheel in over a frame-a-step schedule, slow at first and last", () =>
     Effect.gen(function* () {
-      const steps = yield* Style.eased(500)(0, 1000);
+      const steps = yield* InputStyle.eased(500)(0, 1000);
       const middle = steps[Math.floor(steps.length / 2)]?.dy ?? 0;
 
       assert.lengthOf(steps, 30);
@@ -170,9 +170,9 @@ describe("Presentation's style", () => {
       assert.closeTo(steps.at(-1)?.afterMillis ?? 0, 500 - 500 / 30, 1e-9);
       assert.isBelow(steps[0]?.dy ?? 0, middle / 10);
       assert.isBelow(steps.at(-1)?.dy ?? 0, middle / 10);
-      for (const duration of [Number.NaN, -1, Style.maximumDurationMillis + 1])
+      for (const duration of [Number.NaN, -1, InputStyle.maximumDurationMillis + 1])
         assert.strictEqual(
-          (yield* Effect.flip(Style.eased(duration)(0, 100))).reason._tag,
+          (yield* Effect.flip(InputStyle.eased(duration)(0, 100))).reason._tag,
           "InvalidRequest",
         );
     }),
@@ -183,17 +183,17 @@ describe("Presentation's style", () => {
       const from = { x: 10, y: 10 };
       const to = { x: 300, y: 200 };
 
-      assert.deepStrictEqual(yield* Style.plain.glide(from, to, false), [
+      assert.deepStrictEqual(yield* InputStyle.plain.glide(from, to, false), [
         { ...to, afterMillis: 0 },
       ]);
-      assert.deepStrictEqual(yield* Style.plain.wheel(0, 300), [
+      assert.deepStrictEqual(yield* InputStyle.plain.wheel(0, 300), [
         { dx: 0, dy: 300, afterMillis: 0 },
       ]);
-      assert.deepStrictEqual(yield* Style.plain.typing("a b", true), [
+      assert.deepStrictEqual(yield* InputStyle.plain.typing("a b", true), [
         { afterMillis: 0, phase: "insert", key: "a b" },
       ]);
       assert.deepStrictEqual(
-        (yield* Style.plain.typing("aé", false)).map((event) => [event.phase, event.key]),
+        (yield* InputStyle.plain.typing("aé", false)).map((event) => [event.phase, event.key]),
         [
           ["down", "a"],
           ["up", "a"],
@@ -409,7 +409,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
       yield* page
         .scroll({ at: { x: 100, y: 100 }, dy: 1000 })
-        .pipe(Style.provide({ ...Style.plain, wheel: Style.eased(400) }));
+        .pipe(InputStyle.provide({ ...InputStyle.plain, wheel: InputStyle.eased(400) }));
       assert.isAtLeast(Date.now() - started, 350);
       assert.closeTo(
         (yield* page.read(() => scrollY, { arg: null, result: Schema.Finite })).value,

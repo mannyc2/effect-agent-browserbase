@@ -62,7 +62,7 @@ export const Create = Schema.Union([
 ]);
 
 /** How a release answers. */
-export const Release = Schema.Union([
+export const ReleaseAnswer = Schema.Union([
   /** The session ends at once. */
   Schema.TaggedStruct("Ends", {}),
   /** Accepted, but the session runs on for `millis`, or without them until its timeout. */
@@ -179,7 +179,7 @@ export const Script = Schema.Struct({
   /** How creates answer, in turn; once these run out, each is accepted. */
   creates: Schema.optional(Schema.Array(Create)),
   /** How releases answer, in turn; once these run out, each ends its session. */
-  releases: Schema.optional(Schema.Array(Release)),
+  releases: Schema.optional(Schema.Array(ReleaseAnswer)),
   /** How session reads answer, in turn; once these run out, each answers. */
   reads: Schema.optional(Schema.Array(Read)),
   /** Initial API state, before any requests. IDs must be valid UUIDs. */
@@ -229,7 +229,7 @@ interface Fake {
   readonly connectUrl: string | undefined;
   readonly pending: {
     readonly creates: Array<typeof Create.Type>;
-    readonly releases: Array<typeof Release.Type>;
+    readonly releases: Array<typeof ReleaseAnswer.Type>;
     readonly reads: Array<typeof Read.Type>;
   };
   readonly requests: Array<string>;

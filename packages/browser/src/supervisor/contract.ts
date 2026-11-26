@@ -10,11 +10,11 @@ import {
   type Stream,
 } from "effect";
 
-import type { Released } from "../providers/Released.ts";
+import type { Release } from "../providers/Released.ts";
 
 /** Why a generation stopped serving. */
-export const Why = Schema.Literals(["lost", "rotated", "retired"]);
-export type Why = typeof Why.Type;
+export const StopReason = Schema.Literals(["lost", "rotated", "retired"]);
+export type StopReason = typeof StopReason.Type;
 
 /** A resource acquired in the generation's scope. The core never inspects its value. */
 export interface Opened<A> {
@@ -22,7 +22,7 @@ export interface Opened<A> {
   /** Watched until the generation's scope closes, after its release. */
   readonly lost?: Effect.Effect<string> | undefined;
   /** Without a release hook, closing the generation's scope ends the resource. */
-  readonly release?: ((why: Why) => Effect.Effect<Released>) | undefined;
+  readonly release?: ((why: StopReason) => Effect.Effect<Release>) | undefined;
 }
 
 export interface Options<A, E, R> {
@@ -41,8 +41,8 @@ export type State<E> =
   | { readonly _tag: "Failed"; readonly attempt: number; readonly error: E }
   | { readonly _tag: "Down"; readonly error: E | undefined; readonly detail: string }
   | { readonly _tag: "Open" }
-  | { readonly _tag: "Ending"; readonly why: Why; readonly detail?: string | undefined }
-  | { readonly _tag: "Closed"; readonly released?: Released | undefined };
+  | { readonly _tag: "Ending"; readonly why: StopReason; readonly detail?: string | undefined }
+  | { readonly _tag: "Closed"; readonly released?: Release | undefined };
 
 export interface Generation<E = unknown> {
   readonly number: number;
@@ -67,13 +67,13 @@ export class Unavailable<E = unknown> extends Data.TaggedError("Unavailable")<{
 /** Revoked work still uses its input receipt to determine whether input reached the site. */
 export class Superseded extends Schema.TaggedError<Superseded>()("Superseded", {
   generation: Schema.Int,
-  reason: Why,
+  reason: StopReason,
 }) {}
 
 export interface Lease<A> {
   readonly generation: number;
   readonly value: A;
-  readonly ending: Effect.Effect<Why>;
+  readonly ending: Effect.Effect<StopReason>;
   /** Stale declarations do nothing. */
   readonly lose: (detail: string) => Effect.Effect<void>;
 }

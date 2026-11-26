@@ -9,7 +9,7 @@ import { BrowserError, PolicyTimeout, Timeout } from "../../BrowserError.ts";
 import { Action, ActionAnnounced, Subject } from "../../BrowserEvent.ts";
 import type * as BrowserClock from "../../Clock.ts";
 import { type Point, redacted, type ResolvedTarget } from "../../Page.ts";
-import { Current, type Style, validated } from "../../Style.ts";
+import { Current, type InputStyle, validated } from "../../Style.ts";
 import { redact } from "../../Url.ts";
 import { failWith, type PageContext, undispatched } from "../page/context.ts";
 import { Correlation, FailFast } from "../page/lane.ts";
@@ -19,7 +19,7 @@ import type { Approval, PolicyPlan } from "./guard.ts";
 
 export interface InputMarks {
   /** How the action's input is sent: plainly, or performed for viewers. */
-  readonly style: Style;
+  readonly style: InputStyle;
   /**
    * Time the style spends showing the input, such as a glide or typing at a person's pace, planned
    * from now: the deadline moves back by as much, so presentation has a budget of its own.
@@ -155,7 +155,7 @@ const announcing =
   (
     page: PageContext,
     name: Action["name"],
-    style: Style,
+    style: InputStyle,
     acted: Ref.Ref<Pick<Action, "subject" | "to" | "box">>,
   ) =>
   (to: Point) =>

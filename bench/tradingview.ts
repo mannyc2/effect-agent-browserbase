@@ -22,7 +22,7 @@ import {
 import { Browser } from "effect-browser/Browser";
 import type * as BrowserEvent from "effect-browser/BrowserEvent";
 import * as Chromium from "effect-browser/Chromium";
-import * as Plan from "effect-browser/Plan";
+import * as Walk from "effect-browser/Plan";
 import * as Presentation from "effect-browser/Presentation";
 import * as Browserbase from "effect-browserbase/Browserbase";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
@@ -145,7 +145,7 @@ interface Run {
 
 // What a walk typed, by the input slots its plan names, from the events it was recorded from: the
 // plan keeps each typed text as a slot, never the text.
-const typed = (plan: Plan.Plan, events: ReadonlyArray<BrowserEvent.BrowserEvent>) => {
+const typed = (plan: Walk.Walk, events: ReadonlyArray<BrowserEvent.BrowserEvent>) => {
   const page = events.find((event) => event._tag === "Action")?.page;
 
   const actions = events.filter(
@@ -224,12 +224,12 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
       tools[name] = (tools[name] ?? 0) + 1;
 
     const events = yield* page.recentEvents;
-    const plan = Plan.fromEvents(events);
+    const plan = Walk.fromEvents(events);
 
     if (run.mode === "replayed")
       yield* fs.writeFileString(
         path.join(run.directory, `${id}.plan.json`),
-        JSON.stringify(yield* Schema.encodeEffect(Plan.Plan)(plan), null, 2),
+        JSON.stringify(yield* Schema.encodeEffect(Walk.Walk)(plan), null, 2),
       );
     // The page's input by kind; `act` counts the chart API's changes, the setup's among them.
     const actions: Record<string, number> = {};
@@ -258,7 +258,7 @@ const trial = (run: Run, url: string, task: TradingView.Task, id: string) =>
 const replay = (
   url: string,
   task: TradingView.Task,
-  walk: { readonly plan: Plan.Plan; readonly inputs: Readonly<Record<string, string>> },
+  walk: { readonly plan: Walk.Walk; readonly inputs: Readonly<Record<string, string>> },
   answer: string,
 ) =>
   Effect.gen(function* () {
@@ -272,7 +272,7 @@ const replay = (
 
     // The walk opens on the chart this page has just loaded.
     const replayed = yield* Effect.exit(
-      Plan.replay(page, walk.plan, {
+      Walk.replay(page, walk.plan, {
         inputs: walk.inputs,
         from: first?.action._tag === "Goto" ? 1 : 0,
       }),

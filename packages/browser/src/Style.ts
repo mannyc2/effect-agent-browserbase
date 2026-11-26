@@ -35,7 +35,7 @@ export interface WheelStep {
   readonly afterMillis: number;
 }
 
-export interface Style {
+export interface InputStyle {
   /** Own presentation only after policy allows input; wait options belong to the page. */
   readonly withInput?:
     | ((options: {
@@ -77,7 +77,7 @@ export interface Style {
 }
 
 /** Each key as it comes, with no pause; a drag moves in eight short steps so its target sees it. */
-export const plain: Style = {
+export const plain: InputStyle = {
   shown: false,
   pointer: undefined,
   glide: (from, to, dragging) =>
@@ -188,7 +188,7 @@ const decode =
     );
 
 /** Copy and validate custom schedules before their first input; planning uses the action bound. */
-export const validated = (style: Style): Style => ({
+export const validated = (style: InputStyle): InputStyle => ({
   ...style,
   hold: style.hold.pipe(Effect.flatMap(decode(Delay, "click"))),
   keyGap: style.keyGap.pipe(Effect.flatMap(decode(Delay, "press"))),
@@ -275,7 +275,7 @@ const bursts = Effect.fnUntraced(function* (dx: number, dy: number) {
  * a film scrolls on its own time instead.
  */
 export const eased =
-  (durationMillis: number): Style["wheel"] =>
+  (durationMillis: number): InputStyle["wheel"] =>
   (dx, dy) => {
     if (!Number.isFinite(durationMillis) || durationMillis < 0)
       return refuse("scroll", "an eased scroll lasts a finite, nonnegative time");
@@ -303,7 +303,7 @@ export const performed = (options: {
   readonly pointer: MutableRef.MutableRef<Option.Option<Point>>;
   readonly motion: Motion.Planner;
   readonly wordsPerMinute: number;
-}): Style => {
+}): InputStyle => {
   const gap = keyGap(options.wordsPerMinute);
 
   return {
@@ -318,12 +318,12 @@ export const performed = (options: {
 };
 
 /** Input style in this fiber; plain input is the default. */
-export const Current = Context.Reference<Style>("effect-browser/Style", {
+export const Current = Context.Reference<InputStyle>("effect-browser/Style", {
   defaultValue: () => plain,
 });
 
 /** Apply a style through page input, including pages selected later by a browser adapter. */
 export const provide =
-  (style: Style) =>
+  (style: InputStyle) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.provideService(effect, Current, style);

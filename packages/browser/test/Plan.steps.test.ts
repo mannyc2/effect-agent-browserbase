@@ -12,7 +12,7 @@ import { Browser } from "../src/Browser.ts";
 import { BrowserError, Timeout } from "../src/BrowserError.ts";
 import { Subject } from "../src/BrowserEvent.ts";
 import { Found, type Page as PublicPage, State } from "../src/Page.ts";
-import * as Plan from "../src/plan/index.ts";
+import * as Walk from "../src/plan/index.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestPage from "../src/testing/TestPage.ts";
 import * as TestCdp from "./support/TestCdp.ts";
@@ -79,18 +79,18 @@ const scripted = Effect.fnUntraced(function* (
   };
 });
 
-describe("Plan step safety", () => {
+describe("Walk step safety", () => {
   it.effect("refuses to repeat a click whose dispatch is unknown", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
         const { page, dispatches } = yield* scripted();
 
-        const plan = new Plan.Plan({
+        const plan = new Walk.Walk({
           version: 3,
-          steps: [new Plan.Step({ action: { _tag: "Click", target: "e0" }, subject, url: "" })],
+          steps: [new Walk.Step({ action: { _tag: "Click", target: "e0" }, subject, url: "" })],
         });
 
-        const result = yield* Plan.replay(page, plan, {
+        const result = yield* Walk.replay(page, plan, {
           settle: false,
           from: { step: 0, input: "unknown" },
         }).pipe(Effect.exit);
@@ -106,19 +106,19 @@ describe("Plan step safety", () => {
       Effect.gen(function* () {
         const { page, dispatches } = yield* scripted();
 
-        const plan = Plan.Plan.new([
-          new Plan.Step({ action: { _tag: "Click", target: "e0" }, subject, url: "" }),
-          new Plan.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
+        const plan = Walk.Walk.new([
+          new Walk.Step({ action: { _tag: "Click", target: "e0" }, subject, url: "" }),
+          new Walk.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
         ]);
 
-        const error = yield* Plan.replay(page, plan, {
-          from: new Plan.Stopped({ step: 0, input: "unknown" }),
+        const error = yield* Walk.replay(page, plan, {
+          from: new Walk.Stopped({ step: 0, input: "unknown" }),
           settle: false,
         }).pipe(Effect.flip);
 
         assert.deepStrictEqual([error.stopped.step, error.stopped.input], [0, "unknown"]);
 
-        const retried = yield* Plan.replay(page, plan, {
+        const retried = yield* Walk.replay(page, plan, {
           from: error.stopped,
           inputs: { text: "memo" },
           settle: false,
@@ -135,17 +135,17 @@ describe("Plan step safety", () => {
       Effect.gen(function* () {
         const { page, dispatches } = yield* scripted();
 
-        const plan = Plan.Plan.new([
-          new Plan.Step({ action: { _tag: "Goto", url: "https://workflow.test/run" }, url: "" }),
-          new Plan.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
+        const plan = Walk.Walk.new([
+          new Walk.Step({ action: { _tag: "Goto", url: "https://workflow.test/run" }, url: "" }),
+          new Walk.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
         ]);
 
-        const error = yield* Plan.replay(page, plan, { settle: false }).pipe(Effect.flip);
+        const error = yield* Walk.replay(page, plan, { settle: false }).pipe(Effect.flip);
 
         assert.deepStrictEqual(yield* dispatches, []);
         assert.deepStrictEqual(error.receipts, []);
 
-        const receipts = yield* Plan.replay(page, plan, {
+        const receipts = yield* Walk.replay(page, plan, {
           from: error.stopped,
           inputs: { text: "memo" },
           settle: false,
@@ -233,16 +233,16 @@ describe("Plan step safety", () => {
         };
 
         const payload = { version: 3, steps: [step] };
-        const plan = payload as unknown as Plan.Plan;
-        const from = new Plan.Stopped({ step: 0, input: unknown ? "unknown" : "unsent" });
+        const plan = payload as unknown as Walk.Walk;
+        const from = new Walk.Stopped({ step: 0, input: unknown ? "unknown" : "unsent" });
         const options = { arrival: 0, inputs: { text: "memo" } };
 
         const result = yield* (
           entry === "take"
-            ? Plan.take(changing, plan, from, options).pipe(Effect.map((receipt) => [receipt]))
+            ? Walk.step(changing, plan, from, options).pipe(Effect.map((receipt) => [receipt]))
             : entry === "restore"
-              ? Plan.restore(changing, plan, options)
-              : Plan.replay(changing, plan, { ...options, from })
+              ? Walk.restore(changing, plan, options)
+              : Walk.replay(changing, plan, { ...options, from })
         ).pipe(Effect.exit);
 
         if (unknown) {
@@ -268,15 +268,15 @@ describe("Plan step safety", () => {
               : 0,
           );
         }
-        const decoded = Schema.decodeUnknownExit(Plan.Plan)(payload);
+        const decoded = Schema.decodeUnknownExit(Walk.Walk)(payload);
 
         if (prohibited) assert.isTrue(Exit.isFailure(decoded));
         else {
           assert.isTrue(Exit.isSuccess(decoded));
           if (Exit.isSuccess(decoded))
             assert.deepStrictEqual(
-              yield* Schema.decodeEffect(Plan.Plan)(
-                yield* Schema.encodeEffect(Plan.Plan)(decoded.value),
+              yield* Schema.decodeEffect(Walk.Walk)(
+                yield* Schema.encodeEffect(Walk.Walk)(decoded.value),
               ),
               decoded.value,
             );
@@ -297,11 +297,11 @@ describe("Plan step safety", () => {
             steps: [{ action: { _tag: "Click", target: "e0" }, subject, url: "", expect }],
           };
 
-          const plan = payload as unknown as Plan.Plan;
+          const plan = payload as unknown as Walk.Walk;
           const { page, dispatches } = yield* scripted("blank");
 
-          for (const at of [new Plan.Stopped({ step: 0, input: "unknown" }), 0]) {
-            const result = yield* Plan.take(page, plan, at, { settle: false, arrival: 0 }).pipe(
+          for (const at of [new Walk.Stopped({ step: 0, input: "unknown" }), 0]) {
+            const result = yield* Walk.step(page, plan, at, { settle: false, arrival: 0 }).pipe(
               Effect.exit,
             );
 
@@ -316,7 +316,7 @@ describe("Plan step safety", () => {
           }
           for (const onExcessProperty of ["ignore", "error"] as const)
             assert.isTrue(
-              Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan, { onExcessProperty })(payload)),
+              Exit.isFailure(Schema.decodeUnknownExit(Walk.Walk, { onExcessProperty })(payload)),
             );
         }
       }),
@@ -327,41 +327,41 @@ describe("Plan step safety", () => {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const cases = [
-          new Plan.Step({ action: { _tag: "Goto", url: "https://workflow.test/run" }, url: "" }),
-          new Plan.Step({ action: { _tag: "Hover", target: "e0" }, subject, url: "" }),
-          new Plan.Step({ action: { _tag: "Scroll" }, url: "" }),
-          new Plan.Step({
+          new Walk.Step({ action: { _tag: "Goto", url: "https://workflow.test/run" }, url: "" }),
+          new Walk.Step({ action: { _tag: "Hover", target: "e0" }, subject, url: "" }),
+          new Walk.Step({ action: { _tag: "Scroll" }, url: "" }),
+          new Walk.Step({
             action: { _tag: "Select", ref: "e0", values: ["chosen"] },
             subject,
             url: "",
           }),
-          new Plan.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
+          new Walk.Step({ action: { _tag: "Type", text: "" }, subject, input: "text", url: "" }),
         ];
 
         for (const step of cases) {
           const { page, dispatches } = yield* scripted();
-          const plan = new Plan.Plan({ version: 3, steps: [step] });
+          const plan = new Walk.Walk({ version: 3, steps: [step] });
 
-          const receipts = yield* Plan.replay(page, plan, {
+          const receipts = yield* Walk.replay(page, plan, {
             from: { step: 0, input: "unknown" },
             settle: false,
             inputs: { text: "memo" },
           });
 
-          assert.isTrue(Plan.repeatable(step));
+          assert.isTrue(Walk.repeatable(step));
           assert.deepStrictEqual(yield* dispatches, [
             step.action._tag === "Goto" ? "navigate" : step.action._tag.toLowerCase(),
           ]);
           assert.strictEqual(receipts[0]?.outcome, "taken");
         }
         assert.isFalse(
-          Plan.repeatable(
-            new Plan.Step({ action: { _tag: "Type", text: "" }, input: "text", url: "" }),
+          Walk.repeatable(
+            new Walk.Step({ action: { _tag: "Type", text: "" }, input: "text", url: "" }),
           ),
         );
         assert.isFalse(
-          Plan.repeatable(
-            new Plan.Step({
+          Walk.repeatable(
+            new Walk.Step({
               action: { _tag: "Type", text: "", options: { submit: true } },
               subject,
               url: "",
@@ -394,8 +394,8 @@ describe("Plan step safety", () => {
                 ),
           };
 
-          const plan = Plan.Plan.new([
-            new Plan.Step({
+          const plan = Walk.Walk.new([
+            new Walk.Step({
               action: { _tag: "Click", target: "e0" },
               subject,
               url: "",
@@ -403,8 +403,8 @@ describe("Plan step safety", () => {
             }),
           ]);
 
-          for (const at of [0, new Plan.Stopped({ step: 0, input: "unknown" })]) {
-            const error = yield* Plan.take(button, plan, at, { settle: false, arrival: 0 }).pipe(
+          for (const at of [0, new Walk.Stopped({ step: 0, input: "unknown" })]) {
+            const error = yield* Walk.step(button, plan, at, { settle: false, arrival: 0 }).pipe(
               Effect.flip,
             );
 
@@ -435,8 +435,8 @@ describe("Plan step safety", () => {
               ),
           };
 
-          const plan = Plan.Plan.new([
-            new Plan.Step({
+          const plan = Walk.Walk.new([
+            new Walk.Step({
               action: { _tag: "Click", target: "e0" },
               subject,
               url: "",
@@ -445,10 +445,10 @@ describe("Plan step safety", () => {
           ]);
 
           const taking = yield* Effect.forkChild(
-            Plan.take(
+            Walk.step(
               slow,
               plan,
-              phase === "recovery" ? new Plan.Stopped({ step: 0, input: "unknown" }) : 0,
+              phase === "recovery" ? new Walk.Stopped({ step: 0, input: "unknown" }) : 0,
               { settle: false, arrival: "50 millis" },
             ).pipe(Effect.flip),
           );
@@ -547,10 +547,10 @@ const losesReply = (page: Page): Page => ({
 });
 
 const orderPlan = (durable: boolean) =>
-  new Plan.Plan({
+  new Walk.Walk({
     version: 3,
     steps: [
-      new Plan.Step({
+      new Walk.Step({
         action: { _tag: "Click", target: "e0" },
         subject: named("Place order"),
         url: "",
@@ -566,20 +566,20 @@ const orderPlan = (durable: boolean) =>
 layer(TestCdp.provideLayer(Chromium.layer()), {
   excludeTestServices: true,
   timeout: Duration.seconds(60),
-})("Plan steps in Chromium", (it) => {
+})("Walk steps in Chromium", (it) => {
   it.effect("recovers an exact operation URL without more input", () =>
     TestCdp.withCdp(
       Effect.gen(function* () {
         const site = yield* workflow();
         const page = yield* open(site.url);
 
-        yield* Plan.take(page, orderPlan(true), 0);
+        yield* Walk.step(page, orderPlan(true), 0);
         const receiptUrl = site.url + "/receipt/1";
 
         yield* page.goto(receiptUrl);
 
-        const exact = Plan.Plan.new([
-          new Plan.Step({
+        const exact = Walk.Walk.new([
+          new Walk.Step({
             action: { _tag: "Click", target: "e0" },
             subject: named("Place order"),
             url: "",
@@ -587,28 +587,28 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           }),
         ]);
 
-        const saved = yield* Schema.decodeEffect(Plan.Plan)(
-          yield* Schema.encodeEffect(Plan.Plan)(exact),
+        const saved = yield* Schema.decodeEffect(Walk.Walk)(
+          yield* Schema.encodeEffect(Walk.Walk)(exact),
         );
 
         assert.strictEqual(
-          (yield* Plan.take(page, saved, 0, { settle: false })).outcome,
+          (yield* Walk.step(page, saved, 0, { settle: false })).outcome,
           "skipped",
         );
         const replacement = yield* open(receiptUrl);
-        const options = { settle: false, arrival: "100 millis" } satisfies Plan.TakeOptions;
-        const stopped = new Plan.Stopped({ step: 0, input: "unknown" });
+        const options = { settle: false, arrival: "100 millis" } satisfies Walk.StepOptions;
+        const stopped = new Walk.Stopped({ step: 0, input: "unknown" });
 
         assert.strictEqual(
-          (yield* Plan.take(replacement, saved, stopped, options)).outcome,
+          (yield* Walk.step(replacement, saved, stopped, options)).outcome,
           "skipped",
         );
         assert.strictEqual(
-          (yield* Plan.restore(replacement, saved, options))[0]?.outcome,
+          (yield* Walk.restore(replacement, saved, options))[0]?.outcome,
           "skipped",
         );
         assert.strictEqual(
-          (yield* Plan.replay(replacement, saved, { ...options, from: stopped }))[0]?.outcome,
+          (yield* Walk.replay(replacement, saved, { ...options, from: stopped }))[0]?.outcome,
           "skipped",
         );
         assert.strictEqual(yield* site.orders, 1);
@@ -626,10 +626,10 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           const browser = yield* Browser;
           const before = yield* browser.now;
 
-          const plan = new Plan.Plan({
+          const plan = new Walk.Walk({
             version: 3,
             steps: [
-              new Plan.Step({
+              new Walk.Step({
                 action: { _tag: "Click", target: "e0" },
                 subject: named("Enabled", "checkbox"),
                 url: site.url,
@@ -638,7 +638,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             ],
           });
 
-          const receipt = yield* Plan.take(page, plan, 0);
+          const receipt = yield* Walk.step(page, plan, 0);
 
           assert.strictEqual(receipt.outcome, "skipped");
           assert.isAtLeast(receipt.startedAt, before);
@@ -653,10 +653,10 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             ),
           );
 
-          const unchecked = new Plan.Plan({
+          const unchecked = new Walk.Walk({
             version: 3,
             steps: [
-              new Plan.Step({
+              new Walk.Step({
                 action: { _tag: "Click", target: "e0" },
                 subject: named("Enabled", "checkbox"),
                 url: site.url,
@@ -665,10 +665,10 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             ],
           });
 
-          const from = new Plan.Stopped({ step: 0, input: "unknown" });
+          const from = new Walk.Stopped({ step: 0, input: "unknown" });
 
-          assert.strictEqual((yield* Plan.take(page, unchecked, from)).outcome, "verified");
-          assert.strictEqual((yield* Plan.take(page, unchecked, from)).outcome, "skipped");
+          assert.strictEqual((yield* Walk.step(page, unchecked, from)).outcome, "verified");
+          assert.strictEqual((yield* Walk.step(page, unchecked, from)).outcome, "skipped");
           assert.strictEqual(
             yield* Effect.promise(() =>
               TestCdp.nativePage(page).evaluate(() => document.body.dataset["toggles"]),
@@ -687,21 +687,21 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           const site = yield* workflow();
           const page = yield* open(site.url);
           const plan = orderPlan(true);
-          const receipt = yield* Plan.take(losesReply(page), plan, 0, { arrival: "1 second" });
+          const receipt = yield* Walk.step(losesReply(page), plan, 0, { arrival: "1 second" });
 
           assert.strictEqual(receipt.outcome, "verified");
           assert.strictEqual(yield* site.orders, 1);
 
           const replacement = yield* open(site.url);
-          const restored = yield* Plan.restore(replacement, plan, { upTo: 1 });
+          const restored = yield* Walk.restore(replacement, plan, { upTo: 1 });
 
           assert.deepStrictEqual(
             restored.map(({ outcome }) => outcome),
             ["skipped"],
           );
 
-          const resumed = yield* Plan.replay(replacement, plan, {
-            from: new Plan.Stopped({ step: 0, input: "unknown" }),
+          const resumed = yield* Walk.replay(replacement, plan, {
+            from: new Walk.Stopped({ step: 0, input: "unknown" }),
           });
 
           assert.deepStrictEqual(
@@ -723,7 +723,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           const plan = orderPlan(false);
 
           const error = yield* Effect.flip(
-            Plan.take(losesReply(page), plan, 0, { arrival: "1 second" }),
+            Walk.step(losesReply(page), plan, 0, { arrival: "1 second" }),
           );
 
           assert.strictEqual(error.input, "unknown");
@@ -732,17 +732,17 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           yield* Effect.promise(() =>
             TestCdp.nativePage(page).getByRole("alert").waitFor({ state: "visible" }),
           );
-          const visible = yield* Effect.flip(Plan.replay(page, plan, { from: error.stopped }));
+          const visible = yield* Effect.flip(Walk.replay(page, plan, { from: error.stopped }));
 
           assert.strictEqual(visible.reason._tag, "Uncertain");
 
-          const stopped = yield* Schema.decodeUnknownEffect(Plan.Stopped)(
+          const stopped = yield* Schema.decodeUnknownEffect(Walk.Stopped)(
             JSON.parse(JSON.stringify(error.stopped)),
           );
 
           const replacement = yield* open(site.url);
-          const absent = yield* Effect.flip(Plan.replay(replacement, plan, { from: stopped }));
-          const restore = yield* Effect.flip(Plan.restore(replacement, plan, { upTo: 1 }));
+          const absent = yield* Effect.flip(Walk.replay(replacement, plan, { from: stopped }));
+          const restore = yield* Effect.flip(Walk.restore(replacement, plan, { upTo: 1 }));
 
           assert.strictEqual(absent.reason._tag, "Uncertain");
           assert.strictEqual(restore.reason._tag, "Uncertain");
@@ -759,15 +759,15 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           const site = yield* workflow();
           const page = yield* open(site.url);
 
-          const plan = new Plan.Plan({
+          const plan = new Walk.Walk({
             version: 3,
             steps: [
-              new Plan.Step({
+              new Walk.Step({
                 action: { _tag: "Hover", target: "e0" },
                 subject: named("Place order"),
                 url: site.url,
               }),
-              new Plan.Step({
+              new Walk.Step({
                 action: { _tag: "Click", target: "e0" },
                 subject: named("Unavailable"),
                 url: site.url,
@@ -775,7 +775,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             ],
           });
 
-          const error = yield* Effect.flip(Plan.replay(page, plan));
+          const error = yield* Effect.flip(Walk.replay(page, plan));
 
           assert.deepStrictEqual(
             [error.step, error.input, error.stopped.step, error.stopped.input],
@@ -798,10 +798,10 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           const site = yield* workflow();
           const page = yield* open(site.url);
 
-          const plan = new Plan.Plan({
+          const plan = new Walk.Walk({
             version: 3,
             steps: [
-              new Plan.Step({
+              new Walk.Step({
                 action: { _tag: "Click", target: "e0", options: { holdMillis: 60_000 } },
                 subject: named("Commit on press"),
                 url: site.url,
@@ -809,7 +809,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             ],
           });
 
-          const taking = yield* Effect.forkChild(Plan.take(page, plan, 0));
+          const taking = yield* Effect.forkChild(Walk.step(page, plan, 0));
 
           yield* site.ordered;
           yield* Fiber.interrupt(taking);
@@ -825,8 +825,8 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           );
 
           const error = yield* Effect.flip(
-            Plan.replay(page, plan, {
-              from: new Plan.Stopped({ step: 0, input: "unknown" }),
+            Walk.replay(page, plan, {
+              from: new Walk.Stopped({ step: 0, input: "unknown" }),
             }),
           );
 
@@ -845,8 +845,8 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           const page = yield* open(site.url);
           const elsewhere = site.url.replace("127.0.0.1", "localhost") + "/done";
 
-          const checked = Plan.Plan.new([
-            new Plan.Step({
+          const checked = Walk.Walk.new([
+            new Walk.Step({
               action: { _tag: "Click", target: "e0" },
               subject: named("Enabled", "checkbox"),
               url: elsewhere,
@@ -854,15 +854,15 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             }),
           ]);
 
-          const order = Plan.Plan.new(
-            orderPlan(true).steps.map((step) => new Plan.Step({ ...step, url: elsewhere })),
+          const order = Walk.Walk.new(
+            orderPlan(true).steps.map((step) => new Walk.Step({ ...step, url: elsewhere })),
           );
 
-          const skipped = yield* Plan.take(page, checked, 0, { arrival: "10 millis" }).pipe(
+          const skipped = yield* Walk.step(page, checked, 0, { arrival: "10 millis" }).pipe(
             Effect.exit,
           );
 
-          const verified = yield* Plan.take(losesReply(page), order, 0, {
+          const verified = yield* Walk.step(losesReply(page), order, 0, {
             arrival: "100 millis",
           }).pipe(Effect.exit);
 
@@ -885,10 +885,10 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const site = yield* workflow();
         const expected = site.url.replace("127.0.0.1", "localhost") + "/done";
 
-        const plan = new Plan.Plan({
+        const plan = new Walk.Walk({
           version: 3,
           steps: [
-            new Plan.Step({
+            new Walk.Step({
               action: { _tag: "Click", target: "e0" },
               subject: named("Continue"),
               url: expected,
@@ -899,7 +899,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const timely = yield* open(site.url + "?delay=200");
 
         assert.strictEqual(
-          (yield* Plan.take(timely, plan, 0, { settle: false, arrival: "2 seconds" })).outcome,
+          (yield* Walk.step(timely, plan, 0, { settle: false, arrival: "2 seconds" })).outcome,
           "taken",
         );
         assert.strictEqual(yield* timely.url, expected);
@@ -907,7 +907,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const late = yield* open(site.url + "?delay=60000");
 
         const error = yield* Effect.flip(
-          Plan.take(late, plan, 0, { settle: false, arrival: "100 millis" }),
+          Walk.step(late, plan, 0, { settle: false, arrival: "100 millis" }),
         );
 
         assert.deepStrictEqual([error.reason._tag, error.input], ["Drifted", "unknown"]);
@@ -928,11 +928,11 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* recording.click(continued.ref);
         yield* Effect.promise(() => TestCdp.nativePage(recording).waitForURL(expected));
         yield* recording.press("Shift");
-        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const plan = Walk.fromEvents(yield* recording.recentEvents);
         const following = plan.steps.findIndex((step) => step.action._tag === "Press");
         const replacement = yield* open(expected);
 
-        const receipt = yield* Plan.take(replacement, plan, following, {
+        const receipt = yield* Walk.step(replacement, plan, following, {
           settle: false,
           arrival: "100 millis",
         });
@@ -950,7 +950,7 @@ it.effect("locate retries on the page clock even when its caller clock is suspen
     const test = yield* TestPage.make();
     const clock = yield* Clock.Clock;
 
-    const locating = yield* Plan.locate(test.page, subject).pipe(
+    const locating = yield* Walk.locate(test.page, subject).pipe(
       Effect.provideService(Clock.Clock, { ...clock, sleep: () => Effect.never }),
       Effect.flip,
       Effect.forkChild,

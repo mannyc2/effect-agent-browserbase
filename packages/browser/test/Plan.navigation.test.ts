@@ -9,7 +9,7 @@ import { Deferred, Duration, Effect, Exit, Fiber } from "effect";
 import { Browser } from "../src/Browser.ts";
 import { Subject } from "../src/BrowserEvent.ts";
 import type { Page } from "../src/Page.ts";
-import * as Plan from "../src/plan/index.ts";
+import * as Walk from "../src/plan/index.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -82,7 +82,7 @@ const open = Effect.fnUntraced(function* (url: string) {
 layer(TestCdp.provideLayer(Chromium.layer()), {
   excludeTestServices: true,
   timeout: Duration.seconds(30),
-})("Plan relative navigation", (it) => {
+})("Walk relative navigation", (it) => {
   for (const phase of ["ready", "arrival", "resolution"] as const)
     it.effect(`does not skip input because an earlier redirect completed during ${phase}`, () =>
       TestCdp.withCdp(
@@ -90,20 +90,20 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           const site = yield* fixture(phase === "arrival");
           const page = yield* open(site.start);
 
-          const earlier = Plan.Plan.new([
-            new Plan.Step({
+          const earlier = Walk.Walk.new([
+            new Walk.Step({
               action: { _tag: "Click", target: "e0" },
               subject: named("Fetch"),
               url: site.start,
             }),
           ]);
 
-          yield* Plan.take(page, earlier, 0, { settle: false });
+          yield* Walk.step(page, earlier, 0, { settle: false });
           yield* site.requested;
           const preparing = yield* Deferred.make<void>();
 
           // Signal entry at the public boundary; readiness, arrival reads and all input still
-          // use the real page. The prior handler cannot navigate before Plan takes its baseline.
+          // use the real page. The prior handler cannot navigate before the walk takes its baseline.
           const observed: Page = {
             ...page,
             ready: (options) =>
@@ -123,12 +123,12 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
                 : page.find(query),
           };
 
-          const plan = Plan.Plan.new([
-            new Plan.Step({
+          const plan = Walk.Walk.new([
+            new Walk.Step({
               action: { _tag: "Goto", url: site.destination },
               url: site.destination,
             }),
-            new Plan.Step({
+            new Walk.Step({
               action: { _tag: "Click", target: "e0" },
               subject: named("Still"),
               url: site.destination,
@@ -136,7 +136,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             }),
           ]);
 
-          const taking = yield* Plan.take(observed, plan, 1, {
+          const taking = yield* Walk.step(observed, plan, 1, {
             settle: phase === "ready" ? { quietMillis: 50 } : false,
             arrival: "1 second",
           }).pipe(Effect.exit, Effect.forkChild);
@@ -172,8 +172,8 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const site = yield* fixture();
         const page = yield* open(site.start);
 
-        const plan = Plan.Plan.new([
-          new Plan.Step({
+        const plan = Walk.Walk.new([
+          new Walk.Step({
             action: { _tag: "Click", target: "e0" },
             subject: named("Navigate"),
             url: site.done,
@@ -181,7 +181,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           }),
         ]);
 
-        const receipt = yield* Plan.take(page, plan, 0, { arrival: "1 second" });
+        const receipt = yield* Walk.step(page, plan, 0, { arrival: "1 second" });
 
         assert.strictEqual(receipt.outcome, "verified");
         assert.strictEqual(yield* page.url, site.done);

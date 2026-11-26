@@ -14,6 +14,6 @@ export * as Page from "./Page.ts";
 export * as PageTime from "./PageTime.ts";
 export * as Pose from "./Pose.ts";
 export * as Snapshot from "./Snapshot.ts";
-export * as Style from "./Style.ts";
+export * as InputStyle from "./Style.ts";
 export * as Window from "./Window.ts";
 export * as Url from "./Url.ts";

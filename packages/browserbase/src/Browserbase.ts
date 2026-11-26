@@ -4,7 +4,7 @@
  * `open` creates a session and connects to it over CDP. When its scope closes it disconnects,
  * releases the session and confirms that Browserbase reports it ended, so billing stops then
  * rather than at the session's timeout. `release` does the same sooner and says how it went:
- * `Settled`, or `Unconfirmed` when Browserbase still reported the session running, or could not
+ * `Confirmed`, or `Unconfirmed` when Browserbase still reported the session running, or could not
  * be asked, at the deadline. Each create carries a nonce of its own in its user metadata, so a
  * session made by a create whose answer was lost is found and ended too, rather than billing
  * unseen until its timeout.
@@ -44,7 +44,7 @@ import {
 import * as Browser from "effect-browser/Browser";
 import { BrowserError, Closed } from "effect-browser/BrowserError";
 import * as Cdp from "effect-browser/Cdp";
-import * as Released from "effect-browser/Released";
+import * as Release from "effect-browser/Released";
 import type * as Supervisor from "effect-browser/Supervisor";
 
 import {
@@ -86,7 +86,7 @@ export interface Hosted {
    * `attach`'s only disconnects. It disconnects `browser` first, which is lost as `released`, so a
    * call in flight or a capture's reader is told so. Asked again, it reports the same outcome.
    */
-  readonly release: Effect.Effect<Released.Released>;
+  readonly release: Effect.Effect<Release.Release>;
 }
 
 /** The user metadata key naming the stored context a persisting session writes to. */
@@ -139,12 +139,12 @@ const confirm = (client: Service, id: string, settle: Duration.Duration | undefi
     );
 
     if (!confirmed)
-      return new Released.Unconfirmed({
+      return new Release.Unconfirmed({
         detail: `Session ${id}: ${last} ${Duration.format(releaseDeadline)} after its release`,
       });
     if (settle !== undefined) yield* Effect.sleep(settle);
 
-    return new Released.Settled();
+    return new Release.Confirmed();
   }).pipe(
     Effect.tap((released) => Effect.annotateCurrentSpan({ released: released._tag })),
     Effect.withSpan(
@@ -186,9 +186,9 @@ const endAll = (
 
       return unconfirmed === undefined
         ? Effect.sleep(settle ?? Duration.zero).pipe(
-            Effect.as<Released.Released>(new Released.Settled()),
+            Effect.as<Release.Release>(new Release.Confirmed()),
           )
-        : Effect.succeed<Released.Released>(unconfirmed);
+        : Effect.succeed<Release.Release>(unconfirmed);
     }),
   );
 
@@ -218,7 +218,7 @@ const endOrphan = (client: Service, nonce: string, settle: Duration.Duration | u
     );
 
     if (Option.isNone(found) && !answered)
-      return new Released.Unconfirmed({
+      return new Release.Unconfirmed({
         detail: `Browserbase did not answer a search for it within ${Duration.format(orphanSearch)}`,
       });
     const running = Option.getOrElse(found, () => []).filter((session) => !ended(session));
@@ -275,11 +275,11 @@ const holdContext = Effect.fnUntraced(function* (
           settle,
         ),
       ),
-      Effect.onExit((exit) => set(!(Exit.isSuccess(exit) && exit.value._tag === "Settled"))),
+      Effect.onExit((exit) => set(!(Exit.isSuccess(exit) && exit.value._tag === "Confirmed"))),
     );
 
-  const refuse = (outcome: Released.Released) =>
-    outcome._tag === "Settled"
+  const refuse = (outcome: Release.Release) =>
+    outcome._tag === "Confirmed"
       ? Effect.void
       : Effect.fail(new ContextHeld({ context: id, detail: outcome.detail }));
 
@@ -294,9 +294,9 @@ const holdContext = Effect.fnUntraced(function* (
     /** A session that saves to the context runs from now. */
     writing: set(true),
     /** How the writer's session ended: unconfirmed, it may still save to the context. */
-    released: (outcome: Released.Released) => letGo(outcome._tag === "Unconfirmed"),
+    released: (outcome: Release.Release) => letGo(outcome._tag === "Unconfirmed"),
     /** How ending the session a lost create may have made went: unconfirmed, the open fails. */
-    lost: (outcome: Released.Released) =>
+    lost: (outcome: Release.Release) =>
       letGo(outcome._tag === "Unconfirmed").pipe(Effect.andThen(refuse(outcome))),
   };
 });
@@ -368,7 +368,7 @@ const connect = Effect.fnUntraced(function* (
 /** Open one owned session and report failed acquisition cleanup to its explicit caller. */
 const start = Effect.fnUntraced(function* (
   options: Options,
-  report: (outcome: Released.Released) => Effect.Effect<void> = () => Effect.void,
+  report: (outcome: Release.Release) => Effect.Effect<void> = () => Effect.void,
 ) {
   const client = yield* BrowserbaseClient;
   const lease = yield* ContextLease;
@@ -533,7 +533,7 @@ export const verifyContext = Effect.fn("Browserbase.verifyContext")(function* <A
 /** A failed generation acquisition carries its own provider cleanup evidence. */
 export class OpenFailed<E> extends Data.TaggedError("OpenFailed")<{
   readonly error: E;
-  readonly cleanup?: Released.Released | undefined;
+  readonly cleanup?: Release.Release | undefined;
 }> {
   override get message() {
     return Predicate.isError(this.error) ? this.error.message : String(this.error);
@@ -569,7 +569,7 @@ export const generations = <A, E, R>(
 > => ({
   open: Effect.fnUntraced(function* () {
     const scope = yield* Scope.fork(yield* Effect.scope);
-    let cleanup: Released.Released | undefined;
+    let cleanup: Release.Release | undefined;
 
     const acquired = yield* Effect.exit(
       Effect.gen(function* () {
@@ -594,7 +594,7 @@ export const generations = <A, E, R>(
     const closed = yield* Effect.exit(Scope.close(scope, acquired));
 
     if (Exit.isFailure(closed))
-      cleanup = new Released.Unconfirmed({
+      cleanup = new Release.Unconfirmed({
         detail: `acquisition cleanup failed: ${Cause.pretty(closed.cause)}`,
       });
 

@@ -1,6 +1,6 @@
 /** The resource supervisor's pure lifecycle: one state, one transition, explicit commands. */
-import type { Released } from "../providers/Released.ts";
-import type { State, Why } from "./contract.ts";
+import type { Release } from "../providers/Released.ts";
+import type { State, StopReason } from "./contract.ts";
 
 /** A generation that opened, with the holds on it. */
 export interface Live<V, H> {
@@ -12,7 +12,7 @@ export interface Live<V, H> {
 /** A generation that stopped serving and is not yet released. */
 export interface Ended<V, H> {
   readonly live: Live<V, H>;
-  readonly why: Why;
+  readonly why: StopReason;
   readonly releasing: boolean;
 }
 
@@ -58,13 +58,13 @@ export type Input<V, H, E> =
   | { readonly _tag: "Retire" }
   | { readonly _tag: "Hold"; readonly hold: H }
   | { readonly _tag: "Let"; readonly number: number; readonly hold: H }
-  | { readonly _tag: "Released"; readonly number: number; readonly released: Released };
+  | { readonly _tag: "Released"; readonly number: number; readonly released: Release };
 
 export type Command<V, H> =
   | { readonly _tag: "Open"; readonly number: number }
   | { readonly _tag: "Watch"; readonly live: Live<V, H> }
-  | { readonly _tag: "End"; readonly live: Live<V, H>; readonly why: Why }
-  | { readonly _tag: "Release"; readonly live: Live<V, H>; readonly why: Why }
+  | { readonly _tag: "End"; readonly live: Live<V, H>; readonly why: StopReason }
+  | { readonly _tag: "Release"; readonly live: Live<V, H>; readonly why: StopReason }
   | { readonly _tag: "Stop" };
 
 export interface Step<V, H, E> {
@@ -106,7 +106,7 @@ export const transition = <V, H, E>(
   let borrowed: Live<V, H> | undefined;
 
   // Stop `live` serving: its work hears why, and its release starts once that work has let go.
-  const end = (live: Live<V, H>, why: Why, detail?: string) => {
+  const end = (live: Live<V, H>, why: StopReason, detail?: string) => {
     const releasing = live.holds.size === 0;
 
     next = { ...next, ended: new Map(next.ended).set(live.number, { live, why, releasing }) };

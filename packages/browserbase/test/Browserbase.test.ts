@@ -726,7 +726,7 @@ describe("Browserbase", () => {
         yield* Effect.gen(function* () {
           const hosted = yield* Browserbase.open();
 
-          assert.strictEqual((yield* hosted.release)._tag, "Settled");
+          assert.strictEqual((yield* hosted.release)._tag, "Confirmed");
           assert.deepStrictEqual(
             (yield* kept).map(({ status }) => status),
             ["COMPLETED"],
@@ -890,7 +890,7 @@ describe("Browserbase", () => {
           );
           assert.strictEqual(
             (yield* finish(yield* Effect.forkChild(Browserbase.reconcile(id))))._tag,
-            "Settled",
+            "Confirmed",
           );
 
           // Reconciled, the context is let go: the next writer looks for no other session first.
@@ -941,7 +941,7 @@ describe("Browserbase", () => {
         );
         assert.isUndefined(reconciling.pollUnsafe());
         yield* Scope.close(writing, Exit.void);
-        assert.strictEqual((yield* Fiber.join(reconciling))._tag, "Settled");
+        assert.strictEqual((yield* Fiber.join(reconciling))._tag, "Confirmed");
       }).pipe(Effect.provide(hostedFake({ connectUrl })));
     }),
   );
@@ -1172,7 +1172,7 @@ describe("Browserbase.attach", () => {
           }),
           still("Resumed"),
         );
-        assert.strictEqual((yield* hosted.release)._tag, "Settled");
+        assert.strictEqual((yield* hosted.release)._tag, "Confirmed");
         assert.deepStrictEqual(
           (yield* kept).map(({ status }) => status),
           ["COMPLETED"],
@@ -1204,7 +1204,7 @@ describe("Browserbase.attach", () => {
   );
 });
 
-/** A generation's change as one line, such as `2 Reopening` or `1 Closed Settled`. */
+/** A generation's change as one line, such as `2 Reopening` or `1 Closed Confirmed`. */
 const line = ({ number, state }: Supervisor.Generation) =>
   state._tag === "Closed"
     ? `${number} Closed ${state.released?._tag ?? "none"}`
@@ -1471,7 +1471,7 @@ describe("Browserbase.generations", () => {
             );
 
             assert.deepStrictEqual(atCleanup, [["RUNNING", "Success"]]);
-            assert.deepStrictEqual(closed, [broken ? "Unconfirmed" : "Settled"]);
+            assert.deepStrictEqual(closed, [broken ? "Unconfirmed" : "Confirmed"]);
             assert.deepStrictEqual(
               (yield* kept).map(({ status, releases }) => [status, releases]),
               [["COMPLETED", 1]],
@@ -1500,7 +1500,7 @@ describe("Browserbase.generations", () => {
         const unavailable = yield* down(sessions);
 
         assert.strictEqual(unavailable.error?.error, "builder failed");
-        assert.strictEqual(unavailable.error?.cleanup?._tag, "Settled");
+        assert.strictEqual(unavailable.error?.cleanup?._tag, "Confirmed");
         assert.deepStrictEqual(atCleanup, ["RUNNING"]);
         assert.deepStrictEqual(
           (yield* kept).map(({ status, releases }) => [status, releases]),
@@ -1575,8 +1575,8 @@ describe("Browserbase.generations", () => {
         const events = yield* sessions.states.pipe(Stream.runCollect);
 
         assert.deepStrictEqual(events.filter(({ state }) => state._tag === "Closed").map(line), [
-          "1 Closed Settled",
-          "2 Closed Settled",
+          "1 Closed Confirmed",
+          "2 Closed Confirmed",
         ]);
         assert.deepStrictEqual(
           (yield* kept).map(({ status }) => status),

@@ -2,7 +2,7 @@
 import { targetOf } from "../Action.ts";
 import { type Action, type BrowserEvent, type Navigated } from "../BrowserEvent.ts";
 import { redacted } from "../Page.ts";
-import { Plan, Step } from "./data.ts";
+import { Walk, Step } from "./data.ts";
 
 const isStep = (
   event: BrowserEvent,
@@ -30,7 +30,7 @@ const slotFor = (taken: Set<string>, field: string | undefined) => {
  * The walk one page's events record: the completed actions of the page that acted first, in
  * order. `page.recentEvents` gives them, or `browser.events()` read until the walk ends.
  */
-export const fromEvents = (events: Iterable<BrowserEvent>): Plan => {
+export const fromEvents = (events: Iterable<BrowserEvent>): Walk => {
   const all = Array.from(events);
   const page = all.find((event) => event._tag === "Action")?.page;
   const mine = all.filter((event) => "page" in event && event.page === page);
@@ -42,7 +42,7 @@ export const fromEvents = (events: Iterable<BrowserEvent>): Plan => {
   // Where the page was just before a time: the last address it reached by then.
   const before = (time: number) => moves.findLast((move) => move.at <= time)?.url ?? opened;
 
-  return new Plan({
+  return new Walk({
     version: 3,
     steps: steps.map((action, index) => {
       const value = action.value;

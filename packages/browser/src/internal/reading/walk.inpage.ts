@@ -237,4 +237,4 @@ export const walk = (names: Names) => {
   return { acts, boxOf, controlOf, hitAt, inView, visible, visit };
 };
 
-export type Walk = ReturnType<typeof walk>;
+export type Walked = ReturnType<typeof walk>;

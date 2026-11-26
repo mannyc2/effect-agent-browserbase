@@ -15,7 +15,7 @@ import {
 } from "../src/BrowserEvent.ts";
 import { type FindQuery, Found, type Page, redacted } from "../src/Page.ts";
 import { choose } from "../src/plan/choose.ts";
-import * as Plan from "../src/plan/index.ts";
+import * as Walk from "../src/plan/index.ts";
 import * as Chromium from "../src/providers/Chromium.ts";
 import { DriftSite, DriftSiteLayer, type Operator, operators } from "./drift.ts";
 import * as TestCdp from "./support/TestCdp.ts";
@@ -83,7 +83,7 @@ const repeats = (subject: SubjectContext, field: keyof SubjectContext, value: st
     : all.some((other) => words(other).includes(words(value)));
 };
 
-describe("Plan's choice of a subject", () => {
+describe("Walk's choice of a subject", () => {
   it.prop(
     "chooses the same element whatever order the page lists them in",
     {
@@ -249,9 +249,9 @@ const walk = (text: string): ReadonlyArray<BrowserEvent> => [
   }),
 ];
 
-describe("Plan.fromEvents", () => {
+describe("Walk.fromEvents", () => {
   it("keeps one page's completed steps, where each ended and what else each asked", () => {
-    const plan = Plan.fromEvents(walk("bitcoin"));
+    const plan = Walk.fromEvents(walk("bitcoin"));
 
     assert.deepStrictEqual(
       plan.steps.map(({ action, url, input, box }) => [action, url, input, box]),
@@ -283,38 +283,38 @@ describe("Plan.fromEvents", () => {
     "never keeps what was typed",
     { text: Arbitrary.schema(Schema.String.check(Schema.isPattern(/^typed:[\w ]{1,20}$/))) },
     ({ text }) => {
-      const encoded = JSON.stringify(Schema.encodeSync(Plan.Plan)(Plan.fromEvents(walk(text))));
+      const encoded = JSON.stringify(Schema.encodeSync(Walk.Walk)(Walk.fromEvents(walk(text))));
 
       assert.notInclude(encoded, text);
     },
   );
 
   it("reads back only a plan of its own version", () => {
-    const plan = Plan.fromEvents(walk("bitcoin"));
-    const encoded = Schema.encodeSync(Plan.Plan)(plan);
+    const plan = Walk.fromEvents(walk("bitcoin"));
+    const encoded = Schema.encodeSync(Walk.Walk)(plan);
 
-    assert.deepStrictEqual(Schema.decodeSync(Plan.Plan)(encoded), plan);
-    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version: 4 })));
+    assert.deepStrictEqual(Schema.decodeSync(Walk.Walk)(encoded), plan);
+    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Walk.Walk)({ ...encoded, version: 4 })));
     assert.isTrue(
-      Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ steps: [{ id: "a", run: [] }] })),
+      Exit.isFailure(Schema.decodeUnknownExit(Walk.Walk)({ steps: [{ id: "a", run: [] }] })),
     );
   });
 
   it("uses one typed-action encoding and rejects prior string-action versions", () => {
-    const step = new Plan.Step({
+    const step = new Walk.Step({
       action: { _tag: "Click", target: "e0" },
       url: "https://example.com/orders",
       expect: { _tag: "Appeared", query: { text: "Order 42" }, durable: true },
     });
 
-    const plan = Plan.Plan.new([step]);
-    const encoded = Schema.encodeSync(Plan.Plan)(plan);
+    const plan = Walk.Walk.new([step]);
+    const encoded = Schema.encodeSync(Walk.Walk)(plan);
 
     assert.strictEqual(encoded.version, 3);
-    assert.deepStrictEqual(Schema.decodeSync(Plan.Plan)(encoded), plan);
+    assert.deepStrictEqual(Schema.decodeSync(Walk.Walk)(encoded), plan);
     for (const version of [1, 2])
-      assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Plan.Plan)({ ...encoded, version })));
-    assert.strictEqual(Schema.encodeSync(Plan.Plan)(Plan.Plan.new([])).version, 3);
+      assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Walk.Walk)({ ...encoded, version })));
+    assert.strictEqual(Schema.encodeSync(Walk.Walk)(Walk.Walk.new([])).version, 3);
   });
 });
 
@@ -330,10 +330,10 @@ const ref = (page: Page, query: FindQuery) =>
       ),
     );
 
-type Walk = "buy" | "read" | "search" | "game" | "cart" | "team" | "signin";
+type Journey = "buy" | "read" | "search" | "game" | "cart" | "team" | "signin";
 
 const walks: Record<
-  Walk,
+  Journey,
   (page: Page, url: (path: string) => string) => Effect.Effect<void, BrowserError>
 > = {
   buy: (page, url) =>
@@ -392,7 +392,7 @@ const walks: Record<
 };
 
 // What each replay should do under each operator: replay, or fail with this reason.
-const expected = (operator: Operator, walk: Walk): string => {
+const expected = (operator: Operator, walk: Journey): string => {
   // A press the overlay covers fails, by ref or by point.
   if (operator === "overlay") return "NotActionable";
   if (operator === "rename" && (walk === "buy" || walk === "read")) return "Missing";
@@ -425,7 +425,7 @@ const truthOf = Effect.fnUntraced(function* (page: Page, arrival?: string) {
 layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
   excludeTestServices: true,
   timeout: Duration.minutes(5),
-})("Plan.replay", (it) => {
+})("Walk.replay", (it) => {
   const fresh = Effect.gen(function* () {
     const browser = yield* Browser;
 
@@ -441,7 +441,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
 
         for (let index = 0; index < 20; index++) yield* page.press("Shift");
         const events = yield* page.recentEvents;
-        const steps = Plan.fromEvents(events).steps;
+        const steps = Walk.fromEvents(events).steps;
 
         assert.isFalse(events.some((event) => event._tag === "Navigated"));
         assert.isAbove(steps.length, 0);
@@ -466,10 +466,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
         yield* Effect.promise(() => TestCdp.nativePage(recording).getByLabel("A").focus());
         yield* recording.press("Enter", { on: yield* ref(recording, { name: "B" }) });
         assert.strictEqual(yield* truthOf(recording), "B");
-        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const plan = Walk.fromEvents(yield* recording.recentEvents);
         const replayed = yield* fresh;
 
-        yield* Plan.replay(replayed, plan);
+        yield* Walk.replay(replayed, plan);
         assert.strictEqual(yield* truthOf(replayed), "B");
       }),
     ),
@@ -492,10 +492,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
           ),
           "before after",
         );
-        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const plan = Walk.fromEvents(yield* recording.recentEvents);
         const replayed = yield* fresh;
 
-        yield* Plan.replay(replayed, plan, { inputs: { text: "after" } });
+        yield* Walk.replay(replayed, plan, { inputs: { text: "after" } });
         // Chromium focuses a fresh field at its start; replay preserves text, not an unrecorded caret.
         assert.strictEqual(
           yield* Effect.promise(() => TestCdp.nativePage(replayed).getByLabel("Text").inputValue()),
@@ -515,14 +515,14 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
         // The recording reached the same path on another host.
         const elsewhere = site.url("/news").replace("127.0.0.1", "localhost");
 
-        const plan = new Plan.Plan({
+        const plan = new Walk.Walk({
           version: 3,
           steps: [
-            new Plan.Step({ action: { _tag: "Goto", url: site.url("/news") }, url: elsewhere }),
+            new Walk.Step({ action: { _tag: "Goto", url: site.url("/news") }, url: elsewhere }),
           ],
         });
 
-        const error = yield* Effect.flip(Plan.replay(page, plan));
+        const error = yield* Effect.flip(Walk.replay(page, plan));
 
         assert.deepStrictEqual([error.step, error.reason._tag], [0, "Drifted"]);
       }),
@@ -544,7 +544,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
         yield* site.drift({ operator: "none", seed: 1 });
         yield* recording.goto(shown);
         yield* recording.goto(signed);
-        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const plan = Walk.fromEvents(yield* recording.recentEvents);
 
         assert.deepStrictEqual(
           plan.steps.map(({ action, input }) => [
@@ -556,10 +556,10 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
             [site.url(`/buy?coin=ETH&token=${redacted}`), "address"],
           ],
         );
-        assert.notInclude(JSON.stringify(yield* Schema.encodeEffect(Plan.Plan)(plan)), token);
+        assert.notInclude(JSON.stringify(yield* Schema.encodeEffect(Walk.Walk)(plan)), token);
 
         const unaddressed = yield* fresh;
-        const error = yield* Effect.flip(Plan.replay(unaddressed, plan));
+        const error = yield* Effect.flip(Walk.replay(unaddressed, plan));
 
         assert.deepStrictEqual(
           [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
@@ -569,9 +569,9 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
 
         const replayed = yield* fresh;
 
-        yield* Plan.replay(replayed, new Plan.Plan({ version: 3, steps: plan.steps.slice(0, 1) }));
+        yield* Walk.replay(replayed, new Walk.Walk({ version: 3, steps: plan.steps.slice(0, 1) }));
         assert.strictEqual(yield* truthOf(replayed), "buy:BTC");
-        yield* Plan.replay(replayed, plan, { inputs: { address: signed } });
+        yield* Walk.replay(replayed, plan, { inputs: { address: signed } });
         assert.strictEqual(yield* truthOf(replayed), "buy:ETH");
       }),
     ),
@@ -581,7 +581,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const page = yield* fresh;
-        const error = yield* Effect.flip(Plan.replay(page, Plan.fromEvents(walk("bitcoin"))));
+        const error = yield* Effect.flip(Walk.replay(page, Walk.fromEvents(walk("bitcoin"))));
 
         assert.deepStrictEqual(
           [error.step, error.reason._tag === "BrowserError" ? error.reason.reason._tag : ""],
@@ -600,7 +600,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
 
         yield* site.drift({ operator: "none", seed: 1 });
         yield* walks.buy(recording, site.url);
-        const plan = Plan.fromEvents(yield* recording.recentEvents);
+        const plan = Walk.fromEvents(yield* recording.recentEvents);
         const arrival = plan.steps.at(-1)?.url;
 
         assert.strictEqual(arrival, site.url("/buy?coin=ETH"));
@@ -618,7 +618,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
         );
         const final = plan.steps.length - 1;
 
-        for (let index = 0; index < final; index++) yield* Plan.take(page, plan, index);
+        for (let index = 0; index < final; index++) yield* Walk.step(page, plan, index);
         yield* Effect.promise(() =>
           TestCdp.nativePage(page).evaluate(() => {
             const link = document.querySelector<HTMLAnchorElement>('a[href="/buy?coin=ETH"]');
@@ -630,7 +630,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
             };
           }),
         );
-        const replaying = yield* Plan.take(page, plan, final).pipe(Effect.forkChild);
+        const replaying = yield* Walk.step(page, plan, final).pipe(Effect.forkChild);
 
         yield* Effect.promise(() => requested.promise);
         const receipt = yield* Fiber.join(replaying);
@@ -666,11 +666,11 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
           const outcomes: Record<string, string> = {};
           const wanted: Record<string, string> = {};
           const timings: Record<string, number> = {};
-          const recorded = new Map<Walk, { readonly plan: Plan.Plan; readonly truth: string }>();
+          const recorded = new Map<Journey, { readonly plan: Walk.Walk; readonly truth: string }>();
           const inputs = { search: "bitcoin", username: "alice", password: "hunter2" };
 
           yield* site.drift({ operator: "none", seed: 1 });
-          for (const walk of Object.keys(walks) as Array<Walk>) {
+          for (const walk of Object.keys(walks) as Array<Journey>) {
             const recording = yield* fresh;
 
             yield* walks[walk](recording, site.url);
@@ -678,7 +678,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
             const truth = yield* truthOf(recording);
 
             recorded.set(walk, {
-              plan: Plan.fromEvents(yield* recording.recentEvents),
+              plan: Walk.fromEvents(yield* recording.recentEvents),
               truth,
             });
           }
@@ -694,7 +694,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), DriftSiteLayer)), {
                     const key = `${walk} ${operator} ${seed}`;
                     const started = performance.now();
 
-                    outcomes[key] = yield* Plan.replay(page, plan, { inputs }).pipe(
+                    outcomes[key] = yield* Walk.replay(page, plan, { inputs }).pipe(
                       Effect.andThen(truthOf(page, plan.steps.at(-1)?.url)),
                       Effect.map((reached) =>
                         reached === truth ? "replayed" : `wrong place: ${reached}`,

@@ -26,7 +26,7 @@ const finish = <A, E>(fiber: Fiber.Fiber<A, E>) =>
 
 it.effect.each([
   { release: { _tag: "Refused", status: 403 } as const, outcome: "Unconfirmed", status: "RUNNING" },
-  { release: { _tag: "Ends" } as const, outcome: "Settled", status: "COMPLETED" },
+  { release: { _tag: "Ends" } as const, outcome: "Confirmed", status: "COMPLETED" },
 ])("publishes the failed try's $outcome cleanup", ({ release, outcome, status }) =>
   Effect.gen(function* () {
     const supervisor = yield* Supervisor.make({
@@ -121,7 +121,7 @@ it.effect(
         state._tag === "Failed" ? [state.error.cleanup?._tag] : [],
       );
 
-      assert.deepStrictEqual(failures, ["Unconfirmed", "Settled"]);
+      assert.deepStrictEqual(failures, ["Unconfirmed", "Confirmed"]);
       assert.deepStrictEqual(
         (yield* sessions).map(({ status, releases }) => [status, releases]),
         [

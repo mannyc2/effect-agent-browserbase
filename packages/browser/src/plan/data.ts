@@ -62,13 +62,13 @@ export class Step extends Schema.Class<Step>("effect-browser/Plan/Step")({
   expect: Schema.optional(Expected),
 }) {}
 
-export class Plan extends Schema.Class<Plan>("effect-browser/Plan")({
+export class Walk extends Schema.Class<Walk>("effect-browser/Plan")({
   version: Schema.Literal(3),
   steps: Schema.Array(Step),
 }) {
   /** Version 3 carries canonical typed Actions; prior string-action encodings are rejected. */
-  static new(steps: ReadonlyArray<Step>): Plan {
-    return new Plan({ version: 3, steps });
+  static new(steps: ReadonlyArray<Step>): Walk {
+    return new Walk({ version: 3, steps });
   }
 
   /** The input slots its steps type, in order; replay needs text for each. */

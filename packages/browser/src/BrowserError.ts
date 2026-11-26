@@ -204,7 +204,7 @@ export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserErr
  * What a failure leaves. `lost` is `"page"` when the page is gone and its browser stands, and
  * `"session"` when the browser is gone with its pages. `repeat` says whether the call can be made
  * again, on what still stands: `"safe"`, as nothing reached the browser; `"check"`, as it may have
- * taken effect, so look first, as a Plan expectation does; `"pointless"`, as it fails again unless
+ * taken effect, so look first, as a walk's expectation does; `"pointless"`, as it fails again unless
  * something changes, such as
  * a new ref; or `"resume"`, reading events again from a newer cursor.
  */

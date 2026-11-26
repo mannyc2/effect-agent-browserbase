@@ -4,7 +4,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Option, Schedule, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
-import * as Released from "../src/providers/Released.ts";
+import * as Release from "../src/providers/Released.ts";
 import * as Supervisor from "../src/supervisor/Supervisor.ts";
 
 const closed = <A, E>(supervisor: Supervisor.Supervisor<A, E>) =>
@@ -39,7 +39,7 @@ it.effect.each(["interrupted caller", "inside use"] as const)(
               Deferred.succeed(releasing, undefined).pipe(
                 Effect.andThen(Deferred.await(finish)),
                 Effect.andThen(Effect.sync(() => releases++)),
-                Effect.as(new Released.Settled()),
+                Effect.as(new Release.Confirmed()),
               ),
           }),
       });
@@ -64,7 +64,7 @@ it.effect.each(["interrupted caller", "inside use"] as const)(
 
       assert.deepStrictEqual(events, late);
       assert.strictEqual(events.at(-1)?.state._tag, "Closed");
-      assert.strictEqual((yield* closed(supervisor)).released?._tag, "Settled");
+      assert.strictEqual((yield* closed(supervisor)).released?._tag, "Confirmed");
       assert.strictEqual(releases, 1);
     }),
 );
@@ -88,7 +88,7 @@ it.effect.each(["provider defect", "scope defect", "no release"] as const)(
                   : () =>
                       number === 1 && failure === "provider defect"
                         ? Effect.die("provider release failed")
-                        : Effect.succeed(new Released.Settled()),
+                        : Effect.succeed(new Release.Confirmed()),
             };
           }),
       });
@@ -104,8 +104,8 @@ it.effect.each(["provider defect", "scope defect", "no release"] as const)(
       );
 
       assert.deepStrictEqual(outcomes, [
-        failure === "no release" ? "Settled" : "Unconfirmed",
-        "Settled",
+        failure === "no release" ? "Confirmed" : "Unconfirmed",
+        "Confirmed",
       ]);
     }),
 );
@@ -122,8 +122,8 @@ it.effect("finishes a running try before retirement, then releases it once", () 
           Effect.andThen(Deferred.await(finish)),
           Effect.as({
             value: "opened during retirement",
-            release: (why: Supervisor.Why) =>
-              Effect.sync(() => released.push(why)).pipe(Effect.as(new Released.Settled())),
+            release: (why: Supervisor.StopReason) =>
+              Effect.sync(() => released.push(why)).pipe(Effect.as(new Release.Confirmed())),
           }),
         ),
     });
@@ -136,7 +136,7 @@ it.effect("finishes a running try before retirement, then releases it once", () 
     yield* Deferred.succeed(finish, undefined);
     yield* Fiber.join(retiring);
     assert.deepStrictEqual(released, ["retired"]);
-    assert.strictEqual((yield* closed(supervisor)).released?._tag, "Settled");
+    assert.strictEqual((yield* closed(supervisor)).released?._tag, "Confirmed");
   }),
 );
 
@@ -144,7 +144,7 @@ it.effect("publishes every typed retry error without retaining earlier uncertain
   Effect.gen(function* () {
     const first = {
       detail: "first failed try",
-      cleanup: new Released.Unconfirmed({ detail: "possibly still running" }),
+      cleanup: new Release.Unconfirmed({ detail: "possibly still running" }),
     };
 
     let tries = 0;
@@ -167,7 +167,7 @@ it.effect("publishes every typed retry error without retaining earlier uncertain
     assert.deepStrictEqual(failures, [first]);
     assert.deepStrictEqual(
       events.flatMap(({ state }) => (state._tag === "Closed" ? [state.released?._tag] : [])),
-      ["Settled", "Settled"],
+      ["Confirmed", "Confirmed"],
     );
   }),
 );
@@ -253,7 +253,7 @@ it.effect(
               value: number,
               release: () =>
                 Effect.sync(() => order.push(`release ${number}`)).pipe(
-                  Effect.as(new Released.Settled()),
+                  Effect.as(new Release.Confirmed()),
                 ),
             };
           }),
@@ -305,7 +305,7 @@ it.effect("adds its finalizer to the caller scope and watches loss throughout re
             Deferred.succeed(lost, "lost while releasing").pipe(
               Effect.andThen(Effect.repeat(Effect.yieldNow, { until: () => watched })),
               Effect.andThen(Effect.sync(() => order.push("provider"))),
-              Effect.as(new Released.Settled()),
+              Effect.as(new Release.Confirmed()),
             ),
         }),
     }).pipe(Scope.provide(owner));
@@ -318,7 +318,7 @@ it.effect("adds its finalizer to the caller scope and watches loss throughout re
     yield* Scope.close(owner, Exit.void);
     assert.deepStrictEqual(order, ["caller finalizer", "provider"]);
     assert.isTrue(watched);
-    assert.strictEqual((yield* closed(supervisor)).released?._tag, "Settled");
+    assert.strictEqual((yield* closed(supervisor)).released?._tag, "Confirmed");
   }),
 );
 
@@ -355,7 +355,7 @@ it.effect("preserves a revoked work cleanup defect and still releases the provid
         Effect.succeed({
           value: "resource",
           release: () =>
-            Effect.sync(() => order.push("provider")).pipe(Effect.as(new Released.Settled())),
+            Effect.sync(() => order.push("provider")).pipe(Effect.as(new Release.Confirmed())),
         }),
     });
 
@@ -378,7 +378,7 @@ it.effect("preserves a revoked work cleanup defect and still releases the provid
     yield* supervisor.retire;
     assert.isTrue(Exit.hasDies(yield* Fiber.join(work)));
     assert.deepStrictEqual(order, ["work", "provider"]);
-    assert.strictEqual((yield* closed(supervisor)).released?._tag, "Settled");
+    assert.strictEqual((yield* closed(supervisor)).released?._tag, "Confirmed");
   }),
 );
 
@@ -433,7 +433,7 @@ it.effect("keeps generation work out of the ended constructor span", () =>
               number === 1
                 ? Deferred.await(lost).pipe(Effect.tap(() => record("lost")))
                 : undefined,
-            release: () => record("release").pipe(Effect.as(new Released.Settled())),
+            release: () => record("release").pipe(Effect.as(new Release.Confirmed())),
           }),
         ),
     }).pipe(Effect.withSpan("caller"));
@@ -475,7 +475,7 @@ it.effect("finishes retirement before closing workers in a parallel caller scope
         Effect.succeed({
           value: "resource",
           release: () =>
-            Effect.sync(() => order.push("provider")).pipe(Effect.as(new Released.Settled())),
+            Effect.sync(() => order.push("provider")).pipe(Effect.as(new Release.Confirmed())),
         }),
     }).pipe(Scope.provide(owner));
 

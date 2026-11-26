@@ -28,7 +28,7 @@ describe("H2 local composition", () => {
         report.generations
           .filter((event) => event.state === "Closed")
           .map((event) => event.released),
-        ["Settled", "Settled"],
+        ["Confirmed", "Confirmed"],
       );
       assert.isNull(report.usageDeltaMinutes, "the fake is not billing evidence");
       assert.notInclude(JSON.stringify(report), endpoint.href);
