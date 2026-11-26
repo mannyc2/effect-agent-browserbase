@@ -1,6 +1,6 @@
-// The package's entry points are exactly its public modules and its test kits: the build also
-// emits shared chunks beside them, and only a listed subpath may resolve to one of its files.
-import { readdirSync, readFileSync } from "node:fs";
+// The exports follow Effect's layout: the root barrel, a module per file, the test kits' folder
+// by its index, and closed internals, where the build also puts its shared chunks.
+import { readFileSync } from "node:fs";
 
 import { assert, it } from "@effect/vitest";
 
@@ -8,26 +8,20 @@ const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.
   readonly exports: Record<string, unknown>;
 };
 
-const modules = readdirSync(new URL("../src/", import.meta.url))
-  .filter((file) => file.endsWith(".ts") && file !== "index.ts")
-  .map((file) => file.slice(0, -3))
-  .toSorted();
+const entry = (path: string) => ({
+  "@effect-browser/source": `./src/${path}.ts`,
+  types: `./dist/${path}.d.mts`,
+  default: `./dist/${path}.mjs`,
+});
 
-it("exports the root, each public module and the test kits, and nothing else", () => {
-  assert.deepStrictEqual(
-    Object.keys(manifest.exports).toSorted(),
-    [".", "./testing", ...modules.map((module) => `./${module}`)].toSorted(),
-  );
-  assert.deepStrictEqual(manifest.exports["./testing"], {
-    "@effect-browser/source": "./src/testing/index.ts",
-    types: "./dist/testing/index.d.mts",
-    default: "./dist/testing/index.mjs",
+it("exports modules by path, the test kits by index, and closes internals", () => {
+  assert.deepStrictEqual(manifest.exports, {
+    "./package.json": "./package.json",
+    ".": entry("index"),
+    "./testing": entry("testing/index"),
+    "./*": entry("*"),
+    "./internal/*": null,
+    "./index": null,
+    "./*/index": null,
   });
-
-  for (const module of modules)
-    assert.deepStrictEqual(manifest.exports[`./${module}`], {
-      "@effect-browser/source": `./src/${module}.ts`,
-      types: `./dist/${module}.d.mts`,
-      default: `./dist/${module}.mjs`,
-    });
 });

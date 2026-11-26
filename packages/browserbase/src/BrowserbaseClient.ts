@@ -49,7 +49,9 @@ import {
 
 export const defaultBaseUrl = "https://api.browserbase.com";
 
-export class Session extends Schema.Class<Session>("effect-browserbase/Session")({
+export class Session extends Schema.Class<Session>(
+  "@effect-browser/browserbase/BrowserbaseClient/Session",
+)({
   id: Schema.String,
   /** `PENDING`, `RUNNING`, `ERROR`, `TIMED_OUT` or `COMPLETED`, kept open for new values. */
   status: Schema.String,
@@ -66,7 +68,9 @@ export class Session extends Schema.Class<Session>("effect-browserbase/Session")
 }) {}
 
 /** Links that let a person watch and control a running session. They are credentials. */
-export class LiveView extends Schema.Class<LiveView>("effect-browserbase/LiveView")({
+export class LiveView extends Schema.Class<LiveView>(
+  "@effect-browser/browserbase/BrowserbaseClient/LiveView",
+)({
   /** The active tab, without browser chrome: suited to an iframe. */
   debuggerFullscreenUrl: Schema.RedactedFromValue(Schema.String),
   debuggerUrl: Schema.RedactedFromValue(Schema.String),
@@ -81,7 +85,9 @@ export class LiveView extends Schema.Class<LiveView>("effect-browserbase/LiveVie
 }) {}
 
 /** Browser state (cookies, storage, cache) kept by Browserbase for sessions to load and save. */
-export class StoredContext extends Schema.Class<StoredContext>("effect-browserbase/StoredContext")({
+export class StoredContext extends Schema.Class<StoredContext>(
+  "@effect-browser/browserbase/BrowserbaseClient/StoredContext",
+)({
   id: Schema.String,
   name: Schema.optional(Schema.String),
   /** `getContext` returns the timestamps; `createContext` does not. */
@@ -90,14 +96,18 @@ export class StoredContext extends Schema.Class<StoredContext>("effect-browserba
 }) {}
 
 /** A Chrome extension uploaded to the project, which sessions load when created with its id. */
-export class Extension extends Schema.Class<Extension>("effect-browserbase/Extension")({
+export class Extension extends Schema.Class<Extension>(
+  "@effect-browser/browserbase/BrowserbaseClient/Extension",
+)({
   id: Schema.String,
   fileName: Schema.String,
   createdAt: Schema.String,
   updatedAt: Schema.String,
 }) {}
 
-export class SearchResult extends Schema.Class<SearchResult>("effect-browserbase/SearchResult")({
+export class SearchResult extends Schema.Class<SearchResult>(
+  "@effect-browser/browserbase/BrowserbaseClient/SearchResult",
+)({
   url: Schema.String,
   title: Schema.String,
   author: Schema.optional(Schema.String),
@@ -105,7 +115,9 @@ export class SearchResult extends Schema.Class<SearchResult>("effect-browserbase
 }) {}
 
 /** A page fetched without a browser. */
-export class FetchedPage extends Schema.Class<FetchedPage>("effect-browserbase/FetchedPage")({
+export class FetchedPage extends Schema.Class<FetchedPage>(
+  "@effect-browser/browserbase/BrowserbaseClient/FetchedPage",
+)({
   statusCode: Schema.Finite,
   contentType: Schema.String,
   headers: Schema.Record(Schema.String, Schema.String),
@@ -228,7 +240,7 @@ export interface Service {
 }
 
 export class BrowserbaseClient extends Context.Service<BrowserbaseClient, Service>()(
-  "effect-browserbase/BrowserbaseClient",
+  "@effect-browser/browserbase/BrowserbaseClient",
 ) {}
 
 export interface Options {

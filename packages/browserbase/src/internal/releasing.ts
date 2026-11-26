@@ -3,9 +3,9 @@
  * A failed local cleanup remains explicit release evidence even when the provider confirms its end.
  */
 import { Cause, Effect, Exit, Scope } from "effect";
-import * as Released from "effect-browser/Released";
+import { Release } from "effect-browser/supervisor";
 
-export const releasing = (browser: Scope.Closeable, end: Effect.Effect<Released.Released>) =>
+export const releasing = (browser: Scope.Closeable, end: Effect.Effect<Release.Release>) =>
   Effect.gen(function* () {
     const closed = yield* Effect.exit(Scope.close(browser, Exit.void));
     const ended = yield* Effect.exit(end);
@@ -15,7 +15,7 @@ export const releasing = (browser: Scope.Closeable, end: Effect.Effect<Released.
         Exit.isFailure(closed) ? Cause.combine(closed.cause, ended.cause) : ended.cause,
       );
     if (Exit.isFailure(closed))
-      return new Released.Unconfirmed({
+      return new Release.Unconfirmed({
         detail: `browser cleanup failed; provider release was ${ended.value._tag}`,
       });
 

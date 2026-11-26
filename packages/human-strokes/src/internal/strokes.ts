@@ -2,7 +2,7 @@ import { promisify } from "node:util";
 import { brotliDecompress } from "node:zlib";
 
 import { Effect, Result, Schema } from "effect";
-import * as Motion from "effect-browser/Motion";
+import { Motion } from "effect-browser/presentation";
 
 /** The fixed bundled recording could not be read or validated. */
 export class DataError extends Schema.TaggedError<DataError>()("HumanStrokesDataError", {

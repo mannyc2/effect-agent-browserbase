@@ -1,10 +1,9 @@
 // Requested audit stage 6: browser-wide policy reaches redirect hops and new tabs, failing closed.
 import { createServer } from "node:http";
 
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
-
-import * as Chromium from "../src/providers/Chromium.ts";
 
 it.live("guards every redirect hop and records a redacted refusal", () =>
   Effect.gen(function* () {

@@ -1,9 +1,9 @@
 // PLAN 9: idle ownership is the last host read, including later documents.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const html = (source: string) => `data:text/html,${encodeURIComponent(source)}`;

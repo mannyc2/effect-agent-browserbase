@@ -1,8 +1,8 @@
 // Provider viewport growth must not leave the shared native capture permanently scaled down.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Effect, Schedule, Stream } from "effect";
 
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 it.live("an implicit capture follows viewport growth beyond its initial cap", () =>

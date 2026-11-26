@@ -10,8 +10,8 @@ import type { RunContextRequest } from "@yielded/agent/run-options";
 import { Duration, Effect, Ref } from "effect";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Image } from "effect-browser/Frame";
-import * as Moment from "effect-browser/Moment";
 import type * as Page from "effect-browser/Page";
+import { Moment } from "effect-browser/timeline";
 import { Prompt } from "effect/ai";
 
 import * as AdapterState from "../AdapterState.ts";

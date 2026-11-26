@@ -11,8 +11,8 @@ import {
   refuse,
 } from "../../BrowserError.ts";
 import { InputRequest, type Page } from "../../Page.ts";
-import * as Url from "../../Url.ts";
 import type { Input } from "../input/actions.ts";
+import * as Url from "../url.ts";
 import type { Bridge } from "./bridge.ts";
 import { contextGone, type PageContext } from "./context.ts";
 

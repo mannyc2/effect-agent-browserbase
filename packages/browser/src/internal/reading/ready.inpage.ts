@@ -13,9 +13,9 @@
 import type { History } from "../timeline/history.inpage.ts";
 import type { Readiness } from "./ready.ts";
 import type { Texts } from "./text.inpage.ts";
-import type { Walk } from "./walk.inpage.ts";
+import type { Walked } from "./walk.inpage.ts";
 
-export const ready = (walked: Walk, texts: Texts, kept: History) => {
+export const ready = (walked: Walked, texts: Texts, kept: History) => {
   const { inView, visible } = walked;
   // A canvas is read through a small copy: reading it directly would give it a context of ours.
   let copy: OffscreenCanvasRenderingContext2D | null | undefined;

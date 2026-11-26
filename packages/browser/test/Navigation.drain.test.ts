@@ -3,11 +3,11 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Result } from "effect";
 
 import * as Stage from "../src/presentation/Stage.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const site = Effect.acquireRelease(

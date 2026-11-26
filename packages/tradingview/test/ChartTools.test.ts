@@ -1,12 +1,12 @@
 // A Yielded agent run with the browser tools and the chart's, over a stand-in for TradingView's
 // widget on a real Chromium page, driven by a scripted model: no model is called.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Agent, AgentRuntime, InMemory, Output } from "@yielded/agent";
 import { Duration, Effect, Layer, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/BrowserTools";
 import { TestModel } from "effect-agent-browser/testing";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel, Model, Toolkit } from "effect/ai";
 
 import * as Chart from "../src/Chart.ts";

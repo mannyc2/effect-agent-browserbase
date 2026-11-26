@@ -1,3 +1,4 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 // Document identity remains authoritative even when a transport's paint clock looks newer.
 import { Effect, Fiber, Schedule, Stream } from "effect";
@@ -5,7 +6,6 @@ import { Effect, Fiber, Schedule, Stream } from "effect";
 import { make as makeBrowser } from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
 import type { Frame, Image } from "../src/Frame.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 

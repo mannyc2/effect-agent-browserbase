@@ -1,5 +1,6 @@
 // Confirmation proves a delivered frame is still current across a transport round trip. Local
 // Chromium separately proves the page's own session must answer, even when capture sync is empty.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it, layer } from "@effect/vitest";
 import { Clock, Deferred, Duration, Effect, Fiber, Option, Schedule, Stream } from "effect";
 
@@ -8,7 +9,6 @@ import { BrowserError, Closed } from "../src/BrowserError.ts";
 import type { Frame } from "../src/Frame.ts";
 import * as Capture from "../src/internal/pictures/capture.ts";
 import type { NativeFrame, Transport } from "../src/internal/pictures/transport.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const eventually = (check: Effect.Effect<boolean>) =>

@@ -1,5 +1,6 @@
 // Yielded agent runs with the browser tools on a real Chromium page, driven by scripted models: no
 // model is called.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it, layer } from "@effect/vitest";
 import { Agent, AgentRuntime, InMemory, Output } from "@yielded/agent";
 import { CompactionPolicy } from "@yielded/agent/agent-policy";
@@ -9,8 +10,7 @@ import { ModelCallContext } from "@yielded/agent/context-window";
 import { RunContextPreparation } from "@yielded/agent/run-options";
 import { Duration, Effect, Layer, Option, Result, Schema, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
-import type * as Moment from "effect-browser/Moment";
+import type { Moment } from "effect-browser/timeline";
 import {
   AnthropicStructuredOutput,
   Model,

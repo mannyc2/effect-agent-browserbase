@@ -3,7 +3,7 @@
 // buying. Like the bench's other operate pages, each varies with the seed, and each grader reads the
 // page, not only the answer.
 import { Duration, Effect, Schema } from "effect";
-import * as Stillness from "effect-browser/Stillness";
+import { Stillness } from "effect-browser/timeline";
 
 import { draws, style, truth } from "./Sites.ts";
 import { operate, press, quotes, type Task } from "./Tasks.ts";

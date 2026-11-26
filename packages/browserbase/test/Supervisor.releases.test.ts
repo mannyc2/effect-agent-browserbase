@@ -1,10 +1,10 @@
 // #289 and the 21 October audit: every failed try publishes its own cleanup evidence.
+import * as Browserbase from "@effect-browser/browserbase/Browserbase";
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
+import { TestBrowserbase } from "@effect-browser/browserbase/testing";
 import { assert, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Schedule, Stream } from "effect";
-import * as Supervisor from "effect-browser/Supervisor";
-import * as Browserbase from "effect-browserbase/Browserbase";
-import * as ContextLease from "effect-browserbase/ContextLease";
-import { TestBrowserbase } from "effect-browserbase/testing";
+import { Supervisor } from "effect-browser/supervisor";
 import { TestClock } from "effect/testing";
 
 const fake = (script: TestBrowserbase.Script) =>
@@ -26,7 +26,7 @@ const finish = <A, E>(fiber: Fiber.Fiber<A, E>) =>
 
 it.effect.each([
   { release: { _tag: "Refused", status: 403 } as const, outcome: "Unconfirmed", status: "RUNNING" },
-  { release: { _tag: "Ends" } as const, outcome: "Settled", status: "COMPLETED" },
+  { release: { _tag: "Ends" } as const, outcome: "Confirmed", status: "COMPLETED" },
 ])("publishes the failed try's $outcome cleanup", ({ release, outcome, status }) =>
   Effect.gen(function* () {
     const supervisor = yield* Supervisor.make({
@@ -121,7 +121,7 @@ it.effect(
         state._tag === "Failed" ? [state.error.cleanup?._tag] : [],
       );
 
-      assert.deepStrictEqual(failures, ["Unconfirmed", "Settled"]);
+      assert.deepStrictEqual(failures, ["Unconfirmed", "Confirmed"]);
       assert.deepStrictEqual(
         (yield* sessions).map(({ status, releases }) => [status, releases]),
         [

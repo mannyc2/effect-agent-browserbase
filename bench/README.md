@@ -301,10 +301,10 @@ far the closest drawing the run added lies from where it belongs: its ends' larg
 in price, and every record counts the page's input by kind, `act` being the chart API's.
 
 The scripted solutions make each change with the chart's own controls, through
-`effect-browser-tradingview`'s `ChartInput`, so they are also its live check. `--humanize` performs
+`@effect-browser/tradingview`'s `ChartInput`, so they are also its live check. `--humanize` performs
 the input through a presenter, at a person's pace, for any mode, and each model tool call's record
-gives the seconds it ran. `--mode replayed` records the scripted walk as a `Plan`, replays it on a
-fresh browser from the same start, and grades the replayed chart, each walk's plan beside its
+gives the seconds it ran. `--mode replayed` records the scripted walk as a `Walk`, replays it on a
+fresh browser from the same start, and grades the replayed chart, each recorded walk beside its
 results.
 
 ```sh
@@ -375,7 +375,7 @@ a code given inside a sentence.
 | 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                                                                      | As arm 5                                       |
 | 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                                                                   | As arm 5                                       |
 | 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                                                                  | As arm 5                                       |
-| 17  | Chart reads: arm 5 with `effect-browser-tradingview`'s `chart_state`, `chart_bars`, `chart_values`, `chart_point` and `chart_at`; drawings still by pointer, at `chart_point`'s points                         | As arm 5                                       |
+| 17  | Chart reads: arm 5 with `@effect-browser/tradingview`'s `chart_state`, `chart_bars`, `chart_values`, `chart_point` and `chart_at`; drawings still by pointer, at `chart_point`'s points                        | As arm 5                                       |
 | 18  | Retired. Chart writes through the API, with no visible input; arm 20 makes the same changes as input                                                                                                           | As arm 5                                       |
 | 19  | Chart programs: arm 5 with `chart_program`, whose JavaScript reads the chart as `chart.state`, `chart.bars`, `chart.values`, `chart.point` and `chart.at` beside `browser.*`                                   | As arm 5                                       |
 | 20  | Chart changes: arm 17 with `chart_draw`, `chart_remove`, `chart_range`, `chart_symbol`, `chart_timeframe`, `chart_indicator` and `chart_inputs`, which change the chart with its own toolbar, keys and dialogs | As arm 5                                       |
@@ -709,7 +709,7 @@ preserving charges that arrived before a failure.
 
 ## Input judges
 
-`bun run bench judges` grades the input judges of `effect-browser/Policy` against the 77-control corpus
+`bun run bench judges` grades the input judges of `effect-browser/policy` against the 77-control corpus
 in `packages/browser/test/consequence-corpus.ts`. Each case's input is prepared on local Chromium
 and refused before it reaches the page, so a judge sees exactly what a guard would. Every case is
 judged without a task: the run grades recognising risk, not whether a task asks for it. A risk
@@ -773,7 +773,7 @@ The [compiled composition examples](../docs/COMPOSITION.md) cover watched browsi
 operator-assisted workflow runner in local Chromium, with scripted events and a consumer journal.
 Their tests use no hosted session or model.
 
-`effect-browserbase/testing` exports the in-memory Browserbase its tests and the bench's hosted
+`@effect-browser/browserbase/testing` exports the in-memory Browserbase its tests and the bench's hosted
 tests run on (`TestBrowserbase`), and the checks it is held to (`BrowserbaseContract.checks`):
 what the package relies on Browserbase to do. `bun run bench contract` runs those checks against
 Browserbase itself, so a fake that has drifted from the service shows:
@@ -788,7 +788,7 @@ since it can carry session ids. Checks that move the test clock, such as a sessi
 timeout, run against the fake only. A run opens two sessions of a few seconds each and a stored
 context, and exits with an error unless every check held.
 
-The checks hold behaviour; `effect-browserbase`'s own tests hold shapes. They check every answer
+The checks hold behaviour; `@effect-browser/browserbase`'s own tests hold shapes. They check every answer
 of the fake and every request of the client against a copy of the part of Browserbase's published
 OpenAPI document the package relies on (`packages/browserbase/test/browserbase-openapi.json`): its
 session and context operations, with references inlined and prose left out (`OpenApi.ts`).

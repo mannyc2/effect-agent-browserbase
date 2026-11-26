@@ -4,13 +4,13 @@
  */
 
 import type { Control } from "../../Snapshot.ts";
-import type { addresses } from "../../Url.ts";
+import type { addresses } from "../url.ts";
 import type { Controls } from "./controls.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { SnapshotResult } from "./reading.ts";
 import type { Subjects } from "./subjects.inpage.ts";
 import type { Texts } from "./text.inpage.ts";
-import type { Walk } from "./walk.inpage.ts";
+import type { Walked } from "./walk.inpage.ts";
 
 export interface SnapshotRequest {
   readonly full: boolean;
@@ -27,7 +27,7 @@ type Url = ReturnType<typeof addresses>;
 
 export const outline = (
   names: Names,
-  walked: Walk,
+  walked: Walked,
   subjects: Subjects,
   texts: Texts,
   controlling: Controls,

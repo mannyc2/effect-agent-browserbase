@@ -1,8 +1,9 @@
 # Releasing
 
-`effect-browser`, `effect-browserbase`, `effect-browser-human-strokes` and `effect-agent-browser`
-are released together, at one version, by `.github/workflows/publish.yml`. The workflow runs on a
-`v<version>` tag on `main`, runs `bun run ready`, packs the four packages, checks the archives in a clean consumer and
+`effect-browser`, `@effect-browser/chromium`, `@effect-browser/browserbase`,
+`@effect-browser/human-strokes` and `effect-agent-browser` are released together, at one version, by
+`.github/workflows/publish.yml`. `@effect-browser/tradingview` is private and never published. The
+workflow runs on a `v<version>` tag on `main`, runs `bun run ready`, packs the five packages, checks the archives in a clean consumer and
 publishes them through npm trusted publishing: no npm token, and npm signs provenance for each
 package. Ordinary CI never publishes,
 and preparing or testing a release does not authorize publishing, tagging or changing account
@@ -34,11 +35,14 @@ with integrity
 The owner does this once, in npm and GitHub settings.
 
 1. **Reserve the names.** npm can only trust a publisher for a name that exists, so each name is
-   published by hand once as a placeholder, `0.0.0-reserved.0`. `effect-browser`,
-   `effect-browser-human-strokes` and `effect-agent-browser` are done. npm points `latest` at a
-   name's first version, so `latest` stays on the placeholder until a stable release.
+   published by hand once as a placeholder, `0.0.0-reserved.0`. `effect-browser` and
+   `effect-agent-browser` are done. `@effect-browser/chromium`, `@effect-browser/browserbase` and
+   `@effect-browser/human-strokes` are not: only members of the `effect-browser` npm organization
+   can publish under its scope, so the owner reserves them before the first release that carries
+   them. npm points `latest` at a name's first version, so `latest` stays on the placeholder until a
+   stable release.
 
-2. **Trust the workflow on npm.** For each of the four packages, open the package's
+2. **Trust the workflow on npm.** For each of the five packages, open the package's
    **Settings → Trusted publishing** on npmjs.com, choose **GitHub Actions** and enter:
 
    | Field                | Value                      |
@@ -51,10 +55,8 @@ The owner does this once, in npm and GitHub settings.
 
    The workflow publishes with `npm publish`, so tick it under allowed actions: an entry created
    after 3 September 2026 allows only `npm stage publish` until you do. `effect-browser`,
-   `effect-browserbase` and `effect-agent-browser` have this entry: the workflow published them
-   in `0.3.0-beta.5`. `effect-browser-human-strokes` initially failed with `ENEEDAUTH`, then
-   published from the retained archives when that release's publish job was rerun. All four
-   packages now have a working trusted publisher.
+   and `effect-agent-browser` have this entry: the workflow published them in `0.3.0-beta.5`. The
+   three scoped names need it once they are reserved.
 
 3. **Protect the `npm` environment.** In the repository's **Settings → Environments**, the `npm`
    environment (it exists from 0.2) should have the owner as a required reviewer, and its
@@ -74,7 +76,7 @@ The owner does this once, in npm and GitHub settings.
   range would let a consumer install an Effect the packages were never checked against.
   - Widen the range to the next minor in the release that is checked against it.
   - Widen it to `^4.1.2` once those modules are stable.
-- **`effect-browser`** is a caret range in the other three packages, from the version each needs.
+- **`effect-browser`** is a caret range in the other four packages, from the version each needs.
   Move it in the release that needs a newer one.
 - **`@yielded/agent`** is one exact version in `effect-agent-browser`, because each Yielded beta may
   change the ports that `effect-agent-browser` implements. Its README's install line names that
@@ -83,9 +85,9 @@ The owner does this once, in npm and GitHub settings.
 
 ## Cut a release
 
-1. In one PR, set the same `version` in all four `packages/*/package.json`, add the release's
-   section to `CHANGELOG.md`, move the `effect-browser` peer ranges in `effect-browserbase`,
-   `effect-browser-human-strokes` and `effect-agent-browser` if the release needs the new version, and run
+1. In one PR, set the same `version` in the five published packages' `package.json`, add the
+   release's section to `CHANGELOG.md`, move the `effect-browser` peer ranges in the other four if
+   the release needs the new version, and run
    `bun install --ignore-scripts` so `bun.lock` agrees. 0.3's first release also deletes the root
    README's note that 0.3 is not on npm.
 2. Once it is merged, tag the merge commit and push the tag:
@@ -116,10 +118,10 @@ declarations with `skipLibCheck: false` and Node imports each one, Bun too in th
 run it before tagging too: without arguments it builds and packs the packages itself, under
 `$TMPDIR`.
 
-The tag must be on `main` and name the version all four packages carry. A prerelease
+The tag must be on `main` and name the version all five packages carry. A prerelease
 `x.y.z-alpha.N`, `-beta.N` or `-rc.N` goes to the dist-tag of that name; only a plain `x.y.z` goes
-to `latest`. Packages publish in dependency order, `effect-browser-human-strokes` last, and a
-version already on npm is skipped, so
+to `latest`. Packages publish in dependency order, `effect-browser` first, and a version already
+on npm is skipped, so
 dispatching the same tag again finishes an interrupted release. A published version cannot be
 replaced; fix a bad one with a new version.
 
@@ -141,3 +143,7 @@ assumption in the deferred-frame readiness test. The tag is retained.
 `v0.3.0-beta.18` (`37e61c6`) also remains unpublished: its publishing build exposed a missing
 resize-frame trigger in the same fixture after its dry run passed. The corrected release is
 `0.3.0-beta.19`.
+
+`effect-browserbase` and `effect-browser-human-strokes` ended at `0.3.0-beta.24`; the release after
+it publishes them as `@effect-browser/browserbase` and `@effect-browser/human-strokes`, beside the
+new `@effect-browser/chromium`.

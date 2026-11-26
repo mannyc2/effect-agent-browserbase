@@ -10,7 +10,7 @@
 import { Schema } from "effect";
 
 /** A control the outline shows, as a value: its ref, what it is and what it holds. */
-export class Control extends Schema.Class<Control>("effect-browser/Control")({
+export class Control extends Schema.Class<Control>("effect-browser/Snapshot/Control")({
   ref: Schema.String,
   /** Its role, such as `button` or `textbox`, or `clickable` for an element without one. */
   kind: Schema.String,

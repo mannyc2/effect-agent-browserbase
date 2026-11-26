@@ -1,10 +1,10 @@
 /** Private evidence and one-session admission for the H1/H3 experiments; no autonomous retries. */
+import * as Browserbase from "@effect-browser/browserbase/Browserbase";
+import * as Client from "@effect-browser/browserbase/BrowserbaseClient";
+import { BrowserbaseError, InvalidRequest } from "@effect-browser/browserbase/BrowserbaseError";
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
 import { Cause, Clock, Console, Effect, Exit, FileSystem, Layer, Path, Schema } from "effect";
 import { BrowserError } from "effect-browser/BrowserError";
-import * as Browserbase from "effect-browserbase/Browserbase";
-import * as Client from "effect-browserbase/BrowserbaseClient";
-import { BrowserbaseError, InvalidRequest } from "effect-browserbase/BrowserbaseError";
-import * as ContextLease from "effect-browserbase/ContextLease";
 import { Digest, SecureRandom } from "effect/crypto";
 import { FetchHttpClient } from "effect/http";
 
@@ -139,7 +139,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
     () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6,
   );
 
-  let release: "Settled" | "Unconfirmed" | undefined;
+  let release: "Confirmed" | "Unconfirmed" | undefined;
 
   yield* Effect.scoped(
     Effect.gen(function* () {
@@ -189,7 +189,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
       return evidence
         .write("result.json", {
           ...evidence.setup,
-          status: Exit.isSuccess(exit) && release === "Settled" ? "completed" : "incomplete",
+          status: Exit.isSuccess(exit) && release === "Confirmed" ? "completed" : "incomplete",
           release,
           failure,
           ...observed.evidence(),
@@ -199,7 +199,7 @@ export const run = Effect.fnUntraced(function* <A, E, R>(
     }),
   );
   yield* Console.log(`${evidence.setup.kind.toUpperCase()} evidence: ${evidence.directory}`);
-  if (release !== "Settled")
+  if (release !== "Confirmed")
     return yield* refuse(
       "Provider release is unconfirmed; reconcile this run before any new session",
     );

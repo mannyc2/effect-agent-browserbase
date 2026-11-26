@@ -6,10 +6,10 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Schedule, Stream, Tracer } from "effect";
 
 import { behindProxy, type Command, type Proxy } from "../../../tools/testing/cdp-proxy.ts";
-import * as Moment from "../src/moment/Moment.ts";
+import * as Cdp from "../src/Cdp.ts";
 import type { Page } from "../src/Page.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
-import * as Stillness from "../src/stillness/Stillness.ts";
+import * as Moment from "../src/timeline/Moment.ts";
+import * as Stillness from "../src/timeline/Stillness.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 // The commands an operation sends. Screencast acknowledgements answer frames, not the operation.

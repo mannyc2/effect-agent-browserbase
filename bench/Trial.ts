@@ -1,6 +1,7 @@
 // What both runners share about one scheduled unit of work: its seed, its own browser, and how its
 // exit becomes a durable status. A wrong answer is a result; a broken capture, provider or browser
 // is not, and a refused or unstarted unit is neither.
+import { BrowserbaseError } from "@effect-browser/browserbase/BrowserbaseError";
 import {
   Cause,
   Clock,
@@ -15,7 +16,6 @@ import {
 } from "effect";
 import type { Browser } from "effect-browser/Browser";
 import { BrowserError } from "effect-browser/BrowserError";
-import { BrowserbaseError } from "effect-browserbase/BrowserbaseError";
 import { AiError } from "effect/ai";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 

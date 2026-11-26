@@ -5,8 +5,8 @@ import { type Browser, chromium } from "playwright-core";
 
 import { behindProxy } from "../../../tools/testing/cdp-proxy.ts";
 import { BrowserError } from "../src/BrowserError.ts";
-import * as Cdp from "../src/providers/Cdp.ts";
-import * as WorkerCdp from "../src/workerd/Cdp.ts";
+import * as Cdp from "../src/Cdp.ts";
+import * as WorkerCdp from "../src/internal/cdp/workerd.ts";
 import { nativeConnect } from "./nativeConnector.ts";
 
 it.effect.prop(

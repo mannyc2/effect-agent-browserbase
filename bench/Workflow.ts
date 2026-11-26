@@ -2,8 +2,8 @@
 import { Effect } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { Page } from "effect-browser/Page";
-import * as Plan from "effect-browser/Plan";
-import type * as Supervisor from "effect-browser/Supervisor";
+import type { Supervisor } from "effect-browser/supervisor";
+import { Walk } from "effect-browser/walk";
 
 /**
  * The consumer supplies durable storage and enforces one runner for each run/plan/input identity.
@@ -11,9 +11,9 @@ import type * as Supervisor from "effect-browser/Supervisor";
  * Fresh/finished checkpoints use unsent at zero/the next step. Never infer unsent from a crash.
  */
 export interface Journal<E> {
-  readonly read: (run: string) => Effect.Effect<Plan.Stopped, E>;
+  readonly read: (run: string) => Effect.Effect<Walk.Stopped, E>;
   readonly begun: (run: string, step: number) => Effect.Effect<void, E>;
-  readonly done: (run: string, receipt: Plan.Receipt) => Effect.Effect<void, E>;
+  readonly done: (run: string, receipt: Walk.Receipt) => Effect.Effect<void, E>;
 }
 
 /** Consumer authentication policy and the human/provider-viewer interaction stay outside the library. */
@@ -25,11 +25,11 @@ export interface Operator<E> {
 const assisted = <E>(
   browser: Browser.Service,
   page: Page,
-  plan: Plan.Plan,
-  at: number | Plan.Stopped,
-  options: Plan.TakeOptions & { readonly operator?: Operator<E> },
+  plan: Walk.Walk,
+  at: number | Walk.Stopped,
+  options: Walk.StepOptions & { readonly operator?: Operator<E> },
 ) =>
-  Plan.take(page, plan, at, options).pipe(
+  Walk.step(page, plan, at, options).pipe(
     Effect.catchTag("ReplayError", (error) =>
       Effect.gen(function* () {
         const step = plan.steps[error.step];
@@ -38,7 +38,7 @@ const assisted = <E>(
         if (
           operator === undefined ||
           step === undefined ||
-          (error.input === "unknown" && !Plan.repeatable(step)) ||
+          (error.input === "unknown" && !Walk.repeatable(step)) ||
           !(yield* operator.needed(page))
         )
           return yield* error;
@@ -51,7 +51,7 @@ const assisted = <E>(
         );
 
         // Preserve the original stopping point. Operator assistance cannot authorize a duplicate.
-        return yield* Plan.take(page, plan, error.stopped, options);
+        return yield* Walk.step(page, plan, error.stopped, options);
       }),
     ),
   );
@@ -60,8 +60,8 @@ export const run = Effect.fn("Workflow.run")(function* <A, E, O = never>(
   sessions: Supervisor.Supervisor<{ readonly browser: Browser.Service; readonly value: A }>,
   journal: Journal<E>,
   run: string,
-  plan: Plan.Plan,
-  options: Plan.TakeOptions & { readonly operator?: Operator<O> } = {},
+  plan: Walk.Walk,
+  options: Walk.StepOptions & { readonly operator?: Operator<O> } = {},
 ) {
   const checkpoint = yield* journal.read(run);
 
@@ -73,8 +73,8 @@ export const run = Effect.fn("Workflow.run")(function* <A, E, O = never>(
         Effect.ignore(page.close),
       );
 
-      yield* Plan.restore(page, plan, { ...options, upTo: checkpoint.step });
-      let at: number | Plan.Stopped = checkpoint;
+      yield* Walk.restore(page, plan, { ...options, upTo: checkpoint.step });
+      let at: number | Walk.Stopped = checkpoint;
 
       while ((typeof at === "number" ? at : at.step) < plan.steps.length) {
         const index: number = typeof at === "number" ? at : at.step;

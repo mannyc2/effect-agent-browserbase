@@ -1,10 +1,10 @@
 /** A consumer of the shipped public entry points, executed after a second bundler transforms it. */
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { Effect, Result } from "effect";
 import { Browser } from "effect-browser";
 import { Subject } from "effect-browser/BrowserEvent";
-import * as Chromium from "effect-browser/Chromium";
-import * as Stillness from "effect-browser/Stillness";
 import { TestPage } from "effect-browser/testing";
+import { Stillness } from "effect-browser/timeline";
 
 const form = `data:text/html,${encodeURIComponent(`<title>Bundled page</title>
 <h1>Bundled page</h1><label>Note <input id="note"></label>

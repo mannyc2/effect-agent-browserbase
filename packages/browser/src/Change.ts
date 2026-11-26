@@ -71,7 +71,7 @@ export class Change extends Schema.Class<Change>("effect-browser/Change")({
   cause: Schema.optional(Schema.Finite),
 }) {}
 
-export class Changes extends Schema.Class<Changes>("effect-browser/Changes")({
+export class Changes extends Schema.Class<Changes>("effect-browser/Change/Changes")({
   /** The page's document these changes belong to, as `Navigated` counts them. */
   document: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Where the record is whole: before it, changes may be missing. */

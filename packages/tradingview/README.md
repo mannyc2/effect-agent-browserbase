@@ -1,4 +1,4 @@
-# effect-browser-tradingview
+# @effect-browser/tradingview
 
 TradingView charts for `effect-browser`: read a chart's own data, find the exact screen point of a
 time and price, and change the chart with its own toolbar, keys and dialogs, as a person does. It
@@ -12,10 +12,10 @@ refuses drawings when signed out.
 It is private to this repository and not published: the bench uses it from the workspace.
 
 ```ts
+import { Chromium } from "@effect-browser/chromium";
+import * as Chart from "@effect-browser/tradingview/Chart";
 import { Effect } from "effect";
-import * as Chart from "effect-browser-tradingview/Chart";
 import { Browser } from "effect-browser/Browser";
-import * as Chromium from "effect-browser/Chromium";
 
 const program = Effect.gen(function* () {
   const page = yield* (yield* Browser).newPage("https://charting-library.tradingview-widget.com/");
@@ -84,9 +84,9 @@ and what followed. `layer` serves both over the run's `BrowserTools.Controller`,
 the model sees, with the run's task; an agent's toolkit holds whichever the model may use.
 
 ```ts
+import * as ChartTools from "@effect-browser/tradingview/ChartTools";
 import { Layer } from "effect";
 import * as BrowserTools from "effect-agent-browser/BrowserTools";
-import * as ChartTools from "effect-browser-tradingview/ChartTools";
 import type { Page } from "effect-browser/Page";
 import { Toolkit } from "effect/ai";
 

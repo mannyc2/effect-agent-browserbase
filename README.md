@@ -10,15 +10,16 @@ Sessions, scoped input authority, resumable action receipts and cued presentatio
 watched browsing and operator-assisted workflows. The library owns browser lifetimes and failure
 evidence; applications own their decisions and durable business records.
 
-| Package                                                  | What it is                                                         |
-| -------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`effect-browser`](packages/browser)                     | The browser, its pages, moments and films, over Playwright         |
-| [`effect-agent-browser`](packages/agent-browser)         | Its pages as a Yielded agent's browser tools                       |
-| [`effect-browserbase`](packages/browserbase)             | Browserbase sessions as a `Browser`, and a client for its REST API |
-| [`effect-browser-human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
-| [`effect-browser-tradingview`](packages/tradingview)     | TradingView charts' data, exact screen points and agent tools      |
-| [`bench`](bench) (private)                               | Graded tasks over canvas games, live charts, quotes and forms      |
-| [`site`](site) (private)                                 | The docs site, its narrated demo and a player for recorded runs    |
+| Package                                                   | What it is                                                         |
+| --------------------------------------------------------- | ------------------------------------------------------------------ |
+| [`effect-browser`](packages/browser)                      | The browser, its pages, moments and films, over Playwright         |
+| [`@effect-browser/chromium`](packages/chromium)           | A local Chromium as a `Browser`, launched through Playwright       |
+| [`effect-agent-browser`](packages/agent-browser)          | Its pages as a Yielded agent's browser tools                       |
+| [`@effect-browser/browserbase`](packages/browserbase)     | Browserbase sessions as a `Browser`, and a client for its REST API |
+| [`@effect-browser/human-strokes`](packages/human-strokes) | Optional recorded pointer motion, as a presenter's planner         |
+| [`@effect-browser/tradingview`](packages/tradingview)     | TradingView charts' data, exact screen points and agent tools      |
+| [`bench`](bench) (private)                                | Graded tasks over canvas games, live charts, quotes and forms      |
+| [`site`](site) (private)                                  | The docs site, its narrated demo and a player for recorded runs    |
 
 `effect-agent-browser` needs the npm release of `@yielded/agent` `0.1.0-beta.191` and Effect
 `4.1.2`. Its [README](packages/agent-browser/README.md) gives the install command.
@@ -48,12 +49,12 @@ Yielded's browser tools over an `effect-browser` page, and tools of its own for 
 Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter:
 
 ```ts
+import { Chromium } from "@effect-browser/chromium";
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
 import { BrowserTools } from "effect-agent-browser";
 import { Browser } from "effect-browser";
-import * as Chromium from "effect-browser/Chromium";
 import { Model } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 
@@ -97,11 +98,11 @@ program.pipe(Effect.provide([Chromium.layer(), OpenRouter]), Effect.runPromise);
 ## The same agent on Browserbase
 
 Swap the `Browser` layer. The session is created when the layer is built; closing its scope asks
-the provider to release it. A confirmed `Settled` outcome establishes that the session ended;
+the provider to release it. A `Confirmed` outcome establishes that the session ended;
 `Unconfirmed` preserves uncertainty and can mean billing continues until the provider timeout:
 
 ```ts
-import { Browserbase, BrowserbaseClient, ContextLease } from "effect-browserbase";
+import { Browserbase, BrowserbaseClient, ContextLease } from "@effect-browser/browserbase";
 
 const Hosted = Browserbase.layer({ session: { region: "us-west-2" } }).pipe(
   Layer.provide(BrowserbaseClient.layerConfig()), // reads BROWSERBASE_API_KEY
@@ -246,7 +247,7 @@ on a browser's tabs. `PageControl.make` gives the controller alone, for a host w
   sigma-lognormal planner's paths, scroll off-screen targets into view with visible wheel input and
   type at about 70 WPM, with overlapping key holds and slower word starts, while the page itself
   stays plain. Presentation time has a budget of its own, outside `actionTimeout`, and
-  schedules above 10 seconds are refused before input. The optional `effect-browser-human-strokes` package
+  schedules above 10 seconds are refused before input. The optional `@effect-browser/human-strokes` package
   supplies 32,130 recorded strokes as a planner, `HumanStrokes.motion`; the core package contains
   no data. Each full glide is validated and admitted before its clock starts.
 - `Stage` is the source of a live output: `present(page, { at })` switches it between pages, in one
@@ -283,7 +284,7 @@ real local Chromium and builds. No test calls a model or a hosted browser.
 
 ## License
 
-The core packages and code are MIT. The optional `effect-browser-human-strokes` data is CC BY 4.0;
+The core packages and code are MIT. The optional `@effect-browser/human-strokes` data is CC BY 4.0;
 its [README](packages/human-strokes/README.md) carries attribution. Parts of the build configuration are adapted from
 [Yielded Agent](https://github.com/yielded-dev/agent), then named effect-agent, under the MIT
 License; see [LICENSE-effect-agent](LICENSE-effect-agent).

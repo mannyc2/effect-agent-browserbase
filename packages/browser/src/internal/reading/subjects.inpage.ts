@@ -4,10 +4,10 @@
  * beside it. See `names.inpage.ts` for what a page-side part may use.
  */
 import type { SubjectContext } from "../../BrowserEvent.ts";
-import type { FindRequest, Match } from "../../Matching.ts";
+import type { FindRequest, Match } from "../matching.ts";
 import type { ContextReader } from "./context.inpage.ts";
 import type { Names } from "./names.inpage.ts";
-import type { Walk } from "./walk.inpage.ts";
+import type { Walked } from "./walk.inpage.ts";
 
 export const states = (names: Names) => (element: Element, role: string | null) => {
   const { isDisabled, isInput } = names;
@@ -44,7 +44,7 @@ export const states = (names: Names) => (element: Element, role: string | null) 
 
 export const subjects = (
   names: Names,
-  walked: Walk,
+  walked: Walked,
   matching: Match,
   placing: ContextReader,
   stateOf: ReturnType<typeof states>,

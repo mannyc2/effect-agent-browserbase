@@ -23,7 +23,7 @@
 import { type Effect, Schema } from "effect";
 
 import type { BrowserError } from "./BrowserError.ts";
-import { Point } from "./Geometry.ts";
+import { Point } from "./internal/geometry.ts";
 
 /** How an element is posed. A part left out changes nothing: no move, a scale of 1, no turn. */
 export const Pose = Schema.Struct({

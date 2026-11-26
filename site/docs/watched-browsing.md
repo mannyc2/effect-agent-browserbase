@@ -11,7 +11,7 @@ Most automation is built to be fast and invisible. effect-browser is built for r
 - off-screen targets scroll into view with visible wheel input, in 100 px notches;
 - typing runs near 70 WPM, with overlapping key holds and slower word starts.
 
-The page itself stays plain, and plain input never waits for a view. `view.aim(target)` starts a glide as soon as a target is known, as when it appears in a model's streamed tool call. The optional `effect-browser-human-strokes` package swaps in 32,130 recorded strokes as the planner.
+The page itself stays plain, and plain input never waits for a view. `view.aim(target)` starts a glide as soon as a target is known, as when it appears in a model's streamed tool call. The optional `@effect-browser/human-strokes` package swaps in 32,130 recorded strokes as the planner.
 
 `Browser.events()` carries the timed input track for your own cursor rendering: complete glide plans, submission receipts, button and key phases, wheel input and cursor shape. The demo's player draws its pointer from exactly that track.
 
@@ -23,10 +23,10 @@ Here the output starts on one page, prepares another off air, and switches once 
 
 :::Example
 ```ts
+import { Chromium } from "@effect-browser/chromium";
 import { Effect, Stream } from "effect";
 import { Browser } from "effect-browser";
-import * as Chromium from "effect-browser/Chromium";
-import * as Stage from "effect-browser/Stage";
+import { Stage } from "effect-browser/presentation";
 
 const program = Effect.gen(function* () {
   const browser = yield* Browser.Browser;

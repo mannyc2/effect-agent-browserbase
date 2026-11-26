@@ -6,11 +6,11 @@
  * call, so the boxes and the scroll describe one moment. See `names.inpage.ts` for what a
  * page-side part may use.
  */
-import type { FindRequest, Match, Wanted } from "../../Matching.ts";
+import type { FindRequest, Match, Wanted } from "../matching.ts";
 import type { ContextReader } from "./context.inpage.ts";
 import type { Names } from "./names.inpage.ts";
 import type { Subjects } from "./subjects.inpage.ts";
-import type { Walk } from "./walk.inpage.ts";
+import type { Walked } from "./walk.inpage.ts";
 
 export interface PickRequest extends FindRequest {
   readonly id: string;
@@ -20,7 +20,7 @@ export interface PickRequest extends FindRequest {
 
 export const layout = (
   names: Names,
-  walked: Walk,
+  walked: Walked,
   subjected: Subjects,
   matching: Match,
   placing: ContextReader,

@@ -1,5 +1,5 @@
 // What tests read PNG frames with: playwright-core's bundled decoder, which its untyped entry
-// exports. This merges with `src/stillness/utilsBundle.d.ts`.
+// exports. This merges with `src/timeline/internal/utilsBundle.d.ts`.
 declare module "playwright-core/lib/utilsBundle" {
   export const PNG: {
     readonly sync: {

@@ -1,7 +1,7 @@
 /** Owned native fixture handles and the public browser built from their scoped context. */
+import type * as Chromium from "@effect-browser/chromium/Chromium";
 import { Context, Effect, Layer } from "effect";
 import * as Browser from "effect-browser/Browser";
-import type * as Chromium from "effect-browser/Chromium";
 import { chromium as native, type BrowserContext } from "playwright-core";
 
 import * as Routes from "../FixtureRoutes.ts";

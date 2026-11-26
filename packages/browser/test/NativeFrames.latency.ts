@@ -1,10 +1,10 @@
 /** Optional native frame/input envelopes; ordinary tests retain identity and causal ordering. */
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Clock, Duration, Effect, Fiber, Random, Stream } from "effect";
 
 import * as Presentation from "../src/presentation/Presentation.ts";
 import * as Stage from "../src/presentation/Stage.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import { unpaused } from "./fixtures.ts";
 import { keys, setup } from "./support/InputRelay.ts";
 import {

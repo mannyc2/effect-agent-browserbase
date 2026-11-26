@@ -4,7 +4,7 @@ import { assert, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Exit, Fiber, Option, Scope, Stream } from "effect";
 import { Frame, Screenshot } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
-import * as Supervisor from "effect-browser/Supervisor";
+import { Supervisor } from "effect-browser/supervisor";
 import { TestBrowser, TestPage } from "effect-browser/testing";
 
 import * as Watched from "../Watched.ts";

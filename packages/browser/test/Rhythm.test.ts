@@ -1,3 +1,4 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Deferred, Duration, Effect, Fiber, Random } from "effect";
 
@@ -5,7 +6,6 @@ import { Browser, make as makeBrowser, type Options } from "../src/Browser.ts";
 import { PolicyDenied } from "../src/BrowserError.ts";
 import type { Page } from "../src/Page.ts";
 import * as Presentation from "../src/presentation/Presentation.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import type { Snapshot } from "../src/Snapshot.ts";
 import { unpaused } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";

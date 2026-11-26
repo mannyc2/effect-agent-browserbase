@@ -11,7 +11,7 @@
  */
 import type { SubjectContext } from "../../BrowserEvent.ts";
 import type { Names } from "./names.inpage.ts";
-import type { Walk } from "./walk.inpage.ts";
+import type { Walked } from "./walk.inpage.ts";
 
 /** What one read has learnt of the page: each table's header row and each tree's headings. */
 export interface Known {
@@ -19,7 +19,7 @@ export interface Known {
   readonly headings: Map<Node, ReadonlyArray<Element>>;
 }
 
-export const context = (names: Names, walked: Walk) => {
+export const context = (names: Names, walked: Walked) => {
   const { clean, isButton, isDocument, isHtml, isInput, isRoot } = names;
   const { isSelect, isTextArea, roleOf, textOf } = names;
   const { visible } = walked;

@@ -6,8 +6,8 @@ import { Duration, Effect, Option, Schema, type Scope } from "effect";
 
 import { type BrowserError, NotActionable } from "../../BrowserError.ts";
 import { Box } from "../../BrowserEvent.ts";
-import { Point } from "../../Geometry.ts";
 import type { Held, Step } from "../../PageTime.ts";
+import { Point } from "../geometry.ts";
 import { type Bridge, scriptCall } from "./bridge.ts";
 import { decodeWith, failWith, type PageContext, refuse } from "./context.ts";
 import type { Overlays } from "./overlay.ts";

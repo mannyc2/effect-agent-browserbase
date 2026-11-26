@@ -1,6 +1,7 @@
 // One take of the demo, run the way the bench runs a trial: model calls behind the bench's opt-in
 // and budget, a recorded local Chromium, and the outcome classified and checked. The take is then
 // packed with the agent's words spoken, by a voice with a cap of its own within the take's.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { BenchError, modelRunner, optedIn, refuse } from "bench/Budget.ts";
 import * as Recorder from "bench/Recorder.ts";
 import { errorText } from "bench/run.ts";
@@ -8,7 +9,6 @@ import { frameHistory } from "bench/Tasks.ts";
 import * as Trace from "bench/Trace.ts";
 import { classify, isolatedTrial, revision, workDeadline } from "bench/Trial.ts";
 import { Clock, Console, DateTime, Duration, Effect, Exit, Path, Tracer } from "effect";
-import * as Chromium from "effect-browser/Chromium";
 import { FetchHttpClient } from "effect/http";
 
 import * as Routes from "../../bench/FixtureRoutes.ts";

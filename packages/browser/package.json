@@ -15,6 +15,7 @@
   "type": "module",
   "sideEffects": [],
   "exports": {
+    "./package.json": "./package.json",
     ".": {
       "workerd": {
         "@effect-browser/source": "./src/index.ts",
@@ -25,176 +26,59 @@
       "types": "./dist/index.d.mts",
       "default": "./dist/index.mjs"
     },
-    "./Browser": {
-      "@effect-browser/source": "./src/Browser.ts",
-      "types": "./dist/Browser.d.mts",
-      "default": "./dist/Browser.mjs"
-    },
-    "./BrowserError": {
-      "@effect-browser/source": "./src/BrowserError.ts",
-      "types": "./dist/BrowserError.d.mts",
-      "default": "./dist/BrowserError.mjs"
-    },
-    "./BrowserEvent": {
-      "@effect-browser/source": "./src/BrowserEvent.ts",
-      "types": "./dist/BrowserEvent.d.mts",
-      "default": "./dist/BrowserEvent.mjs"
-    },
-    "./Change": {
-      "@effect-browser/source": "./src/Change.ts",
-      "types": "./dist/Change.d.mts",
-      "default": "./dist/Change.mjs"
-    },
     "./Cdp": {
       "workerd": {
-        "@effect-browser/source": "./src/workerd/Cdp.ts",
-        "types": "./dist/workerd/Cdp.d.mts",
-        "default": "./dist/workerd/Cdp.mjs"
+        "@effect-browser/source": "./src/internal/cdp/workerd.ts",
+        "types": "./dist/internal/cdp/workerd.d.mts",
+        "default": "./dist/internal/cdp/workerd.mjs"
       },
-      "@effect-browser/source": "./src/providers/Cdp.ts",
-      "types": "./dist/providers/Cdp.d.mts",
-      "default": "./dist/providers/Cdp.mjs"
+      "@effect-browser/source": "./src/Cdp.ts",
+      "types": "./dist/Cdp.d.mts",
+      "default": "./dist/Cdp.mjs"
     },
-    "./Chromium": {
-      "@effect-browser/source": "./src/providers/Chromium.ts",
-      "types": "./dist/providers/Chromium.d.mts",
-      "default": "./dist/providers/Chromium.mjs"
+    "./timeline": {
+      "@effect-browser/source": "./src/timeline/index.ts",
+      "types": "./dist/timeline/index.d.mts",
+      "default": "./dist/timeline/index.mjs"
     },
-    "./Frame": {
-      "@effect-browser/source": "./src/Frame.ts",
-      "types": "./dist/Frame.d.mts",
-      "default": "./dist/Frame.mjs"
+    "./presentation": {
+      "@effect-browser/source": "./src/presentation/index.ts",
+      "types": "./dist/presentation/index.d.mts",
+      "default": "./dist/presentation/index.mjs"
     },
-    "./Moment": {
-      "@effect-browser/source": "./src/moment/Moment.ts",
-      "types": "./dist/moment/Moment.d.mts",
-      "default": "./dist/moment/Moment.mjs"
+    "./walk": {
+      "@effect-browser/source": "./src/walk/index.ts",
+      "types": "./dist/walk/index.d.mts",
+      "default": "./dist/walk/index.mjs"
     },
-    "./Motion": {
-      "@effect-browser/source": "./src/presentation/Motion.ts",
-      "types": "./dist/presentation/Motion.d.mts",
-      "default": "./dist/presentation/Motion.mjs"
+    "./policy": {
+      "@effect-browser/source": "./src/policy/index.ts",
+      "types": "./dist/policy/index.d.mts",
+      "default": "./dist/policy/index.mjs"
     },
-    "./Page": {
-      "@effect-browser/source": "./src/Page.ts",
-      "types": "./dist/Page.d.mts",
-      "default": "./dist/Page.mjs"
-    },
-    "./Plan": {
-      "@effect-browser/source": "./src/plan/index.ts",
-      "types": "./dist/plan/index.d.mts",
-      "default": "./dist/plan/index.mjs"
-    },
-    "./Policy": {
-      "@effect-browser/source": "./src/policy/Policy.ts",
-      "types": "./dist/policy/Policy.d.mts",
-      "default": "./dist/policy/Policy.mjs"
-    },
-    "./Presentation": {
-      "@effect-browser/source": "./src/presentation/Presentation.ts",
-      "types": "./dist/presentation/Presentation.d.mts",
-      "default": "./dist/presentation/Presentation.mjs"
-    },
-    "./Snapshot": {
-      "@effect-browser/source": "./src/Snapshot.ts",
-      "types": "./dist/Snapshot.d.mts",
-      "default": "./dist/Snapshot.mjs"
-    },
-    "./Stage": {
-      "@effect-browser/source": "./src/presentation/Stage.ts",
-      "types": "./dist/presentation/Stage.d.mts",
-      "default": "./dist/presentation/Stage.mjs"
-    },
-    "./Supervisor": {
-      "@effect-browser/source": "./src/supervisor/Supervisor.ts",
-      "types": "./dist/supervisor/Supervisor.d.mts",
-      "default": "./dist/supervisor/Supervisor.mjs"
-    },
-    "./Released": {
-      "@effect-browser/source": "./src/providers/Released.ts",
-      "types": "./dist/providers/Released.d.mts",
-      "default": "./dist/providers/Released.mjs"
-    },
-    "./Action": {
-      "@effect-browser/source": "./src/Action.ts",
-      "types": "./dist/Action.d.mts",
-      "default": "./dist/Action.mjs"
-    },
-    "./Clock": {
-      "@effect-browser/source": "./src/Clock.ts",
-      "types": "./dist/Clock.d.mts",
-      "default": "./dist/Clock.mjs"
-    },
-    "./Geometry": {
-      "@effect-browser/source": "./src/Geometry.ts",
-      "types": "./dist/Geometry.d.mts",
-      "default": "./dist/Geometry.mjs"
-    },
-    "./Layout": {
-      "@effect-browser/source": "./src/Layout.ts",
-      "types": "./dist/Layout.d.mts",
-      "default": "./dist/Layout.mjs"
-    },
-    "./Overlay": {
-      "@effect-browser/source": "./src/Overlay.ts",
-      "types": "./dist/Overlay.d.mts",
-      "default": "./dist/Overlay.mjs"
-    },
-    "./Pose": {
-      "@effect-browser/source": "./src/Pose.ts",
-      "types": "./dist/Pose.d.mts",
-      "default": "./dist/Pose.mjs"
-    },
-    "./PageTime": {
-      "@effect-browser/source": "./src/PageTime.ts",
-      "types": "./dist/PageTime.d.mts",
-      "default": "./dist/PageTime.mjs"
-    },
-    "./Style": {
-      "@effect-browser/source": "./src/Style.ts",
-      "types": "./dist/Style.d.mts",
-      "default": "./dist/Style.mjs"
-    },
-    "./Window": {
-      "@effect-browser/source": "./src/Window.ts",
-      "types": "./dist/Window.d.mts",
-      "default": "./dist/Window.mjs"
-    },
-    "./Film": {
-      "@effect-browser/source": "./src/film/Film.ts",
-      "types": "./dist/film/Film.d.mts",
-      "default": "./dist/film/Film.mjs"
-    },
-    "./Site": {
-      "@effect-browser/source": "./src/Site.ts",
-      "types": "./dist/Site.d.mts",
-      "default": "./dist/Site.mjs"
-    },
-    "./Stillness": {
-      "@effect-browser/source": "./src/stillness/Stillness.ts",
-      "types": "./dist/stillness/Stillness.d.mts",
-      "default": "./dist/stillness/Stillness.mjs"
-    },
-    "./Matching": {
-      "@effect-browser/source": "./src/Matching.ts",
-      "types": "./dist/Matching.d.mts",
-      "default": "./dist/Matching.mjs"
+    "./supervisor": {
+      "@effect-browser/source": "./src/supervisor/index.ts",
+      "types": "./dist/supervisor/index.d.mts",
+      "default": "./dist/supervisor/index.mjs"
     },
     "./testing": {
       "@effect-browser/source": "./src/testing/index.ts",
       "types": "./dist/testing/index.d.mts",
       "default": "./dist/testing/index.mjs"
     },
-    "./Url": {
-      "@effect-browser/source": "./src/Url.ts",
-      "types": "./dist/Url.d.mts",
-      "default": "./dist/Url.mjs"
+    "./*": {
+      "@effect-browser/source": "./src/*.ts",
+      "types": "./dist/*.d.mts",
+      "default": "./dist/*.mjs"
     },
-    "./ActionPort": {
-      "@effect-browser/source": "./src/ActionPort.ts",
-      "types": "./dist/ActionPort.d.mts",
-      "default": "./dist/ActionPort.mjs"
-    }
+    "./internal/*": null,
+    "./timeline/internal/*": null,
+    "./presentation/internal/*": null,
+    "./walk/internal/*": null,
+    "./supervisor/internal/*": null,
+    "./testing/internal/*": null,
+    "./index": null,
+    "./*/index": null
   },
   "publishConfig": {
     "access": "public"
@@ -205,6 +89,7 @@
     "test": "vp test --run"
   },
   "devDependencies": {
+    "@effect-browser/chromium": "workspace:*",
     "@effect/vitest": "4.1.2",
     "@types/node": "26.1.2",
     "effect": "4.1.2",

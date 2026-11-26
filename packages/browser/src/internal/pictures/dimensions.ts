@@ -2,8 +2,8 @@
 import { Clock, Duration, Effect, Queue } from "effect";
 
 import type { BrowserError } from "../../BrowserError.ts";
-import { monotonicMillis } from "../../Clock.ts";
 import type { Frame } from "../../Frame.ts";
+import { monotonicMillis } from "../clock.ts";
 
 export interface Size {
   readonly width: number;

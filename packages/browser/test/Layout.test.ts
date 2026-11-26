@@ -1,3 +1,4 @@
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect } from "effect";
 
@@ -5,7 +6,6 @@ import type { Action } from "../src/Action.ts";
 import { Browser } from "../src/Browser.ts";
 import * as Layout from "../src/Layout.ts";
 import type { Page } from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const blank = Effect.gen(function* () {

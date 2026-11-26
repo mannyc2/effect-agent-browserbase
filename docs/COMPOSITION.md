@@ -44,7 +44,7 @@ commit and transfers its prepared-page ownership together, then closes the old p
 time; `latency` records how late it was relative to the event. Journal this alongside the
 consumer's line identifier if the application needs a durable editorial history.
 
-`perform(prepared, plan, from, stop)` calls `Plan.take` one step at a time. A stop requested
+`perform(prepared, plan, from, stop)` calls `Walk.step` one step at a time. A stop requested
 during a step waits until that step completes, then returns its receipts and an unsent next
 step. A previously unknown stopping point remains unknown. A hard interruption has no return
 value: a consumer requiring crash recovery must durably record begun steps, as in the workflow
@@ -83,7 +83,7 @@ consumer to reconcile; the runner never retries it as a fresh numeric step.
 assertion about an actual lasting, operation-specific read-back. Absence and relative navigation
 cannot recover unknown input. A toast, generic success heading, arbitrary exact URL or another
 run's saved record is not sufficient. The library cannot
-prove that a site's text represents the intended business operation. All plans use version 3
+prove that a site's text represents the intended business operation. All walks use version 3
 with canonical typed Actions; prior string-action encodings do not decode.
 
 When a step is known unsent (or repeatable) and the consumer's `operator.needed(page)` confirms

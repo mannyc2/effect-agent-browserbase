@@ -4,8 +4,7 @@
  * input's checks and held time over it (`bridge.ts`); a site that owns its page calls it in its
  * own bundle (`Site.ts`). See `names.inpage.ts` for what a page-side part may use.
  */
-import type { match } from "../../Matching.ts";
-import type { addresses } from "../../Url.ts";
+import type { match } from "../matching.ts";
 import type { context } from "../reading/context.inpage.ts";
 import type { controls } from "../reading/controls.inpage.ts";
 import type { expectations } from "../reading/expect.inpage.ts";
@@ -22,6 +21,7 @@ import type { history } from "../timeline/history.inpage.ts";
 import type { marks } from "../timeline/marks.inpage.ts";
 import type { record } from "../timeline/record.inpage.ts";
 import type { sight } from "../timeline/sight.inpage.ts";
+import type { addresses } from "../url.ts";
 import type { overlay } from "./overlay.inpage.ts";
 import type { pose } from "./pose.inpage.ts";
 

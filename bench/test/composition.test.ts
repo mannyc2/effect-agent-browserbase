@@ -10,8 +10,8 @@ import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect";
 import * as Browser from "effect-browser/Browser";
 import { Subject } from "effect-browser/BrowserEvent";
-import * as Plan from "effect-browser/Plan";
-import * as Supervisor from "effect-browser/Supervisor";
+import { Supervisor } from "effect-browser/supervisor";
+import { Walk } from "effect-browser/walk";
 import { chromium, type Page as NativePage } from "playwright-core";
 
 import * as Watched from "../Watched.ts";
@@ -72,7 +72,7 @@ const fixture = Effect.fnUntraced(function* (needsOperator = false) {
       ),
   );
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  const walk = Plan.Plan.new([new Plan.Step({ action: { _tag: "Goto", url }, url })]);
+  const walk = Walk.Walk.new([new Walk.Step({ action: { _tag: "Goto", url }, url })]);
   const nativePages = new Map<string, Array<NativePage>>();
   let latestBrowser = "";
   const closed: Array<number> = [];
@@ -121,9 +121,9 @@ const fixture = Effect.fnUntraced(function* (needsOperator = false) {
 });
 
 const claim = (url: string, durable: boolean) =>
-  Plan.Plan.new([
-    new Plan.Step({ action: { _tag: "Goto", url }, url }),
-    new Plan.Step({
+  Walk.Walk.new([
+    new Walk.Step({ action: { _tag: "Goto", url }, url }),
+    new Walk.Step({
       action: { _tag: "Click", target: "e1" },
       url,
       subject: button("Submit claim"),
@@ -140,20 +140,20 @@ class StoreFailed extends Schema.TaggedError<StoreFailed>()("StoreFailed", {}) {
 // The port is external to the runner. Reopening reads a file, not the old runner's memory.
 // This fixture simulates process loss after dispatch, not a filesystem's power-loss durability.
 const journal = (path: string, failAfterSubmit = false): Workflow.Journal<StoreFailed> => {
-  const save = (stopped: Plan.Stopped) =>
+  const save = (stopped: Walk.Stopped) =>
     Effect.sync(() => writeFileSync(path, JSON.stringify(stopped)));
 
   return {
     read: () =>
       Effect.sync(() => JSON.parse(readFileSync(path, "utf8"))).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(Plan.Stopped)),
+        Effect.flatMap(Schema.decodeUnknownEffect(Walk.Stopped)),
         Effect.orDie,
       ),
-    begun: (_run, step) => save(new Plan.Stopped({ step, input: "unknown" })),
+    begun: (_run, step) => save(new Walk.Stopped({ step, input: "unknown" })),
     done: (_run, receipt) =>
       receipt.step === 1 && failAfterSubmit
         ? Effect.fail(new StoreFailed())
-        : save(new Plan.Stopped({ step: receipt.step + 1, input: "unsent" })),
+        : save(new Walk.Stopped({ step: receipt.step + 1, input: "unsent" })),
   };
 };
 
@@ -165,7 +165,7 @@ const journalFile = Effect.gen(function* () {
   );
   const path = join(directory, "run.json");
 
-  writeFileSync(path, JSON.stringify(new Plan.Stopped({ step: 0, input: "unsent" })));
+  writeFileSync(path, JSON.stringify(new Walk.Stopped({ step: 0, input: "unsent" })));
 
   return path;
 });
@@ -225,13 +225,13 @@ describe("consumer compositions", () => {
       );
       const stop = yield* Deferred.make<void>();
 
-      const plan = Plan.Plan.new([
-        new Plan.Step({
+      const plan = Walk.Walk.new([
+        new Walk.Step({
           action: { _tag: "Click", target: "e1" },
           url: world.url,
           subject: button("First"),
         }),
-        new Plan.Step({
+        new Walk.Step({
           action: { _tag: "Click", target: "e1" },
           url: world.url,
           subject: button("Second"),
@@ -260,7 +260,7 @@ describe("consumer compositions", () => {
       );
       assert.deepStrictEqual(
         Option.getOrThrow(outcome.stopped),
-        new Plan.Stopped({ step: 1, input: "unsent" }),
+        new Walk.Stopped({ step: 1, input: "unsent" }),
       );
       assert.strictEqual(
         yield* Effect.promise(() => world.native(first.browser.id).locator("output").textContent()),
@@ -313,7 +313,7 @@ describe("consumer compositions", () => {
 
         assert.deepStrictEqual(
           checkpoint,
-          new Plan.Stopped({ step: accepted ? 2 : 1, input: accepted ? "unsent" : "unknown" }),
+          new Walk.Stopped({ step: accepted ? 2 : 1, input: accepted ? "unsent" : "unknown" }),
         );
       }).pipe(Effect.scoped),
     );

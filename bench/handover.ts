@@ -1,7 +1,7 @@
 /** The opt-in H2 command. Only closed, aliased evidence reaches its private output directory. */
+import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
 import { Console, Effect, FileSystem, Layer, Path, Schema } from "effect";
-import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
-import * as ContextLease from "effect-browserbase/ContextLease";
 import { Command, Flag } from "effect/cli";
 import { Digest, SecureRandom } from "effect/crypto";
 import { FetchHttpClient } from "effect/http";

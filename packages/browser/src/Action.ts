@@ -1,8 +1,8 @@
 /** Typed browser actions, shared by execution, policy, recordings and replay. */
 import { Schema } from "effect";
 
-import { Point } from "./Geometry.ts";
-import * as Url from "./Url.ts";
+import { Point } from "./internal/geometry.ts";
+import * as Url from "./internal/url.ts";
 
 const Ref = Schema.String.check(Schema.isPattern(/^e\d+$/));
 const Target = Schema.Union([Ref, Point]);

@@ -1,6 +1,10 @@
 // The `run` command. Without a model it runs the free scripted solutions; model calls and hosted
 // browsers cost money, so each needs its opt-in. Each trial owns its browser, random seed and
 // accounting; only the admission budget is shared.
+import * as Browserbase from "@effect-browser/browserbase/Browserbase";
+import * as BrowserbaseClient from "@effect-browser/browserbase/BrowserbaseClient";
+import * as ContextLease from "@effect-browser/browserbase/ContextLease";
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import {
   Cause,
@@ -19,10 +23,6 @@ import {
   Schema,
   Tracer,
 } from "effect";
-import * as Chromium from "effect-browser/Chromium";
-import * as Browserbase from "effect-browserbase/Browserbase";
-import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
-import * as ContextLease from "effect-browserbase/ContextLease";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 

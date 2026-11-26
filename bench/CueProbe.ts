@@ -2,7 +2,7 @@
 import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { CaptureStats } from "effect-browser/Frame";
-import * as Stage from "effect-browser/Stage";
+import { Stage } from "effect-browser/presentation";
 
 import { refuse } from "./Budget.ts";
 import * as Fixtures from "./FixtureRoutes.ts";

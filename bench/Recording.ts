@@ -4,7 +4,8 @@
 import { Schema } from "effect";
 import { HttpCassette } from "effect-agent-browser/testing";
 import { RecordedEvent } from "effect-browser/BrowserEvent";
-import * as Moment from "effect-browser/Moment";
+// By module path, not the timeline barrel, whose Stillness loads Node-only code.
+import * as Moment from "effect-browser/timeline/Moment";
 
 import type { Step } from "./Arms.ts";
 

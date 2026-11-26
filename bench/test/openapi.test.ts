@@ -1,4 +1,4 @@
-// What `contract --spec` takes from Browserbase's OpenAPI document for effect-browserbase's shape
+// What `contract --spec` takes from Browserbase's OpenAPI document for @effect-browser/browserbase's shape
 // test, and how it compares two copies. Free, with no network.
 import { assert, describe, it } from "@effect/vitest";
 

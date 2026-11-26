@@ -1,14 +1,14 @@
 // Element poses on local Chromium: where a posed element is drawn, read back through `layout`, and
 // what is put back, refused and stepped on held time.
+import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Stream } from "effect";
 import { PNG } from "playwright-core/lib/utilsBundle";
 
 import { Browser } from "../src/Browser.ts";
-import * as Film from "../src/film/Film.ts";
 import * as Layout from "../src/Layout.ts";
 import type { Page } from "../src/Page.ts";
-import * as Chromium from "../src/providers/Chromium.ts";
+import * as Film from "../src/presentation/Film.ts";
 
 // A button whose every property eases over a second, as many do, and a box the page centres on
 // its left with a transform of its own.

@@ -22,6 +22,7 @@
   "devDependencies": {
     "@alchemy.run/cloudflare": "2.0.0-beta.85",
     "@alchemy.run/frontend-frameworks": "2.0.0-beta.85",
+    "@effect-browser/chromium": "workspace:*",
     "@effect/ai-openrouter": "4.1.2",
     "@effect/platform-node": "4.1.2",
     "@effect/vitest": "4.1.2",

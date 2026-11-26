@@ -1,9 +1,9 @@
 // H1/H3 cannot reach provider configuration without exact opt-in, and each admits one attempt.
+import { BrowserbaseClient } from "@effect-browser/browserbase/BrowserbaseClient";
+import { TestBrowserbase } from "@effect-browser/browserbase/testing";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { ConfigProvider, Effect } from "effect";
-import { BrowserbaseClient } from "effect-browserbase/BrowserbaseClient";
-import { TestBrowserbase } from "effect-browserbase/testing";
 import { Command } from "effect/cli";
 
 import * as Cue from "../cue.ts";

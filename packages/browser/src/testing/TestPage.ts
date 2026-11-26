@@ -1,8 +1,8 @@
 /** Seed a deterministic page without executing page code or inferring browser effects. */
-import type { Seed } from "./model.ts";
-import { makeIn } from "./page.ts";
+import type { Seed } from "./internal/model.ts";
+import { makeIn } from "./internal/page.ts";
 
-export type { Seed, Element, ChangeTrack } from "./model.ts";
+export type { Seed, Element, ChangeTrack } from "./internal/model.ts";
 
 export const make = (
   seed: Seed = {},

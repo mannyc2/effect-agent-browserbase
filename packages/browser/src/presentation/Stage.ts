@@ -32,10 +32,10 @@ import {
   Timeout,
   undispatched,
 } from "../BrowserError.ts";
-import { monotonicMillis } from "../Clock.ts";
 import type { CaptureStats, Frame, ScreencastOptions } from "../Frame.ts";
+import { monotonicMillis } from "../internal/clock.ts";
 import type { Capture, Page } from "../Page.ts";
-import * as Lifecycle from "./feed.ts";
+import * as Lifecycle from "./internal/feed.ts";
 
 export interface Options extends ScreencastOptions {
   /** Bound for each first-frame wait. Defaults to 5 seconds. */
@@ -43,7 +43,9 @@ export interface Options extends ScreencastOptions {
 }
 
 /** A switch that took effect, on the clock shared by browser events and frames. */
-export class Presented extends Schema.Class<Presented>("effect-browser/Presented")({
+export class Presented extends Schema.Class<Presented>(
+  "effect-browser/presentation/Stage/Presented",
+)({
   page: Schema.String,
   at: Schema.Finite,
   latency: Schema.Finite,
