@@ -18,7 +18,7 @@
 import { RunContextPreparation } from "@yielded/agent/run-options";
 import { Effect, Layer, Schema } from "effect";
 import { BrowserTools, type PageControl, Tabs } from "effect-browser/ai";
-import { Zoom } from "effect-browser/Page";
+import { Zoom } from "effect-browser/Frame";
 import { Snapshot } from "effect-browser/Snapshot";
 import type { Moment } from "effect-browser/timeline";
 import { Prompt } from "effect/ai";

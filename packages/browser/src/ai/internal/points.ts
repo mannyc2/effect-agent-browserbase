@@ -4,7 +4,8 @@
  */
 import { Option } from "effect";
 
-import * as Page from "../../Page.ts";
+import { Region, type Zoom } from "../../Frame.ts";
+import type * as Page from "../../Page.ts";
 
 // A point is the more specific of the two, such as a spot on a canvas a ref names.
 export const target = (place: {
@@ -23,11 +24,11 @@ export const viewportTarget = (to: Page.Target, scale: number): Page.Target =>
   typeof to === "string" ? to : { x: to.x / scale, y: to.y / scale };
 
 // A region read from such a picture, in the whole CSS pixels that hold it within the viewport.
-export const viewportRegion = (region: Page.Region, scale: number) => {
+export const viewportRegion = (region: Region, scale: number) => {
   const x = Math.floor(region.x / scale);
   const y = Math.floor(region.y / scale);
 
-  return new Page.Region({
+  return new Region({
     x,
     y,
     width: Math.max(1, Math.floor((region.x + region.width) / scale) - x),
@@ -42,14 +43,14 @@ export const around = (
   point: Page.Point,
   viewport: { readonly width: number; readonly height: number },
 ) =>
-  new Page.Region({
+  new Region({
     x: Math.round(Math.min(Math.max(point.x - 100, 0), Math.max(viewport.width - 200, 0))),
     y: Math.round(Math.min(Math.max(point.y - 60, 0), Math.max(viewport.height - 120, 0))),
     width: 200,
     height: 120,
   });
 
-export const holds = ({ region }: Page.Zoom, point: Page.Point) =>
+export const holds = ({ region }: Zoom, point: Page.Point) =>
   point.x >= region.x &&
   point.y >= region.y &&
   point.x <= region.x + region.width &&

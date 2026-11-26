@@ -13,6 +13,7 @@ import {
 } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { RecordedEvent } from "effect-browser/BrowserEvent";
+import * as Frame from "effect-browser/Frame";
 import { type HttpCassette } from "effect-browser/testing";
 
 import { BenchError } from "./Budget.ts";
@@ -171,7 +172,7 @@ export const make = Effect.fnUntraced(function* (
             ),
           );
 
-          yield* page.screencast().pipe(
+          yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
             Stream.runForEach((frame) => {
               const file = `frames/${index}-${String(++count).padStart(6, "0")}.jpg`;
 

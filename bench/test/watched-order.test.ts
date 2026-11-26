@@ -2,8 +2,8 @@
 // Scripted public capture streams hold cleanup precisely; Chromium cannot reliably force this race.
 import { assert, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Exit, Fiber, Option, Scope, Stream } from "effect";
-import { Frame, Screenshot } from "effect-browser/Frame";
-import type { Page } from "effect-browser/Page";
+import { refuse } from "effect-browser/BrowserError";
+import * as Frame from "effect-browser/Frame";
 import { Supervisor } from "effect-browser/supervisor";
 import { TestBrowser, TestPage } from "effect-browser/testing";
 
@@ -38,7 +38,7 @@ it.live(
           Effect.sync(() => void closed.push(id)),
         );
 
-        const frame = new Frame({
+        const frame = new Frame.Frame({
           page: id,
           session: "fixture",
           connection: "fixture-connection",
@@ -48,7 +48,7 @@ it.live(
           width: 1,
           height: 1,
           receivedAt: at,
-          timing: new Screenshot({ hostTime: at, uncertaintyMillis: 0 }),
+          timing: new Frame.Screenshot({ hostTime: at, uncertaintyMillis: 0 }),
         });
 
         const simulated = yield* TestPage.make(
@@ -57,8 +57,8 @@ it.live(
         ).pipe(Effect.provideService(Scope.Scope, hold));
 
         // Its held stream isolates the FIFO handover race; all other contracts use the public kit.
-        const page: Page = {
-          ...simulated.page,
+        const page = TestPage.withPictures(simulated.page, (own) => ({
+          ...own,
           capture: () =>
             Effect.succeed({
               stream: Stream.concat(Stream.succeed(frame), Stream.never).pipe(
@@ -68,9 +68,9 @@ it.live(
               isCurrent: () => true,
               confirm: () => Effect.succeed(true),
               sync: Effect.void,
-              stats: (options) => simulated.page.captureStats(options),
+              stats: () => refuse("captureStats", "a scripted capture keeps no counts"),
             }),
-        };
+        }));
 
         return {
           id,

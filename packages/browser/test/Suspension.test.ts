@@ -5,6 +5,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 
 import { consequence } from "../src/BrowserError.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as Stage from "../src/presentation/Stage.ts";
 import * as Snapshot from "../src/Snapshot.ts";
@@ -164,7 +165,7 @@ describe("Scoped browser input authority", () => {
         }
         assert.strictEqual(judged, before, "held input must not invoke the guard");
         assert.include((yield* Snapshot.read(page)).text, "Input");
-        assert.isAbove((yield* other.screenshot()).data.length, 0);
+        assert.isAbove((yield* Frame.read(other, { after: "input" })).data.length, 0);
 
         const recorded = yield* browser.events({ after: stopped.since }).pipe(
           Stream.filter(({ event }) => event._tag === "Action"),

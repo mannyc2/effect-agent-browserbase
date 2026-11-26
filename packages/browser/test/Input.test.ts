@@ -2,6 +2,7 @@ import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
 import { Duration, Effect, Fiber, Random, Schedule, Stream } from "effect";
 
+import * as Frame from "../src/Frame.ts";
 import type * as Page from "../src/Page.ts";
 import { keys, setup, value, type Dispatch, type RecordedWindow } from "./support/InputRelay.ts";
 import * as TestCdp from "./support/TestCdp.ts";
@@ -224,9 +225,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           // alongside, which finds the clock moved.
           relay.age(10_000);
 
-          const frames = yield* relay.page
-            .screencast()
-            .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+          const frames = yield* Stream.unwrap(
+            Effect.map(Frame.capture(relay.page), ({ stream }) => stream),
+          ).pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
 
           const frame = frames[0];
 

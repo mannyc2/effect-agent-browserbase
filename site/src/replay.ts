@@ -67,8 +67,10 @@ export const kindOfTool = (tool: string): ActivityKind =>
 export const activityOf = (spans: ReadonlyArray<RecordedSpan>): ReadonlyArray<Activity> => {
   const byId = new Map(spans.map((span) => [span.id, span]));
 
+  // Whether the agent looked itself: a moment's own picture is part of the moment's look.
   const agents = (span: RecordedSpan) => {
     for (let parent = byId.get(span.parent ?? ""); parent !== undefined;) {
+      if (parent.name === "Moment.capture") return false;
       if (parent.name.startsWith("invoke_agent")) return true;
       parent = byId.get(parent.parent ?? "");
     }
@@ -83,7 +85,7 @@ export const activityOf = (spans: ReadonlyArray<RecordedSpan>): ReadonlyArray<Ac
       const kind =
         span.name === "AgentRuntime.model"
           ? "think"
-          : (span.name === "Page.screenshot" || span.name === "Moment.capture") && agents(span)
+          : (span.name === "Frame.read" || span.name === "Moment.capture") && agents(span)
             ? "look"
             : tool === undefined
               ? undefined

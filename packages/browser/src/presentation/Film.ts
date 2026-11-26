@@ -16,12 +16,12 @@ import { Clock, Duration, Effect, Schema, Stream } from "effect";
 
 import { Action } from "../Action.ts";
 import { type BrowserError, refuse } from "../BrowserError.ts";
-import { Image } from "../Frame.ts";
+import * as Frame from "../Frame.ts";
 import { monotonicMillis } from "../internal/clock.ts";
 import { Point } from "../internal/geometry.ts";
 import * as Layout from "../Layout.ts";
 import type { Content, Overlay } from "../Overlay.ts";
-import { type Page, ResolvedTarget, type ScreenshotOptions } from "../Page.ts";
+import { type Page, ResolvedTarget } from "../Page.ts";
 import type { Held, Step } from "../PageTime.ts";
 
 /**
@@ -63,9 +63,9 @@ export interface Options<E = never> {
   readonly overlay?: Overlay | undefined;
   /**
    * How each frame is taken. For frames with more pixels than the layout, paint the page first
-   * (`Page.paint`) and take them at `scale: "device"`.
+   * (`Frame.paint`) and take them at `scale: "device"`.
    */
-  readonly image?: Pick<ScreenshotOptions, "format" | "quality" | "scale"> | undefined;
+  readonly image?: Pick<Frame.FrameOptions, "format" | "quality" | "scale"> | undefined;
   /** How many times a frame's screenshot is taken again after it times out. Defaults to 2. */
   readonly retries?: number | undefined;
 }
@@ -110,7 +110,7 @@ export class Passage extends Schema.Class<Passage>("effect-browser/presentation/
 export class Shot extends Schema.Class<Shot>("effect-browser/presentation/Film/Shot")({
   index: Count,
   t: Millis,
-  image: Image,
+  image: Frame.Image,
   /** The page's document and address after the picture, as `Page.state` gives them. */
   document: Count,
   url: Schema.String,
@@ -245,14 +245,14 @@ const picture = (page: Page, image: Options["image"], retries: number) =>
   Effect.gen(function* () {
     let timedOut = 0;
 
-    const taken = yield* page.screenshot({ ...image, maxAge: 0 }).pipe(
+    const taken = yield* Frame.read(page, { ...image, maxAge: 0 }).pipe(
       Effect.tapError((error) =>
         Effect.sync(() => (timedOut += error.reason._tag === "Timeout" ? 1 : 0)),
       ),
       Effect.retry({ times: retries, while: (error) => error.reason._tag === "Timeout" }),
     );
 
-    return { image: taken, retries: timedOut };
+    return { image: taken.image, retries: timedOut };
   });
 
 const keyOf = (content: Content | undefined) =>

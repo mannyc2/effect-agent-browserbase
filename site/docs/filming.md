@@ -26,7 +26,7 @@ A browser opened with `pageTime` installs a clock in each page before its own sc
 
 `Film` is experimental, so Effect's language service warns (`experimentalApiUsage`) at each use of it. A project whose build denies warnings allows it among the `@effect/language-service` plugin's options in its tsconfig: `"allowedExperimentalApis": ["effect-browser/presentation/Film"]`.
 
-The frames are pictures, and encoding them is the caller's. `page.paint` sets an attached browser's device pixels per CSS pixel for sharper frames, and hides scrollbars.
+The frames are pictures, and encoding them is the caller's. `Frame.paint` sets an attached browser's device pixels per CSS pixel for sharper frames, and hides scrollbars.
 
 ## Moving the page's own elements
 

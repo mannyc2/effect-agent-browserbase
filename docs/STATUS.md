@@ -40,15 +40,17 @@ each of its modules also has a path of its own, such as `effect-browser/Page`:
   `Action` through `perform`, the caller's own code in the page through `read` and `act`, and
   `ready`, which waits for the page's own evidence that it is ready to be shown. `state` says what
   the library already knows of the page, at no call. `Page` gains a member only for identity,
-  order, time or input; reading and filming are functions in the modules below, each taking the
-  page first.
+  order, time or input; reading, pictures and filming are functions in the modules below, each
+  taking the page first.
 - `Snapshot`: the outline a model reads, whose controls carry refs the actions take
   (`Snapshot.read`); the elements a query of role, name, text and context finds, each with its
   subject (`Snapshot.find`); and a wait, in the page, until a query is met (`Snapshot.until`).
 - `Text`: the text the viewport shows, or one element whole (`Text.read`), with field values masked
   unless asked for, and secret fields' always.
-- `Frame`: pictures with their timing. Screencast frames, screenshots and crops, each placed on the
-  host clock with an explicit uncertainty, and a page's capture counters.
+- `Frame`: pictures with their timing, each placed on the host clock with an explicit uncertainty:
+  the viewport now (`Frame.read`), a crop (`Frame.zoom`), a scoped capture with its stream of
+  screencast frames and its counters (`Frame.capture`), the frames the page keeps
+  (`Frame.recent`), and painting at another device scale (`Frame.paint`).
 - `Change` and `Window`: what visibly changed on a page over a window, element by element, recorded
   in the page from the first read on (`Change.read`); and a page's events, changes and frames over
   one window of its browser's clock (`Window.read`).

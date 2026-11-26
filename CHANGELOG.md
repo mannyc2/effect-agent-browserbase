@@ -11,8 +11,8 @@ its entry ends with how. Entries before 0.3 are short summaries drawn from the r
 
 **Breaking.** The packages move into the `@effect-browser` scope, Chromium becomes a package of its
 own, the core's features become subpaths, and an agent's browser tools move into the core as
-`effect-browser/ai`, for any `effect/ai` loop (#324, #327). The Page's reading and filming become
-functions in their types' modules (#326). Errors take identifiers and guards (#329), and
+`effect-browser/ai`, for any `effect/ai` loop (#324, #327). The Page's reading, pictures and
+filming become functions in their types' modules (#326, #333). Errors take identifiers and guards (#329), and
 constructors and layers take Effect's names and shapes (#325). There are no aliases or shims: each
 name this entry gives as removed or renamed is gone, and the entry says what replaced it.
 
@@ -82,10 +82,11 @@ path, such as `effect-browser/timeline/Moment`.
 
 ### The Page
 
-`Page` keeps its members for identity, order, time and input. Reading and filming are functions in
-the modules of the types they return, each taking the page first; the seven with other arguments
-are `dual`, so `Effect.flatMap(browser.firstPage, Snapshot.read({ full: true }))` works. A new
-capability follows the same rule: `Page` gains a member only for identity, order, time or input.
+`Page` keeps 24 members, for identity, order, time and input. Reading, pictures and filming are
+functions in the modules of the types they return, each taking the page first; those with other
+arguments are `dual`, so `Effect.flatMap(browser.firstPage, Snapshot.read({ full: true }))` works.
+A new capability follows the same rule: `Page` gains a member only for identity, order, time or
+input. The duplicates among the pictures are gone.
 
 | `0.3.0-beta.24`                   | This release                                              |
 | --------------------------------- | --------------------------------------------------------- |
@@ -99,16 +100,36 @@ capability follows the same rule: `Page` gains a member only for identity, order
 | `page.overlay`                    | `Overlay.make(page)`                                      |
 | `page.poses`                      | `Pose.make(page)`                                         |
 | `page.hold`                       | `PageTime.hold(page)`                                     |
+| `page.frame(options)`             | `Frame.read(page, options)`                               |
+| `page.screenshot(options)`        | `Frame.read(page, { ...options, after: "input" })`        |
+| `page.zoom(region, options)`      | `Frame.zoom(page, region, options)`                       |
+| `page.capture(options)`           | `Frame.capture(page, options)`                            |
+| `page.screencast(options)`        | The `stream` of `Frame.capture(page, options)`            |
+| `page.captureStats(options)`      | A capture's `stats(options)`                              |
+| `page.recentFrames`               | `Frame.recent(page)`                                      |
+| `page.paint(options)`             | `Frame.paint(page, options)`                              |
 | `state.overlay`                   | `Overlay.drawn(page)`, an `Option`                        |
 | `state.text`                      | Removed: `Text.read` reads the text                       |
+| `state.frame`                     | Removed: the newest of `Frame.recent(page)`               |
 
 - Their types move with them: `Page.FindQuery`, `ElementState`, `Found`, `UntilWant` and
   `UntilResult` to `Snapshot`; `Page.Text` and `TextOptions` to `Text`; `Page.ChangesOptions` to
-  `Change`; and `Page.WindowOptions` to `Window`. `Found` is identified as
-  `effect-browser/Snapshot/Found` and `Text` as `effect-browser/Text`.
+  `Change`; `Page.WindowOptions` to `Window`; and `Page.Region`, `Zoom`, `FrameOptions`, `Paint`
+  and `Capture` to `Frame`. `Found` is identified as `effect-browser/Snapshot/Found`, `Text` as
+  `effect-browser/Text`, and `Region` and `Zoom` as `effect-browser/Frame/Region` and
+  `effect-browser/Frame/Zoom`.
+- `Page.ScreenshotOptions` is gone: `Frame.FrameOptions` takes its `quality`, `format` and `scale`,
+  and a PNG or device-pixel read never reuses a screencast frame, as before. A clipped screenshot
+  is `Frame.zoom`. A capture's `stats` still counts over the page's life and answers after the
+  capture's scope has closed.
+- A picture that fails reports the operation `"frame"`, the agent's picture before each turn
+  included, which reported `"screenshot"`.
+- `effect-browser/testing` adds `TestPage.withPictures` and `TestPage.Pictures`, which replace a
+  seeded page's picture functions by `Frame`'s names.
 - Their spans follow: `Page.snapshot` is `Snapshot.read`, `Page.find` `Snapshot.find`,
   `Page.expect` `Snapshot.until`, `Page.text` `Text.read`, `Page.layout` `Layout.measure`,
-  `Page.changes` `Change.read` and `Page.window` `Window.read`.
+  `Page.changes` `Change.read`, `Page.window` `Window.read`, `Page.frame` `Frame.read` and
+  `Page.zoom` `Frame.zoom`; `Page.screenshot` is gone.
 
 ### Constructors and layers
 
@@ -153,7 +174,7 @@ in its tsconfig, among the `@effect/language-service` plugin's options:
 
 - Public Schema classes, errors, services and references are identified by their path,
   `<package>/<folder>/<Module>/<Name>`, and a module's main class by `<package>/<folder>/<Module>`:
-  `effect-browser/Page/Region`, which was `effect-browser/Region`, `effect-browser/BrowserError`,
+  `effect-browser/Frame/Region`, which was `effect-browser/Region`, `effect-browser/BrowserError`,
   `effect-browser/BrowserError/Timeout`, `effect-browser/walk/Walk/ReplayError`,
   `@effect-browser/browserbase/BrowserbaseError/NotFound`. Identifiers are not encoded, so encoded
   values and recordings decode as before.

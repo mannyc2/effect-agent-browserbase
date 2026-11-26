@@ -1,9 +1,9 @@
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Schedule, Stream, Struct } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Schedule, Scope, Stream, Struct } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
-import type { Frame, Image } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
 import * as Moment from "../src/timeline/Moment.ts";
 import * as Stillness from "../src/timeline/Stillness.ts";
@@ -151,6 +151,15 @@ const setup = Effect.fnUntraced(function* (controlled = false) {
 const count = (calls: ReadonlyArray<Call>, method: string) =>
   calls.filter((call) => call.method === method).length;
 
+// A capture lease that `release` gives up, as the end of a stream over it would; its counts
+// outlive it.
+const lease = Effect.fnUntraced(function* (page: Page) {
+  const scope = yield* Scope.fork(yield* Effect.scope);
+  const capture = yield* Frame.capture(page).pipe(Scope.provide(scope));
+
+  return { capture, release: Scope.close(scope, Exit.void) };
+});
+
 const eventually = (check: Effect.Effect<boolean>) =>
   check.pipe(
     Effect.repeat({ schedule: Schedule.spaced("5 millis"), until: (holds) => holds }),
@@ -203,7 +212,11 @@ const delayedCapture = Effect.fnUntraced(function* () {
   addEventListener("mousedown", () => { document.body.style.background = "rgb(255,0,0)"; });
 </script></body>`),
   );
-  yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+  yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+    Stream.runDrain,
+    Effect.ignore,
+    Effect.forkScoped,
+  );
   // Let frames painted well after navigation arrive, so only the input rule can refuse them.
   yield* Effect.sleep("600 millis");
 
@@ -219,8 +232,8 @@ const delayedCapture = Effect.fnUntraced(function* () {
 
   // A reused frame is one of the retained screencast frames, returned by reference; it is stale if
   // its paint could precede the given time.
-  const reusedBefore = (image: Image, time: number) =>
-    page.recentFrames.pipe(
+  const reusedBefore = (image: Pick<Frame.Image, "data">, time: number) =>
+    Frame.recent(page).pipe(
       Effect.map((frames) =>
         frames.some(
           (frame) =>
@@ -233,7 +246,7 @@ const delayedCapture = Effect.fnUntraced(function* () {
 });
 
 // The centre pixel of an image, decoded by the page itself.
-const centreOf = (page: Page, image: Image) =>
+const centreOf = (page: Page, image: Pick<Frame.Image, "data">) =>
   Effect.promise(() =>
     TestCdp.nativePage(page).evaluate(async (bytes) => {
       const bitmap = await createImageBitmap(
@@ -330,13 +343,17 @@ const withheldFinalPaint = Effect.fnUntraced(function* () {
   window.finish = () => { running = false; document.body.style.background = "rgb(255,0,0)"; };
 </script></body>`),
   );
-  yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+  yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+    Stream.runDrain,
+    Effect.ignore,
+    Effect.forkScoped,
+  );
   yield* Effect.sleep("400 millis");
 
-  const centre = (image: Image) => centreOf(page, image);
+  const centre = (image: Pick<Frame.Image, "data">) => centreOf(page, image);
 
-  const retained = (image: Image) =>
-    page.recentFrames.pipe(
+  const retained = (image: Pick<Frame.Image, "data">) =>
+    Frame.recent(page).pipe(
       Effect.map((frames) => frames.some((frame) => frame.data === image.data)),
     );
 
@@ -411,10 +428,13 @@ const sameAspectCrops = Effect.fnUntraced(function* (
 </script></body>`),
   );
 
-  const frames: Array<Frame> = [];
+  const frames: Array<Frame.Frame> = [];
 
-  const reader = yield* page.screencast().pipe(
+  const { capture, release } = yield* lease(page);
+
+  const reader = yield* capture.stream.pipe(
     Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+    Effect.ensuring(release),
     Effect.forkChild,
   );
 
@@ -426,7 +446,7 @@ const sameAspectCrops = Effect.fnUntraced(function* (
     { x: 20, y: 10, width: 200, height: 150 },
   ])
     for (let index = 0; index < 3; index++) {
-      yield* page.zoom(region);
+      yield* Frame.zoom(page, region);
       zoomed.push(yield* browser.now);
       // The page's own frames arrive between crops, past each crop's window.
       yield* Effect.sleep("200 millis");
@@ -464,11 +484,15 @@ const sameAspectCrops = Effect.fnUntraced(function* (
       : [];
   });
 
-  return { frames, escaped, stats: yield* page.captureStats() };
+  return { frames, escaped, stats: yield* capture.stats() };
 });
 
 const firstFrame = (page: Page) =>
-  page.screencast().pipe(Stream.take(1), Stream.runCollect, Effect.timeout("15 seconds"));
+  Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+    Stream.take(1),
+    Stream.runCollect,
+    Effect.timeout("15 seconds"),
+  );
 
 layer(TestCdp.provideLayer(Chromium.layer()), {
   excludeTestServices: true,
@@ -479,9 +503,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       Effect.gen(function* () {
         const fixture = yield* setup(true);
 
-        const reader = yield* fixture.page
-          .screencast()
-          .pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
+        const reader = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.runDrain, Effect.flip, Effect.forkScoped);
 
         const template = yield* fixture.template;
 
@@ -626,7 +650,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         yield* pressed;
         // While the action may still change the page, no cached paint is current.
-        const image = yield* page.screenshot({ maxAge: "10 seconds" });
+        const image = yield* Frame.read(page, { maxAge: "10 seconds", after: "input" });
 
         assert.isFalse(yield* reusedBefore(image, Infinity));
         yield* Fiber.join(clicking);
@@ -646,7 +670,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const input = yield* pressed;
 
         yield* Fiber.interrupt(clicking);
-        const image = yield* page.screenshot({ maxAge: "10 seconds" });
+        const image = yield* Frame.read(page, { maxAge: "10 seconds", after: "input" });
 
         assert.isFalse(yield* reusedBefore(image, input));
 
@@ -669,7 +693,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         // While the page animates, a frame painted moments ago is current.
         yield* Effect.gen(function* () {
-          const { frame } = yield* page.state;
+          const frame = (yield* Frame.recent(page)).at(-1);
           const at = yield* browser.now;
 
           return frame !== undefined && at - frame.hostTime < 50;
@@ -677,7 +701,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           Effect.repeat({ schedule: Schedule.spaced("5 millis"), until: (fresh) => fresh }),
           Effect.timeout("5 seconds"),
         );
-        assert.isTrue(yield* retained(yield* page.screenshot()));
+        assert.isTrue(yield* retained(yield* Frame.read(page, { after: "input" })));
 
         // The final paint never reaches the host; the newest frame still shows the animation.
         withhold();
@@ -687,7 +711,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           ),
         );
         yield* Effect.sleep("400 millis");
-        const image = yield* page.screenshot();
+        const image = yield* Frame.read(page, { after: "input" });
         const pixel = yield* centre(image);
 
         assert.isFalse(yield* retained(image));
@@ -737,7 +761,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         );
         // Waiting for the screen to settle runs and stops a capture; its frames stay retained.
         yield* Stillness.wait(page, { quietMillis: 300 });
-        const retained = yield* page.recentFrames;
+        const retained = yield* Frame.recent(page);
 
         assert.isAbove(retained.length, 1);
         yield* page.click({ x: 50, y: 30 });
@@ -835,7 +859,14 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       Effect.gen(function* () {
         const { browser, page, calls } = yield* setup();
         const began = yield* browser.now;
-        const frames = yield* page.screencast().pipe(Stream.take(1), Stream.runCollect);
+        const { capture, release } = yield* lease(page);
+
+        const frames = yield* capture.stream.pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.ensuring(release),
+        );
+
         const finished = yield* browser.now;
         const frame = frames[0];
 
@@ -849,7 +880,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         assert.isAbove(frame.hostTime, began - 1000);
         assert.deepStrictEqual([frame.width, frame.height], [800, 600]);
         assert.deepStrictEqual([frame.data[0], frame.data[1]], [0xff, 0xd8]);
-        const stats = yield* page.captureStats();
+        const stats = yield* capture.stats();
 
         assert.strictEqual(
           stats.received,
@@ -881,10 +912,12 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 </script></body>`),
         );
 
-        const frames: Array<Frame> = [];
+        const frames: Array<Frame.Frame> = [];
+        const { capture, release } = yield* lease(page);
 
-        const reader = yield* page.screencast().pipe(
+        const reader = yield* capture.stream.pipe(
           Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+          Effect.ensuring(release),
           Effect.forkChild,
         );
 
@@ -898,9 +931,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* seen(800, 600);
 
         // A crop is a clipped screenshot, which Chromium also draws into the running screencast.
-        const crop = page
-          .zoom({ x: 10, y: 20, width: 100, height: 100 })
-          .pipe(Effect.andThen(Effect.sleep("100 millis")));
+        const crop = Frame.zoom(page, { x: 10, y: 20, width: 100, height: 100 }).pipe(
+          Effect.andThen(Effect.sleep("100 millis")),
+        );
 
         for (let index = 0; index < 3; index++) yield* crop;
         yield* Effect.promise(() =>
@@ -916,7 +949,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         assert.deepStrictEqual([...new Set(sizes.slice(0, resized))], ["800x600"]);
         assert.deepStrictEqual([...new Set(sizes.slice(resized))], ["640x480"]);
-        const stats = yield* page.captureStats();
+        const stats = yield* capture.stats();
 
         // A paused native capture need not produce a frame to discard. Counts describe callbacks.
         assert.strictEqual(
@@ -972,10 +1005,12 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const fixture = yield* setup(true);
-        const frames: Array<Frame> = [];
+        const frames: Array<Frame.Frame> = [];
+        const { capture, release } = yield* lease(fixture.page);
 
-        const reader = yield* fixture.page.screencast().pipe(
+        const reader = yield* capture.stream.pipe(
           Stream.runForEach((frame) => Effect.sync(() => frames.push(frame))),
+          Effect.ensuring(release),
           Effect.forkChild,
         );
 
@@ -1004,7 +1039,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* Effect.sync(() => fixture.inject(base + 50, quarter));
         yield* delivered(base + 60);
         yield* Fiber.interrupt(reader);
-        const stats = yield* fixture.page.captureStats();
+        const stats = yield* capture.stats();
 
         assert.deepStrictEqual(
           frames.map((frame) => frame.timestamp),
@@ -1028,9 +1063,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       Effect.gen(function* () {
         const fixture = yield* setup(true);
 
-        const collect = yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(4), Stream.runCollect, Effect.forkChild);
+        const collect = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.take(4), Stream.runCollect, Effect.forkChild);
 
         const template = yield* fixture.template;
         const base = (template.metadata.timestamp ?? 0) * 1000 - 2000;
@@ -1041,7 +1076,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         // The fixture keeps 300 ms, so only the first paint is too old once the last arrives.
         assert.deepStrictEqual(
-          (yield* fixture.page.recentFrames).map((frame) => frame.timestamp),
+          (yield* Frame.recent(fixture.page)).map((frame) => frame.timestamp),
           [base + 150, base + 250, base + 400],
         );
       }),
@@ -1052,11 +1087,15 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const fixture = yield* setup(true);
-        const before = yield* fixture.page.captureStats();
+        const { capture, release } = yield* lease(fixture.page);
+        const before = yield* capture.stats();
 
-        const collect = yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(3), Stream.runCollect, Effect.forkChild);
+        const collect = yield* capture.stream.pipe(
+          Stream.take(3),
+          Stream.runCollect,
+          Effect.ensuring(release),
+          Effect.forkChild,
+        );
 
         const template = yield* fixture.template;
         const base = (template.metadata.timestamp ?? 0) * 1000 - 1000;
@@ -1067,7 +1106,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* Effect.sync(() => fixture.inject(undefined));
         yield* Effect.sync(() => fixture.inject(base + 100));
         const frames = yield* Fiber.join(collect);
-        const stats = yield* fixture.page.captureStats();
+        const stats = yield* capture.stats();
 
         assert.deepStrictEqual(
           frames.map((frame) => frame.timestamp),
@@ -1086,14 +1125,14 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         });
         assert.strictEqual(before.received, 0);
         assert.deepStrictEqual(
-          (yield* fixture.page.recentFrames).map((frame) => frame.timestamp),
+          (yield* Frame.recent(fixture.page)).map((frame) => frame.timestamp),
           frames.map((frame) => frame.timestamp),
         );
         assert.closeTo(frames[2]!.hostTime - frames[0]!.hostTime, 100, 0.001);
         assert.strictEqual(count(fixture.calls, "Page.screencastFrameAck"), 7);
         yield* Effect.sync(() => fixture.inject(base + 200));
         assert.deepStrictEqual(
-          Struct.omit(yield* fixture.page.captureStats(), ["ackBacklog"]),
+          Struct.omit(yield* capture.stats(), ["ackBacklog"]),
           Struct.omit(stats, ["ackBacklog"]),
         );
       }),
@@ -1104,10 +1143,14 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const fixture = yield* setup(true);
+        const { capture, release } = yield* lease(fixture.page);
 
-        const collect = yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(4), Stream.runCollect, Effect.forkChild);
+        const collect = yield* capture.stream.pipe(
+          Stream.take(4),
+          Stream.runCollect,
+          Effect.ensuring(release),
+          Effect.forkChild,
+        );
 
         const template = yield* fixture.template;
         const base = (template.metadata.timestamp ?? 0) * 1000 - 1000;
@@ -1118,8 +1161,8 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         // The window holds these: one late frame, and the gaps that the last two delivered end.
         for (const offset of [40, 30, 100]) yield* Effect.sync(() => fixture.inject(base + offset));
         yield* Fiber.join(collect);
-        const recent = yield* fixture.page.captureStats({ window: "500 millis" });
-        const whole = yield* fixture.page.captureStats();
+        const recent = yield* capture.stats({ window: "500 millis" });
+        const whole = yield* capture.stats();
 
         assert.deepStrictEqual([recent.received, recent.accepted, recent.late], [3, 2, 1]);
         assert.deepStrictEqual(recent.gaps, {
@@ -1132,7 +1175,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         assert.deepStrictEqual([whole.received, whole.accepted, whole.late], [5, 4, 1]);
         assert.strictEqual(whole.gaps.count, 3);
         for (const window of ["0 millis", "61 seconds"] as const) {
-          const error = yield* fixture.page.captureStats({ window }).pipe(Effect.flip);
+          const error = yield* capture.stats({ window }).pipe(Effect.flip);
 
           assert.strictEqual(error.reason._tag, "InvalidRequest", window);
         }
@@ -1146,11 +1189,13 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const fixture = yield* setup(true);
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const slowFrames: Array<Frame> = [];
-        const fastFrames: Array<Frame> = [];
+        const slowFrames: Array<Frame.Frame> = [];
+        const fastFrames: Array<Frame.Frame> = [];
         let fastSignal = Deferred.makeUnsafe<void>();
 
-        const slow = yield* fixture.page.screencast().pipe(
+        const { capture, release: leave } = yield* lease(fixture.page);
+
+        const slow = yield* capture.stream.pipe(
           Stream.take(17),
           Stream.tap((frame) =>
             Effect.gen(function* () {
@@ -1162,6 +1207,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
             }),
           ),
           Stream.runDrain,
+          Effect.ensuring(leave),
           Effect.forkChild,
         );
 
@@ -1176,7 +1222,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           }),
         );
 
-        const fast = yield* fixture.page.screencast().pipe(
+        const fast = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(
           Stream.tap((frame) =>
             Effect.sync(() => {
               fastFrames.push(frame);
@@ -1196,7 +1244,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
               duration: "3 seconds",
               orElse: () =>
                 Effect.gen(function* () {
-                  const stats = yield* fixture.page.captureStats();
+                  const stats = yield* capture.stats();
 
                   return yield* Effect.die(
                     "fast reader missed frame " +
@@ -1216,7 +1264,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         }
         assert.strictEqual(fastFrames.length, 20);
         assert.strictEqual(fastFrames[0]?.timestamp, base + 10);
-        assert.strictEqual((yield* fixture.page.captureStats()).lost, 0);
+        assert.strictEqual((yield* capture.stats()).lost, 0);
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(slow).pipe(
           Effect.timeoutOrElse({
@@ -1228,7 +1276,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         assert.strictEqual(slowFrames.length, 17);
         assert.strictEqual(slowFrames[1]?.timestamp, base + 50);
         assert.strictEqual(slowFrames.at(-1)?.timestamp, base + 200);
-        assert.strictEqual((yield* fixture.page.captureStats()).lost, 4);
+        assert.strictEqual((yield* capture.stats()).lost, 4);
         assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 1);
         assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 0);
         yield* Fiber.interrupt(fast);
@@ -1242,9 +1290,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       Effect.gen(function* () {
         const fixture = yield* setup(true);
 
-        const first = yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
+        const first = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
 
         const template = yield* fixture.template;
         const base = (template.metadata.timestamp ?? 0) * 1000 - 1000;
@@ -1253,15 +1301,20 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* Effect.sync(() => fixture.inject(base + 20));
         yield* Fiber.join(first);
 
-        const second = yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
+        const { capture, release } = yield* lease(fixture.page);
+
+        const second = yield* capture.stream.pipe(
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.ensuring(release),
+          Effect.forkChild,
+        );
 
         yield* fixture.waitStarts(2);
         yield* Effect.sync(() => fixture.inject(base + 500));
         yield* Effect.sync(() => fixture.inject(base + 530));
         yield* Fiber.join(second);
-        assert.deepStrictEqual((yield* fixture.page.captureStats()).gaps, {
+        assert.deepStrictEqual((yield* capture.stats()).gaps, {
           count: 2,
           totalMillis: 50,
           minMillis: 20,
@@ -1279,9 +1332,14 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       Effect.gen(function* () {
         const fixture = yield* setup(true);
 
-        const failure = yield* fixture.page
-          .screencast()
-          .pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
+        const { capture, release } = yield* lease(fixture.page);
+
+        const failure = yield* capture.stream.pipe(
+          Stream.runDrain,
+          Effect.flip,
+          Effect.ensuring(release),
+          Effect.forkChild,
+        );
 
         const template = yield* fixture.template;
         const base = (template.metadata.timestamp ?? 0) * 1000 - 1000;
@@ -1295,14 +1353,14 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         assert.match(error.message, /ack/i);
         assert.strictEqual(count(fixture.calls, "Page.screencastFrameAck"), 32);
         assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 1);
-        const stopped = yield* fixture.page.captureStats();
+        const stopped = yield* capture.stats();
 
         assert.strictEqual(stopped.ackBacklog, 32);
         yield* Effect.sync(() => fixture.inject(base + 100));
-        assert.deepStrictEqual(yield* fixture.page.captureStats(), stopped);
+        assert.deepStrictEqual(yield* capture.stats(), stopped);
         fixture.releaseAcks();
         yield* eventually(
-          fixture.page.captureStats().pipe(
+          capture.stats().pipe(
             Effect.map((stats) => stats.ackBacklog === 0),
             Effect.orDie,
           ),
@@ -1316,9 +1374,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       Effect.gen(function* () {
         const fixture = yield* setup();
 
-        const reader = yield* fixture.page
-          .screencast()
-          .pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
+        const reader = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
 
         yield* fixture.template;
         yield* fixture.page.close;
@@ -1337,9 +1395,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         fixture.holdReply("Page.startScreencast");
 
-        const error = yield* fixture.page
-          .screencast()
-          .pipe(Stream.runDrain, Effect.flip, Effect.timeout("5 seconds"));
+        const error = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.runDrain, Effect.flip, Effect.timeout("5 seconds"));
 
         assert.strictEqual(error._tag, "BrowserError");
         assert.match(error.message, /start.*deadline/i);
@@ -1356,13 +1414,16 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const fixture = yield* setup();
 
         fixture.holdReply("Page.stopScreencast");
-        yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(1), Stream.runCollect, Effect.exit, Effect.timeout("5 seconds"));
+        yield* Stream.unwrap(Effect.map(Frame.capture(fixture.page), ({ stream }) => stream)).pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.exit,
+          Effect.timeout("5 seconds"),
+        );
 
-        const error = yield* fixture.page
-          .screencast()
-          .pipe(Stream.runDrain, Effect.flip, Effect.timeout("5 seconds"));
+        const error = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.runDrain, Effect.flip, Effect.timeout("5 seconds"));
 
         assert.strictEqual(error._tag, "BrowserError");
         assert.match(error.message, /stop.*deadline/i);
@@ -1372,9 +1433,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         // The late stop succeeds; it delayed capture but must not disable it for the page.
         fixture.releaseReply();
 
-        const frames = yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+        const frames = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
 
         assert.strictEqual(frames.length, 1);
         assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 2);
@@ -1400,22 +1461,24 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           }),
         );
 
-        yield* fixture.page.screencast(small).pipe(Stream.runDrain, Effect.forkChild);
+        yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page, small), ({ stream }) => stream),
+        ).pipe(Stream.runDrain, Effect.forkChild);
         yield* fixture.template;
 
         for (const conflicting of [{ quality: 95 }, { size: { width: 800, height: 600 } }]) {
-          const error = yield* fixture.page
-            .screencast(conflicting)
-            .pipe(Stream.runDrain, Effect.flip, Effect.timeout("5 seconds"));
+          const error = yield* Stream.unwrap(
+            Effect.map(Frame.capture(fixture.page, conflicting), ({ stream }) => stream),
+          ).pipe(Stream.runDrain, Effect.flip, Effect.timeout("5 seconds"));
 
           assert.strictEqual(error.reason._tag, "InvalidRequest");
           assert.isFalse(error.dispatched);
         }
         // Readers without options, or with the same ones, share the running capture.
         for (const sharing of [{}, small]) {
-          const frames = yield* fixture.page
-            .screencast(sharing)
-            .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+          const frames = yield* Stream.unwrap(
+            Effect.map(Frame.capture(fixture.page, sharing), ({ stream }) => stream),
+          ).pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
 
           assert.deepStrictEqual(
             frames.map((frame) => [frame.width, frame.height]),
@@ -1431,15 +1494,18 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
     TestCdp.withCdp(
       Effect.gen(function* () {
         const fixture = yield* setup();
-        const first = yield* fixture.page.screencast().pipe(Stream.runDrain, Effect.forkChild);
+
+        const first = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.runDrain, Effect.forkChild);
 
         yield* fixture.template;
         yield* Fiber.interrupt(first).pipe(Effect.timeout("5 seconds"));
         assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 1);
 
-        const frames = yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+        const frames = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
 
         assert.strictEqual(frames.length, 1);
         assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 2);
@@ -1453,9 +1519,9 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       Effect.gen(function* () {
         const fixture = yield* setup(true);
 
-        const capture = yield* fixture.page
-          .screencast()
-          .pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
+        const capture = yield* Stream.unwrap(
+          Effect.map(Frame.capture(fixture.page), ({ stream }) => stream),
+        ).pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
 
         const template = yield* fixture.template;
         const oldPaint = (template.metadata.timestamp ?? 0) * 1000 - 2000;

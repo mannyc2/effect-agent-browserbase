@@ -82,7 +82,6 @@ export interface Controller {
     BrowserError,
     Scope.Scope
   >;
-  readonly stream: (options?: ScreencastOptions) => Stream.Stream<Frame, BrowserError>;
   readonly latest: Effect.Effect<Option.Option<Frame>>;
   readonly recent: Effect.Effect<ReadonlyArray<Frame>>;
   /** Lifetime counts, or those of the latest `windowMillis`, at most `countsKept`. */
@@ -668,8 +667,6 @@ export const make = (options: Options) =>
 
     return {
       open,
-      stream: (options?: ScreencastOptions) =>
-        Stream.unwrap(Effect.map(open(options), ({ stream }) => stream)),
       latest: Effect.sync(() => latest),
       recent: Effect.sync(() => history),
       active: Effect.sync(() => generation !== undefined && generation.state._tag !== "Stopped"),

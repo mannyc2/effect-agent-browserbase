@@ -15,7 +15,7 @@ import {
 import { TestClock } from "effect/testing";
 
 import { BrowserError, Failed } from "../src/BrowserError.ts";
-import { Frame } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import type { Estimate } from "../src/internal/clock.ts";
 import * as Replies from "../src/internal/page/replies.ts";
 import * as Capture from "../src/internal/pictures/capture.ts";
@@ -135,9 +135,12 @@ const fixture = Effect.fnUntraced(function* () {
     onViewport: (next: typeof viewport) => {
       viewport = next;
     },
-    reader: controller
-      .stream({ quality: 10, size: { width: 10, height: 10 } })
-      .pipe(Stream.runDrain, Effect.exit, Effect.forkScoped),
+    reader: Stream.unwrap(
+      Effect.map(
+        controller.open({ quality: 10, size: { width: 10, height: 10 } }),
+        ({ stream }) => stream,
+      ),
+    ).pipe(Stream.runDrain, Effect.exit, Effect.forkScoped),
   };
 });
 
@@ -149,14 +152,14 @@ it.live("capture IDs survive copies and a disjoint estimate widens monotonic fra
     yield* f.controller.open();
     const first = Option.getOrThrow(yield* f.controller.latest);
 
-    assert.isTrue(f.controller.current(new Frame({ ...first })));
+    assert.isTrue(f.controller.current(new Frame.Frame({ ...first })));
     for (const foreign of [
       { page: "another-page" },
       { session: "another-session" },
       { connection: "another-connection" },
       { document: first.document + 1 },
     ])
-      assert.isFalse(f.controller.current(new Frame({ ...first, ...foreign })));
+      assert.isFalse(f.controller.current(new Frame.Frame({ ...first, ...foreign })));
     f.onEstimate({ offsetMillis: 2000, uncertaintyMillis: 1, roundTripMillis: 2, sampledAt: 0 });
     f.emit();
     const next = Option.getOrThrow(yield* f.controller.latest);
@@ -430,9 +433,12 @@ it.live(
       yield* eventually(() => reading);
 
       // Queue the join before the old reader's cleanup, which removes its subscription immediately.
-      const joining = yield* f.controller
-        .stream({ quality: 10, size: { width: 10, height: 10 } })
-        .pipe(Stream.take(1), Stream.runCollect, Effect.forkChild({ startImmediately: true }));
+      const joining = yield* Stream.unwrap(
+        Effect.map(
+          f.controller.open({ quality: 10, size: { width: 10, height: 10 } }),
+          ({ stream }) => stream,
+        ),
+      ).pipe(Stream.take(1), Stream.runCollect, Effect.forkChild({ startImmediately: true }));
 
       const leaving = yield* Fiber.interrupt(reader).pipe(
         Effect.forkChild({ startImmediately: true }),
@@ -505,7 +511,10 @@ it.live(
       reply.resolve();
       yield* Fiber.join(reader).pipe(Effect.timeout("3 seconds"));
       f.onStart(() => Promise.resolve());
-      yield* f.controller.stream().pipe(Stream.take(1), Stream.runDrain);
+      yield* Stream.unwrap(Effect.map(f.controller.open(), ({ stream }) => stream)).pipe(
+        Stream.take(1),
+        Stream.runDrain,
+      );
       assert.strictEqual(f.starts.length, 3);
     }),
 );
