@@ -145,7 +145,7 @@ requests no further session and records the remaining trials as unrun. A refused
 another 4xx) allocated nothing and stops nothing. Browserbase time is not part of
 the model budget. Each session carries the trial's run, task, trial, arm and trace id as user
 metadata, which Browserbase's dashboard shows, and its trace records the session's id and region
-on `Browserbase.open`, so either finds the other.
+on `Browserbase.make`, so either finds the other.
 The model remains a caller choice. For the research runs, use `openai/gpt-6-luna`; reasoning defaults
 to `medium` for operate tasks and `none` for understand tasks. `--reasoning` overrides both.
 
@@ -232,7 +232,7 @@ Each trial is a trace of its own, rooted at a `bench.trial` span with its task, 
 and model and, once it ends, its status, reason and grade; its `traceId` finds it. Each judged case
 is a `bench.judge` trace. `effect-browser`'s README lists the spans inside. `--record` also keeps
 the trial's spans in `recording.json`, on the recording's host clock. A hosted trial's spans hold
-its Browserbase session id, on `Browserbase.open` and in the API requests' URLs, so keep recordings
+its Browserbase session id, on `Browserbase.make` and in the API requests' URLs, so keep recordings
 and exported traces out of commits; a packed replay leaves the spans out.
 
 ### Latency

@@ -4,8 +4,8 @@
  *
  * @since 0.3.0
  */
-import { make } from "./connection.ts";
+import { forRuntime } from "./connection.ts";
 
 export type { Connector, ConnectOptions, Options } from "./connection.ts";
 
-export const { open, layer } = make();
+export const { make, layer, layerConfig } = forRuntime();

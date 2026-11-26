@@ -59,9 +59,10 @@ each of its modules also has a path of its own, such as `effect-browser/Page`:
 
 The subpaths:
 
-- `effect-browser/Cdp`: any DevTools endpoint as a `Browser`. On Node it connects through
-  Playwright's `connectOverCDP`; under the `workerd` condition the entry imports no Node transport,
-  and the caller passes a `connect` of its own.
+- `effect-browser/Cdp`: any DevTools endpoint as a `Browser`, through `make`, `layer` or
+  `layerConfig`, which takes the options as `Config` values and the endpoint as a redacted secret.
+  On Node it connects through Playwright's `connectOverCDP`; under the `workerd` condition the
+  entry imports no Node transport, and the caller passes a `connect` of its own.
 - `effect-browser/Site`: the readers, the change record, the overlay and poses, for a site to run in
   its own bundle on its own page, with no protocol and no runtime `effect`.
 - `effect-browser/timeline`: `Moment`, a window that ends at a picture of the page now, with what
@@ -95,15 +96,17 @@ each feature folder deleted, together with the features that import it.
 
 ### `@effect-browser/chromium`
 
-`Chromium.layer` and `Chromium.open` launch a local Chromium through `playwright-core`, as a
-`Browser`. Chromium runs without its sandbox unless given `sandbox: true`, as in Playwright; the
+`Chromium.make`, `Chromium.layer` and `Chromium.layerConfig` launch a local Chromium through
+`playwright-core`, as a `Browser`. Chromium runs without its sandbox unless given `sandbox: true`, as in Playwright; the
 package's README says what that risks.
 
 ### `@effect-browser/browserbase`
 
 - `BrowserbaseClient`: Browserbase's REST API: sessions, Live View, stored contexts, extensions,
   search and fetch.
-- `Browserbase`: sessions as a `Browser`. Closing a session's scope releases it and confirms that
+- `Browserbase`: sessions as a `Browser`, through `make`, `layer` or `layerConfig`; the layer also
+  provides the session itself, its browser and its release, as the `Browserbase.Browserbase`
+  service. Closing a session's scope releases it and confirms that
   Browserbase reports it ended, `Confirmed`, or says `Unconfirmed` when it could not by the
   deadline, which can mean the session bills until its timeout. Each create carries a nonce of its
   own, so a session whose create lost its answer is found and ended. `attach` resumes a running
@@ -115,8 +118,9 @@ package's README says what that risks.
   leaves the context unsettled, and the next writer ends the context's sessions first, failing
   `ContextHeld` while it cannot confirm they ended. `Browserbase.reconcile` does that without
   opening a session, and `Browserbase.verifyContext` reads a context back from a session that saves
-  nothing. `ContextLease.layer` excludes writers within one process; an application excludes them
-  across processes with a lease of its own, such as a lock in its database.
+  nothing. Unless the application provides a lease, one lease holds contexts for every writer in the
+  process; an application excludes writers across processes with a lease of its own, such as a lock
+  in its database. `ContextLease.layer` gives a program a lease of its own, as a test does.
 - `BrowserbaseError`: the client's failures.
 - `@effect-browser/browserbase/testing`: `TestBrowserbase`, the API in memory with scripted faults,
   and `BrowserbaseContract.checks`, what the package relies on Browserbase to do, which the fake

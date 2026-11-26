@@ -359,7 +359,7 @@ export const chromiumEndpoint = Effect.gen(function* () {
  * `roundTripMillis` more per round trip, half each way, as a new hosted session's is. Each command
  * sent over the connection is passed to `record` once answered.
  */
-export const open = Effect.fn("Latency.open")(function* (
+export const make = Effect.fn("Latency.make")(function* (
   roundTripMillis: number,
   options: Browser.Options,
   record: (command: Command) => void,
@@ -405,4 +405,4 @@ export const layer = (
   roundTripMillis: number,
   options: Browser.Options,
   record: (command: Command) => void,
-) => Layer.effect(Browser.Browser, open(roundTripMillis, options, record));
+) => Layer.effect(Browser.Browser, make(roundTripMillis, options, record));

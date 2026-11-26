@@ -39,7 +39,7 @@ it.live("a timed-out navigation permits correction, browser suspension and an ou
     Effect.gen(function* () {
       const { url } = yield* site;
 
-      const browser = yield* Chromium.open({
+      const browser = yield* Chromium.make({
         actionTimeout: "300 millis",
         navigationTimeout: "300 millis",
       });
@@ -82,7 +82,7 @@ it.live("a link's unanswered settling read does not retain input authority", () 
 
       // Leave time for the native input to reach its settling read under load. The held-reply
       // regression below exercises the earlier deadline during input acknowledgement.
-      const browser = yield* Chromium.open({ actionTimeout: "2 seconds" });
+      const browser = yield* Chromium.make({ actionTimeout: "2 seconds" });
 
       const page = yield* browser.newPage(url);
       const [link] = yield* page.find({ role: "link", name: "Hang" });
@@ -111,7 +111,7 @@ it.live("a refused history traversal sends no stop-loading mutation", () =>
   TestCdp.withCdp(
     Effect.gen(function* () {
       const faults = yield* TestCdp.make();
-      const browser = yield* faults.provide(Chromium.open());
+      const browser = yield* faults.provide(Chromium.make());
       const page = yield* browser.newPage();
       const error = yield* page.back.pipe(Effect.flip);
 
@@ -137,7 +137,7 @@ it.live(
         const faults = yield* TestCdp.make();
 
         const browser = yield* faults.provide(
-          Chromium.open({ actionTimeout: "2 seconds", navigationTimeout: "200 millis" }),
+          Chromium.make({ actionTimeout: "2 seconds", navigationTimeout: "200 millis" }),
         );
 
         const arrived = Promise.withResolvers<void>();
@@ -215,7 +215,7 @@ it.live("bounds a missing stop reply without surrendering its input authority", 
     Effect.gen(function* () {
       const { url } = yield* site;
       const faults = yield* TestCdp.make();
-      const browser = yield* faults.provide(Chromium.open({ navigationTimeout: "200 millis" }));
+      const browser = yield* faults.provide(Chromium.make({ navigationTimeout: "200 millis" }));
       const sent = Promise.withResolvers<void>();
       const gate = yield* Deferred.make<void>();
       const reply = { resolve: () => Deferred.doneUnsafe(gate, Effect.void) };

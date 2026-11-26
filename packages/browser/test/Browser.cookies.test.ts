@@ -8,7 +8,7 @@ import * as Cdp from "../src/Cdp.ts";
 it.live("cookie query reports its actual native timeout", () =>
   Effect.gen(function* () {
     const proxy = yield* behindProxy();
-    const browser = yield* Cdp.open({ endpoint: proxy.endpoint, actionTimeout: "100 millis" });
+    const browser = yield* Cdp.make({ endpoint: proxy.endpoint, actionTimeout: "100 millis" });
 
     proxy.hold = (command) => (command.method.endsWith("Cookies") ? 500 : 0);
 

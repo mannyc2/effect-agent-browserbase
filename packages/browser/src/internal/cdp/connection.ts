@@ -6,7 +6,7 @@
  *
  * @since 0.3.0
  */
-import { type DateTime, Effect, Layer, Redacted } from "effect";
+import { Config, type DateTime, Effect, Layer, Redacted } from "effect";
 import type { Browser as PlaywrightBrowser } from "playwright-core";
 
 import * as Browser from "../../Browser.ts";
@@ -51,8 +51,8 @@ export interface Options extends Browser.Options, Pick<ConnectOptions, "headers"
 }
 
 /** Runtime facades supply the default transport; the shared lifetime imports no Node transport. */
-export const make = (defaultConnect?: Connector) => {
-  const open = Effect.fn("Cdp.open")(function* (options: Options) {
+export const forRuntime = (defaultConnect?: Connector) => {
+  const make = Effect.fn("Cdp.make")(function* (options: Options) {
     const endpoint = Redacted.isRedacted(options.endpoint)
       ? Redacted.value(options.endpoint)
       : options.endpoint;
@@ -128,7 +128,13 @@ export const make = (defaultConnect?: Connector) => {
   });
 
   const layer = (options: Options): Layer.Layer<Browser.Browser, Errors.BrowserError> =>
-    Layer.effect(Browser.Browser, open(options));
+    Layer.effect(Browser.Browser, make(options));
 
-  return { open, layer };
+  /** The options as `Config` values, such as the endpoint as a `Config.Redacted`. */
+  const layerConfig = (
+    config: Config.Wrap<Options>,
+  ): Layer.Layer<Browser.Browser, Errors.BrowserError | Config.ConfigError> =>
+    Layer.effect(Browser.Browser, Config.unwrap(config).pipe(Effect.flatMap(make)));
+
+  return { make, layer, layerConfig };
 };

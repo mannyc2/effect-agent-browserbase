@@ -12,7 +12,7 @@ its entry ends with how. Entries before 0.3 are short summaries drawn from the r
 **Breaking.** The packages move into the `@effect-browser` scope, Chromium becomes a package of its
 own, the core's features become subpaths, and an agent's browser tools move into the core as
 `effect-browser/ai`, for any `effect/ai` loop (#324, #327). Errors take identifiers and guards
-(#329). There are no aliases or shims: each name this entry gives as removed or renamed is gone,
+(#329), and constructors and layers take Effect's names and shapes (#325). There are no aliases or shims: each name this entry gives as removed or renamed is gone,
 and the entry says what replaced it.
 
 ### Packages
@@ -26,8 +26,8 @@ and the entry says what replaced it.
 | `effect-agent-browser`                 | `effect-browser/ai` for the tools, `@effect-browser/yielded` for Yielded |
 | `effect-browser-tradingview` (private) | `@effect-browser/tradingview` (private)                                  |
 
-- `@effect-browser/chromium` holds `Chromium`, with `layer`, `open` and `Options` as
-  `effect-browser/Chromium` had them. It peers on `effect`, `effect-browser` and `playwright-core`.
+- `@effect-browser/chromium` holds `Chromium`, `effect-browser/Chromium`'s module, whose `open` is
+  `make` (below). It peers on `effect`, `effect-browser` and `playwright-core`.
 - `@effect-browser/yielded` is only the Yielded binding of `effect-browser/ai`'s tools, and the only
   package that depends on `@yielded/agent`, still `0.1.0-beta.191` exactly. `effect-browser` gains
   no dependency.
@@ -78,6 +78,22 @@ path, such as `effect-browser/timeline/Moment`.
   `Moments.weave` in `@effect-browser/yielded`; and `Seed` and `load` are `YieldedTools.Seed` and
   `YieldedTools.load`.
 - `PageControl.useError` is `ToolError.fromBrowserError`.
+
+### Constructors and layers
+
+- `Cdp.open`, `Chromium.open` and `Browserbase.open` are `make`, and so is the `workerd` entry's
+  `open`; their spans are `Cdp.make`, `Chromium.make` and `Browserbase.make`. Each module also has
+  `layerConfig`, which takes its options as `Config` values, with a secret such as a CDP endpoint
+  as `Config.Redacted`.
+- `Browserbase.layer` provides `Browserbase.Browserbase`, a new service holding the session's
+  `Hosted` (`browser`, `session` and `release`), beside `Browser`.
+- `ContextLease.ContextLease` is a `Context.Reference` rather than a service class. Its default is
+  one lease shared by every writer in the process, so `Browserbase.make`, `layer`, `generations`,
+  `reconcile` and `verifyContext` require only `BrowserbaseClient`, and a program no longer
+  provides `ContextLease.layer`. That layer still gives a program a lease of its own, as a
+  `Layer<never>`.
+- `Browser.newPage(url?)` opens a page in the `Browser` the context holds, as `HttpClient.get`
+  calls the client the context holds.
 
 ### The agent's tools
 

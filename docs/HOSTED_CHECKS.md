@@ -56,10 +56,10 @@ EFFECT_BROWSER_BENCH_HOSTED=1 bun run bench handover --allowance /private/h2-all
 ```
 
 The command checks that `EFFECT_BROWSER_BENCH_HOSTED` is exactly `1` before reading provider
-configuration or creating a context or session. It supplies `BrowserbaseClient.layerConfig()`,
-`ContextLease.layer` and `FetchHttpClient.layer`. Its client wrapper counts session attempts before
-dispatch and admits at most two. An interrupted or failed create closes admission; an uncertain
-allocation is retained as uncertainty. It does not retry that create. The probe runs under a scope
+configuration or creating a context or session. It supplies `BrowserbaseClient.layerConfig()` and
+`FetchHttpClient.layer`, and holds contexts through the process's default `ContextLease`. Its
+client wrapper counts session attempts before dispatch and admits at most two. An interrupted or
+failed create closes admission; an uncertain allocation is retained as uncertainty. It does not retry that create. The probe runs under a scope
 with a four-minute operation deadline. Cleanup still runs after interruption or timeout and can
 outlast that deadline; it is not a hard billing cutoff.
 
