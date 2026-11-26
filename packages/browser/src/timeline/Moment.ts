@@ -3,7 +3,7 @@
  *
  * A page's timeline has three tracks on its browser's host clock: its events, what visibly changed
  * on it (`Change`), and its screencast frames. A `Window` holds the three from `since` to `until`,
- * and says why a part it could not read is missing rather than fail. `Page.window` takes one, which
+ * and says why a part it could not read is missing rather than fail. `Window.read` takes one, which
  * can end in the past, at a frame a delayed consumer airs late, so that a line written now tells
  * what its viewers will see. Its `account` says what was so at its end: how long the page had been
  * still, which of its changes were still under way, and which had settled.
@@ -32,28 +32,28 @@ import { type Action } from "../BrowserEvent.ts";
 import { type Change, type Changes } from "../Change.ts";
 import { type Frame } from "../Frame.ts";
 import type * as Page from "../Page.ts";
-import { Snapshot, type SnapshotOptions } from "../Snapshot.ts";
+import * as Snapshot from "../Snapshot.ts";
 import { describe, named, quoted, where } from "./internal/words.ts";
 
 export { Window } from "../Window.ts";
-import { Window } from "../Window.ts";
+import * as Window from "../Window.ts";
 
 /**
  * A window that ends at a picture of the page, its last frame, unless `missing` says why it has
  * none. Its frames are a few, spread over the window, so that it still begins where it starts.
  */
-export class Moment extends Window.extend<Moment>("effect-browser/timeline/Moment")({
+export class Moment extends Window.Window.extend<Moment>("effect-browser/timeline/Moment")({
   /** The page's outline at the end of the window, when the capture asked for it. */
-  snapshot: Schema.optional(Snapshot),
+  snapshot: Schema.optional(Snapshot.Snapshot),
 }) {}
 
 export interface CaptureOptions {
   /**
-   * Where the window starts, as for `Page.window`: a previous window or moment, so that consecutive
+   * Where the window starts, as for `Window.read`: a previous window or moment, so that consecutive
    * ones neither repeat nor miss an event or a change, or a `Duration` back from the picture.
    * Defaults to 5 seconds.
    */
-  readonly since?: Page.WindowOptions["since"] | undefined;
+  readonly since?: Window.WindowOptions["since"] | undefined;
   /** Frames to keep, at least 1, spread over the window and ending with the picture. Defaults to 2. */
   readonly frames?: number | undefined;
   /**
@@ -61,7 +61,7 @@ export interface CaptureOptions {
    * Defaults to `false`: the frames and the timeline carry most moments, while an outline costs a
    * round trip to the page and can double a moment's tokens.
    */
-  readonly snapshot?: SnapshotOptions | boolean | undefined;
+  readonly snapshot?: Snapshot.SnapshotOptions | boolean | undefined;
   /** Show what fields hold in the moment's changes; a secret field still reads `••••`. */
   readonly unmask?: boolean | undefined;
 }
@@ -106,7 +106,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
       pictured: Effect.result(pictureOf(page)).pipe(
         Effect.flatMap((picture) =>
           Effect.map(
-            page.window({
+            Window.read(page, {
               since: options.since ?? Duration.seconds(5),
               until: Result.getOrUndefined(picture),
               unmask: options.unmask,
@@ -118,7 +118,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
       outlined: Effect.result(
         outline === false
           ? Effect.void
-          : page.snapshot({ maxChars: 4000, ...(outline === true ? {} : outline) }),
+          : Snapshot.read(page, { maxChars: 4000, ...(outline === true ? {} : outline) }),
       ),
     },
     { concurrency: 2 },
@@ -145,7 +145,7 @@ export const capture = Effect.fn("Moment.capture")(function* (
 });
 
 /** A window's record of changes, if it saw any of the window: a page's first has none. */
-const recordOf = ({ changes }: Window) =>
+const recordOf = ({ changes }: Window.Window) =>
   changes !== undefined && changes.from < changes.until ? changes : undefined;
 
 /** What a window says of its page at its end: what was still in flux, and what had settled. */
@@ -185,7 +185,7 @@ const underWay = (change: Change, until: number) => {
  * changes were still under way and which had settled. A window whose record saw none of it has
  * neither.
  */
-export const account = (window: Window): Account => {
+export const account = (window: Window.Window): Account => {
   const record = recordOf(window);
   const changes = record?.changes ?? [];
 

@@ -2,6 +2,7 @@ import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Stream } from "effect";
 
+import * as Snapshot from "../src/Snapshot.ts";
 import { Site, SiteLayer } from "./fixtures.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
@@ -12,7 +13,7 @@ it.live("keeps a popup registration alive when its input caller is interrupted",
       const opener = yield* browser.firstPage;
 
       yield* opener.goto((yield* Site).url("/form"));
-      const [link] = yield* opener.find({ role: "link", name: "Open in a new tab" });
+      const [link] = yield* Snapshot.find(opener, { role: "link", name: "Open in a new tab" });
       const gate = yield* Deferred.make<void>();
       const baseline = faults.calls.filter((call) => call.method === "$open").length;
 

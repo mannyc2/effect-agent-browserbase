@@ -25,9 +25,10 @@ import { BrowserUse } from "@yielded/agent";
 import { Effect, Option, Result, Schema } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
+import * as Change from "effect-browser/Change";
 import type * as Page from "effect-browser/Page";
 import { Policy } from "effect-browser/policy";
-import { Snapshot } from "effect-browser/Snapshot";
+import * as Snapshot from "effect-browser/Snapshot";
 
 import * as AdapterState from "./AdapterState.ts";
 import { destination, followed, told } from "./internal/receipts.ts";
@@ -197,7 +198,7 @@ const invalid = (message: string) =>
 
 /** A snapshot as an observation: the outline, the controls and where the page is. */
 const observation = (
-  snapshot: Snapshot,
+  snapshot: Snapshot.Snapshot,
   extra: { readonly followed?: ReadonlyArray<string>; readonly tabs?: Observation["tabs"] },
 ): Observation => ({
   text: [...(extra.followed ?? []), snapshot.rendered].join("\n"),
@@ -341,7 +342,7 @@ const changed = (before: ReadonlyArray<string>, after: ReadonlyArray<string>) =>
 };
 
 /** A snapshot whose outline is only what changed since `before`, or itself when that is longer. */
-const changesOf = (snapshot: Snapshot, before: string) => {
+const changesOf = (snapshot: Snapshot.Snapshot, before: string) => {
   const lines = snapshot.text.split("\n");
   const { gone, added } = changed(before.split("\n"), lines);
 
@@ -354,7 +355,7 @@ const changesOf = (snapshot: Snapshot, before: string) => {
     ...(added.length === 0 ? [] : ["Newly shown:", ...added]),
   ].join("\n");
 
-  return new Snapshot({
+  return new Snapshot.Snapshot({
     ...snapshot,
     text,
     controls: snapshot.controls.filter((control) => text.includes(`[ref=${control.ref}]`)),
@@ -400,7 +401,7 @@ const session = Effect.fnUntraced(function* (target: Target, options: Options) {
   const record = (page: Page.Page) =>
     recording.has(page.id)
       ? Effect.succeed([])
-      : page.changes().pipe(
+      : Change.read(page).pipe(
           Effect.andThen(Effect.sync(() => recording.add(page.id))),
           Effect.as([]),
           Effect.catch((error) =>
@@ -413,7 +414,7 @@ const session = Effect.fnUntraced(function* (target: Target, options: Options) {
 
   const outlined = (page: Page.Page, scope: Scope) =>
     Effect.map(
-      page.snapshot({
+      Snapshot.read(page, {
         maxChars,
         within: scope.within,
         ...(scope.query === undefined ? {} : { full: true, query: scope.query }),
@@ -531,7 +532,8 @@ const waiting =
     return Effect.gen(function* () {
       const page = yield* current;
 
-      const { met } = yield* page.until(
+      const { met } = yield* Snapshot.until(
+        page,
         {
           selector: request.selector,
           text: request.text,

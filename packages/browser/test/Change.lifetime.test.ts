@@ -4,6 +4,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
+import * as Change from "../src/Change.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const html = (source: string) => `data:text/html,${encodeURIComponent(source)}`;
@@ -24,7 +25,7 @@ for (const overlap of ["none", "navigate", "cancel", "close"] as const)
           browser.newPage(html('<div role="status" id="status">First</div>')),
         );
 
-        yield* page.changes();
+        yield* Change.read(page);
         yield* TestClock.adjust("119 seconds");
         yield* page.goto(html('<div role="status" id="status">Second</div>'));
         const release = yield* Deferred.make<void>();
@@ -72,7 +73,7 @@ for (const overlap of ["none", "navigate", "cancel", "close"] as const)
           },
           { arg: undefined, result: Schema.Void, document: (yield* page.state).document },
         );
-        const resumed = yield* page.changes();
+        const resumed = yield* Change.read(page);
 
         assert.strictEqual(
           faults.calls.filter(({ method }) => method === "Page.removeScriptToEvaluateOnNewDocument")
@@ -90,7 +91,7 @@ for (const overlap of ["none", "navigate", "cancel", "close"] as const)
           },
           { arg: undefined, result: Schema.Void, document: (yield* page.state).document },
         );
-        const fresh = yield* page.changes({ since: resumed });
+        const fresh = yield* Change.read(page, { since: resumed });
 
         assert.isTrue(fresh.changes.some((change) => change.after === "After new read"));
       }).pipe(Effect.scoped),
@@ -107,7 +108,7 @@ it.effect("idle expiry waits for navigation and later changes renew the recorder
 
     const page = yield* faults.provide(browser.newPage(html("<title>First</title>")));
 
-    yield* page.changes();
+    yield* Change.read(page);
     yield* TestClock.adjust("119 seconds");
     const release = yield* Deferred.make<void>();
 
@@ -130,7 +131,7 @@ it.effect("idle expiry waits for navigation and later changes renew the recorder
     );
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(moving);
-    yield* page.changes();
+    yield* Change.read(page);
 
     const removed = faults.calls.filter(
       ({ method }) => method === "Page.removeScriptToEvaluateOnNewDocument",
@@ -143,7 +144,7 @@ it.effect("idle expiry waits for navigation and later changes renew the recorder
       removed + 1,
       "a successful read must renew expiry even after the first idle deadline met navigation",
     );
-    yield* page.changes();
+    yield* Change.read(page);
   }).pipe(Effect.scoped),
 );
 
@@ -154,14 +155,14 @@ it.effect("native recorder cleanup failure remains visible to later changes", ()
     const browser = yield* faults.provide(Chromium.open());
     const page = yield* faults.provide(browser.newPage(html("<title>First</title>")));
 
-    yield* page.changes();
+    yield* Change.read(page);
     faults.rule(
       { page: page.id, method: "Page.removeScriptToEvaluateOnNewDocument" },
       { _tag: "Fail", error: new Error("recorder removal rejected") },
       { times: 1 },
     );
     yield* TestClock.adjust("121 seconds");
-    const failure = yield* Effect.flip(page.changes());
+    const failure = yield* Effect.flip(Change.read(page));
 
     assert.strictEqual(failure.reason._tag, "Failed");
     assert.include(failure.message, "recorder removal rejected");

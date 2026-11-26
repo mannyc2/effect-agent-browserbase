@@ -7,6 +7,7 @@ import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 import { consequence } from "../src/BrowserError.ts";
 import type { Page } from "../src/Page.ts";
 import * as Stage from "../src/presentation/Stage.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const document = (title = "Input") =>
@@ -79,7 +80,7 @@ describe("Scoped browser input authority", () => {
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
         const page = yield* browser.newPage(document());
         const other = yield* browser.newPage(document("Other"));
-        const [choice] = yield* page.find({ role: "combobox", name: "Choice" });
+        const [choice] = yield* Snapshot.find(page, { role: "combobox", name: "Choice" });
         const stage = yield* Stage.make();
 
         yield* stage.present(page);
@@ -129,9 +130,9 @@ describe("Scoped browser input authority", () => {
 
         const page = yield* browser.newPage(document());
         const other = yield* browser.newPage(document("Other"));
-        const [field] = yield* page.find({ role: "textbox", name: "Memo" });
-        const [button] = yield* page.find({ role: "button", name: "Submit" });
-        const [choice] = yield* page.find({ role: "combobox", name: "Choice" });
+        const [field] = yield* Snapshot.find(page, { role: "textbox", name: "Memo" });
+        const [button] = yield* Snapshot.find(page, { role: "button", name: "Submit" });
+        const [choice] = yield* Snapshot.find(page, { role: "combobox", name: "Choice" });
         const first = yield* scope;
         const second = yield* scope;
         const before = judged;
@@ -162,7 +163,7 @@ describe("Scoped browser input authority", () => {
           assert.deepStrictEqual(consequence(failure), { lost: "nothing", repeat: "safe" });
         }
         assert.strictEqual(judged, before, "held input must not invoke the guard");
-        assert.include((yield* page.snapshot()).text, "Input");
+        assert.include((yield* Snapshot.read(page)).text, "Input");
         assert.isAbove((yield* other.screenshot()).data.length, 0);
 
         const recorded = yield* browser.events({ after: stopped.since }).pipe(
@@ -179,7 +180,7 @@ describe("Scoped browser input authority", () => {
 
         // Direct native input represents a separate operator; the library's gate does not seize it.
         yield* Effect.promise(() => TestCdp.nativePage(page).locator("input").fill("operator"));
-        assert.include((yield* page.snapshot()).text, "operator");
+        assert.include((yield* Snapshot.read(page)).text, "operator");
         yield* Scope.close(first, Exit.void);
         assert.strictEqual((yield* Effect.flip(page.press("a"))).reason._tag, "Suspended");
         yield* Scope.close(second, Exit.void);
@@ -213,7 +214,7 @@ describe("Scoped browser input authority", () => {
           assert.isFalse(refused.dispatched);
           assert.strictEqual(reply.sent(), 1);
           assert.isUndefined(stopping.pollUnsafe());
-          assert.include((yield* other.snapshot()).text, "Other");
+          assert.include((yield* Snapshot.read(other)).text, "Other");
           yield* reply.release;
           yield* Fiber.join(input);
           const stopped = yield* Fiber.join(stopping);

@@ -5,6 +5,7 @@ import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { Connector } from "effect-browser/Cdp";
+import * as Snapshot from "effect-browser/Snapshot";
 import { Supervisor } from "effect-browser/supervisor";
 import { type Browser as PlaywrightBrowser, chromium } from "playwright-core";
 
@@ -56,7 +57,7 @@ it.live("passes the connector through open, layer, attach and supervised generat
         const page = yield* browser.firstPage;
 
         yield* page.goto("data:text/html,<button>Custom</button>");
-        assert.include((yield* page.snapshot()).text, 'button "Custom"');
+        assert.include((yield* Snapshot.read(page)).text, 'button "Custom"');
       });
 
     yield* Effect.gen(function* () {

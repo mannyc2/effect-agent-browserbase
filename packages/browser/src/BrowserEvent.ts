@@ -104,7 +104,7 @@ export const SubjectContext = Schema.Struct({
 export type SubjectContext = typeof SubjectContext.Type;
 
 /**
- * What an input acted on, or what `Page.find` found, as the page named it then: its role (null
+ * What an input acted on, or what `Snapshot.find` found, as the page named it then: its role (null
  * when it has none), its accessible name (empty when it has none), its lowercase tag and its
  * context. For a point, it is the control under the point, or else the element painted there.
  * Unlike a ref, it keeps its meaning after the page changes.

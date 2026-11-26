@@ -33,9 +33,9 @@ runner that refuses unresolved consequential input. Connection identity and one 
 frame and generation evidence interpretable across reattachment. [STATUS.md](docs/STATUS.md)
 distinguishes released capabilities from remaining hosted checks.
 
-Pages can also be filmed. `Page.layout` reads where things and their words are, as data.
-`Page.overlay` draws a caller's SVG above the page, which no reader reads. `Page.hold` holds the
-page's own time and steps it. `Page.poses` moves, turns and scales the page's own elements.
+Pages can also be filmed. `Layout.measure` reads where things and their words are, as data.
+`Overlay.make` draws a caller's SVG above the page, which no reader reads. `PageTime.hold` holds
+the page's own time and steps it. `Pose.make` moves, turns and scales the page's own elements.
 `Film.frames` takes a frame at each film time and sends each input on the frame it belongs to;
 [Filming a page](packages/browser/README.md#filming-a-page) puts them together. A site that owns its
 page runs the same readers, change record, overlay and poses in its own bundle through

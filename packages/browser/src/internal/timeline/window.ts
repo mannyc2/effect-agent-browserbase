@@ -7,10 +7,9 @@ import { Duration, Effect, Option, Result, Schema } from "effect";
 
 import type { BrowserError } from "../../BrowserError.ts";
 import { type BrowserEvent, TrackEvent } from "../../BrowserEvent.ts";
-import type { Changes } from "../../Change.ts";
+import type { Changes, ChangesOptions } from "../../Change.ts";
 import { Frame } from "../../Frame.ts";
-import type { ChangesOptions, WindowOptions } from "../../Page.ts";
-import { Window } from "../../Window.ts";
+import { Window, type WindowOptions } from "../../Window.ts";
 import { type PageContext, refuse } from "../page/context.ts";
 
 const isWindow = Schema.is(Window);
@@ -89,4 +88,4 @@ export const make =
         changes: Result.getOrUndefined(changes),
         missing: Option.toArray(Result.getFailure(changes)),
       });
-    }).pipe(page.span("Page.window"), page.owned);
+    }).pipe(page.span("Window.read"), page.owned);

@@ -12,6 +12,7 @@ import { Browser } from "../src/Browser.ts";
 import * as Cdp from "../src/Cdp.ts";
 import type { Frame } from "../src/Frame.ts";
 import type { Page } from "../src/Page.ts";
+import * as Snapshot from "../src/Snapshot.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const freePort = Effect.callback<number>((resume) => {
@@ -359,17 +360,17 @@ it.live("reads every later document after another connection takes over a page",
       const first = yield* Cdp.open({ endpoint: proxy.endpoint }).pipe(Scope.provide(earlier));
       const opened = yield* first.newPage(still("one"));
 
-      assert.include((yield* opened.snapshot()).text, "one");
+      assert.include((yield* Snapshot.read(opened)).text, "one");
 
       const later = yield* Cdp.open({ endpoint: proxy.endpoint });
       const page = Option.getOrThrow(yield* later.page(opened.id));
 
-      assert.include((yield* page.snapshot()).text, "one");
+      assert.include((yield* Snapshot.read(page)).text, "one");
       yield* Scope.close(earlier, Exit.void);
       yield* page.goto(still("two"));
 
       const before = proxy.commands.length;
-      const text = (yield* page.snapshot()).text;
+      const text = (yield* Snapshot.read(page)).text;
       const read = proxy.commands.slice(before);
 
       assert.include(text, "two");

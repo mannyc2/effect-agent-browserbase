@@ -4,7 +4,7 @@
  * in one step, a recording's page moves one frame's worth per frame however long each takes.
  *
  * A browser opened with `pageTime` runs a page clock in each top document's main world, before
- * the page's own scripts. Until `Page.hold`, it keeps real time. Held, the page's timers and
+ * the page's own scripts. Until `hold`, it keeps real time. Held, the page's timers and
  * intervals, its animation frames, `performance.now`, `Date.now`, `new Date()` and `Date()`, and
  * its CSS transitions, CSS animations and Web Animations stand still, and each `advance` runs what
  * falls due in time order, each timer at its own time, and then one animation frame at its end.
@@ -19,11 +19,13 @@
  *
  * @since 0.3.0
  */
-import type { Duration, Effect } from "effect";
+import type { Duration, Effect, Scope } from "effect";
 
 import type { BrowserError } from "./BrowserError.ts";
 import type { Point } from "./internal/geometry.ts";
+import { functionsOf } from "./internal/page/functions.ts";
 import type { Content } from "./Overlay.ts";
+import type { Page } from "./Page.ts";
 import type { Pose } from "./Pose.ts";
 
 /** What else changes with page time in the same call to the page. */
@@ -45,3 +47,10 @@ export interface Held {
   /** How far this hold has moved page time, across the documents it held. */
   readonly elapsed: Effect.Effect<Duration.Duration>;
 }
+
+/**
+ * Hold the page's own time for the scope, to step it on with `advance`; real time resumes when
+ * the scope closes. Needs the browser's `pageTime` option; one hold at a time.
+ */
+export const hold = (page: Page): Effect.Effect<Held, BrowserError, Scope.Scope> =>
+  functionsOf(page).hold;

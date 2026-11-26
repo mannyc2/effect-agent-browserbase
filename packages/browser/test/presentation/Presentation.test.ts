@@ -21,7 +21,7 @@ import * as InputStyle from "../../src/InputStyle.ts";
 import { correlate, type Page } from "../../src/Page.ts";
 import * as Motion from "../../src/presentation/Motion.ts";
 import * as Presentation from "../../src/presentation/Presentation.ts";
-import type { Snapshot } from "../../src/Snapshot.ts";
+import * as Snapshot from "../../src/Snapshot.ts";
 import { Site, SiteLayer, unpaused } from "../fixtures.ts";
 import * as TestCdp from "../support/TestCdp.ts";
 
@@ -205,7 +205,7 @@ describe("Presentation's style", () => {
 });
 
 /** The ref of the line for this role and name. */
-const refOf = (snapshot: Snapshot, role: string, name: string): string => {
+const refOf = (snapshot: Snapshot.Snapshot, role: string, name: string): string => {
   const ref = new RegExp(`${role} "${name}"[^\\n]*?\\[ref=(e\\d+)\\]`).exec(snapshot.text)?.[1];
 
   assert.isDefined(ref, `no ${role} "${name}" in:\n${snapshot.text}`);
@@ -292,7 +292,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       const browser = yield* Browser;
       const page = yield* browser.newPage((yield* Site).url("/form"));
       const presenter = yield* Presentation.make({ pacing: unpaused });
-      const submit = refOf(yield* page.snapshot(), "button", "Submit");
+      const submit = refOf(yield* Snapshot.read(page), "button", "Submit");
 
       yield* page.click(submit);
       yield* presenter.view(page).click(submit);
@@ -358,7 +358,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       });
 
       const view = presenter.view(page);
-      const snapshot = yield* page.snapshot();
+      const snapshot = yield* Snapshot.read(page);
       const still = refOf(snapshot, "button", "Still");
 
       // A random source whose normal draws are zero, so each wait is its median.
@@ -370,7 +370,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
       yield* view.click(still).pipe(medians);
       yield* view.click(still).pipe(medians);
       yield* view.click(refOf(snapshot, "link", "Link")).pipe(medians);
-      yield* view.click(refOf(yield* page.snapshot(), "button", "Continue")).pipe(medians);
+      yield* view.click(refOf(yield* Snapshot.read(page), "button", "Continue")).pipe(medians);
       yield* presenter.view(other).click({ x: 20, y: 340 }).pipe(medians);
 
       const actions = (yield* browser.recentEvents).filter(
@@ -452,7 +452,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
         const view = presenter.view(page);
 
         yield* view
-          .click(refOf(yield* page.snapshot(), "button", "Submit"))
+          .click(refOf(yield* Snapshot.read(page), "button", "Submit"))
           .pipe(correlate("call-1"));
         yield* view.drag({ x: 100, y: 500 }, { x: 300, y: 500 });
         const events = yield* eventsOf(browser, page);
@@ -492,7 +492,11 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
         const presenter = yield* Presentation.make({ pacing: unpaused, motion: straight(50) });
 
-        const [far] = yield* page.find({ role: "button", name: "Far", scope: "document" });
+        const [far] = yield* Snapshot.find(page, {
+          role: "button",
+          name: "Far",
+          scope: "document",
+        });
 
         yield* presenter.view(page).click(far?.ref ?? "missing");
         const events = yield* eventsOf(browser, page);
@@ -537,7 +541,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           Effect.gen(function* () {
             const page = yield* browser.newPage(typeahead(replacement));
             const role = replacement.original === "password" ? "textbox" : "searchbox";
-            const field = refOf(yield* page.snapshot(), role, "Search");
+            const field = refOf(yield* Snapshot.read(page), role, "Search");
 
             const result = yield* presenter
               .view(page)
@@ -547,7 +551,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
                 Effect.catch((error) => Effect.succeed(error.reason._tag)),
               );
 
-            const { controls } = yield* page.snapshot();
+            const { controls } = yield* Snapshot.read(page);
 
             yield* page.close;
 

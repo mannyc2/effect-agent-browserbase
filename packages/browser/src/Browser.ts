@@ -116,7 +116,7 @@ export interface Options {
   /** Scripts that new documents run before their own, each where its `match` allows. */
   readonly initScripts?: ReadonlyArray<InitScript> | undefined;
   /**
-   * Run a page clock in each top document before its own scripts, so `Page.hold` can hold and
+   * Run a page clock in each top document before its own scripts, so `PageTime.hold` can hold and
    * step its time. It keeps real time until held, but replaces the page's timers, animation
    * frames, `Date` and `performance.now`, which a page script can notice. See `PageTime`.
    */

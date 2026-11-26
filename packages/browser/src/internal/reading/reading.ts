@@ -1,13 +1,13 @@
 /**
  * Reading a page: its outline with refs, the elements a query finds and the text it shows. Each
  * read takes its turn on the page and shares its work with identical reads, as `lane.ts`
- * describes. The viewport's text as it was last read is kept, for `Page.state`.
+ * describes.
  */
 import { Duration, Effect, Schedule, Schema } from "effect";
 
 import { StaleRef } from "../../BrowserError.ts";
-import { type FindQuery, Found, Text, type TextOptions } from "../../Page.ts";
-import { Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
+import { type FindQuery, Found, Snapshot, type SnapshotOptions } from "../../Snapshot.ts";
+import { Text, type TextOptions } from "../../Text.ts";
 import { request as askedOf, type FindRequest } from "../matching.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, failWith, type PageContext, refuse } from "../page/context.ts";
@@ -54,7 +54,6 @@ export const make = (page: PageContext, bridge: Bridge) =>
     const snapshots = lane.shared<Snapshot>("snapshot", true);
     const finds = lane.shared<ReadonlyArray<Found>>("find", true);
     const texts = lane.shared<Text>("text", true);
-    let viewed: Text | undefined;
 
     const snapshot = (snapshotOptions: SnapshotOptions = {}) => {
       const asked = {
@@ -81,7 +80,7 @@ export const make = (page: PageContext, bridge: Bridge) =>
 
           return new Snapshot({ ...result.snapshot, url: Url.redact(url) });
         }).pipe(within("snapshot")),
-      ).pipe(span("Page.snapshot", { full: asked.full }), owned);
+      ).pipe(span("Snapshot.read", { full: asked.full }), owned);
     };
 
     const find = (query: FindQuery = {}) => {
@@ -104,7 +103,7 @@ export const make = (page: PageContext, bridge: Bridge) =>
         }).pipe(within("find")),
       ).pipe(
         // The query's words are the caller's, and may be anything; only its shape is traced.
-        span("Page.find", { scope: asked.scope, role: asked.role ?? "" }),
+        span("Snapshot.find", { scope: asked.scope, role: asked.role ?? "" }),
         owned,
       );
     };
@@ -133,14 +132,11 @@ export const make = (page: PageContext, bridge: Bridge) =>
                   chars: result.text.length,
                   truncated: result.truncated,
                 });
-                const shown = new Text({ ...result, url: Url.redact(result.url), at: now() });
 
-                if (request.ref === null) viewed = shown;
-
-                return shown;
+                return new Text({ ...result, url: Url.redact(result.url), at: now() });
               }).pipe(within("text")),
             )
-      ).pipe(span("Page.text", { scope: scope === "viewport" ? "viewport" : "ref" }), owned);
+      ).pipe(span("Text.read", { scope: scope === "viewport" ? "viewport" : "ref" }), owned);
     };
 
     // One call, which the page answers once `want` holds of what `query` matches, the whole document
@@ -181,16 +177,12 @@ export const make = (page: PageContext, bridge: Bridge) =>
         .pipe(
           Effect.andThen(look),
           within("expect", Duration.sum(Duration.millis(millis), page.settings.actionTimeout)),
-          span("Page.expect", { want: typeof want === "string" ? want : "other" }),
+          span("Snapshot.until", { want: typeof want === "string" ? want : "other" }),
           owned,
         );
     };
 
-    /** The viewport's text as it was last read, if after `since`, as a document began. */
-    const viewedSince = (since: number) =>
-      viewed !== undefined && viewed.at > since ? viewed : undefined;
-
-    return { snapshot, find, text, until, viewedSince };
+    return { snapshot, find, text, until };
   });
 
 export type Reading = Effect.Success<ReturnType<typeof make>>;

@@ -19,6 +19,7 @@ import {
   Stream,
 } from "effect";
 import { Browser } from "effect-browser/Browser";
+import * as Snapshot from "effect-browser/Snapshot";
 import { Supervisor } from "effect-browser/supervisor";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
@@ -701,7 +702,7 @@ describe("Browserbase", () => {
 
           yield* page.goto("data:text/html,<title>Hosted</title><button>Go</button>");
           assert.deepStrictEqual([browser.id, browser.provider], [...(yield* ids), "browserbase"]);
-          assert.include((yield* page.snapshot()).text, 'button "Go"');
+          assert.include((yield* Snapshot.read(page)).text, 'button "Go"');
         }).pipe(Effect.provide(Browserbase.layer({ session: { timeout: 300 } })));
         const [id] = yield* ids;
 

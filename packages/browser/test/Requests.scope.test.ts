@@ -7,6 +7,7 @@ import { chromium } from "playwright-core";
 
 import * as Browser from "../src/Browser.ts";
 import { refuse } from "../src/BrowserError.ts";
+import * as Text from "../src/Text.ts";
 import * as TestCdp from "./support/TestCdp.ts";
 
 const site = Effect.acquireRelease(
@@ -114,8 +115,8 @@ for (const order of [
       const pageA = yield* a.newPage(`${origin}/first`);
       const pageB = yield* b.newPage(`${origin}/second`);
 
-      assert.include((yield* pageA.text()).text, "policy 0");
-      assert.include((yield* pageB.text()).text, "policy 1");
+      assert.include((yield* Text.read(pageA)).text, "policy 0");
+      assert.include((yield* Text.read(pageB)).text, "policy 1");
       assert.strictEqual(
         (yield* a.newPage(`${origin}/blocked`).pipe(Effect.result))._tag,
         "Failure",
