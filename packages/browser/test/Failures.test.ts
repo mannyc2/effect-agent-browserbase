@@ -84,7 +84,7 @@ it.live("a screenshot timeout reports the action timeout", () =>
 
       const error = yield* Effect.flip(Frame.read(page, { maxAge: 0 }));
 
-      assert.deepStrictEqual([error.operation, timeoutOf(error)], ["screenshot", 1000]);
+      assert.deepStrictEqual([error.operation, timeoutOf(error)], ["frame", 1000]);
     }).pipe(Effect.scoped),
   ),
 );
