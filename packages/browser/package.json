@@ -1,7 +1,7 @@
 {
   "name": "effect-browser",
   "version": "0.3.0-beta.24",
-  "description": "Effect browser sessions, page control, screencast, moments and filming over Playwright and CDP.",
+  "description": "Effect browser sessions, page control, screencast, moments, filming and an agent's browser tools over Playwright and CDP.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -66,6 +66,11 @@
       "types": "./dist/testing/index.d.mts",
       "default": "./dist/testing/index.mjs"
     },
+    "./ai": {
+      "@effect-browser/source": "./src/ai/index.ts",
+      "types": "./dist/ai/index.d.mts",
+      "default": "./dist/ai/index.mjs"
+    },
     "./*": {
       "@effect-browser/source": "./src/*.ts",
       "types": "./dist/*.d.mts",
@@ -77,6 +82,7 @@
     "./walk/internal/*": null,
     "./supervisor/internal/*": null,
     "./testing/internal/*": null,
+    "./ai/internal/*": null,
     "./index": null,
     "./*/index": null
   },

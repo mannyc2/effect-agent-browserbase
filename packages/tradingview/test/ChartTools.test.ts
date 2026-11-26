@@ -1,13 +1,12 @@
-// A Yielded agent run with the browser tools and the chart's, over a stand-in for TradingView's
+// The browser tools and the chart's in a plain effect/ai loop, over a stand-in for TradingView's
 // widget on a real Chromium page, driven by a scripted model: no model is called.
 import * as Chromium from "@effect-browser/chromium/Chromium";
 import { assert, layer } from "@effect/vitest";
-import { Agent, AgentRuntime, InMemory, Output } from "@yielded/agent";
-import { Duration, Effect, Layer, Schema } from "effect";
-import * as BrowserTools from "effect-agent-browser/BrowserTools";
-import { TestModel } from "effect-agent-browser/testing";
+import { Duration, Effect, Layer } from "effect";
+import { BrowserTools } from "effect-browser/ai";
 import { Browser } from "effect-browser/Browser";
-import { LanguageModel, Model, Toolkit } from "effect/ai";
+import { TestModel } from "effect-browser/testing";
+import { LanguageModel, Prompt, Toolkit } from "effect/ai";
 
 import * as Chart from "../src/Chart.ts";
 import * as ChartTools from "../src/ChartTools.ts";
@@ -15,22 +14,25 @@ import { chartOn, position, recorded, time } from "./fixture.ts";
 
 const tools = BrowserTools.make();
 
-const agent = Agent.make("chart-test", {
-  input: Schema.String,
-  output: Output.text(Schema.String),
-  instructions: "Use the tools to do the task, then say what you did.",
-  toolkit: Toolkit.merge(tools.toolkit, ChartTools.Reads, ChartTools.Writes),
-  policy: { maxTurns: 6, maxToolCalls: 12, maxDuration: "1 minute", toolConcurrency: 1 },
-});
+const toolkit = Toolkit.merge(tools.toolkit, ChartTools.Reads, ChartTools.Writes);
 
-const scripted = (turns: ReadonlyArray<TestModel.Turn>) =>
-  Model.make(
-    "scripted",
-    "test-model",
-    Layer.effect(LanguageModel.LanguageModel, LanguageModel.LanguageModel).pipe(
-      Layer.provide(TestModel.layer(turns)),
-    ),
-  );
+// The task to the model's answer: each turn's calls run in order, and join the thread with their
+// results.
+const run = (task: string) =>
+  Effect.gen(function* () {
+    let thread = Prompt.make(task);
+
+    for (;;) {
+      const response = yield* LanguageModel.generateText({
+        prompt: thread,
+        toolkit,
+        concurrency: 1,
+      });
+
+      thread = Prompt.concat(thread, Prompt.fromResponseParts(response.content));
+      if (response.toolCalls.length === 0) return response.text;
+    }
+  });
 
 const reply = (call: ReturnType<typeof TestModel.call>) =>
   Effect.succeed(TestModel.reply(TestModel.calling(call)));
@@ -52,12 +54,11 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         yield* chartOn(page);
 
-        const result = yield* AgentRuntime.run(agent, task).pipe(
+        const answer = yield* run(task).pipe(
           Effect.provide(
             Layer.mergeAll(
               ChartTools.layer.pipe(Layer.provideMerge(tools.layer({ page }, { task }))),
-              InMemory.layer,
-              scripted([
+              TestModel.layer([
                 () =>
                   reply(
                     TestModel.call("chart_point", { points: [{ time: time(70), price: 180 }] }),
@@ -76,7 +77,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           ),
         );
 
-        assert.strictEqual(result.output, "Clicked and drew.");
+        assert.strictEqual(answer, "Clicked and drew.");
         assert.deepStrictEqual((yield* recorded(page)).clicks, [position(70, 180)]);
         assert.deepStrictEqual(
           (yield* Chart.state(page)).drawings.map(({ name, points }) => [name, points]),

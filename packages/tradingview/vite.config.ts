@@ -19,6 +19,6 @@ export default defineConfig({
     testTimeout: 60_000,
     hookTimeout: 60_000,
     // Run the workspace's effect-browser from source rather than from its unbuilt dist.
-    server: { deps: { inline: ["effect-browser", "effect-agent-browser"] } },
+    server: { deps: { inline: ["effect-browser"] } },
   },
 });

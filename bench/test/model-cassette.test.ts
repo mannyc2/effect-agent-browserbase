@@ -2,7 +2,7 @@
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, it } from "@effect/vitest";
 import { ConfigProvider, Effect } from "effect";
-import { HttpCassette } from "effect-agent-browser/testing";
+import { HttpCassette } from "effect-browser/testing";
 import { LanguageModel } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 

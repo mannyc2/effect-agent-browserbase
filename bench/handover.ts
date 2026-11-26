@@ -60,7 +60,7 @@ export const command = Command.make(
       const directory = path.join(import.meta.dirname, "..", ".work", "h2", runId);
       const versions: Record<string, string> = {};
 
-      for (const name of ["browser", "browserbase", "agent-browser", "human-strokes"]) {
+      for (const name of ["browser", "browserbase", "yielded", "human-strokes"]) {
         const manifest = yield* fs
           .readFileString(path.join(import.meta.dirname, "..", "packages", name, "package.json"))
           .pipe(
