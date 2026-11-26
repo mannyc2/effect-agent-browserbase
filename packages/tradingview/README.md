@@ -3,8 +3,8 @@
 TradingView charts for `effect-browser`: read a chart's own data, find the exact screen point of a
 time and price, and change the chart with its own toolbar, keys and dialogs, as a person does. It
 finds the chart of pages that embed TradingView's Advanced Charts library and of tradingview.com.
-Its `ChartTools` give a Yielded agent the same as tools, beside `effect-agent-browser`'s browser
-tools.
+Its `ChartTools` give an agent the same as tools, beside `effect-browser/ai`'s browser tools, in
+any `effect/ai` loop.
 
 It is checked live on the library's demo, where each change is made by visible input. tradingview.com
 refuses drawings when signed out.
@@ -76,17 +76,16 @@ const drawn =
 
 ## ChartTools
 
-For a Yielded agent, `effect-agent-browser` and `@yielded/agent` are needed too. `Reads` are the tools
-`chart_state`, `chart_bars`, `chart_values`, `chart_point` and `chart_at`; `Writes` are `chart_draw`,
-`chart_remove`, `chart_range`, `chart_symbol`, `chart_timeframe`, `chart_indicator` and
-`chart_inputs`, which change the chart as `ChartInput` does and answer what they did, `via` which path,
-and what followed. `layer` serves both over the run's `BrowserTools.Controller`, so they act on the tab
-the model sees, with the run's task; an agent's toolkit holds whichever the model may use.
+`Reads` are the tools `chart_state`, `chart_bars`, `chart_values`, `chart_point` and `chart_at`;
+`Writes` are `chart_draw`, `chart_remove`, `chart_range`, `chart_symbol`, `chart_timeframe`,
+`chart_indicator` and `chart_inputs`, which change the chart as `ChartInput` does and answer what
+they did, `via` which path, and what followed. `layer` serves both over `BrowserTools.Controller`, so they act on the tab the
+model sees, with the agent's task; an agent's toolkit holds whichever the model may use.
 
 ```ts
 import * as ChartTools from "@effect-browser/tradingview/ChartTools";
 import { Layer } from "effect";
-import * as BrowserTools from "effect-agent-browser/BrowserTools";
+import { BrowserTools } from "effect-browser/ai";
 import type { Page } from "effect-browser/Page";
 import { Toolkit } from "effect/ai";
 

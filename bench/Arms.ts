@@ -21,11 +21,12 @@
 // chart through its API, unseen, is retired. Understand tasks differ only in arm 1, whose moments
 // add the outline.
 import * as ChartTools from "@effect-browser/tradingview/ChartTools";
+import { YieldedTools } from "@effect-browser/yielded";
 import { Agent, AgentRuntime, CodeMode, InMemory, type RunEvent } from "@yielded/agent";
 import { inProcessCodeExecutorLayer } from "@yielded/agent-testing/code-executor-substitute";
 import { CodeExecutionLimits } from "@yielded/agent/code-executor";
 import { DateTime, Duration, Effect, Layer, Schema, Stream } from "effect";
-import * as BrowserTools from "effect-agent-browser/BrowserTools";
+import { BrowserTools } from "effect-browser/ai";
 import type { Page } from "effect-browser/Page";
 import type { Moment } from "effect-browser/timeline";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
@@ -233,8 +234,8 @@ const finishing = <A, I>(answer: Schema.Codec<A, I>) =>
 
 const { tools: control } = BrowserTools.Control;
 const { tools: pointer } = BrowserTools.Pointer;
-const single = BrowserTools.make({ mode: "single" });
-const batched = BrowserTools.make();
+const single = YieldedTools.make({ mode: "single" });
+const batched = YieldedTools.make();
 
 // Arm 5's tools act on one page, so a program's calls run one at a time. The executor runs the
 // model's program in the bench's own process, isolated by nothing but shadowed globals: the bench's,
@@ -340,7 +341,7 @@ const tooling = {
 } as const;
 
 /** What arms 13, 14 and 16 change in how the tools show the page. */
-const presenting: { readonly [A in Arm]?: BrowserTools.LayerOptions } = {
+const presenting: { readonly [A in Arm]?: YieldedTools.LayerOptions } = {
   13: { boxes: true },
   14: { changes: true },
   16: { placement: "crop" },

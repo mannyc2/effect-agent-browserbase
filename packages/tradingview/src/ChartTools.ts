@@ -1,8 +1,8 @@
 /**
- * A Yielded agent's tools for a TradingView chart on the tab `effect-agent-browser`'s
- * `BrowserTools` serves. `Reads` give the chart's state with its studies' inputs and latest
- * values, its bars and a study's values as numbers, and the viewport points of times and prices,
- * which the pointer tools take. `Writes` change the chart as `ChartInput` does, with TradingView's
+ * An agent's tools for a TradingView chart on the tab `effect-browser/ai`'s `BrowserTools` serves.
+ * `Reads` give the chart's state with its studies' inputs and latest values, its bars and a
+ * study's values as numbers, and the viewport points of times and prices, which the pointer tools
+ * take. `Writes` change the chart as `ChartInput` does, with TradingView's
  * own toolbar, hotkeys, searches and dialogs: on a presenter's page the viewers see each change
  * made. `layer` serves both over the run's `BrowserTools.Controller`, beneath `BrowserTools`' own
  * layer; an agent's toolkit holds whichever the model may use.
@@ -19,10 +19,8 @@
  *
  * @since 0.3.0
  */
-import { BrowserUse } from "@yielded/agent";
 import { Effect, Layer, Schema } from "effect";
-import * as BrowserTools from "effect-agent-browser/BrowserTools";
-import * as PageControl from "effect-agent-browser/PageControl";
+import { BrowserTools, ToolError } from "effect-browser/ai";
 import type { BrowserError } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
 import { Tool, Toolkit } from "effect/ai";
@@ -48,7 +46,7 @@ const chartTool = <
     description,
     parameters: Schema.Struct(parameters),
     success,
-    failure: BrowserUse.BrowserUseError,
+    failure: ToolError.ToolError,
     failureMode: "return",
   });
 
@@ -79,7 +77,7 @@ const reads = {
       "Read the chart's symbol, timeframe, the times of the first and last bars in view, the prices in view, its studies with their inputs and latest values, and its drawings.",
     parameters: Tool.EmptyParams,
     success: Chart.State,
-    failure: BrowserUse.BrowserUseError,
+    failure: ToolError.ToolError,
     failureMode: "return",
   }),
   bars: chartTool(
@@ -198,7 +196,7 @@ const handlers = Effect.gen(function* () {
 
   const read = <A>(run: (page: Page) => Effect.Effect<A, BrowserError>) =>
     Effect.flatMap(controller.current, run).pipe(
-      Effect.mapError(PageControl.useError),
+      Effect.mapError(ToolError.fromBrowserError),
       controller.withTask,
     );
 
@@ -208,7 +206,7 @@ const handlers = Effect.gen(function* () {
   ) =>
     controller.perform(run).pipe(
       Effect.map(({ value, followed }) => ({ did: did(value), via: value.via, followed })),
-      Effect.mapError(PageControl.useError),
+      Effect.mapError(ToolError.fromBrowserError),
     );
 
   const byId = (inputs: ReadonlyArray<{ readonly id: string; readonly value: Chart.InputValue }>) =>

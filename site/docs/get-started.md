@@ -1,20 +1,20 @@
 # Get started
 
-effect-browser runs on Effect 4 and Playwright's Chromium. An agent drives pages through `effect-agent-browser`, on Yielded Agent.
+effect-browser runs on Effect 4 and Playwright's Chromium. An agent drives pages with `effect-browser/ai`'s tools, here through `@effect-browser/yielded` on Yielded Agent.
 
 ## Install
 
-`effect-agent-browser` peers on the published npm release of `@yielded/agent` `0.1.0-beta.191` exactly. Effect and the OpenRouter provider are pinned to `4.1.2`. If you installed an earlier release with an archive override for Yielded, remove that override and refresh your lockfile before installing.
+`@effect-browser/yielded` peers on the published npm release of `@yielded/agent` `0.1.0-beta.191` exactly. Effect and the OpenRouter provider are pinned to `4.1.2`. If you installed an earlier release with an archive override for Yielded, remove that override and refresh your lockfile before installing.
 
 :::Example
 ```sh
 mkdir top-story && cd top-story && npm init -y > /dev/null && npm pkg set type=module
-npm install @yielded/agent@0.1.0-beta.191 effect-browser@beta @effect-browser/chromium@beta effect-agent-browser@beta effect@4.1.2 @effect/ai-openrouter@4.1.2 playwright-core@1.63.0
+npm install @yielded/agent@0.1.0-beta.191 effect-browser@beta @effect-browser/chromium@beta @effect-browser/yielded@beta effect@4.1.2 @effect/ai-openrouter@4.1.2 playwright-core@1.63.0
 npx playwright-core install chromium
 ```
 
 Captured in a fresh npm project on Linux with Node `24.14.1` and npm `11.11.0`. At capture time,
-`effect-browser` and `effect-agent-browser` resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
+`effect-browser` and the agent tools' package, then `effect-agent-browser`, resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
 `0.1.0-beta.168`, the peer before the moves to `0.1.0-beta.189` and `0.1.0-beta.191`, with Effect
 and the OpenRouter provider at `4.0.3`. Chromium was already
 installed on this host, so its install command printed nothing:
@@ -28,20 +28,20 @@ found 0 vulnerabilities
 
 ## An agent in a local Chromium
 
-A Yielded agent runs the loop; `BrowserTools` gives it the browser tools over an effect-browser page. Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter. Save it as `agent.ts` in the same directory:
+A Yielded agent runs the loop; `YieldedTools` gives it the browser tools over an effect-browser page. Any `effect/ai` `LanguageModel` drives it. This one goes through OpenRouter. Save it as `agent.ts` in the same directory:
 
 :::Example
 ```ts
 import { Chromium } from "@effect-browser/chromium";
+import { YieldedTools } from "@effect-browser/yielded";
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
-import { BrowserTools } from "effect-agent-browser";
 import { Browser } from "effect-browser";
 import { Model } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 
-const tools = BrowserTools.make();
+const tools = YieldedTools.make();
 
 const reader = Agent.make("top-story", {
   input: Schema.String,
