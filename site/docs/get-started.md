@@ -13,15 +13,15 @@ npm install @yielded/agent@0.1.0-beta.191 effect-browser@beta @effect-browser/ch
 npx playwright-core install chromium
 ```
 
-Captured in a fresh npm project on Linux with Node `24.14.1` and npm `11.11.0`. The capture predates the
-`@effect-browser` packages: Chromium came with `effect-browser`, and `effect-browser` and the agent
-tools' package, then `effect-agent-browser`, resolved to `0.3.0-beta.19`; Yielded Agent came from npm at
-`0.1.0-beta.168`, the peer before the moves to `0.1.0-beta.189` and `0.1.0-beta.191`, with Effect
-and the OpenRouter provider at `4.0.3`. Chromium was already
-installed on this host, so its install command printed nothing:
+Captured on 26 November 2026 in a fresh npm project on Linux with Node `24.14.1` and npm `11.11.0`.
+`effect-browser`, `@effect-browser/chromium` and `@effect-browser/yielded` resolved to `0.3.0-beta.25`.
+Chromium was already installed on this host, so its install command printed nothing:
 
 ```text output
-added 6 packages, and audited 7 packages in 2s
+added 8 packages, and audited 9 packages in 1s
+
+1 package is looking for funding
+  run `npm fund` for details
 
 found 0 vulnerabilities
 ```
@@ -83,16 +83,16 @@ const OpenRouter = Layer.mergeAll(
 program.pipe(Effect.provide([Chromium.layer(), OpenRouter]), Effect.runPromise);
 ```
 
-Run with `OPENROUTER_API_KEY=… node agent.ts`. The following result is from 11 October 2026, using the earlier release-candidate archive and Effect `4.0.0`; it is historical run evidence. The model read the top story off the first screenshot, so the run took one model call:
+Run with `OPENROUTER_API_KEY=… node agent.ts`. The following result is from 26 November 2026, with the packages installed above. The run took two model calls:
 
 ```text output
-[20:23:58.322] INFO (#1): {
-  title: 'Total Annihilation, rebuilt for modern computers',
-  points: 155
+[12:13:22.845] INFO (#2): {
+  title: 'Euro-Office comes to your desktop with the Nextcloud Office Desktop app',
+  points: 320
 } RunTotals {
-  modelCalls: 1,
-  inputTokens: 2944,
-  outputTokens: 58,
+  modelCalls: 2,
+  inputTokens: 11566,
+  outputTokens: 110,
   webSearchCalls: 0,
   costMicrousd: 0,
   usageStatus: 'complete',
