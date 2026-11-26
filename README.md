@@ -25,7 +25,7 @@ evidence; applications own their decisions and durable business records.
 
 The browser core also owns [leased generations](packages/browser/README.md#supervising-browser-generations):
 scoped work and application resources, bounded handover and explicit revocation, with hosted
-construction through `Browserbase.supervise({ build })`. The consumer keeps its editorial policy,
+sessions through `Browserbase.generations({ build })`. The consumer keeps its editorial policy,
 account decisions and durable business journal. [Compiled composition examples](docs/COMPOSITION.md)
 show watched preparation and event-driven presentation, plus a separate operator-assisted workflow
 runner that refuses unresolved consequential input. Connection identity and one host clock keep

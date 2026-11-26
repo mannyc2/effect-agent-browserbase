@@ -40,7 +40,7 @@ Run on 11 October 2026 with `npm install effect-browserbase@beta` added, and `BR
 
 The session is created when the layer is built; closing its scope asks Browserbase to release it, and waits for the outcome. A confirmed `Settled` outcome establishes that the session ended. Each create carries a nonce of its own, so a create whose answer was lost is found and ended rather than left billing until its timeout.
 
-`attach` connects to a running session without owning it, as from another process. `supervise` keeps sessions open across losses and session ends, as generations. The browser announces the session's end ahead of time as a `SessionEnding` event.
+`attach` connects to a running session without owning it, as from another process. `generations` supplies hosted sessions to `Supervisor.make`, which keeps a browser open across losses and session ends, as generations. The browser announces the session's end ahead of time as a `SessionEnding` event.
 
 ## Capture on its own connection
 

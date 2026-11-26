@@ -24,7 +24,9 @@ Here the output starts on one page, prepares another off air, and switches once 
 :::Example
 ```ts
 import { Effect, Stream } from "effect";
-import { Browser, Chromium, Stage } from "effect-browser";
+import { Browser } from "effect-browser";
+import * as Chromium from "effect-browser/Chromium";
+import * as Stage from "effect-browser/Stage";
 
 const program = Effect.gen(function* () {
   const browser = yield* Browser.Browser;
