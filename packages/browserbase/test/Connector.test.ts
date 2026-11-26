@@ -2,7 +2,7 @@
 import { createServer } from "node:net";
 
 import { assert, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Layer } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect";
 import { Browser } from "effect-browser/Browser";
 import type { Connector } from "effect-browser/Cdp";
 import * as Snapshot from "effect-browser/Snapshot";
@@ -50,7 +50,7 @@ it.live("passes the connector through open, layer, attach and supervised generat
       return chromium.connectOverCDP(local);
     };
 
-    const options = { connect, connectTimeoutMillis: 5000, captureConnection: false };
+    const options = { connect, connectTimeout: Duration.seconds(5), captureConnection: false };
 
     const read = (browser: Browser["Service"]) =>
       Effect.gen(function* () {

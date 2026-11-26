@@ -449,8 +449,8 @@ it.live("a read of changes costs one call, its first a registration beside it", 
       holds(yield* sentBy(proxy, Change.read(page)), 2, 1);
       assert.strictEqual(registrations().length, 2);
       holds(yield* sentBy(proxy, Change.read(page)), 1, 1);
-      yield* Moment.capture(page);
-      holds(yield* sentBy(proxy, Moment.capture(page)), 1, 1);
+      yield* Moment.read(page);
+      holds(yield* sentBy(proxy, Moment.read(page)), 1, 1);
     }).pipe(Effect.scoped),
   ),
 );
@@ -486,7 +486,7 @@ it.live("a wait for a still screen costs two calls, and three more without a run
       yield* Snapshot.read(page);
       // The browser's first capture maps its clock.
       yield* toFirstFrame(proxy, page);
-      holds(yield* sentBy(proxy, Stillness.wait(page, { quietMillis: 100 })), 5, 5);
+      holds(yield* sentBy(proxy, Stillness.wait(page, { quiet: "100 millis" })), 5, 5);
       // A capture on air, once its first frame has come.
       const onAir = yield* Deferred.make<void>();
 
@@ -496,7 +496,7 @@ it.live("a wait for a still screen costs two calls, and three more without a run
         Effect.forkScoped,
       );
       yield* Deferred.await(onAir);
-      holds(yield* sentBy(proxy, Stillness.wait(page, { quietMillis: 100 })), 2, 2);
+      holds(yield* sentBy(proxy, Stillness.wait(page, { quiet: "100 millis" })), 2, 2);
     }).pipe(Effect.scoped),
   ),
 );

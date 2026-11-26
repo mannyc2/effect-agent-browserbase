@@ -3,6 +3,7 @@ import { Duration, Effect, Schedule, Schema } from "effect";
 
 import { Timeout, failWith, refuse } from "../../BrowserError.ts";
 import type { ReadyOptions } from "../../Page.ts";
+import { millisOf } from "../clock.ts";
 import { type Bridge, scriptCall } from "../page/bridge.ts";
 import { contextGone, decodeWith, type PageContext } from "../page/context.ts";
 
@@ -25,10 +26,10 @@ export type Readiness = typeof ReadinessSchema.Type;
 export const make =
   (page: PageContext, bridge: Bridge) =>
   (options: ReadyOptions = {}) => {
-    const quietMillis = options.quietMillis ?? 0;
+    const quietMillis = millisOf(options.quiet ?? 0);
 
     if (!Number.isFinite(quietMillis) || quietMillis < 0)
-      return refuse("ready", "quietMillis must be finite and nonnegative");
+      return refuse("ready", "quiet must be a finite nonnegative duration");
     const timeout = options.timeout ?? Duration.seconds(15);
 
     // The page's own evidence, checked in the page until nothing is left or `until` has come.

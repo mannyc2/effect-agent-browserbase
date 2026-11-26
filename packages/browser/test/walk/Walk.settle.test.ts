@@ -12,7 +12,7 @@ import * as Stillness from "../../src/timeline/Stillness.ts";
 import * as Walk from "../../src/walk/Walk.ts";
 
 const named = (name: string) => new Subject({ role: "button", name, tag: "button", context: {} });
-const settle = { quietMillis: 300, timeout: "1 second" } as const;
+const settle = { quiet: "300 millis", timeout: "1 second" } as const;
 
 const site = Effect.fnUntraced(function* () {
   const requests: Array<string> = [];

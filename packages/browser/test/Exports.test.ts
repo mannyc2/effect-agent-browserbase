@@ -3,7 +3,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 import { assert, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 
 import * as Root from "../src/index.ts";
 
@@ -73,20 +73,31 @@ it.effect("each feature folder's index holds every module in the folder", () =>
 );
 
 // As Effect's `effect/sql/SqlError/ConnectionError`: the package, the feature folder, the module
-// and the error's own name, which a module's own error leaves out.
-it.effect("every public error's identifier is its path", () =>
+// and the class's own name, which a module's own class leaves out. Without one, Schema tells
+// classes apart by their tag alone, so two packages' same-tagged classes would pass each other's
+// `Schema.is`.
+it.effect("every public Schema class's identifier is its path", () =>
   Effect.gen(function* () {
     const entries: Array<readonly [string, Record<string, unknown>]> = [["", Root]];
 
     for (const folder of folders) entries.push([`${folder}/`, yield* featureIndex(folder)]);
 
-    const errors = entries.flatMap(([folder, index]) =>
+    // A class another module re-exports, as `Moment` does `Window`, keeps its own module's path:
+    // the root comes first, and each class counts once.
+    const seen = new Set<unknown>();
+
+    const classes = entries.flatMap(([folder, index]) =>
       Object.entries(index).flatMap(([module, exports]) =>
         Object.entries(exports as Record<string, unknown>).flatMap(([name, value]) =>
-          typeof value === "function" && value.prototype instanceof Error && "identifier" in value
+          typeof value === "function" &&
+          Schema.isSchema(value) &&
+          "identifier" in value &&
+          !seen.has(value) &&
+          seen.add(value)
             ? [
                 {
                   value,
+                  error: value.prototype instanceof Error,
                   path: `effect-browser/${folder}${module}${name === module ? "" : `/${name}`}`,
                 },
               ]
@@ -95,10 +106,11 @@ it.effect("every public error's identifier is its path", () =>
       ),
     );
 
-    assert.isNotEmpty(errors);
+    assert.isTrue(classes.some(({ error }) => error));
+    assert.isTrue(classes.some(({ error }) => !error));
     assert.deepStrictEqual(
-      errors.map(({ value }) => value.identifier),
-      errors.map(({ path }) => path),
+      classes.map(({ value }) => value.identifier),
+      classes.map(({ path }) => path),
     );
   }),
 );

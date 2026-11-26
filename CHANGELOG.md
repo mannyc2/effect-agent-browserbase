@@ -11,10 +11,12 @@ its entry ends with how. Entries before 0.3 are short summaries drawn from the r
 
 **Breaking.** The packages move into the `@effect-browser` scope, Chromium becomes a package of its
 own, the core's features become subpaths, and an agent's browser tools move into the core as
-`effect-browser/ai`, for any `effect/ai` loop (#324, #327). The Page's reading, pictures and
-filming become functions in their types' modules (#326, #333). Errors take identifiers and guards (#329), and
-constructors and layers take Effect's names and shapes (#325). There are no aliases or shims: each
-name this entry gives as removed or renamed is gone, and the entry says what replaced it.
+`effect-browser/ai`, for any `effect/ai` loop (#324, #327). The Page's reading, pictures and filming
+become functions in their types' modules (#326, #333). Errors take identifiers and guards (#329),
+and constructors and layers take Effect's names and shapes (#325). Names that read two ways are
+renamed, durations are `Duration.Input` and more functions are `dual` (#334). There are no aliases
+or shims: each name this entry gives as removed or renamed is gone, and the entry says what replaced
+it.
 
 ### Packages
 
@@ -55,10 +57,11 @@ path, such as `effect-browser/timeline/Moment`.
 | `effect-browser/ActionPort`, `/Clock`, `/Geometry`, `/Matching`, `/Url` | Closed, with no public replacement                                     |
 
 - The root no longer exports `ActionPort`, `Clock`, `Geometry`, `Url` or `Style`, and exports
-  `InputStyle` and the new `Text`. `Geometry`'s `Plan`, `Planner`, `Point`, `Sample`, `maximumDurationMillis` and
-  `maximumSamples` are still in `Motion`; its `normal` is gone.
-- `effect-browser/Cdp`, with its `workerd` condition, `effect-browser/Site`, `effect-browser/testing`
-  and the root's modules keep their paths. Neither `Cdp` nor `Site` is in the root.
+  `InputStyle` and the new `Text`. `Geometry`'s `Plan`, `Planner`, `Point`, `Sample`,
+  `maximumDurationMillis` and `maximumSamples` are still in `Motion`; its `normal` is gone.
+- `effect-browser/Cdp`, with its `workerd` condition, `effect-browser/Site`,
+  `effect-browser/testing` and the root's modules keep their paths. Neither `Cdp` nor `Site` is in
+  the root.
 
 ### Renamed
 
@@ -73,12 +76,16 @@ path, such as `effect-browser/timeline/Moment`.
 - `BrowserError.Reason` is `BrowserError.BrowserErrorReason`, and `BrowserbaseError.Reason` is
   `BrowserbaseError.BrowserbaseErrorReason`.
 - `TestBrowserbase.Release` is `TestBrowserbase.ReleaseAnswer`.
-- `AdapterState`, which `effect-agent-browser/testing` also exported, is split: `tabs`, `Tabs`, `follow` and `selected` are `Tabs.make`, `Tabs.Tabs`,
-  `Tabs.follow` and `Tabs.selected` in `effect-browser/ai`; `moments`, `Moments`, `Placed`,
-  `place` and `weave` are `Moments.make`, `Moments.Moments`, `Moments.Placed`, `Moments.place` and
-  `Moments.weave` in `@effect-browser/yielded`; and `Seed` and `load` are `YieldedTools.Seed` and
-  `YieldedTools.load`.
+- `AdapterState`, which `effect-agent-browser/testing` also exported, is split: `tabs`, `Tabs`,
+  `follow` and `selected` are `Tabs.make`, `Tabs.Tabs`, `Tabs.follow` and `Tabs.selected` in
+  `effect-browser/ai`; `moments`, `Moments`, `Placed`, `place` and `weave` are `Moments.make`,
+  `Moments.Moments`, `Moments.Placed`, `Moments.place` and `Moments.weave` in
+  `@effect-browser/yielded`; and `Seed` and `load` are `YieldedTools.Seed` and `YieldedTools.load`.
 - `PageControl.useError` is `ToolError.fromBrowserError`.
+- The member `Page.clock` is `Page.hostClock`: it is the owning browser's host clock, where
+  Playwright's `page.clock` fakes a page's timers.
+- `Moment.capture` is `Moment.read`, and `Moment.CaptureOptions` is `Moment.MomentOptions`. Its span
+  is `Moment.read`, which the bench and the site's player count as a look.
 
 ### The Page
 
@@ -92,7 +99,7 @@ input. The duplicates among the pictures are gone.
 | --------------------------------- | --------------------------------------------------------- |
 | `page.snapshot(options)`          | `Snapshot.read(page, options)`                            |
 | `page.find(query)`                | `Snapshot.find(page, query)`                              |
-| `page.until(query, want, millis)` | `Snapshot.until(page, query, want, millis)`               |
+| `page.until(query, want, millis)` | `Snapshot.until(page, query, want, timeout)`              |
 | `page.text(options)`              | `Text.read(page, options)`, in the new root module `Text` |
 | `page.layout(picks)`              | `Layout.measure(page, picks)`                             |
 | `page.changes(options)`           | `Change.read(page, options)`                              |
@@ -146,6 +153,30 @@ input. The duplicates among the pictures are gone.
 - `Browser.newPage(url?)` opens a page in the `Browser` the context holds, as `HttpClient.get`
   calls the client the context holds.
 
+### Durations and `dual`
+
+- Options that took milliseconds take a `Duration.Input`, under a name without `Millis`:
+  `Page.ReadyOptions.quietMillis` and `Stillness.Options.quietMillis` are `quiet`,
+  `Cdp.Options.connectTimeoutMillis` and `Browserbase.Options.connectTimeoutMillis` are
+  `connectTimeout`, and `PageControl.Options.maxWaitMillis` is `maxWait`. `Snapshot.until`'s timeout
+  and `InputStyle.eased`'s duration take a `Duration.Input` too. A plain number still means
+  milliseconds, and a NaN is refused.
+- `Frame.read` refuses a `maxAge` that is NaN or holds one, with `InvalidRequest`, as it refused a
+  negative one. It read it as zero and took a new picture.
+- Recorded data and Schema classes stay in milliseconds, so recordings decode as before: an
+  `Action`'s `holdMillis`, a frame's and a capture's stats, a window's `since` and `until`, and
+  error fields such as `Busy.waitedMillis`. So do the tools' parameters, `TypingEvent` and
+  `WheelStep`'s `afterMillis`, Film's time axis, Playwright's `ConnectOptions.timeout`,
+  Browserbase's API seconds and the `Site` page script's API.
+- These are `dual`, taking their subject first or last in a pipe: `Action.recorded`,
+  `InputStyle.provide`, `Layout.place`, `Layout.rehearse`, `Page.correlate`, `Policy.escalate`,
+  `Film.frames`, `Tabs.follow`, `Tabs.selected`, `Moment.read`, `Stillness.wait`, `Walk.step`,
+  `Walk.replay`, `Walk.restore`, `Walk.locate`, `Moments.place`, `Moments.weave`, and
+  `@effect-browser/tradingview`'s `Chart` and `ChartInput` functions. `Page.correlate(effect, id)`
+  joins `Page.correlate(id)`.
+- `Page.isPage` tells a page from other values; a `dual` whose other arguments are optional uses it.
+  `Walk.RestoreOptions` names what `Walk.restore` takes.
+
 ### The agent's tools
 
 - `effect-browser/ai` holds `BrowserTools`, `PageControl` and `PromptCache`, with `Tabs` and
@@ -184,10 +215,14 @@ in its tsconfig, among the `@effect/language-service` plugin's options:
 - `Schema.is` of one package's error no longer accepts another's error of the same tag:
   `BrowserError.NotFound` accepted Browserbase's `NotFound`, and each package's reasons accepted the
   other's `NotFound` and `InvalidRequest`.
-- Guards: `BrowserError.isBrowserError` and `isBrowserErrorReason`, `BrowserbaseError.isBrowserbaseError`
-  and `isBrowserbaseErrorReason`, `Walk.isReplayError` and `isReplayErrorReason`, with
-  `Walk.ReplayErrorReason` naming the walk's reasons, `ToolError.isToolError` and
-  `TestModel.isScriptError`.
+- Guards: `BrowserError.isBrowserError` and `isBrowserErrorReason`,
+  `BrowserbaseError.isBrowserbaseError` and `isBrowserbaseErrorReason`, `Walk.isReplayError` and
+  `isReplayErrorReason`, with `Walk.ReplayErrorReason` naming the walk's reasons,
+  `ToolError.isToolError` and `TestModel.isScriptError`.
+- The 19 `BrowserEvent` classes, `Frame`'s `BrowserPaint` and `Screenshot`, and `Release`'s
+  `Confirmed` and `Unconfirmed` have identifiers too, such as
+  `effect-browser/BrowserEvent/Navigated` and `effect-browser/supervisor/Release/Confirmed`. Their
+  tags are unchanged, so recorded events and frames decode as before.
 - `Supervisor.InvalidWait` is a Schema error rather than a `Data.TaggedError`, with the same
   `detail`.
 - `@effect-browser/human-strokes`' `DataError` has the tag `DataError`, where it had
@@ -197,7 +232,8 @@ in its tsconfig, among the `@effect/language-service` plugin's options:
 
 `bun run boundaries` now deletes each feature folder on its own, with the features that import it,
 and typechecks the rest; checks that the root's runtime loads only `effect`; and refuses
-`@yielded/agent` in any package but `@effect-browser/yielded`. The packed check covers the five
+`@yielded/agent` in any package but `@effect-browser/yielded`. The core's tests require every public
+Schema class to have an identifier equal to its path. The packed check covers the five
 published names, 59 entry points, in a clean npm project and in a Bun workspace. No hosted or paid
 check has run on this release.
 

@@ -53,14 +53,14 @@ tools against `dev`, the default, and compare arms on `eval`.
 | `payment-refund` | operate    | Refund the one payment a support ticket describes, among payments that look alike               |
 
 An operate task gives a Yielded agent the browser tools. An understand task brings the page to
-a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call:
+a moment without a model, takes it (`Moment.read`) and asks a model about it in one call:
 `LanguageModel.generateObject` over `Moment.toPrompt`, with the task's question as the system
 message. Capture starts before the scripted setup, and multi-frame tasks check the
 retained time span as well as the frame count. The final frame must follow the fixture's last visual
 change on the browser clock. A screencast can lose the final paint of a page that then stays
 still, so each fixture paints its settled state once more, and if no frame reaches the barrier the
 final frame is a fresh screenshot with its own capture timing, never a claimed paint time.
-`Moment.capture` also ends with a fresh screenshot whenever its newest frame is not demonstrably
+`Moment.read` also ends with a fresh screenshot whenever its newest frame is not demonstrably
 current (for example on a page that has been still for a while); one taken after the fixture's
 last change was read counts as following it. An
 incomplete capture is an infrastructure failure, before any model call. Bench browsers keep 30 seconds of frames, for the
@@ -360,27 +360,27 @@ trial counts when its page holds the work the task asked for, whatever the answe
 keeps this as `onPage`. The runs recorded below matched answers exactly, so their pass counts fail
 a code given inside a sentence.
 
-| Arm | Operate tasks                                                                                                                                                                                                  | Understand tasks                               |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools                                                 | The moment with its outline                    |
-| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                                                                   | As arm 5                                       |
-| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                                                                            | `Moment.capture` as it is: frames and timeline |
-| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                                                                   | As arm 5                                       |
-| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                                                                | As arm 5                                       |
-| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                                                           | As arm 5                                       |
-| 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look`                                          | As arm 5                                       |
-| 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                                                            | As arm 5                                       |
-| 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels                                                     | As arm 5                                       |
-| 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels                                                     | As arm 5                                       |
-| 13  | Boxes in the outline: arm 5 with each control's box, `WxH at (x,y)`, on its outline line                                                                                                                       | As arm 5                                       |
-| 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                                                                      | As arm 5                                       |
-| 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                                                                   | As arm 5                                       |
-| 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                                                                  | As arm 5                                       |
-| 17  | Chart reads: arm 5 with `@effect-browser/tradingview`'s `chart_state`, `chart_bars`, `chart_values`, `chart_point` and `chart_at`; drawings still by pointer, at `chart_point`'s points                        | As arm 5                                       |
-| 18  | Retired. Chart writes through the API, with no visible input; arm 20 makes the same changes as input                                                                                                           | As arm 5                                       |
-| 19  | Chart programs: arm 5 with `chart_program`, whose JavaScript reads the chart as `chart.state`, `chart.bars`, `chart.values`, `chart.point` and `chart.at` beside `browser.*`                                   | As arm 5                                       |
-| 20  | Chart changes: arm 17 with `chart_draw`, `chart_remove`, `chart_range`, `chart_symbol`, `chart_timeframe`, `chart_indicator` and `chart_inputs`, which change the chart with its own toolbar, keys and dialogs | As arm 5                                       |
-| 21  | Chart change programs: arm 19 whose `chart.*` calls also change the chart, as arm 20's tools do                                                                                                                | As arm 5                                       |
+| Arm | Operate tasks                                                                                                                                                                                                  | Understand tasks                            |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| 1   | The ref tools alone, as Yielded once gave them: `observe`, one action per `act` with the next outline, and the control tools; no pictures and no pointer tools                                                 | The moment with its outline                 |
+| 2   | Vision first: a screenshot before each turn and no outline; the pointer tools, `zoom` and `navigate`; no `observe`, `act` or condition waits                                                                   | As arm 5                                    |
+| 5   | The default: a screenshot before each turn, `observe` and `act` in batches, the control tools and the pointer tools                                                                                            | `Moment.read` as it is: frames and timeline |
+| 6   | Moments: arm 5, but after each turn's results a moment of what the page did since the turn before, instead of the screenshot                                                                                   | As arm 5                                    |
+| 7   | Programs: arm 5's tools behind one Code Mode tool, `browser_program`, whose JavaScript calls them as `browser.observe`, `browser.act` and so on                                                                | As arm 5                                    |
+| 8   | Programs and tools: arm 5's tools, and `browser_program` beside them                                                                                                                                           | As arm 5                                    |
+| 9   | Pictures by page: arm 5 and `look`, with the screenshot only after pointer input, while the viewport shows a canvas, a video or another site's frame, or after `look`                                          | As arm 5                                    |
+| 10  | Pictures on request: arm 5 and `look`, with the screenshot only after `look`, and an instruction to check each step                                                                                            | As arm 5                                    |
+| 11  | Half-size pictures: arm 5 in a browser at device scale 0.5, shown its 1280×720 viewport at 640×360; the pointer tools and `zoom` take the picture's pixels                                                     | As arm 5                                    |
+| 12  | Sharper pictures: arm 5 in a browser at device scale 1.5, shown its 1280×720 viewport at 1920×1080; the pointer tools and `zoom` take the picture's pixels                                                     | As arm 5                                    |
+| 13  | Boxes in the outline: arm 5 with each control's box, `WxH at (x,y)`, on its outline line                                                                                                                       | As arm 5                                    |
+| 14  | Find and changes: arm 5 with `find`, and after an action only what changed in the outline                                                                                                                      | As arm 5                                    |
+| 15  | Zoom before placing: arm 5 told to zoom before a precise placement, such as a drawing's ends                                                                                                                   | As arm 5                                    |
+| 16  | Placement by crop: arm 5 whose `click_at` and `drag` first show a crop around each point, and act when called again inside it                                                                                  | As arm 5                                    |
+| 17  | Chart reads: arm 5 with `@effect-browser/tradingview`'s `chart_state`, `chart_bars`, `chart_values`, `chart_point` and `chart_at`; drawings still by pointer, at `chart_point`'s points                        | As arm 5                                    |
+| 18  | Retired. Chart writes through the API, with no visible input; arm 20 makes the same changes as input                                                                                                           | As arm 5                                    |
+| 19  | Chart programs: arm 5 with `chart_program`, whose JavaScript reads the chart as `chart.state`, `chart.bars`, `chart.values`, `chart.point` and `chart.at` beside `browser.*`                                   | As arm 5                                    |
+| 20  | Chart changes: arm 17 with `chart_draw`, `chart_remove`, `chart_range`, `chart_symbol`, `chart_timeframe`, `chart_indicator` and `chart_inputs`, which change the chart with its own toolbar, keys and dialogs | As arm 5                                    |
+| 21  | Chart change programs: arm 19 whose `chart.*` calls also change the chart, as arm 20's tools do                                                                                                                | As arm 5                                    |
 
 Arm 5 is the default. Each arm is a Yielded agent (`Arms.ts`) over the task's page, with its own
 tools and system prompt, `done` and `give_up` to end the run, and Yielded's policy: a run has

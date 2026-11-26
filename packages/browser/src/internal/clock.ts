@@ -5,6 +5,26 @@
  */
 import { type Clock, Duration, Effect, Option, Semaphore } from "effect";
 
+/**
+ * A duration in milliseconds: NaN for an input that is no duration, or that holds a NaN, which
+ * `Duration.fromInput` would read as zero. An infinite one stays infinite, for the caller's bounds.
+ */
+export const millisOf = (input: Duration.Input): number => {
+  const parts =
+    typeof input === "number"
+      ? [input]
+      : typeof input === "object" && !Duration.isDuration(input)
+        ? Object.values(input)
+        : [];
+
+  return parts.some((part) => typeof part === "number" && Number.isNaN(part))
+    ? Number.NaN
+    : Option.match(Duration.fromInput(input), {
+        onNone: () => Number.NaN,
+        onSome: Duration.toMillis,
+      });
+};
+
 /** Read the captured owner's clock, including from native callbacks, without changing its origin. */
 export const monotonicMillis = (clock: Clock.Clock): number =>
   Number(clock.monotonicTimeNanosUnsafe()) / 1e6;

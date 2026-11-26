@@ -130,7 +130,7 @@ const narrate = <E>(
 
       // A moment says what it could not read, as mid-navigation, rather than fail; one that fails
       // anyway, or whose caption fails, leaves its window to the next try.
-      const captured = yield* Moment.capture(page, {
+      const captured = yield* Moment.read(page, {
         frames: 3,
         since: previous ?? Duration.fromInputUnsafe(every),
         snapshot: false,
@@ -495,7 +495,7 @@ const understand = <A, I extends Record<string, unknown>, E = A>(spec: {
       // the evidence window.
       const waited = shot === undefined ? 0 : (yield* browser.now) - waiting;
 
-      const captured = yield* Moment.capture(page, {
+      const captured = yield* Moment.read(page, {
         frames: spec.capture.frames,
         since: Duration.millis((spec.capture.windowMillis ?? 5000) + waited),
         snapshot: Arms.outline(options.arm ?? 5),
@@ -646,7 +646,7 @@ const spin = (page: Page) =>
     const { spins } = yield* truth(page, ReelsTruth);
 
     yield* page.click(spinAt);
-    yield* Stillness.wait(page, { quietMillis: 400, timeout: Duration.seconds(10) });
+    yield* Stillness.wait(page, { quiet: "400 millis", timeout: Duration.seconds(10) });
     // `ready` can take a stalled screencast for a still page while the reels turn, and the game
     // ignores a click while they do, so the reels' own state says when the spin has ended.
     yield* truth(page, ReelsTruth).pipe(
@@ -942,7 +942,7 @@ const tumbleWin = understand({
         Effect.timeout("20 seconds"),
         Effect.orDie,
       );
-      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(3) });
     }),
   // Three frames can omit an entire paying cascade; give the describer its visual evidence.
   capture: { frames: 12, windowMillis: 20_000 },
@@ -989,7 +989,7 @@ const orderFilled = understand({
       // Keep an earlier no-order frame distinct from the final filled row.
       yield* Effect.sleep("700 millis");
       yield* buy(page, "0.25");
-      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
   minimumSpanMillis: () => Effect.succeed(500),
@@ -1038,7 +1038,7 @@ const navigated = understand({
     Effect.gen(function* () {
       yield* Effect.sleep("700 millis");
       yield* playReels(page);
-      yield* Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
+      yield* Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(3) });
     }),
   capture: { frames: 2, windowMillis: 5000 },
   minimumSpanMillis: () => Effect.succeed(500),
@@ -1222,7 +1222,7 @@ const boardWhen = (page: Page, ready: (board: typeof BoardTruth.Type) => boolean
   );
 
 const settle = (page: Page) =>
-  Stillness.wait(page, { quietMillis: 150, timeout: Duration.seconds(3) });
+  Stillness.wait(page, { quiet: "150 millis", timeout: Duration.seconds(3) });
 
 /** The first selected frame was painted before `at`, so the pictures hold the earlier state. */
 const startsBefore = (frames: ReadonlyArray<Frame.Frame>, at: number | null, what: string) => {

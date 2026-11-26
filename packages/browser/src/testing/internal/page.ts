@@ -305,7 +305,7 @@ export const makeIn = Effect.fnUntraced(function* (
     }),
     ...methods(perform),
     id,
-    clock,
+    hostClock: clock,
     perform,
     afterInput: (effect) => own(lane.read("afterInput")(effect)),
     read: () => unsupported("read"),

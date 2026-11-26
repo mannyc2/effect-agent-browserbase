@@ -1,9 +1,9 @@
 /** Replay and restore with durable read-back before repeating uncertain consequential input. */
-import { Clock, Duration, Effect, Exit, Option, Schedule, Schema } from "effect";
+import { Clock, Duration, Effect, Exit, Function, Option, Schedule, Schema } from "effect";
 
 import { type Action } from "../../Action.ts";
 import { type BrowserError, InvalidRequest, undispatched } from "../../BrowserError.ts";
-import type { Page, ReadyOptions, Target } from "../../Page.ts";
+import { isPage, type Page, type ReadyOptions, type Target } from "../../Page.ts";
 import * as Snapshot from "../../Snapshot.ts";
 import * as Stillness from "../../timeline/Stillness.ts";
 import { type Ambiguous, Drifted, type Missing } from "./choose.ts";
@@ -199,12 +199,7 @@ const checkEffect = (
   }
 };
 
-/**
- * Take one step. Unknown non-repeatable input is never resent: only positive durable read-back
- * can skip it. An interrupted call remains interrupted; persist begun-before-call in the consumer
- * and treat a missing receipt as Stopped{input: "unknown"}, including after process restart.
- */
-export const step = Effect.fn("Walk.step")(function* (
+const stepOn = Effect.fn("Walk.step")(function* (
   page: Page,
   plan: Walk,
   at: number | Stopped,
@@ -253,12 +248,12 @@ export const step = Effect.fn("Walk.step")(function* (
       options.settle !== false &&
       (index > 0 || !["Goto", "Back", "Reload"].includes(step.action._tag))
     )
-      yield* options.settle?.quietMillis === undefined
+      yield* options.settle?.quiet === undefined
         ? page.ready(options.settle)
         : Stillness.wait(page, {
             ...options.settle,
             still: "content",
-            quietMillis: options.settle.quietMillis,
+            quiet: options.settle.quiet,
           });
     const before = plan.steps[index - 1]?.url;
 
@@ -326,7 +321,7 @@ export const step = Effect.fn("Walk.step")(function* (
   });
 
   return yield* work.pipe(
-    Effect.provideService(Clock.Clock, page.clock),
+    Effect.provideService(Clock.Clock, page.hostClock),
     Effect.mapError(
       (reason) =>
         new ReplayError({
@@ -386,7 +381,7 @@ const run = Effect.fnUntraced(function* (
         ? from
         : index;
 
-    const receipt = yield* step(page, plan, at, options).pipe(
+    const receipt = yield* stepOn(page, plan, at, options).pipe(
       Effect.mapError((error) => new ReplayError({ ...error, receipts: [...receipts] })),
     );
 
@@ -396,18 +391,64 @@ const run = Effect.fnUntraced(function* (
   return receipts;
 });
 
+/**
+ * Take one step. Unknown non-repeatable input is never resent: only positive durable read-back
+ * can skip it. An interrupted call remains interrupted; persist begun-before-call in the consumer
+ * and treat a missing receipt as Stopped{input: "unknown"}, including after process restart.
+ */
+export const step: {
+  (
+    plan: Walk,
+    at: number | Stopped,
+    options?: StepOptions,
+  ): (page: Page) => Effect.Effect<Receipt, ReplayError>;
+  (
+    page: Page,
+    plan: Walk,
+    at: number | Stopped,
+    options?: StepOptions,
+  ): Effect.Effect<Receipt, ReplayError>;
+} = Function.dual((args) => isPage(args[0]), stepOn);
+
 /** Take a plan's steps from a fresh index or durable stopping point, returning completed receipts. */
-export const replay = (page: Page, plan: Walk, options: ReplayOptions = {}) =>
-  run(page, plan, options, options.from ?? 0, plan.steps.length, false).pipe(
-    Effect.withSpan("Walk.replay"),
-  );
+export const replay: {
+  (
+    plan: Walk,
+    options?: ReplayOptions,
+  ): (page: Page) => Effect.Effect<ReadonlyArray<Receipt>, ReplayError>;
+  (
+    page: Page,
+    plan: Walk,
+    options?: ReplayOptions,
+  ): Effect.Effect<ReadonlyArray<Receipt>, ReplayError>;
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, plan: Walk, options: ReplayOptions = {}) =>
+    run(page, plan, options, options.from ?? 0, plan.steps.length, false).pipe(
+      Effect.withSpan("Walk.replay"),
+    ),
+);
+
+/** What `restore` takes: how each step waits, its inputs, and how many steps it restores. */
+export interface RestoreOptions extends StepOptions {
+  readonly upTo?: number | undefined;
+}
 
 /** Restore prior steps on a fresh page; unresolved commitments require positive durable evidence. */
-export const restore = (
-  page: Page,
-  plan: Walk,
-  options: StepOptions & { readonly upTo?: number | undefined } = {},
-) =>
-  run(page, plan, options, 0, options.upTo ?? plan.steps.length, true).pipe(
-    Effect.withSpan("Walk.restore"),
-  );
+export const restore: {
+  (
+    plan: Walk,
+    options?: RestoreOptions,
+  ): (page: Page) => Effect.Effect<ReadonlyArray<Receipt>, ReplayError>;
+  (
+    page: Page,
+    plan: Walk,
+    options?: RestoreOptions,
+  ): Effect.Effect<ReadonlyArray<Receipt>, ReplayError>;
+} = Function.dual(
+  (args) => isPage(args[0]),
+  (page: Page, plan: Walk, options: RestoreOptions = {}) =>
+    run(page, plan, options, 0, options.upTo ?? plan.steps.length, true).pipe(
+      Effect.withSpan("Walk.restore"),
+    ),
+);

@@ -29,6 +29,7 @@ import * as Snapshot from "effect-browser/Snapshot";
 
 import * as Chart from "./Chart.ts";
 import { drawings } from "./internal/drawings.ts";
+import { onPage } from "./internal/dual.ts";
 import {
   awaiting,
   type Box,
@@ -244,7 +245,7 @@ const exact = (page: Page, drawing: Drawing, id: string, via: Via) =>
  * line's tool chosen by Alt+T, and every other tool from its toolbar group's menu. Gives the
  * drawing as the chart then holds it.
  */
-export const draw = (page: Page, drawing: Drawing) =>
+export const draw = onPage((page: Page, drawing: Drawing) =>
   Effect.gen(function* () {
     const wanted = Chart.points(drawing.shape);
 
@@ -268,7 +269,8 @@ export const draw = (page: Page, drawing: Drawing) =>
     );
 
     return (yield* exact(page, drawing, made.id, made.via)) satisfies Drawn;
-  });
+  }),
+);
 
 // Where a click lands on a drawing: on a line across the pane, at its price or its time; along the
 // way between its first two points, which a straight drawing passes on screen, from the middle, as
@@ -339,7 +341,7 @@ const unlisted = (page: Page, id: string) =>
  * Remove a drawing, with a click on it and Delete, or a study, with its legend row's Remove
  * button.
  */
-export const remove = (page: Page, id: string) =>
+export const remove = onPage((page: Page, id: string) =>
   Effect.gen(function* () {
     const state = yield* Chart.state(page);
     const drawing = state.drawings.find((candidate) => candidate.id === id);
@@ -359,6 +361,7 @@ export const remove = (page: Page, id: string) =>
     );
 
     return { via };
-  });
+  }),
+);
 
 export { range, symbol, timeframe, indicator, inputs } from "./internal/controls.ts";

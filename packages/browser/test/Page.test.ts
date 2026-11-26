@@ -698,7 +698,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
 
         yield* page.click({ x: 300, y: 320 });
         assert.isTrue((yield* slotState(page)).spinning);
-        yield* Stillness.wait(page, { quietMillis: 600, timeout: Duration.seconds(10) });
+        yield* Stillness.wait(page, { quiet: "600 millis", timeout: Duration.seconds(10) });
         assert.deepInclude(yield* slotState(page), { spins: 1, spinning: false });
         assert.deepStrictEqual(yield* reason(page.click({ x: 5000, y: 5 })), {
           tag: "InvalidRequest",
@@ -751,10 +751,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
             Frame.read(page, { after: "input" }),
             (frame) => frame.image,
           ),
-          moment: Effect.map(
-            Moment.capture(page, { frames: 1 }),
-            (moment) => moment.frames[0]?.image,
-          ),
+          moment: Effect.map(Moment.read(page, { frames: 1 }), (moment) => moment.frames[0]?.image),
         };
 
         for (const [read, image] of Object.entries(reads)) {

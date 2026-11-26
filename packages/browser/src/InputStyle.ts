@@ -8,6 +8,7 @@ import {
   Context,
   type Duration,
   Effect,
+  Function,
   type MutableRef,
   type Option,
   Random,
@@ -16,6 +17,7 @@ import {
 
 import { undispatched, type BrowserError, InvalidRequest, refuse } from "./BrowserError.ts";
 import type { ActionAnnounced } from "./BrowserEvent.ts";
+import { millisOf } from "./internal/clock.ts";
 import type * as Motion from "./internal/geometry.ts";
 import { normal } from "./internal/geometry.ts";
 import * as Keys from "./internal/input/keys.ts";
@@ -270,13 +272,15 @@ const bursts = Effect.fnUntraced(function* (dx: number, dy: number) {
 });
 
 /**
- * A wheel that eases over `durationMillis`: a step each frame, sixty a second, slow at first and
- * last, so a scroll that viewers watch glides to where it goes. A style takes it as its `wheel`;
- * a film scrolls on its own time instead.
+ * A wheel that eases over `duration`: a step each frame, sixty a second, slow at first and last,
+ * so a scroll that viewers watch glides to where it goes. A style takes it as its `wheel`; a film
+ * scrolls on its own time instead.
  */
 export const eased =
-  (durationMillis: number): InputStyle["wheel"] =>
+  (duration: Duration.Input): InputStyle["wheel"] =>
   (dx, dy) => {
+    const durationMillis = millisOf(duration);
+
     if (!Number.isFinite(durationMillis) || durationMillis < 0)
       return refuse("scroll", "an eased scroll lasts a finite, nonnegative time");
     if (durationMillis > maximumDurationMillis) return Effect.fail(overBudget("scroll"));
@@ -323,7 +327,11 @@ export const Current = Context.Reference<InputStyle>("effect-browser/InputStyle"
 });
 
 /** Apply a style through page input, including pages selected later by a browser adapter. */
-export const provide =
-  (style: InputStyle) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.provideService(effect, Current, style);
+export const provide: {
+  (style: InputStyle): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  <A, E, R>(effect: Effect.Effect<A, E, R>, style: InputStyle): Effect.Effect<A, E, R>;
+} = Function.dual(
+  2,
+  <A, E, R>(effect: Effect.Effect<A, E, R>, style: InputStyle): Effect.Effect<A, E, R> =>
+    Effect.provideService(effect, Current, style),
+);

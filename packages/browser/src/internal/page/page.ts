@@ -117,7 +117,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     ...Scripts.make(page, bridge, input),
     ...ActionPort.methods(perform),
     perform,
-    clock: page.clock,
+    hostClock: page.clock,
     afterInput,
     id,
     url: Effect.sync(() => Url.redact(playwright.url())),

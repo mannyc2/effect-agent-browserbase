@@ -23,6 +23,7 @@ import * as BrowserError from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
 
 import { drawings, shapes } from "./internal/drawings.ts";
+import { onPage } from "./internal/dual.ts";
 
 /** A time, in the bars' UTC seconds, and a price. */
 export const Point = Schema.Struct({ time: Schema.Finite, price: Schema.Finite });
@@ -479,17 +480,19 @@ export const state = (page: Page) =>
  * Loaded bars, oldest first: the `last` few, or those from `from` to `to`, by default the bars in
  * view.
  */
-export const bars = (
-  page: Page,
-  request: {
-    readonly last?: number | undefined;
-    readonly from?: number | undefined;
-    readonly to?: number | undefined;
-  } = {},
-) =>
-  page
-    .read(readBars, { arg: request, result: Schema.NullOr(Schema.Array(Bar)) })
-    .pipe(Effect.flatMap(found));
+export const bars = onPage(
+  (
+    page: Page,
+    request: {
+      readonly last?: number | undefined;
+      readonly from?: number | undefined;
+      readonly to?: number | undefined;
+    } = {},
+  ) =>
+    page
+      .read(readBars, { arg: request, result: Schema.NullOr(Schema.Array(Bar)) })
+      .pipe(Effect.flatMap(found)),
+);
 
 /** A study's plots bar by bar: their titles, and rows of each bar's time and the plots' values. */
 export const Values = Schema.Struct({
@@ -506,18 +509,20 @@ export type Values = typeof Values.Type;
  * A study's values, as `bars` gives the bars: the `last` few bars', or those `from` one time `to`
  * another, by default the bars in view. A study that is not on the chart fails `NotFound`.
  */
-export const values = (
-  page: Page,
-  request: {
-    readonly study: string;
-    readonly last?: number | undefined;
-    readonly from?: number | undefined;
-    readonly to?: number | undefined;
-  },
-) =>
-  page
-    .read(readValues, { arg: request, result: Outcome(Values) })
-    .pipe(Effect.flatMap(({ value }) => outcome(value)));
+export const values = onPage(
+  (
+    page: Page,
+    request: {
+      readonly study: string;
+      readonly last?: number | undefined;
+      readonly from?: number | undefined;
+      readonly to?: number | undefined;
+    },
+  ) =>
+    page
+      .read(readValues, { arg: request, result: Outcome(Values) })
+      .pipe(Effect.flatMap(({ value }) => outcome(value))),
+);
 
 const Placed = Schema.NullOr(
   Schema.Struct({
@@ -534,15 +539,17 @@ const placed = (page: Page, request: Parameters<typeof place>[0]) =>
  * A time between bars is the nearest bar's; one past the loaded bars, as many bars on. A point may
  * lie outside the pane, off screen.
  */
-export const point = (page: Page, points: ReadonlyArray<Point>) =>
-  Effect.map(placed(page, { points }), ({ positions }) => positions);
+export const point = onPage((page: Page, points: ReadonlyArray<Point>) =>
+  Effect.map(placed(page, { points }), ({ positions }) => positions),
+);
 
 /**
  * The times and prices under viewport points, on the main pane's scale; null where the chart has
  * no time there.
  */
-export const at = (page: Page, positions: ReadonlyArray<Position>) =>
-  Effect.map(placed(page, { positions }), ({ points }) => points);
+export const at = onPage((page: Page, positions: ReadonlyArray<Position>) =>
+  Effect.map(placed(page, { positions }), ({ points }) => points),
+);
 
 /**
  * A drawing tool by its name in the chart API: "horizontal_line", "trend_line", "rectangle",
@@ -658,45 +665,58 @@ const change = (page: Page, request: Change) =>
  * Draw through chart points, as many as the shape takes, with its text for one that shows text;
  * gives the drawing's id.
  */
-export const draw = (
-  page: Page,
-  drawing: {
-    readonly shape: Shape;
-    readonly points: ReadonlyArray<Point>;
-    readonly text?: string | undefined;
-  },
-) => change(page, { kind: "draw", ...drawing });
+export const draw = onPage(
+  (
+    page: Page,
+    drawing: {
+      readonly shape: Shape;
+      readonly points: ReadonlyArray<Point>;
+      readonly text?: string | undefined;
+    },
+  ) => change(page, { kind: "draw", ...drawing }),
+);
 
 /** Remove a drawing or a study by its id. */
-export const remove = (page: Page, id: string) =>
-  Effect.asVoid(change(page, { kind: "remove", id }));
+export const remove = onPage((page: Page, id: string) =>
+  Effect.asVoid(change(page, { kind: "remove", id })),
+);
 
 /** Set a drawing's points, all of them, in its own order. */
-export const move = (
-  page: Page,
-  drawing: { readonly id: string; readonly points: ReadonlyArray<Point> },
-) => Effect.asVoid(change(page, { kind: "move", ...drawing }));
+export const move = onPage(
+  (page: Page, drawing: { readonly id: string; readonly points: ReadonlyArray<Point> }) =>
+    Effect.asVoid(change(page, { kind: "move", ...drawing })),
+);
 
 /** Show the bars from one time to another. */
-export const range = (page: Page, span: { readonly from: number; readonly to: number }) =>
-  Effect.asVoid(change(page, { kind: "range", ...span }));
+export const range = onPage((page: Page, span: { readonly from: number; readonly to: number }) =>
+  Effect.asVoid(change(page, { kind: "range", ...span })),
+);
 
 /** Chart another symbol, such as "MSFT" or "BINANCE:ETHUSDT". */
-export const symbol = (page: Page, name: string) =>
-  Effect.asVoid(change(page, { kind: "symbol", name }));
+export const symbol = onPage((page: Page, name: string) =>
+  Effect.asVoid(change(page, { kind: "symbol", name })),
+);
 
 /** Chart another timeframe, as `State.resolution` writes it. */
-export const timeframe = (page: Page, resolution: string) =>
-  Effect.asVoid(change(page, { kind: "timeframe", resolution }));
+export const timeframe = onPage((page: Page, resolution: string) =>
+  Effect.asVoid(change(page, { kind: "timeframe", resolution })),
+);
 
 /** Add a study by its name, such as "Relative Strength Index", with inputs by id; gives its id. */
-export const indicator = (
-  page: Page,
-  study: { readonly name: string; readonly inputs?: Readonly<Record<string, unknown>> | undefined },
-) => change(page, { kind: "indicator", name: study.name, inputs: study.inputs ?? {} });
+export const indicator = onPage(
+  (
+    page: Page,
+    study: {
+      readonly name: string;
+      readonly inputs?: Readonly<Record<string, unknown>> | undefined;
+    },
+  ) => change(page, { kind: "indicator", name: study.name, inputs: study.inputs ?? {} }),
+);
 
 /** Set a study's inputs by id, such as `{ length: 21 }`; the rest keep their values. */
-export const inputs = (
-  page: Page,
-  request: { readonly study: string; readonly inputs: Readonly<Record<string, unknown>> },
-) => Effect.asVoid(change(page, { kind: "inputs", ...request }));
+export const inputs = onPage(
+  (
+    page: Page,
+    request: { readonly study: string; readonly inputs: Readonly<Record<string, unknown>> },
+  ) => Effect.asVoid(change(page, { kind: "inputs", ...request })),
+);

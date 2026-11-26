@@ -69,7 +69,11 @@ export const run = () =>
         : "NotDone";
 
       yield* Snapshot.until(page, { selector: "#status", text: "Saved" }, "some", 1000);
-      yield* Stillness.wait(page, { still: "foreground", quietMillis: 100, timeout: "5 seconds" });
+      yield* Stillness.wait(page, {
+        still: "foreground",
+        quiet: "100 millis",
+        timeout: "5 seconds",
+      });
       const saved = yield* Text.read(page);
 
       yield* page.goto(
@@ -84,7 +88,7 @@ setInterval(() => { green = !green; context.fillStyle = green ? 'rgb(0,255,0)' :
 
       const moving = yield* Stillness.wait(page, {
         still: "foreground",
-        quietMillis: 300,
+        quiet: "300 millis",
         timeout: "1200 millis",
       }).pipe(Effect.result);
 
@@ -92,7 +96,11 @@ setInterval(() => { green = !green; context.fillStyle = green ? 'rgb(0,255,0)' :
       yield* page.goto("data:text/html,<title>Next document</title><h1>Next document</h1>");
       const next = yield* Snapshot.read(page);
 
-      yield* Stillness.wait(page, { still: "foreground", quietMillis: 100, timeout: "5 seconds" });
+      yield* Stillness.wait(page, {
+        still: "foreground",
+        quiet: "100 millis",
+        timeout: "5 seconds",
+      });
 
       yield* page.goto(
         "data:text/html,<button style='width:100px;height:100px'>New control</button>",

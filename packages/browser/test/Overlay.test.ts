@@ -185,7 +185,7 @@ layer(TestCdp.provideLayer(Chromium.layer({ viewport: { width: 400, height: 300 
       );
 
       yield* Effect.sleep(Duration.millis(200));
-      yield* Stillness.wait(page, { still: "screen", quietMillis: 500, timeout: "5 seconds" });
+      yield* Stillness.wait(page, { still: "screen", quiet: "500 millis", timeout: "5 seconds" });
       assert.isTrue(x > 5);
       yield* Fiber.interrupt(moving);
       assert.isTrue(yield* evaluate(page, () => document.querySelectorAll("p").length === 1));

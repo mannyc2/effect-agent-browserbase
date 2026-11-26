@@ -104,7 +104,7 @@ it.effect("publishes only current-document paint and stops retired feeds after a
     yield* first.emitFrame(frame("first"));
     yield* TestClock.adjust("1 millis");
     assert.lengthOf(frames, before);
-    const current = frame("first", 1, monotonicMillis(first.page.clock));
+    const current = frame("first", 1, monotonicMillis(first.page.hostClock));
 
     yield* first.emitFrame(current);
     yield* TestClock.adjust("1 millis");
@@ -113,7 +113,7 @@ it.effect("publishes only current-document paint and stops retired feeds after a
     yield* Effect.yieldNow;
     const switched = frames.length;
 
-    yield* first.emitFrame(frame("first", 1, monotonicMillis(first.page.clock)));
+    yield* first.emitFrame(frame("first", 1, monotonicMillis(first.page.hostClock)));
     yield* TestClock.adjust("1 millis");
     assert.lengthOf(frames, switched);
     assert.strictEqual(frames.at(-1)?.page, "second");

@@ -145,7 +145,7 @@ it.live(
           yield* Snapshot.read(still);
           yield* recorded(still);
           from = proxy.commands.length;
-          yield* Stillness.wait(still, { quietMillis: 200 });
+          yield* Stillness.wait(still, { quiet: "200 millis" });
           assert.strictEqual(sentOn(proxy, control, from).length, 2);
           assert.deepStrictEqual(methods(sentOn(proxy, capturing, from)), ["Page.getFrameTree"]);
         }),
@@ -305,7 +305,7 @@ it.live("never reads a stall on the capture connection as a still screen", () =>
               Effect.forkChild,
             );
 
-            return yield* Stillness.wait(page, { quietMillis: 400, timeout: "3 seconds" }).pipe(
+            return yield* Stillness.wait(page, { quiet: "400 millis", timeout: "3 seconds" }).pipe(
               Effect.as("still"),
               Effect.catch((error) => Effect.succeed(error.reason._tag)),
             );

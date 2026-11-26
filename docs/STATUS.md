@@ -24,8 +24,10 @@ Every package peers on `effect` `~4.1.2`. `effect-browser`, `@effect-browser/chr
 ### `effect-browser`
 
 Browsers and pages over the Chrome DevTools Protocol, through `playwright-core`. It depends on
-`effect` and `playwright-core` only. The root, `effect-browser`, loads only `effect` at runtime, and
-each of its modules also has a path of its own, such as `effect-browser/Page`:
+`effect` and `playwright-core` only. Functions that take a subject and more arguments are `dual`,
+options take durations as `Duration.Input`, and every public Schema class is identified by its path,
+such as `effect-browser/Frame/Region`. The root, `effect-browser`, loads only `effect` at runtime,
+and each of its modules also has a path of its own, such as `effect-browser/Page`:
 
 - `Browser`: the service. Its pages, which keep their CDP target ids, so a new connection to the
   same browser finds one again with `browser.page(id)`; its events, read from a cursor, with an
@@ -71,10 +73,10 @@ The subpaths:
   entry imports no Node transport, and the caller passes a `connect` of its own.
 - `effect-browser/Site`: the readers, the change record, the overlay and poses, for a site to run in
   its own bundle on its own page, with no protocol and no runtime `effect`.
-- `effect-browser/timeline`: `Moment`, a window that ends at a picture of the page now, with what
-  was still changing at its end and what had settled (`Moment.account`), laid out as one message
-  for any `effect/ai` call (`Moment.toPrompt`); and `Stillness.wait`, for a page's screen, content
-  or foreground to stay still.
+- `effect-browser/timeline`: `Moment`, a window that ends at a picture of the page now
+  (`Moment.read`), with what was still changing at its end and what had settled (`Moment.account`),
+  laid out as one message for any `effect/ai` call (`Moment.toPrompt`); and `Stillness.wait`, for a
+  page's screen, content or foreground to stay still.
 - `effect-browser/presentation`: `Presentation`, input performed for viewers through a view of a
   page, with one drawn pointer, a person's reaction times and typing near 70 WPM; `Stage`, the
   source of a live output, switched between pages with their captures overlapping; `Motion`, the
@@ -104,8 +106,8 @@ each feature folder deleted, together with the features that import it.
 ### `@effect-browser/chromium`
 
 `Chromium.make`, `Chromium.layer` and `Chromium.layerConfig` launch a local Chromium through
-`playwright-core`, as a `Browser`. Chromium runs without its sandbox unless given `sandbox: true`, as in Playwright; the
-package's README says what that risks.
+`playwright-core`, as a `Browser`. Chromium runs without its sandbox unless given `sandbox: true`,
+as in Playwright; the package's README says what that risks.
 
 ### `@effect-browser/browserbase`
 
@@ -227,8 +229,8 @@ moments without `Moment.account` and in 29 with it. The site's two demos are rec
 - **Hosted checks prepared but not run** ([HOSTED_CHECKS.md](HOSTED_CHECKS.md)): two captures held
   for five minutes with cued switches (H1), a supervisor's rotation with a persisted context read
   back in the next session (H2), and a human sign-in through Live View during an input suspension
-  (H3). They wait for verified included Browserbase hours, and H3 for an operator. Local Chromium and
-  the in-memory Browserbase check their mechanisms, not Browserbase's timing, persistence or
+  (H3). They wait for verified included Browserbase hours, and H3 for an operator. Local Chromium
+  and the in-memory Browserbase check their mechanisms, not Browserbase's timing, persistence or
   billing.
 - **`effect-browser/Site`** has run on no real site yet.
 - **Workers:** the `workerd` run above was local. A Cloudflare-hosted Playwright connector has not
