@@ -1,5 +1,7 @@
 # Supervisor audit implementation — 21 October 2026
 
+> Archived. It describes the code as it was on 22 October 2026, at `e903f55`, not as it is now.
+
 This ledger preserves the initial audit implementation and its historical evidence through
 `1d6d7c7`. Subsequent Claude findings, changed request/registration contracts and current
 acceptance are recorded in [the follow-through ledger](CLAUDE-FOLLOWTHROUGH.md).

@@ -1,5 +1,7 @@
 # Browser replacement implementation ledger
 
+> Archived. It describes the code as it was on 22 October 2026, at `e903f55`, not as it is now.
+
 Started 21 October 2026 on `codex/browser-audit-fixes-v2`, isolated from the dirty primary
 checkout. `git ls-remote origin refs/heads/main` returned
 `473222529715f67709493def4c30d2419e1f4742`. Routine writes and Git reads succeeded.

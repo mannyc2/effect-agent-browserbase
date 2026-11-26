@@ -1,5 +1,7 @@
 # Reading implementation evidence — 21 October 2026
 
+> Archived. It describes the code as it was on 21 October 2026, at `1d6d7c7`, not as it is now.
+
 Scope follows PLAN bugs 3, 4, 5, 10 and 12 and its reading minor findings. Bug 1
 (`consequence`) is owned by the kernel implementation. Source inspection alone is
 not browser-runtime reproduction.
