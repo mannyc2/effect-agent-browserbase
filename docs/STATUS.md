@@ -174,12 +174,13 @@ spending cap.
 ### On every pull request
 
 CI runs `bun run ready`: the format check, lint with its size limits (600 lines of code a module,
-150 a function, falling to 100), the boundary checks, the typecheck, every workspace's tests and
-the build. Then `tools/check-packed.sh` packs the five published packages and installs them in a
-clean npm project and in a Bun workspace with the isolated linker, where every entry point must
-typecheck and load. Tests run against a real local Chromium on pages the tests serve, an in-memory
-Browserbase and scripted models: none calls a model or a hosted browser. Native suites hold reads,
-pictures and opening a browser to their protocol call budgets through a counting proxy.
+150 a function, falling to 100) and the doc tags, the boundary checks, the typecheck, every
+workspace's tests and the build. Then `tools/check-packed.sh` packs the five published packages and
+installs them in a clean npm project and in a Bun workspace with the isolated linker, where every
+entry point must typecheck and load. Tests run against a real local Chromium on pages the tests
+serve, an in-memory Browserbase and scripted models: none calls a model or a hosted browser. Native
+suites hold reads, pictures and opening a browser to their protocol call budgets through a counting
+proxy.
 
 On `main` at `3708fce`, 26 November 2026, CI passed with 660 tests in `effect-browser`, 72 in
 `@effect-browser/browserbase`, 9 each in `@effect-browser/yielded` and

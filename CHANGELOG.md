@@ -14,9 +14,9 @@ own, the core's features become subpaths, and an agent's browser tools move into
 `effect-browser/ai`, for any `effect/ai` loop (#324, #327). The Page's reading, pictures and filming
 become functions in their types' modules (#326, #333). Errors take identifiers and guards (#329),
 and constructors and layers take Effect's names and shapes (#325). Names that read two ways are
-renamed, durations are `Duration.Input` and more functions are `dual` (#334). There are no aliases
-or shims: each name this entry gives as removed or renamed is gone, and the entry says what replaced
-it.
+renamed, durations are `Duration.Input` and more functions are `dual` (#334), and every public
+export is tagged as Effect tags its own (#332). There are no aliases or shims: each name this entry
+gives as removed or renamed is gone, and the entry says what replaced it.
 
 ### Packages
 
@@ -195,8 +195,9 @@ input. The duplicates among the pictures are gone.
 
 ### Doc tags
 
-Every public export carries `@since 0.3.0`, `@category` and `@stability`, as Effect tags its own.
-`Film` is `@stability experimental`, and the rest `stable`. Effect's language service warns
+Every public export carries `@since 0.3.0`, `@category` and `@stability`, as Effect tags its own,
+and every public module and barrel entry `@since` and `@stability`. `Film` is
+`@stability experimental`, and the rest `stable`. Effect's language service warns
 (`experimentalApiUsage`) at each use of `Film`, so a project whose build denies warnings allows it
 in its tsconfig, among the `@effect/language-service` plugin's options:
 `"allowedExperimentalApis": ["effect-browser/presentation/Film"]`.
@@ -233,9 +234,9 @@ in its tsconfig, among the `@effect/language-service` plugin's options:
 `bun run boundaries` now deletes each feature folder on its own, with the features that import it,
 and typechecks the rest; checks that the root's runtime loads only `effect`; and refuses
 `@yielded/agent` in any package but `@effect-browser/yielded`. The core's tests require every public
-Schema class to have an identifier equal to its path. The packed check covers the five
-published names, 59 entry points, in a clean npm project and in a Bun workspace. No hosted or paid
-check has run on this release.
+Schema class to have an identifier equal to its path, and lint requires the doc tags. The packed
+check covers the five published names, 59 entry points, in a clean npm project and in a Bun
+workspace. No hosted or paid check has run on this release.
 
 ## 0.3.0-beta.24
 
