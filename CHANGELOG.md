@@ -235,7 +235,7 @@ in its tsconfig, among the `@effect/language-service` plugin's options:
 and typechecks the rest; checks that the root's runtime loads only `effect`; and refuses
 `@yielded/agent` in any package but `@effect-browser/yielded`. The core's tests require every public
 Schema class to have an identifier equal to its path, and lint requires the doc tags. The packed
-check covers the five published names, 59 entry points, in a clean npm project and in a Bun
+check covers the five published names, 60 entry points, in a clean npm project and in a Bun
 workspace. No hosted or paid check has run on this release.
 
 ## 0.3.0-beta.24

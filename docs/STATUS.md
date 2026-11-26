@@ -182,10 +182,10 @@ serve, an in-memory Browserbase and scripted models: none calls a model or a hos
 suites hold reads, pictures and opening a browser to their protocol call budgets through a counting
 proxy.
 
-On `main` at `3708fce`, 26 November 2026, CI passed with 660 tests in `effect-browser`, 72 in
-`@effect-browser/browserbase`, 9 each in `@effect-browser/yielded` and
-`@effect-browser/tradingview`, 8 in `@effect-browser/human-strokes`, 4 in
-`@effect-browser/chromium`, 207 in the bench and 87 in the site, and the packed check's 59 entry
+On `main` at `82700b3`, 26 November 2026, after the last of the restructure's code pull requests, CI
+passed with 662 tests in `effect-browser`, 73 in `@effect-browser/browserbase`, 9 each in
+`@effect-browser/yielded` and `@effect-browser/tradingview`, 8 in `@effect-browser/human-strokes`, 4
+in `@effect-browser/chromium`, 220 in the bench and 87 in the site, and the packed check's 60 entry
 points.
 
 ### On Browserbase
@@ -247,5 +247,6 @@ moments without `Moment.account` and in 29 with it. The site's two demos are rec
   Recapturing it takes a paid model call, and the install commands the scoped release.
 - **Timing tests under load:** some of `effect-browser`'s and the bench's timing tests fail on a
   loaded machine and pass alone. On `main` CI, `Budget.test.ts`'s browser-opening call count, a
-  `Ready.test.ts` foreground-motion case and the bench's tumble-interval grading each failed once on
-  26 November 2026, and passed on the next run.
+  `Ready.test.ts` foreground-motion case, the bench's tumble-interval grading and its watched-order
+  case for a queued reveal, which gives the queued call a fixed 30 ms, each failed once on 26
+  November 2026, and passed on the next run.
