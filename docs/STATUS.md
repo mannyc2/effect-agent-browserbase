@@ -189,7 +189,7 @@ establish hosted billing or actual provider release confirmation.
 
 The `0.3.0-beta.14` release adds declared generation loss and per-attempt recovery admission:
 `lease.lose(detail)` revokes serving work before returning, and `Admission.after` supplies the
-preceding generation's actual release once it stops serving. `Browserbase.supervise` exposes
+preceding generation's actual release once it stops serving. `Browserbase.generations` exposes
 `admit` and `definite`; permanent context-policy refusal stops before provider requests. Completed
 terminal plan input returns its receipt without waiting for continuous page updates to settle.
 Moment pictures include completed input and account for navigation once. Stage output has its own
@@ -302,10 +302,8 @@ with agents on Yielded Agent, the renamed Effect Agent:
   sessions saving to one stored context), and revokes at once on `retire`. A
   failure the provider deems definite, such as a refused key, is `Down` at once with its cause,
   rather than hidden behind the schedule. Each generation's changes stream as `states`, with its
-  release outcome last, a loss with its cause. `Browserbase.supervise` supervises hosted sessions,
-  and with `keep`, a name, leaves its session running past its scope, `Kept`, for the next
-  supervisor under that name to adopt with its pages: opt-in, since a kept session bills until it
-  is adopted and released, or its timeout ends it.
+  release outcome last, a loss with its cause. `Browserbase.generations` supplies hosted sessions
+  to `Supervisor.make`, and `Browserbase.attach` resumes a session another process left running.
 - Pages with durable names and a life story. A page's id is its CDP target id, so a new connection
   to the same browser finds it again with `browser.page(id)`. The timeline tells each page's
   documents and moves within them (`Navigated` with `document` and `sameDocument`), its loads

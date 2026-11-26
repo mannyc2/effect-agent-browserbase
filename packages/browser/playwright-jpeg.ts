@@ -38,11 +38,11 @@ export const playwrightJpeg = (): TsdownPlugin => {
 
   return {
     name: "playwright-jpeg",
+    // Match the import, not the importing file, so a move cannot ship the Node bundle again.
     transform(code, id) {
-      if (!id.endsWith("/internal/pictures/motion.ts")) return undefined;
       const imported = 'from "playwright-core/lib/utilsBundle"';
 
-      if (!code.includes(imported)) throw new Error("The JPEG decoder import changed.");
+      if (!code.includes(imported)) return undefined;
 
       return {
         code: code.replace(imported, `from "${virtual}"`),
@@ -67,7 +67,12 @@ export const playwrightJpeg = (): TsdownPlugin => {
         ? `var __getOwnPropNames = Object.getOwnPropertyNames;\n${common}\n${decoder}\nexport const jpegjs = { decode: require_decoder() };`
         : undefined;
     },
-    generateBundle() {
+    generateBundle(_, output) {
+      // Playwright's internals are no published entry's to load: on Workers they don't exist.
+      for (const chunk of Object.values(output))
+        if (chunk.type === "chunk" && chunk.code.includes("playwright-core/lib/"))
+          this.error(`${chunk.fileName} loads playwright-core/lib/*`);
+
       this.emitFile({ type: "asset", fileName: "LICENSE-jpeg-js", source: license });
     },
   };

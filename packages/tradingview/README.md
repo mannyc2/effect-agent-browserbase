@@ -9,9 +9,7 @@ tools.
 It is checked live on the library's demo, where each change is made by visible input. tradingview.com
 refuses drawings when signed out.
 
-```sh
-npm install effect-browser-tradingview@beta effect-browser@beta effect playwright-core
-```
+It is private to this repository and not published: the bench uses it from the workspace.
 
 ```ts
 import { Effect } from "effect";

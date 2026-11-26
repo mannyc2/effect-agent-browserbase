@@ -36,7 +36,8 @@ import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter
 import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
 import { Config, Effect, Layer, Schema } from "effect";
 import { BrowserTools } from "effect-agent-browser";
-import { Browser, Chromium } from "effect-browser";
+import { Browser } from "effect-browser";
+import * as Chromium from "effect-browser/Chromium";
 import { Model } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 
