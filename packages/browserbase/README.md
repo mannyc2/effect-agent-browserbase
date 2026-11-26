@@ -172,7 +172,7 @@ went. The connection opens with the first capture and closes with the browser. I
 the capture ends with `Failed` two seconds on, the page and its own session stay as they were, and
 the next capture opens another. If the browser is lost too, the capture's readers are told the
 browser's loss, `Closed` by its cause, whichever connection hears the end first. A wait for a
-still screen, `ready({ quietMillis })`, ends with one round trip on this connection,
+still screen, `ready({ quiet })`, ends with one round trip on this connection,
 `Page.getFrameTree`, whose answer comes behind any frame still on its way, so a stall here is not
 read as stillness; it costs the control connection nothing. `captureConnection: false` keeps
 captures on each page's own session; so does a DevTools server's `http:` address, such as a local

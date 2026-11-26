@@ -8,7 +8,7 @@
  * what its viewers will see. Its `account` says what was so at its end: how long the page had been
  * still, which of its changes were still under way, and which had settled.
  *
- * A `Moment` is a window that ends at a picture of the page now: `capture` takes the picture, then
+ * A `Moment` is a window that ends at a picture of the page now: `read` takes the picture, then
  * the window up to it, and on request the page's outline. `toPrompt` turns a moment into one user
  * message for any `effect/ai` call: a structured answer from `LanguageModel.generateObject`, a
  * caption from `generateText`, or one turn of a `Chat` that follows moment after moment. It leads
@@ -24,14 +24,14 @@
  *
  * @since 0.3.0
  */
-import { Duration, Effect, Option, Result, Schema } from "effect";
+import { Duration, Effect, Function, Option, Result, Schema } from "effect";
 import { Prompt } from "effect/ai";
 
-import { refuse } from "../BrowserError.ts";
+import { type BrowserError, refuse } from "../BrowserError.ts";
 import { type Action } from "../BrowserEvent.ts";
 import { type Change, type Changes } from "../Change.ts";
 import { type Frame } from "../Frame.ts";
-import type * as Page from "../Page.ts";
+import * as Page from "../Page.ts";
 import * as Snapshot from "../Snapshot.ts";
 import { describe, named, quoted, where } from "./internal/words.ts";
 
@@ -47,7 +47,8 @@ export class Moment extends Window.Window.extend<Moment>("effect-browser/timelin
   snapshot: Schema.optional(Snapshot.Snapshot),
 }) {}
 
-export interface CaptureOptions {
+/** What `read` reads: where its window starts, how many frames it keeps, and the outline. */
+export interface MomentOptions {
   /**
    * Where the window starts, as for `Window.read`: a previous window or moment, so that consecutive
    * ones neither repeat nor miss an event or a change, or a `Duration` back from the picture.
@@ -88,9 +89,9 @@ const pictureOf = Effect.fnUntraced(function* (page: Page.Page) {
     : frame;
 });
 
-export const capture = Effect.fn("Moment.capture")(function* (
+const readMoment = Effect.fn("Moment.read")(function* (
   page: Page.Page,
-  options: CaptureOptions = {},
+  options: MomentOptions = {},
 ) {
   const count = options.frames ?? 2;
 
@@ -143,6 +144,15 @@ export const capture = Effect.fn("Moment.capture")(function* (
     ],
   });
 });
+
+/**
+ * A moment of the page now: its picture, the window up to it, and the outline if asked. What
+ * cannot be read is missing from the moment, with why, rather than failing it.
+ */
+export const read: {
+  (options?: MomentOptions): (page: Page.Page) => Effect.Effect<Moment, BrowserError>;
+  (page: Page.Page, options?: MomentOptions): Effect.Effect<Moment, BrowserError>;
+} = Function.dual((args) => Page.isPage(args[0]), readMoment);
 
 /** A window's record of changes, if it saw any of the window: a page's first has none. */
 const recordOf = ({ changes }: Window.Window) =>

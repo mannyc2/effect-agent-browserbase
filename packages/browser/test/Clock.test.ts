@@ -129,7 +129,7 @@ layer(TestCdp.provideLayer(Layer.mergeAll(Chromium.layer(), SiteLayer)), {
           time.monotonic = 7000;
           const callerTime = { wall: 1_800_000_000_000, monotonic: 900_000 };
 
-          const capture = Moment.capture(page, { since: Duration.seconds(3) }).pipe(
+          const capture = Moment.read(page, { since: Duration.seconds(3) }).pipe(
             Effect.provideService(Clock.Clock, controlledClock(live, callerTime)),
           );
 

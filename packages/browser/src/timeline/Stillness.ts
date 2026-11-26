@@ -1,29 +1,31 @@
 /** Screen and foreground stillness over the public page capture and owning clock. */
-import { Clock, Duration, Effect, Option, Schedule, Stream } from "effect";
+import { Clock, Duration, Effect, Function, Option, Schedule, Stream } from "effect";
 
-import { Failed, refuse, Timeout, undispatched } from "../BrowserError.ts";
+import { type BrowserError, Failed, refuse, Timeout, undispatched } from "../BrowserError.ts";
 import type { Box } from "../BrowserEvent.ts";
 import * as Change from "../Change.ts";
 import type { Frame } from "../Frame.ts";
-import { monotonicMillis } from "../internal/clock.ts";
+import { millisOf, monotonicMillis } from "../internal/clock.ts";
 import * as Overlay from "../Overlay.ts";
 import type { Page } from "../Page.ts";
 import * as Motion from "./internal/pixels.ts";
 
 export interface Options {
   readonly still?: "screen" | "content" | "foreground" | undefined;
-  readonly quietMillis: number;
+  /** How long the screen, or the content, must stay still. */
+  readonly quiet: Duration.Input;
+  /** Defaults to 15 seconds. */
   readonly timeout?: Duration.Input | undefined;
 }
 
-const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
+const observe = (page: Page, options: Options, quietMillis: number, timeout: Duration.Duration) =>
   Effect.gen(function* () {
-    const now = () => monotonicMillis(page.clock);
+    const now = () => monotonicMillis(page.hostClock);
     const deadline = now() + Duration.toMillis(timeout);
 
     const settled = () =>
       page.ready({
-        quietMillis: options.quietMillis,
+        quiet: quietMillis,
         timeout: Duration.millis(Math.max(0, deadline - now())),
       });
 
@@ -146,39 +148,27 @@ const observe = (page: Page, options: Options, timeout: Duration.Duration) =>
     yield* page.afterInput(Effect.void);
     if (options.still === "content") {
       yield* Change.read(page);
-      yield* Effect.sleep(Duration.millis(options.quietMillis));
+      yield* Effect.sleep(Duration.millis(quietMillis));
 
       return yield* settled();
     }
     yield* settled();
-    yield* quiet(options.quietMillis);
+    yield* quiet(quietMillis);
   });
 
-export const wait = (page: Page, options: Options) =>
+const waitStill = (page: Page, options: Options) =>
   Effect.gen(function* () {
-    if (!Number.isFinite(options.quietMillis) || options.quietMillis < 0)
-      return yield* refuse("stillness", "quietMillis must be finite and nonnegative");
-    const input = options.timeout ?? Duration.seconds(15);
+    const quietMillis = millisOf(options.quiet);
 
-    const components =
-      typeof input === "number"
-        ? [input]
-        : typeof input === "object" && !Duration.isDuration(input)
-          ? Object.values(input)
-          : [];
+    if (!Number.isFinite(quietMillis) || quietMillis < 0)
+      return yield* refuse("stillness", "quiet must be a finite nonnegative duration");
+    const timeoutMillis = millisOf(options.timeout ?? Duration.seconds(15));
 
-    const timeout = Duration.fromInput(input);
-
-    if (
-      components.some((value) => typeof value === "number" && !Number.isFinite(value)) ||
-      Option.isNone(timeout) ||
-      !Duration.isFinite(timeout.value) ||
-      Duration.isNegative(timeout.value)
-    )
+    if (!Number.isFinite(timeoutMillis) || timeoutMillis < 0)
       return yield* refuse("stillness", "timeout must be a finite nonnegative duration");
-    const duration = timeout.value;
+    const duration = Duration.millis(timeoutMillis);
 
-    return yield* observe(page, options, duration).pipe(
+    return yield* observe(page, options, quietMillis, duration).pipe(
       Effect.timeoutOrElse({
         duration,
         orElse: () =>
@@ -189,6 +179,16 @@ export const wait = (page: Page, options: Options) =>
     );
   }).pipe(
     Effect.scoped,
-    Effect.provideService(Clock.Clock, page.clock),
+    Effect.provideService(Clock.Clock, page.hostClock),
     Effect.withSpan("Stillness.wait"),
   );
+
+/**
+ * Wait for a ready page to stay still for `quiet`: its screen, by default, with no screencast frame
+ * coming; its `"foreground"`, allowing motion it showed before its latest input; or its
+ * `"content"`, with no visible change recorded. Fails `Timeout` after `timeout`.
+ */
+export const wait: {
+  (options: Options): (page: Page) => Effect.Effect<void, BrowserError>;
+  (page: Page, options: Options): Effect.Effect<void, BrowserError>;
+} = Function.dual(2, waitStill);

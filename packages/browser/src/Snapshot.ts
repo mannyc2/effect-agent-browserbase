@@ -7,10 +7,11 @@
  *
  * @since 0.3.0
  */
-import { type Effect, Function, Schema } from "effect";
+import { type Duration, type Effect, Function, Schema } from "effect";
 
 import type { BrowserError } from "./BrowserError.ts";
 import { Box, Subject } from "./BrowserEvent.ts";
+import { millisOf } from "./internal/clock.ts";
 import type { Point } from "./internal/geometry.ts";
 import { functionsOf, isPage } from "./internal/page/functions.ts";
 import type { Page } from "./Page.ts";
@@ -189,7 +190,7 @@ export interface UntilResult {
 }
 
 /**
- * Wait, in one call to the page, until what `query` matches is as `want` says or `millis` pass.
+ * Wait, in one call to the page, until what `query` matches is as `want` says or `timeout` passes.
  * Replaced documents share one deadline. Unmet is `met: false`; an empty mark means no stable
  * document could be sampled.
  */
@@ -197,14 +198,14 @@ export const until: {
   (
     query: FindQuery,
     want: UntilWant,
-    millis: number,
+    timeout: Duration.Input,
   ): (page: Page) => Effect.Effect<UntilResult, BrowserError>;
   (
     page: Page,
     query: FindQuery,
     want: UntilWant,
-    millis: number,
+    timeout: Duration.Input,
   ): Effect.Effect<UntilResult, BrowserError>;
-} = Function.dual(4, (page: Page, query: FindQuery, want: UntilWant, millis: number) =>
-  functionsOf(page).until(query, want, millis),
+} = Function.dual(4, (page: Page, query: FindQuery, want: UntilWant, timeout: Duration.Input) =>
+  functionsOf(page).until(query, want, millisOf(timeout)),
 );

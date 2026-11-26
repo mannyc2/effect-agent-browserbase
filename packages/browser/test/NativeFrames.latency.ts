@@ -83,7 +83,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         const { browser } = yield* session("latency-clock");
         const page = yield* browser.newPage("data:text/html,<button>Clock</button>");
 
-        const caller = Object.assign(Object.create(page.clock) as Clock.Clock, {
+        const caller = Object.assign(Object.create(page.hostClock) as Clock.Clock, {
           monotonicTimeNanosUnsafe: () => 0n,
           sleep: () => Effect.never,
         });

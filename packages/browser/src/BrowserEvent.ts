@@ -16,7 +16,9 @@ import { Action as ActionValue, Name } from "./Action.ts";
 import * as Motion from "./internal/geometry.ts";
 
 /** A page opened, and the page that opened it, as a link or `window.open` does, if one did. */
-export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
+export class PageOpened extends Schema.TaggedClass<PageOpened>(
+  "effect-browser/BrowserEvent/PageOpened",
+)("PageOpened", {
   at: Schema.Finite,
   page: Schema.String,
   url: Schema.String,
@@ -27,7 +29,9 @@ export class PageOpened extends Schema.TaggedClass<PageOpened>()("PageOpened", {
  * The page closed (`page`), or crashed and was closed (`crashed`). A page lost with its browser
  * has no event of its own: `Disconnected` stands for all of them.
  */
-export class PageClosed extends Schema.TaggedClass<PageClosed>()("PageClosed", {
+export class PageClosed extends Schema.TaggedClass<PageClosed>(
+  "effect-browser/BrowserEvent/PageClosed",
+)("PageClosed", {
   at: Schema.Finite,
   page: Schema.String,
   cause: Schema.Literals(["page", "crashed"]),
@@ -37,7 +41,9 @@ export class PageClosed extends Schema.TaggedClass<PageClosed>()("PageClosed", {
  * A tab the site opened that the library could not track, as its registration failed with
  * `detail`. A tab that closed as it opened has no event.
  */
-export class PageUntracked extends Schema.TaggedClass<PageUntracked>()("PageUntracked", {
+export class PageUntracked extends Schema.TaggedClass<PageUntracked>(
+  "effect-browser/BrowserEvent/PageUntracked",
+)("PageUntracked", {
   at: Schema.Finite,
   url: Schema.String,
   detail: Schema.String,
@@ -47,7 +53,9 @@ export class PageUntracked extends Schema.TaggedClass<PageUntracked>()("PageUntr
  * The page's main frame moved to `url`: into a new document, or within the current one
  * (`sameDocument`), as `pushState` and fragment links do. Frames carry the document they followed.
  */
-export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
+export class Navigated extends Schema.TaggedClass<Navigated>(
+  "effect-browser/BrowserEvent/Navigated",
+)("Navigated", {
   at: Schema.Finite,
   page: Schema.String,
   url: Schema.String,
@@ -61,7 +69,9 @@ export class Navigated extends Schema.TaggedClass<Navigated>()("Navigated", {
 }) {}
 
 /** The page's document finished parsing (`domcontentloaded`) or loading (`load`). */
-export class PageLoaded extends Schema.TaggedClass<PageLoaded>()("PageLoaded", {
+export class PageLoaded extends Schema.TaggedClass<PageLoaded>(
+  "effect-browser/BrowserEvent/PageLoaded",
+)("PageLoaded", {
   at: Schema.Finite,
   page: Schema.String,
   state: Schema.Literals(["domcontentloaded", "load"]),
@@ -76,13 +86,17 @@ export const DisconnectCause = Schema.Literals(["connection", "session", "releas
 export type DisconnectCause = typeof DisconnectCause.Type;
 
 /** The browser was lost to its owner, with every page in it. It happens once. */
-export class Disconnected extends Schema.TaggedClass<Disconnected>()("Disconnected", {
+export class Disconnected extends Schema.TaggedClass<Disconnected>(
+  "effect-browser/BrowserEvent/Disconnected",
+)("Disconnected", {
   at: Schema.Finite,
   cause: DisconnectCause,
 }) {}
 
 /** The provider ends this browser's session at `expiresAt`, a wall-clock instant. */
-export class SessionEnding extends Schema.TaggedClass<SessionEnding>()("SessionEnding", {
+export class SessionEnding extends Schema.TaggedClass<SessionEnding>(
+  "effect-browser/BrowserEvent/SessionEnding",
+)("SessionEnding", {
   at: Schema.Finite,
   expiresAt: Schema.DateTimeUtc,
 }) {}
@@ -135,28 +149,31 @@ export type Box = typeof Box.Type;
  * point they used. `correlation` is the id its caller gave it with `Page.correlate`, such as a
  * model's tool call id.
  */
-export class Action extends Schema.TaggedClass<Action>()("Action", {
-  at: Schema.Finite,
-  startedAt: Schema.Finite,
-  page: Schema.String,
-  name: Name,
-  /** The decoded call, with secrets removed before publication. */
-  value: ActionValue,
-  /** The address when the action ended; absent in events recorded by older releases. */
-  url: Schema.optional(Schema.String),
-  correlation: Schema.optional(Schema.String),
-  target: Schema.optional(Schema.String),
-  subject: Schema.optional(Subject),
-  to: Schema.optional(Subject),
-  /** For an action at a point, the box of what it found there. */
-  box: Schema.optional(Box),
-  text: Schema.optional(Schema.String),
-  x: Schema.optional(Motion.Point.fields.x),
-  y: Schema.optional(Motion.Point.fields.y),
-  ok: Schema.Boolean,
-  dispatched: Schema.Boolean,
-  error: Schema.optional(Schema.String),
-}) {}
+export class Action extends Schema.TaggedClass<Action>("effect-browser/BrowserEvent/Action")(
+  "Action",
+  {
+    at: Schema.Finite,
+    startedAt: Schema.Finite,
+    page: Schema.String,
+    name: Name,
+    /** The decoded call, with secrets removed before publication. */
+    value: ActionValue,
+    /** The address when the action ended; absent in events recorded by older releases. */
+    url: Schema.optional(Schema.String),
+    correlation: Schema.optional(Schema.String),
+    target: Schema.optional(Schema.String),
+    subject: Schema.optional(Subject),
+    to: Schema.optional(Subject),
+    /** For an action at a point, the box of what it found there. */
+    box: Schema.optional(Box),
+    text: Schema.optional(Schema.String),
+    x: Schema.optional(Motion.Point.fields.x),
+    y: Schema.optional(Motion.Point.fields.y),
+    ok: Schema.Boolean,
+    dispatched: Schema.Boolean,
+    error: Schema.optional(Schema.String),
+  },
+) {}
 
 const Sequence = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -167,7 +184,9 @@ const Sequence = Schema.Int.check(Schema.isGreaterThan(0));
  * a drag, its start. Input with no pointer travel, such as keys or typing into the focused field,
  * announces nothing.
  */
-export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>()("ActionAnnounced", {
+export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>(
+  "effect-browser/BrowserEvent/ActionAnnounced",
+)("ActionAnnounced", {
   at: Schema.Finite,
   page: Schema.String,
   name: Name,
@@ -179,7 +198,9 @@ export class ActionAnnounced extends Schema.TaggedClass<ActionAnnounced>()("Acti
 }) {}
 
 /** One whole glide, published before its first input. Offsets use the host monotonic clock. */
-export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlanned", {
+export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>(
+  "effect-browser/BrowserEvent/TrackPlanned",
+)("TrackPlanned", {
   at: Schema.Finite,
   page: Schema.String,
   from: Motion.Point,
@@ -191,7 +212,9 @@ export class TrackPlanned extends Schema.TaggedClass<TrackPlanned>()("TrackPlann
  * counts samples. `complete` means every sample was submitted, not acknowledged by the browser.
  * The terminal point clips a canceled plan so a compositor never draws its unrealized future.
  */
-export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>()("TrackPerformed", {
+export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>(
+  "effect-browser/BrowserEvent/TrackPerformed",
+)("TrackPerformed", {
   at: Schema.Finite,
   page: Schema.String,
   plan: Sequence,
@@ -200,7 +223,9 @@ export class TrackPerformed extends Schema.TaggedClass<TrackPerformed>()("TrackP
   complete: Schema.Boolean,
 }) {}
 
-export class PointerPressed extends Schema.TaggedClass<PointerPressed>()("PointerPressed", {
+export class PointerPressed extends Schema.TaggedClass<PointerPressed>(
+  "effect-browser/BrowserEvent/PointerPressed",
+)("PointerPressed", {
   at: Schema.Finite,
   page: Schema.String,
   ...Motion.Point.fields,
@@ -208,7 +233,9 @@ export class PointerPressed extends Schema.TaggedClass<PointerPressed>()("Pointe
   clickCount: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
-export class PointerReleased extends Schema.TaggedClass<PointerReleased>()("PointerReleased", {
+export class PointerReleased extends Schema.TaggedClass<PointerReleased>(
+  "effect-browser/BrowserEvent/PointerReleased",
+)("PointerReleased", {
   at: Schema.Finite,
   page: Schema.String,
   ...Motion.Point.fields,
@@ -216,7 +243,9 @@ export class PointerReleased extends Schema.TaggedClass<PointerReleased>()("Poin
   clickCount: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
-export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>()("WheelScrolled", {
+export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>(
+  "effect-browser/BrowserEvent/WheelScrolled",
+)("WheelScrolled", {
   at: Schema.Finite,
   page: Schema.String,
   ...Motion.Point.fields,
@@ -224,7 +253,9 @@ export class WheelScrolled extends Schema.TaggedClass<WheelScrolled>()("WheelScr
   dy: Schema.Finite,
 }) {}
 
-export class KeyChanged extends Schema.TaggedClass<KeyChanged>()("KeyChanged", {
+export class KeyChanged extends Schema.TaggedClass<KeyChanged>(
+  "effect-browser/BrowserEvent/KeyChanged",
+)("KeyChanged", {
   at: Schema.Finite,
   page: Schema.String,
   key: Schema.String,
@@ -232,14 +263,18 @@ export class KeyChanged extends Schema.TaggedClass<KeyChanged>()("KeyChanged", {
 }) {}
 
 /** Literal text insertion has no corresponding key events, including Unicode and newlines. */
-export class TextInserted extends Schema.TaggedClass<TextInserted>()("TextInserted", {
+export class TextInserted extends Schema.TaggedClass<TextInserted>(
+  "effect-browser/BrowserEvent/TextInserted",
+)("TextInserted", {
   at: Schema.Finite,
   page: Schema.String,
   text: Schema.String,
 }) {}
 
 /** The target's CSS cursor, obtained during target resolution without another browser call. */
-export class CursorChanged extends Schema.TaggedClass<CursorChanged>()("CursorChanged", {
+export class CursorChanged extends Schema.TaggedClass<CursorChanged>(
+  "effect-browser/BrowserEvent/CursorChanged",
+)("CursorChanged", {
   at: Schema.Finite,
   page: Schema.String,
   cursor: Schema.String,
@@ -263,7 +298,9 @@ export type TrackEvent = typeof TrackEvent.Type;
  * A JavaScript dialog appeared; its completed answer, or a failed response: an alert or a leave-page prompt accepted, a
  * confirm or a prompt dismissed, as if its Cancel were pressed.
  */
-export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown", {
+export class DialogShown extends Schema.TaggedClass<DialogShown>(
+  "effect-browser/BrowserEvent/DialogShown",
+)("DialogShown", {
   at: Schema.Finite,
   page: Schema.String,
   kind: Schema.String,
@@ -273,7 +310,9 @@ export class DialogShown extends Schema.TaggedClass<DialogShown>()("DialogShown"
 
 /** A context policy refused traffic; page is present only when its containing page was established.
  * Worker and out-of-process iframe requests may omit it while retaining proven context ownership. */
-export class RequestRefused extends Schema.TaggedClass<RequestRefused>()("RequestRefused", {
+export class RequestRefused extends Schema.TaggedClass<RequestRefused>(
+  "effect-browser/BrowserEvent/RequestRefused",
+)("RequestRefused", {
   at: Schema.Finite,
   page: Schema.optional(Schema.String),
   method: Schema.String,

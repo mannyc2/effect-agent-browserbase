@@ -43,6 +43,7 @@ export {
   repeatable,
   type StepOptions,
   type ReplayOptions,
+  type RestoreOptions,
 } from "./internal/execute.ts";
 
 export { Ambiguous, Drifted, Missing } from "./internal/choose.ts";

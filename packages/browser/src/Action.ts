@@ -1,5 +1,5 @@
 /** Typed browser actions, shared by execution, policy, recordings and replay. */
-import { Schema } from "effect";
+import { Function, Schema } from "effect";
 
 import { Point } from "./internal/geometry.ts";
 import * as Url from "./internal/url.ts";
@@ -67,7 +67,10 @@ export const Name = Schema.Literals([
 export type Name = typeof Name.Type;
 
 /** Effective semantics suitable for policy and records; credentials never survive. */
-export const recorded = (value: Action, revealed: boolean): Action => {
+export const recorded: {
+  (revealed: boolean): (value: Action) => Action;
+  (value: Action, revealed: boolean): Action;
+} = Function.dual(2, (value: Action, revealed: boolean): Action => {
   if (value._tag === "Type") {
     const secret = !revealed || value.options?.secret === true;
 
@@ -83,7 +86,7 @@ export const recorded = (value: Action, revealed: boolean): Action => {
   }
 
   return value._tag === "Goto" ? { ...value, url: Url.redact(value.url) } : value;
-};
+});
 
 /** The stable event vocabulary for an action. */
 const names: Record<Action["_tag"], Name> = {

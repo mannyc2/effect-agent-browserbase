@@ -196,7 +196,7 @@ layer(
       assert.strictEqual(waiting.reason._tag, "Timeout");
 
       const still = yield* Effect.flip(
-        Stillness.wait(page, { quietMillis: 100, timeout: "400 millis" }),
+        Stillness.wait(page, { quiet: "100 millis", timeout: "400 millis" }),
       );
 
       assert.strictEqual(still.reason._tag, "Timeout");

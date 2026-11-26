@@ -702,7 +702,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
       Effect.gen(function* () {
         const page = yield* slowFirstFrame();
 
-        yield* Stillness.wait(page, { quietMillis: 400, timeout: Duration.seconds(10) });
+        yield* Stillness.wait(page, { quiet: "400 millis", timeout: Duration.seconds(10) });
 
         assert.isTrue(
           yield* Effect.promise(() =>
@@ -736,13 +736,13 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 </script></body>`),
         );
         // Waiting for the screen to settle runs and stops a capture; its frames stay retained.
-        yield* Stillness.wait(page, { quietMillis: 300 });
+        yield* Stillness.wait(page, { quiet: "300 millis" });
         const retained = yield* page.recentFrames;
 
         assert.isAbove(retained.length, 1);
         yield* page.click({ x: 50, y: 30 });
 
-        const moment = yield* Moment.capture(page, { frames: 2 });
+        const moment = yield* Moment.read(page, { frames: 2 });
 
         const last = moment.frames.at(-1);
 
@@ -1470,7 +1470,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           }),
         );
 
-        const moment = yield* Moment.capture(fixture.page, { since: Duration.millis(100) });
+        const moment = yield* Moment.read(fixture.page, { since: Duration.millis(100) });
 
         const image = moment.frames[0];
 

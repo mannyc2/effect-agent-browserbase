@@ -83,7 +83,7 @@ export const activityOf = (spans: ReadonlyArray<RecordedSpan>): ReadonlyArray<Ac
       const kind =
         span.name === "AgentRuntime.model"
           ? "think"
-          : (span.name === "Page.screenshot" || span.name === "Moment.capture") && agents(span)
+          : (span.name === "Page.screenshot" || span.name === "Moment.read") && agents(span)
             ? "look"
             : tool === undefined
               ? undefined

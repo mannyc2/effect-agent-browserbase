@@ -22,7 +22,7 @@ it.effect.prop(
       for (const invalid of [timeout, Number.NaN, Infinity, -Infinity]) {
         const error = yield* Cdp.make({
           endpoint: "wss://runtime.invalid",
-          connectTimeoutMillis: invalid,
+          connectTimeout: invalid,
           connect: async () => {
             calls++;
             throw new Error("Connector should not be invoked");
@@ -59,7 +59,7 @@ it.live("uses the supplied connector and disconnects without ending its remote b
       const browser = yield* Cdp.make({
         endpoint: Redacted.make("wss://runtime.invalid/?signingKey=private"),
         headers: { "x-runtime": "one" },
-        connectTimeoutMillis: 5000,
+        connectTimeout: "5 seconds",
         connect: async (endpoint, options) => {
           calls.push([endpoint, options.timeout, options.headers, options.signal.aborted]);
           const connected = await chromium.connectOverCDP(proxy.endpoint);
@@ -124,7 +124,7 @@ it.live("bounds an unresponsive connector and disconnects its late browser", () 
 
     const error = yield* Cdp.make({
       endpoint: proxy.endpoint,
-      connectTimeoutMillis: 50,
+      connectTimeout: "50 millis",
       connect: (_endpoint, options) => {
         signal = options.signal;
 

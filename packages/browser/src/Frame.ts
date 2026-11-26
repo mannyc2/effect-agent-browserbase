@@ -17,17 +17,22 @@ const Nonnegative = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 /** Native CDP paint time mapped to the owning host clock, with transport uncertainty retained. */
-export class BrowserPaint extends Schema.TaggedClass<BrowserPaint>()("BrowserPaint", {
+export class BrowserPaint extends Schema.TaggedClass<BrowserPaint>(
+  "effect-browser/Frame/BrowserPaint",
+)("BrowserPaint", {
   timestamp: Schema.Finite,
   hostTime: Schema.Finite,
   uncertaintyMillis: Nonnegative,
 }) {}
 
 /** A screenshot's host capture interval; it has no native browser paint timestamp. */
-export class Screenshot extends Schema.TaggedClass<Screenshot>()("Screenshot", {
-  hostTime: Schema.Finite,
-  uncertaintyMillis: Nonnegative,
-}) {}
+export class Screenshot extends Schema.TaggedClass<Screenshot>("effect-browser/Frame/Screenshot")(
+  "Screenshot",
+  {
+    hostTime: Schema.Finite,
+    uncertaintyMillis: Nonnegative,
+  },
+) {}
 
 /**
  * An image and its timing evidence. Paint time and screenshot capture time cannot be confused in

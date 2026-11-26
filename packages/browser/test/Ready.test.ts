@@ -89,7 +89,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* Effect.addFinalizer(() => Deferred.succeed(restored, undefined));
 
         const outcome = (timeout: Duration.Input) =>
-          Stillness.wait(page, { quietMillis: 100, timeout }).pipe(
+          Stillness.wait(page, { quiet: "100 millis", timeout }).pipe(
             Effect.match({ onSuccess: () => "ready", onFailure: (error) => error.reason._tag }),
           );
 
@@ -227,7 +227,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
           yield* Stillness.wait(page, {
             still: "content",
-            quietMillis: 200,
+            quiet: "200 millis",
             timeout: Duration.seconds(2),
           });
           assert.isAtLeast(performance.now() - started, 200);
@@ -240,7 +240,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           });
           yield* Stillness.wait(page, {
             still: "content",
-            quietMillis: 200,
+            quiet: "200 millis",
             timeout: Duration.seconds(2),
           });
 
@@ -279,7 +279,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
         yield* evaluate(page, () => (window as unknown as { start: () => void }).start());
         yield* Stillness.wait(page, {
           still: "content",
-          quietMillis: 250,
+          quiet: "250 millis",
           timeout: Duration.seconds(2),
         });
         assert.strictEqual(yield* page.url, "https://ready.test/2");
@@ -296,7 +296,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           yield* reason(
             Stillness.wait(page, {
               still: "content",
-              quietMillis: 250,
+              quiet: "250 millis",
               timeout: Duration.millis(700),
             }),
           ),
@@ -464,7 +464,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         const waiting = yield* Stillness.wait(page, {
           still: "foreground",
-          quietMillis: 300,
+          quiet: "300 millis",
           timeout: "5 seconds",
         }).pipe(Effect.forkScoped);
 
@@ -521,7 +521,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
         const resizing = yield* Stillness.wait(page, {
           still: "foreground",
-          quietMillis: 300,
+          quiet: "300 millis",
           timeout: "5 seconds",
         }).pipe(Effect.forkScoped);
 
@@ -573,13 +573,15 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
 
           yield* Stillness.wait(page, {
             still: "foreground",
-            quietMillis: 600,
+            quiet: "600 millis",
             timeout: Duration.seconds(10),
           });
           // Within a sample of the spell: the wait looks every 100 ms.
           assert.isAtLeast(yield* quiet(page), 450, moving);
           assert.strictEqual(
-            yield* reason(Stillness.wait(page, { quietMillis: 600, timeout: Duration.seconds(2) })),
+            yield* reason(
+              Stillness.wait(page, { quiet: "600 millis", timeout: Duration.seconds(2) }),
+            ),
             "Timeout",
           );
         }),
@@ -595,7 +597,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           yield* reason(
             Stillness.wait(page, {
               still: "foreground",
-              quietMillis: 600,
+              quiet: "600 millis",
               timeout: Duration.seconds(3),
             }),
           ),
@@ -665,7 +667,11 @@ it.live("never takes a stalled connection for a still screen", () =>
             Effect.andThen(Effect.sync(() => proxy.stall(toward, 600))),
             Effect.forkScoped,
           );
-          yield* Stillness.wait(page, { still, quietMillis: 400, timeout: Duration.seconds(10) });
+          yield* Stillness.wait(page, {
+            still,
+            quiet: "400 millis",
+            timeout: Duration.seconds(10),
+          });
           assert.isAtLeast(
             (yield* browser.now) - clicked,
             1200,
@@ -712,7 +718,7 @@ it.live(
         const started = yield* browser.now;
 
         yield* evaluate(page, () => (window as unknown as { tick: () => void }).tick());
-        yield* Stillness.wait(page, { quietMillis: 300, timeout: Duration.seconds(10) });
+        yield* Stillness.wait(page, { quiet: "300 millis", timeout: Duration.seconds(10) });
         assert.isAtLeast((yield* browser.now) - started, 1200);
       }).pipe(Effect.scoped),
     ),
@@ -746,7 +752,7 @@ for (const failure of [
       };
 
       const result = yield* Stillness.wait(page, {
-        quietMillis: 10,
+        quiet: "10 millis",
         timeout: "2 seconds",
       }).pipe(Effect.exit, Effect.timeout("1 second"));
 
@@ -757,14 +763,14 @@ for (const failure of [
 }
 
 for (const [name, options] of [
-  ["negative quiet", { quietMillis: -1 }],
-  ["NaN quiet", { quietMillis: Number.NaN }],
-  ["infinite quiet", { quietMillis: Infinity }],
-  ["negative timeout", { quietMillis: 100, timeout: -1 }],
-  ["NaN timeout", { quietMillis: 100, timeout: Number.NaN }],
-  ["infinite timeout", { quietMillis: 100, timeout: Infinity }],
-  ["NaN tuple timeout", { quietMillis: 100, timeout: [0, Number.NaN] }],
-  ["NaN component timeout", { quietMillis: 100, timeout: { seconds: Number.NaN } }],
+  ["negative quiet", { quiet: -1 }],
+  ["NaN quiet", { quiet: Number.NaN }],
+  ["infinite quiet", { quiet: Infinity }],
+  ["negative timeout", { quiet: "100 millis", timeout: -1 }],
+  ["NaN timeout", { quiet: "100 millis", timeout: Number.NaN }],
+  ["infinite timeout", { quiet: "100 millis", timeout: Infinity }],
+  ["NaN tuple timeout", { quiet: "100 millis", timeout: [0, Number.NaN] }],
+  ["NaN component timeout", { quiet: "100 millis", timeout: { seconds: Number.NaN } }],
 ] as const) {
   it.effect("stillness refuses " + name + " before observing the page", () =>
     Effect.gen(function* () {
@@ -798,8 +804,8 @@ it.live("page.ready refuses invalid quiet intervals", () =>
     const browser = yield* Chromium.make();
     const page = yield* browser.newPage("data:text/html,<h1>Ready</h1>");
 
-    for (const quietMillis of [-1, Number.NaN, Infinity]) {
-      const result = yield* page.ready({ quietMillis, timeout: "100 millis" }).pipe(Effect.exit);
+    for (const quiet of [-1, Number.NaN, Infinity]) {
+      const result = yield* page.ready({ quiet, timeout: "100 millis" }).pipe(Effect.exit);
       const failure = Exit.findErrorOption(result);
 
       assert.isTrue(Option.isSome(failure), "invalid quiet interval must refuse");
@@ -861,7 +867,7 @@ it.live("foreground motion after navigation cannot inherit the previous document
 
     const waiting = yield* Stillness.wait(observed, {
       still: "foreground",
-      quietMillis: 200,
+      quiet: "200 millis",
       timeout: "1 second",
     }).pipe(Effect.exit, Effect.forkScoped);
 

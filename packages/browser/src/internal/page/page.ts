@@ -104,7 +104,7 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
     ...Scripts.make(page, bridge, input),
     ...ActionPort.methods(perform),
     perform,
-    clock: page.clock,
+    hostClock: page.clock,
     afterInput,
     capture: (options) =>
       capture.open(options).pipe(

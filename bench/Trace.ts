@@ -50,7 +50,7 @@ const looks = new Set([
   "Page.screenshot",
   "Snapshot.read",
   "Page.frame",
-  "Moment.capture",
+  "Moment.read",
 ]);
 
 const isTool = (span: Tracer.Span) =>

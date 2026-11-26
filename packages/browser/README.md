@@ -67,7 +67,7 @@ page scripts.
 `Page` holds what a tab is and how it takes its turns: its identity, the order and time of what is
 done on it, and input. Everything else a page does is a function in the module of what it returns,
 taking the page first: `Snapshot.read(page)`, `Snapshot.find(page, query)`,
-`Snapshot.until(page, query, want, millis)`, `Text.read(page)`, `Layout.measure(page, picks)`,
+`Snapshot.until(page, query, want, timeout)`, `Text.read(page)`, `Layout.measure(page, picks)`,
 `Change.read(page)`, `Window.read(page, options)`, `Overlay.make(page)`, `Pose.make(page)` and
 `PageTime.hold(page)`. Those with more than the page also take it last, for a pipeline, as in
 `Effect.flatMap(browser.firstPage, Snapshot.read({ full: true }))`. A new capability follows the
@@ -153,8 +153,8 @@ the `workerd` condition. Local Worker/CDP checks also pass without `nodejs_compa
 implementation against this package's Playwright peer; the seam does not certify a different
 Playwright version or provide a Cloudflare connector.
 
-The callback receives a finite positive `connectTimeoutMillis`, 30 seconds by default, and an
-`AbortSignal`. Opening enforces that deadline independently, fails with reason `Timeout` and aborts
+The callback receives the `connectTimeout`, 30 seconds by default, as its `timeout` in
+milliseconds, and an `AbortSignal`. Opening enforces that deadline independently, fails with reason `Timeout` and aborts
 the signal when it expires or the caller is interrupted. A connector should stop its own pending
 work when aborted. A browser it returns late is disconnected, as is one whose opening fails or
 whose scope closes. Its `close()` must disconnect the CDP connection without ending the remote
@@ -190,7 +190,7 @@ A snapshot outlines the viewport, or the whole page, with a ref such as `e12` on
 lists those controls as values, `Snapshot.Control`: each one's ref, kind, name and what it holds,
 a select's options, and whether it is disabled, checked or takes typed text. `within` reads only
 inside the elements a CSS selector matches, and `query` keeps the lines that hold some text.
-`Snapshot.until(page, query, want, millis)` waits using `Snapshot.find`'s matching, including CSS `selector` and
+`Snapshot.until(page, query, want, timeout)` waits using `Snapshot.find`'s matching, including CSS `selector` and
 `state: "enabled"`. It searches the document by default. `want` is `"some"`, `"none"`, or
 `{ other: previous.mark }`; comparison marks reveal no text or values and ignore focus.
 A finite nonnegative deadline returns `{ met, mark }`; document replacements share that deadline.
@@ -250,13 +250,13 @@ is, or until the time is up: its document is parsed and has painted since, nothi
 animating in view, its fonts and the images in view have loaded, nothing in view is marked busy
 (`aria-busy`), and the viewport shows something: text, a canvas drawn on, a picture or drawing
 larger than an icon, a video or a frame. It polls every 50 ms and follows document replacements
-within one timeout. `quietMillis` also checks changes when a recorder is already running; it does
+within one timeout. `quiet` also checks changes when a recorder is already running; it does
 not start a recorder or a capture. A canvas mounted blank, as chart libraries mount theirs,
 or a spinner alone is still loading. A screen that only says "Loading…" in words reads as ready,
 and a WebGL canvas drawn once, without keeping its drawing, reads as blank. A hidden tab, which
 paints nothing, is never ready.
 
-`Stillness.wait(page, { quietMillis, still: "screen" })` waits for a ready screen to stay still that long: no screencast frame comes,
+`Stillness.wait(page, { quiet, still: "screen" })` waits for a ready screen to stay still that long: no screencast frame comes,
 counted from the first frame of a capture the wait starts itself, since a hosted browser sends that
 frame over half a second late. A capture's silence alone proves little: a stalled connection holds
 frames on their way, and Chromium sends frames only while few acknowledgements are unanswered. So
@@ -269,17 +269,17 @@ of 2 waits before, and in none since. Where the page's changes are recorded, the
 page's own check also waits until nothing in view has changed for the spell, so frames the browser
 holds back, as an encoder's backlog does, cannot pass for a still page. Stillness is a heuristic
 on a canvas: a canvas that keeps drawing, such as a live chart, is never still, and one that pauses
-longer than `quietMillis` between phases reads as still. On the slot machine fixture, with the
+longer than `quiet` between phases reads as still. On the slot machine fixture, with the
 connection stalled for 450 to 900 ms toward either end while the reels spun, none of 132 waits
 ended early, where all 36 did before.
 
-`Stillness.wait(page, { still: "foreground", quietMillis })` allows motion already seen in the 1.5 seconds
+`Stillness.wait(page, { still: "foreground", quiet })` allows motion already seen in the 1.5 seconds
 before the page's latest input, such as idle decoration. Motion elsewhere restarts the quiet
 interval. It compares newly accepted frames, including brief motion between polls and frames
 accepted after a viewport-size check; missing history or more than eight new frames in one poll
 restarts the interval conservatively. Without pre-input frame history, all motion counts.
 
-`Stillness.wait(page, { still: "content", quietMillis })` instead observes a full interval without visible
+`Stillness.wait(page, { still: "content", quiet })` instead observes a full interval without visible
 recorded DOM changes. It starts the recorder itself and starts the interval again in each new
 document; navigation retries share the original timeout. Canvas animation can continue while DOM
 content is ready. This does not prove pixel or screencast stillness and inherits the change
@@ -347,10 +347,10 @@ rest, each showing what it settled at, as a price that ticked and stopped does. 
 how long the page had been still, by the last change in view its record shows or the last paint
 among its screencast frames; a screenshot shows the page, not when it changed. Frames show paint
 only while a capture runs, and the record does not see a canvas, so a canvas that draws with no
-capture running reads as still. Use `Stillness.wait(page, { still: "screen", quietMillis })`
+capture running reads as still. Use `Stillness.wait(page, { still: "screen", quiet })`
 when a wait must observe screen quiet and hold through a stalled capture connection.
 
-`Moment.capture` is a window that ends at a picture of the page now. It takes the picture first,
+`Moment.read` is a window that ends at a picture of the page now. It takes the picture first,
 then the window up to its paint, from where a previous window or moment ended, so the changes hold
 nothing the picture does not show. A cached picture from before the latest action finished is
 replaced with a fresh screenshot, keeping a navigation's triggering action in the moment.
@@ -376,7 +376,7 @@ what was typed as an input slot named for its field, never the text itself. A na
 address with a credential withheld is an input slot too, `address`, so replay goes where the caller
 says, never to the address without its credential. `Walk.replay(page,
 plan, { inputs })` takes the steps in turn: before each step except an opening navigate, back or
-reload, it waits for readiness (`settle` sets how, or `false` skips it). A `quietMillis` option uses
+reload, it waits for readiness (`settle` sets how, or `false` skips it). A `quiet` option uses
 `Stillness.wait` for content quiet; otherwise it calls `Page.ready`. It finds the element with
 `Walk.locate`, and acts on it. An element that does not repeat every part of the recorded context
 is another subject: its row read whole, so a row named "Wrapped BTC" is not the row "BTC" (laid out
@@ -872,7 +872,7 @@ section above describes that recovery contract. `Snapshot.until` provides the un
 observation without deciding whether an action may be repeated:
 
 ```ts
-const observed = yield * Snapshot.until(page, { text: "Order 42" }, "some", 5000);
+const observed = yield * Snapshot.until(page, { text: "Order 42" }, "some", "5 seconds");
 ```
 
 The mark from `Snapshot.until` compares matching elements' text, values and states except focus. Keep it

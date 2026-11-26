@@ -19,7 +19,15 @@
  *
  * @since 0.3.0
  */
-import { type Clock, type Duration, Effect, Schema, type Scope, type Stream } from "effect";
+import {
+  type Clock,
+  type Duration,
+  Effect,
+  Function,
+  Schema,
+  type Scope,
+  type Stream,
+} from "effect";
 
 import {
   Action,
@@ -34,7 +42,11 @@ import { type CaptureStats, Frame, Image, type ScreencastOptions } from "./Frame
 import * as Motion from "./internal/geometry.ts";
 import { FormFieldSchema } from "./internal/input/evidence.inpage.ts";
 import * as Guard from "./internal/input/guard.inpage.ts";
-import type { Implementation, key } from "./internal/page/functions.ts";
+import {
+  type Implementation,
+  isPage as isLibraryPage,
+  type key,
+} from "./internal/page/functions.ts";
 import { Correlation, FailFast } from "./internal/page/lane.ts";
 import * as Url from "./internal/url.ts";
 
@@ -122,7 +134,7 @@ export interface Paint {
 
 export interface ReadyOptions {
   /** How long recorded content must stay unchanged. Screen stillness is a separate feature. */
-  readonly quietMillis?: number | undefined;
+  readonly quiet?: Duration.Input | undefined;
   readonly timeout?: Duration.Input | undefined;
 }
 
@@ -228,6 +240,12 @@ export class InputRequest extends Schema.Class<InputRequest>("effect-browser/Pag
 export const redacted = Url.withheld;
 
 /**
+ * Whether a value is a page the library made: what a function over a page, callable with the page
+ * first or last, tells it from its other arguments by.
+ */
+export const isPage: (u: unknown) => u is Page = isLibraryPage;
+
+/**
  * Run page operations without waiting their turn: on a page busy with other operations, each fails
  * `Busy` at once, and `Browser.newPage` on a browser with `maxPages` open fails `Limit` at once.
  */
@@ -238,10 +256,14 @@ export const failFast = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect
  * Give every action `effect` performs a caller's id, such as a model's tool call id, which its
  * recorded `Action` carries as `correlation`.
  */
-export const correlate =
-  (id: string) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-    Effect.provideService(effect, Correlation, id);
+export const correlate: {
+  (id: string): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  <A, E, R>(effect: Effect.Effect<A, E, R>, id: string): Effect.Effect<A, E, R>;
+} = Function.dual(
+  2,
+  <A, E, R>(effect: Effect.Effect<A, E, R>, id: string): Effect.Effect<A, E, R> =>
+    Effect.provideService(effect, Correlation, id),
+);
 
 /** Succeed to allow, fail to deny, or await an external signal to hold the input. */
 export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
@@ -292,8 +314,11 @@ export interface Page {
     script: (arg: Arg) => unknown,
     options: ActOptions<A, Arg>,
   ) => Effect.Effect<A, BrowserError>;
-  /** Owning browser clock: deadlines and all frame/event timestamps use this clock. */
-  readonly clock: Clock.Clock;
+  /**
+   * The owning browser's host clock, which stamps the page's events and frames and times its
+   * deadlines. It is not the page's own time, which `PageTime` holds.
+   */
+  readonly hostClock: Clock.Clock;
   /** Wait for admitted input and retain a bounded read turn through effect. */
   readonly afterInput: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -384,7 +409,7 @@ export interface Page {
 
   /**
    * Wait for document evidence, polling every 50 ms: parsed, painted, visible, fonts and visible
-   * images loaded, and finite animations finished. Optional quietMillis requires recorded content
+   * images loaded, and finite animations finished. Optional `quiet` requires recorded content
    * to stay unchanged. Screen or foreground stillness belongs to the Stillness feature.
    * Fails Timeout after timeout, 15 seconds by default.
    */

@@ -1,11 +1,11 @@
 /** Find a recorded subject and verify where its point still lands before replay input. */
-import { Clock, Duration, Effect, Schedule } from "effect";
+import { Clock, Duration, Effect, Function, Schedule } from "effect";
 
-import { InvalidRequest, undispatched } from "../../BrowserError.ts";
+import { type BrowserError, InvalidRequest, undispatched } from "../../BrowserError.ts";
 import { type Box, type Subject } from "../../BrowserEvent.ts";
 import type { Page, Point, Target } from "../../Page.ts";
 import * as Snapshot from "../../Snapshot.ts";
-import { choose, Drifted } from "./choose.ts";
+import { type Ambiguous, choose, Drifted, type Missing } from "./choose.ts";
 
 const invalid = (detail: string) => undispatched("replay", new InvalidRequest({ detail }));
 
@@ -13,7 +13,15 @@ const invalid = (detail: string) => undispatched("replay", new InvalidRequest({ 
  * The one element on the page that a subject names, by role, name and context (see `Walk`),
  * looking again for two seconds while the page may still be drawing it.
  */
-export const locate = (page: Page, subject: Subject) =>
+export const locate: {
+  (
+    subject: Subject,
+  ): (page: Page) => Effect.Effect<Snapshot.Found, Missing | Ambiguous | Drifted | BrowserError>;
+  (
+    page: Page,
+    subject: Subject,
+  ): Effect.Effect<Snapshot.Found, Missing | Ambiguous | Drifted | BrowserError>;
+} = Function.dual(2, (page: Page, subject: Subject) =>
   Snapshot.find(page, {
     name: subject.name,
     scope: "document",
@@ -25,9 +33,10 @@ export const locate = (page: Page, subject: Subject) =>
       times: 8,
       while: (error) => error._tag !== "BrowserError",
     }),
-    Effect.provideService(Clock.Clock, page.clock),
+    Effect.provideService(Clock.Clock, page.hostClock),
     Effect.withSpan("Walk.locate", { attributes: { role: subject.role ?? "" } }),
-  );
+  ),
+);
 
 /**
  * Where the step acts: the element its subject names, or, for a step recorded at a point, the same

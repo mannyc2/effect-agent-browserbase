@@ -12,7 +12,7 @@
  * @stability experimental
  * @since 0.3.0
  */
-import { Clock, Duration, Effect, Schema, Stream } from "effect";
+import { Clock, Duration, Effect, Function, Schema, Stream } from "effect";
 
 import { Action } from "../Action.ts";
 import { type BrowserError, refuse } from "../BrowserError.ts";
@@ -210,12 +210,12 @@ const mover = (page: Page, time: Time, overlay: Overlay | undefined): Mover => {
     time === "real"
       ? (t: number) =>
           Effect.suspend(() => {
-            const now = monotonicMillis(page.clock);
+            const now = monotonicMillis(page.hostClock);
 
             start ??= now;
 
             return Effect.sleep(Duration.millis(Math.max(0, start + t - now))).pipe(
-              Effect.provideService(Clock.Clock, page.clock),
+              Effect.provideService(Clock.Clock, page.hostClock),
             );
           })
       : time.seek;
@@ -258,14 +258,7 @@ const picture = (page: Page, image: Options["image"], retries: number) =>
 const keyOf = (content: Content | undefined) =>
   content === undefined ? undefined : content._tag === "Svg" ? `svg:${content.markup}` : "empty";
 
-/**
- * Frames of `page` at `times`, one at a time: each moves the page to its film time, draws what
- * `at` gives there when it changed, and takes a new screenshot, again after one that times out.
- */
-export const frames = <E = never>(
-  page: Page,
-  options: Options<E>,
-): Stream.Stream<Shot, BrowserError | E> =>
+const film = <E = never>(page: Page, options: Options<E>): Stream.Stream<Shot, BrowserError | E> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const times = yield* timesOf(options.times);
@@ -279,7 +272,7 @@ export const frames = <E = never>(
         return yield* refuse(operation, "an input's time is finite and nonnegative");
       let next = 0;
       const { move, skip } = mover(page, options.time, options.overlay);
-      const now = () => monotonicMillis(page.clock);
+      const now = () => monotonicMillis(page.hostClock);
       const passages: Array<Passage> = [];
 
       const at = (t: number) =>
@@ -367,6 +360,15 @@ export const frames = <E = never>(
       );
     }),
   );
+
+/**
+ * Frames of `page` at `times`, one at a time: each moves the page to its film time, draws what
+ * `at` gives there when it changed, and takes a new screenshot, again after one that times out.
+ */
+export const frames: {
+  <E = never>(options: Options<E>): (page: Page) => Stream.Stream<Shot, BrowserError | E>;
+  <E = never>(page: Page, options: Options<E>): Stream.Stream<Shot, BrowserError | E>;
+} = Function.dual(2, film);
 
 /** Run a film's shots, which a caller has usually written out on the way, to what they cost. */
 export const summary = <E, R>(shots: Stream.Stream<Shot, E, R>): Effect.Effect<Summary, E, R> =>
