@@ -45,8 +45,8 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
   const viewports = lane.shared<Effect.Success<Page["viewport"]>>("viewport", true);
 
   // What the page's parts already know, asking it nothing: its documents as its own session saw
-  // them, and the newest frame.
-  const state = Effect.map(capture.latest, (latest) => {
+  // them.
+  const state = Effect.sync(() => {
     const { document, url } = bridge.frameTag();
     const committedAt = page.activity.documentAt;
 
@@ -58,7 +58,6 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       document,
       committedAt: Number.isFinite(committedAt) ? committedAt : undefined,
       load: bridge.loaded(),
-      frame: Option.getOrUndefined(latest),
     });
   });
 
@@ -100,41 +99,38 @@ export const make = Effect.fnUntraced(function* (options: Context.MakeOptions) {
       drawn: Effect.sync(() => Option.fromUndefinedOr(overlay.drawn())),
       poses: poses.lease,
       hold: Time.make(page, bridge, overlay, poses).hold,
+      frame: pictures.frame,
+      zoom: pictures.zoom,
+      capture: (options) =>
+        capture.open(options).pipe(
+          Effect.map((lease) => ({
+            ...lease,
+            isCurrent: current,
+            confirm,
+            sync: capture.sync,
+            stats: pictures.captureStats,
+          })),
+        ),
+      recentFrames: capture.recent,
+      paint: pictures.paint,
     }),
     ...Scripts.make(page, bridge, input),
     ...ActionPort.methods(perform),
     perform,
     clock: page.clock,
     afterInput,
-    capture: (options) =>
-      capture.open(options).pipe(
-        Effect.map((lease) => ({
-          ...lease,
-          isCurrent: current,
-          confirm,
-          sync: capture.sync,
-          stats: pictures.captureStats,
-        })),
-      ),
     id,
     url: Effect.sync(() => Url.redact(playwright.url())),
     title: titles("", navigation.title.pipe(within("title"))).pipe(span("Page.title"), owned),
     bringToFront: native("bringToFront", () => playwright.bringToFront()),
     // Playwright answers once the page has closed, and at once for one already closed.
     close: native("close", () => playwright.close()),
-    screenshot: pictures.screenshot,
-    frame: pictures.frame,
-    zoom: pictures.zoom,
-    paint: pictures.paint,
     viewport: viewports("", viewport.viewportFor("viewport").pipe(within("viewport"))).pipe(
       span("Page.viewport"),
       owned,
     ),
     state,
     ready: Ready.make(page, bridge),
-    screencast: capture.stream,
-    captureStats: pictures.captureStats,
-    recentFrames: capture.recent,
     recentEvents: options.recentEvents,
   };
 

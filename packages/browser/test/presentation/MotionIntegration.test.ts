@@ -4,6 +4,7 @@ import { Clock, Deferred, Duration, Effect, Fiber, Random, Stream } from "effect
 import { TestClock } from "effect/testing";
 
 import { Browser, make as makeBrowser } from "../../src/Browser.ts";
+import * as Frame from "../../src/Frame.ts";
 import * as Motion from "../../src/presentation/Motion.ts";
 import * as Presentation from "../../src/presentation/Presentation.ts";
 import { unpaused } from "../fixtures.ts";
@@ -402,7 +403,10 @@ layer(TestCdp.provideLayer(Chromium.layer()), {
           fixture.dispatches.filter((dispatch) => dispatch.input.type === "mouseMoved");
 
         // A capture maps the browser's clock, so each sample carries the time it was meant for.
-        yield* page.screencast().pipe(Stream.take(1), Stream.runDrain);
+        yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
+          Stream.take(1),
+          Stream.runDrain,
+        );
         const hovering = yield* page.hover({ x: 670, y: 490 }).pipe(Effect.forkChild);
 
         // Equal offsets are intentional: neither coalescing nor pacing by replies is permitted.

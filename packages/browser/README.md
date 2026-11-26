@@ -20,10 +20,10 @@ README says what that risks and how signals end the browser.
 | Module         | Import from                   | What it holds                                                                     |
 | -------------- | ----------------------------- | --------------------------------------------------------------------------------- |
 | `Browser`      | `effect-browser`              | The `Browser` service: tabs, recent events, lifetime and input suspension         |
-| `Page`         | `effect-browser`              | One tab: navigation, screenshots, input, waits and the screencast                 |
+| `Page`         | `effect-browser`              | One tab: navigation, input and waits                                              |
 | `Snapshot`     | `effect-browser`              | The model-readable outline of a page, with refs, and the elements a query finds   |
 | `Text`         | `effect-browser`              | What a page shows as text, from its viewport or one element whole                 |
-| `Frame`        | `effect-browser`              | Pictures, timing evidence and capture identity                                    |
+| `Frame`        | `effect-browser`              | A page's pictures, crops and screencast, with timing and capture identity         |
 | `BrowserEvent` | `effect-browser`              | Tabs, documents, loads, actions, dialogs, pointer motion and the browser's end    |
 | `BrowserError` | `effect-browser`              | Typed failures, whether input reached the page first, and what each leaves        |
 | `Action`       | `effect-browser`              | Typed actions, shared by input, guards, event records and walks                   |
@@ -200,7 +200,7 @@ sampled. A zero-duration baseline reads once and fails if its document disappear
 a moment uses. The actions a call performs record a caller's id as their `correlation` when it runs
 under `Page.correlate(id)`, such as a model's tool call.
 
-`Page.zoom` captures a region in viewport CSS pixels as a `Zoom` schema value with `region` and `image`;
+`Frame.zoom` captures a region in viewport CSS pixels as a `Zoom` schema value with `region` and `image`;
 crop pixel coordinates need the region's origin added before using them as click coordinates.
 
 `Page.click` returns a `ResolvedTarget` captured before input: the requested point, element label,
@@ -720,20 +720,19 @@ Windows and a moment's frame captions use `hostTime`, so delayed delivery cannot
 page/session/connection/document/generation/sequence lineage, so an image copy can retain its
 capture evidence. Untagged pictures match only by object identity. Currency additionally requires
 an active capture and the page's current document.
-A picture states how old it may be. `Page.frame({ maxAge, after })` serves the newest screencast
+A picture states how old it may be. `Frame.read(page, { maxAge, after })` serves the newest screencast
 frame when it has the viewport's size and was painted at most `maxAge` ago, at the earliest its
 timing allows: 250 ms by default, while 0 always takes a new screenshot. With `after: "input"` the
 frame must also follow the page's latest submitted input, including input of an interrupted action,
-and the read waits for the action in flight: what a caller that has just acted needs.
-`Page.screenshot` always applies that rule, so a caller that acts and then looks sees what its
-action did; a deck or a narrator that wants a picture of a stated age reads `frame`, which a frame
-that qualifies serves at once, even while an action runs. A screencast sends only changes and can
+and the read waits for the action in flight: what a caller that has just acted needs, so a caller
+that acts and then looks sees what its action did. A deck or a narrator that wants a picture of a
+stated age leaves `after` out, and a frame that qualifies serves at once, even while an action runs. A screencast sends only changes and can
 miss a final paint, so a frame is only ever as current as its age. No read reuses a frame painted
 before the page's current document began, when the page's own session saw its main frame commit
 it: a page that keeps painting while the next document loads would otherwise leave its own frames
 the newest when the navigation returns. Otherwise a new screenshot is
-taken, which `frame` returns as a `Screenshot`-timed frame. A screenshot, which the agent's
-observations take, and a `Moment`'s picture use `after: "input"`, so a stopped capture, a lost
+taken, which `Frame.read` returns as a `Screenshot`-timed frame. The agent's observations and a
+`Moment`'s picture use `after: "input"`, so a stopped capture, a lost
 final paint or later input never presents older paint as the page an action left.
 
 A new picture goes on the page's own protocol session. Where a device pixel is a CSS pixel and
@@ -782,7 +781,7 @@ was meant for; until then Chromium stamps them as it receives them, and input ne
 measurement. Shortcut chords retain Playwright's platform behavior, and Unicode insertion has no
 timestamp field.
 
-`Page.captureStats()` counts, over the page's life or with `{ window }` over up to the latest
+A capture's `stats()` counts, over the page's life or with `{ window }` over up to the latest
 minute: received and accepted frames, missing timestamps, `late` frames (Chromium encodes several at
 once and finished these after a newer one; they are dropped, never reordered, and a busy machine
 makes more of them), frames dropped for their size (`foreignSize`) or for coming during one of the
@@ -825,7 +824,7 @@ joins whatever is running, and one whose explicit options differ fails with `Inv
 than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
 observed sequence gaps add to `lost`. Late subscribers do not count earlier history.
 ACKs are independent of reader speed and bounded to 32 unresolved replies; exhaustion ends capture
-with a typed error. `recentFrames` keeps the frames painted within `frameHistory` of the newest,
+with a typed error. `Frame.recent` keeps the frames painted within `frameHistory` of the newest,
 5 seconds by default, a moment's default window. Capture stops when its last
 reader leaves; a stop whose reply is late is never resent, and the next capture waits for it (up
 to 2 s per attempt) rather than disabling capture for the page.
@@ -942,7 +941,7 @@ yield *
     const paused = yield* browser.suspend();
     // An event reader can resume from paused.since; paused.at is host monotonic time.
     const page = yield* browser.firstPage;
-    yield* page.screenshot();
+    yield* Frame.read(page);
     yield* operatorDone;
   }).pipe(Effect.scoped);
 // Input resumes after this scope, provided no other suspension still holds it.
@@ -997,7 +996,7 @@ film time however long the last one took to picture. Each part is a module of it
 - `Pose.make(page)` moves, turns and scales the page's own elements about a point, as data, through
   CSS `translate`, `rotate` and `scale`. Readers and clicks see a posed element where it is drawn,
   and the change record does not report a pose. The scope's end takes every pose off.
-- `page.paint({ scale, scrollbars })` sets an attached browser's device pixels to each CSS pixel,
+- `Frame.paint(page, { scale, scrollbars })` sets an attached browser's device pixels to each CSS pixel,
   and hides scrollbars from the next document on. `Chromium.layer` takes its `deviceScaleFactor`
   at launch.
 - `Film.frames(page, options)` is a stream of `Shot`s. At each film time it asks `at` for the
@@ -1031,7 +1030,7 @@ const film = Effect.gen(function* () {
 The frames are pictures; encoding them is the caller's. What an input changed is
 `Change.read(page, { since })` read after it. Each `Change` has the `box` to frame it by, and `at`, on
 the same clock as a `Shot`'s `at`, so on held time the first shot at or after it is the first to
-show it. To lift an element off the page, take its picture with a clipped screenshot at
+show it. To lift an element off the page, take its picture with `Frame.zoom` at
 `scale: "device"`, then pose it to `sx: 0, sy: 0`, which hides it and leaves the page laid out as
 it was. `examples/film.ts` films a small site this way: a hover, a tab, a selected word, a copy,
 a search typed a key at a time, an eased scroll, a row selected by a drag and a link to the next
@@ -1313,8 +1312,8 @@ records except text: the target, the subject's role, name and tag, whether input
 a judge's model call, are its children, as are pointer travel (`Page.move`) and the settle after input (`Page.settle`).
 `Snapshot.read`, `Snapshot.find`, `Snapshot.until`, `Text.read`, `Layout.measure`, `Change.read`,
 `Window.read`, `Page.title`, `Page.viewport`,
-`Page.screenshot` and `Page.frame` (with
-`source`: a reused screencast `frame` or a new `screenshot`), `Page.zoom`, `Page.ready` and the
+`Frame.read` (with
+`source`: a reused screencast `frame` or a new `screenshot`), `Frame.zoom`, `Page.ready` and the
 other waits are spans, as are `Walk.replay` and `Walk.locate`, and so is each round trip to the
 page's script (`Page.evaluate`) and its registration (`Page.register`). Each page span reports its cost on the page's own protocol session: `calls`,
 `bytesOut` and `bytesIn` (their parameters and results as JSON) and `waitedMillis`, how long at

@@ -6,7 +6,7 @@ import { Clock, Deferred, Duration, Effect, Fiber, Option, Schedule, Stream } fr
 
 import { Browser } from "../src/Browser.ts";
 import { BrowserError, Closed } from "../src/BrowserError.ts";
-import type { Frame } from "../src/Frame.ts";
+import * as Frame from "../src/Frame.ts";
 import * as Capture from "../src/internal/pictures/capture.ts";
 import type { NativeFrame, Transport } from "../src/internal/pictures/transport.ts";
 import * as TestCdp from "./support/TestCdp.ts";
@@ -89,7 +89,10 @@ const transport = Effect.fnUntraced(function* () {
     controller,
     current,
     emit,
-    start: controller.stream().pipe(Stream.runDrain, Effect.forkScoped),
+    start: Stream.unwrap(Effect.map(controller.open(), ({ stream }) => stream)).pipe(
+      Stream.runDrain,
+      Effect.forkScoped,
+    ),
     commit: () => {
       document += 1;
     },
@@ -202,11 +205,11 @@ const nativeFixture = Effect.fnUntraced(function* () {
   const faults = yield* TestCdp.TestCdp;
   const browser = yield* Browser;
   const page = yield* faults.provide(browser.newPage("data:text/html,<h1>Quiet frame</h1>"));
-  const capture = yield* page.capture();
+  const capture = yield* Frame.capture(page);
   let withheld: NativeFrame | undefined;
-  let latest: Frame | undefined;
+  let latest: Frame.Frame | undefined;
 
-  yield* page.screencast().pipe(
+  yield* Stream.unwrap(Effect.map(Frame.capture(page), ({ stream }) => stream)).pipe(
     Stream.runForEach((frame) =>
       Effect.sync(() => {
         latest = frame;
@@ -260,7 +263,7 @@ layer(TestCdp.provideLayer(Chromium.layer()), { excludeTestServices: true })(
       TestCdp.withCdp(
         Effect.gen(function* () {
           const fixture = yield* nativeFixture();
-          const joined = yield* fixture.page.capture();
+          const joined = yield* Frame.capture(fixture.page);
 
           assert.isTrue(joined.current === fixture.latest());
           const next = yield* joined.stream.pipe(Stream.runHead, Effect.forkChild);

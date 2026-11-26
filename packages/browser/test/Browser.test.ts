@@ -23,6 +23,7 @@ import type * as Browser from "../src/Browser.ts";
 import type { BrowserError } from "../src/BrowserError.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Cdp from "../src/Cdp.ts";
+import * as Frame from "../src/Frame.ts";
 import * as Url from "../src/internal/url.ts";
 import { type Page, redacted } from "../src/Page.ts";
 import * as Snapshot from "../src/Snapshot.ts";
@@ -336,9 +337,9 @@ describe("a loss", () => {
         const other = yield* browser.newPage(still("two"));
         const from = (yield* browser.recentEvents).length;
 
-        const watching = yield* other
-          .screencast()
-          .pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
+        const watching = yield* Stream.unwrap(
+          Effect.map(Frame.capture(other), ({ stream }) => stream),
+        ).pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
 
         const requested = Promise.withResolvers<void>();
 
@@ -454,11 +455,11 @@ describe("a page's documents", () => {
           ),
         );
         yield* page.goto(site.url("/next"));
-        const frame = yield* page.frame({ maxAge: 0 });
+        const frame = yield* Frame.read(page, { maxAge: 0 });
 
-        const captured = yield* page
-          .screencast()
-          .pipe(Stream.take(1), Stream.runHead, Effect.map(Option.getOrThrow));
+        const captured = yield* Stream.unwrap(
+          Effect.map(Frame.capture(page), ({ stream }) => stream),
+        ).pipe(Stream.take(1), Stream.runHead, Effect.map(Option.getOrThrow));
 
         // A document's `load` can follow the navigation's return.
         const loadedSince = (events: ReadonlyArray<BrowserEvent>) =>

@@ -37,7 +37,8 @@ import { Prompt, Tool, Toolkit } from "effect/ai";
 
 import { Action } from "../Action.ts";
 import type { BrowserError } from "../BrowserError.ts";
-import * as Page from "../Page.ts";
+import * as Frame from "../Frame.ts";
+import type * as Page from "../Page.ts";
 import * as Stillness from "../timeline/Stillness.ts";
 import { cropped } from "./internal/crops.ts";
 import * as Points from "./internal/points.ts";
@@ -132,7 +133,7 @@ export const Pointer = Toolkit.make(
   pointerTool(
     "zoom",
     "Crop a small region of the viewport, shown on its own before your next turn at the viewport's own scale: a closer look at small text, not a magnification. Click coordinates stay in viewport space.",
-    Page.Region.fields,
+    Frame.Region.fields,
   ),
   pointerTool(
     "wait_still",
@@ -322,7 +323,7 @@ export class Pictures extends Context.Service<
 export type Vision = boolean | "ask" | "page";
 
 export interface LayerOptions extends PageControl.Options {
-  readonly initialZooms?: ReadonlyArray<Page.Zoom> | undefined;
+  readonly initialZooms?: ReadonlyArray<Frame.Zoom> | undefined;
   /**
    * What the model sees of the page: `true`, the default, a screenshot of the current tab before
    * each turn; `"ask"`, one only before a turn after `look`; `"page"`, one also after pointer input
@@ -351,7 +352,7 @@ const text = (value: string) => ({ type: "text" as const, text: value });
  */
 const pictures = (
   controller: PageControl.Controller,
-  zooms: Ref.Ref<Array<Page.Zoom>>,
+  zooms: Ref.Ref<Array<Frame.Zoom>>,
   screen: (page: Page.Page) => Effect.Effect<boolean, BrowserError>,
   pixels: "css" | "device",
   scale: Ref.Ref<number>,
@@ -363,7 +364,7 @@ const pictures = (
         const zoomed = yield* Ref.getAndSet(zooms, []);
 
         if (!(yield* screen(page))) return cropped(zoomed, page.id, yield* Ref.get(scale));
-        const shot = yield* page.screenshot(pixels === "device" ? { scale: "device" } : undefined);
+        const { image: shot } = yield* Frame.read(page, { after: "input", scale: pixels });
 
         if (pixels === "device") yield* Ref.set(scale, shot.width / (yield* page.viewport).width);
         const crops = cropped(zoomed, page.id, yield* Ref.get(scale));
@@ -418,16 +419,16 @@ const missing = (what: string) =>
 const cropping =
   (
     controller: PageControl.Controller,
-    zooms: Ref.Ref<Array<Page.Zoom>>,
+    zooms: Ref.Ref<Array<Frame.Zoom>>,
     vision: Vision,
     scale: Ref.Ref<number>,
     zoomed: { readonly scale: "device" } | undefined,
   ) =>
-  (region: ConstructorParameters<typeof Page.Region>[0]) =>
+  (region: ConstructorParameters<typeof Frame.Region>[0]) =>
     vision !== false
       ? Effect.all([controller.current, Ref.get(scale)]).pipe(
           Effect.flatMap(([page, scale]) =>
-            page.zoom(Points.viewportRegion(new Page.Region(region), scale), zoomed),
+            Frame.zoom(page, Points.viewportRegion(new Frame.Region(region), scale), zoomed),
           ),
           Effect.tap((zoom) => Ref.update(zooms, (crops) => [...crops, zoom])),
           Effect.map(() => ({
@@ -451,12 +452,12 @@ const cropping =
  */
 const pointing = (
   controller: PageControl.Controller,
-  zooms: Ref.Ref<Array<Page.Zoom>>,
+  zooms: Ref.Ref<Array<Frame.Zoom>>,
   vision: Vision,
   pointed: Ref.Ref<boolean>,
   pixels: "css" | "device",
   scale: Ref.Ref<number>,
-  framed: Ref.Ref<Array<Page.Zoom>> | undefined,
+  framed: Ref.Ref<Array<Frame.Zoom>> | undefined,
 ) => {
   const zoomed = pixels === "device" ? ({ scale: "device" } as const) : undefined;
 
@@ -502,7 +503,7 @@ const pointing = (
         const viewport = yield* page.viewport;
 
         return yield* Effect.forEach(points, (point) =>
-          page.zoom(Points.around(point, viewport), zoomed),
+          Frame.zoom(page, Points.around(point, viewport), zoomed),
         );
       }).pipe(Effect.mapError(fromBrowserError), controller.withTask);
 
@@ -623,7 +624,7 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
     Layer.unwrap(
       Effect.gen(function* () {
         const controller = yield* PageControl.make(target, options);
-        const zooms = yield* Ref.make<Array<Page.Zoom>>([...(options.initialZooms ?? [])]);
+        const zooms = yield* Ref.make<Array<Frame.Zoom>>([...(options.initialZooms ?? [])]);
         const vision = options.vision ?? true;
         const pixels = options.pixels ?? "css";
         // The pictures' pixels to a CSS pixel, as the latest screenshot showed them.
@@ -634,7 +635,7 @@ const tooling = <Refs extends Record<string, Tool.Any>>(
         const pointed = yield* Ref.make(false);
 
         const framed =
-          options.placement === "crop" ? yield* Ref.make<Array<Page.Zoom>>([]) : undefined;
+          options.placement === "crop" ? yield* Ref.make<Array<Frame.Zoom>>([]) : undefined;
 
         // Whether the screen is shown before a turn: always with `true`, after `look` with `"ask"`,
         // and with `"page"` also after pointer input or while the viewport shows a picture.

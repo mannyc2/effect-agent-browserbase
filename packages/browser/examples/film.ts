@@ -26,6 +26,8 @@ import * as Layout from "effect-browser/Layout";
 import * as Pose from "effect-browser/Pose";
 import { Film } from "effect-browser/presentation";
 
+import * as Frame from "../src/Frame.ts";
+
 const rows = Array.from({ length: 30 }, (_, index) => `<p>Row ${index + 1}</p>`).join("");
 
 const home = `<!doctype html><meta charset=utf-8><title>A page to film</title><style>
@@ -187,7 +189,7 @@ export const film = <E>(write: (shot: Film.Shot) => Effect.Effect<void, E>) =>
       const page = yield* browser.newPage();
 
       // Scrollbars go from the next document on, so paint before loading it.
-      yield* page.paint({ scrollbars: false });
+      yield* Frame.paint(page, { scrollbars: false });
       yield* page.goto(`${origin}/`);
       yield* page.ready();
       const layout = yield* Layout.measure(page, picks);

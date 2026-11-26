@@ -1,7 +1,7 @@
 /** H1's full hosted capture experiment: 30-second preparations and 20 cuts over five minutes. */
 import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
 import type * as Browser from "effect-browser/Browser";
-import type { CaptureStats } from "effect-browser/Frame";
+import * as Frame from "effect-browser/Frame";
 import { Stage } from "effect-browser/presentation";
 import * as Text from "effect-browser/Text";
 
@@ -44,7 +44,7 @@ export const make = Effect.fnUntraced(function* (browser: Browser.Service) {
     eventAt: number;
     shownAt: number;
     latency: number;
-    stats: CaptureStats | null;
+    stats: Frame.CaptureStats | null;
   }> = [];
 
   let measurementStart: number | undefined;
@@ -61,7 +61,7 @@ export const make = Effect.fnUntraced(function* (browser: Browser.Service) {
     firstAt?: number;
     lastAt?: number;
     frames: number;
-    stats: CaptureStats | null;
+    stats: Frame.CaptureStats | null;
   }> = [];
 
   const run = Effect.scoped(
@@ -80,12 +80,17 @@ export const make = Effect.fnUntraced(function* (browser: Browser.Service) {
       yield* stage.present(second);
       const epoch = yield* browser.now;
 
-      const captures = [first, second].map((page, index) => {
+      const leases = yield* Effect.forEach(
+        [first, second],
+        Frame.capture({ quality: 80, size: { width: 1280, height: 720 } }),
+      );
+
+      const captures = leases.map((capture, index) => {
         const sample: (typeof retained)[number] = { page: index + 1, frames: 0, stats: null };
 
         retained.push(sample);
 
-        return page.screencast({ quality: 80, size: { width: 1280, height: 720 } }).pipe(
+        return capture.stream.pipe(
           Stream.runForEach(() =>
             Effect.gen(function* () {
               const at = yield* browser.now;
@@ -173,7 +178,7 @@ export const make = Effect.fnUntraced(function* (browser: Browser.Service) {
         yield* Fiber.join(reveals);
         measurementEnd = yield* browser.now;
         maximumGapMillis = Math.max(maximumGapMillis, measurementEnd - (previous ?? beginning));
-        yield* Effect.forEach([first, second], (page, index) =>
+        yield* Effect.forEach(leases, (capture, index) =>
           Effect.gen(function* () {
             const sample = retained[index];
 
@@ -184,7 +189,7 @@ export const make = Effect.fnUntraced(function* (browser: Browser.Service) {
               sample.frames === 0
             )
               return yield* refuse("H1 did not retain both captures for the measured window");
-            sample.stats = yield* page.captureStats();
+            sample.stats = yield* capture.stats();
           }),
         );
         if (commits.length !== 20 || frames === 0 || loads === 0)

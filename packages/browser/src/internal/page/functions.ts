@@ -9,6 +9,15 @@ import { type Effect, type Option, Predicate, type Scope } from "effect";
 import type { BrowserError } from "../../BrowserError.ts";
 import type { Box } from "../../BrowserEvent.ts";
 import type { Changes, ChangesOptions } from "../../Change.ts";
+import type {
+  Capture,
+  Frame,
+  FrameOptions,
+  Paint,
+  Region,
+  ScreencastOptions,
+  Zoom,
+} from "../../Frame.ts";
 import type { Layout, Picks } from "../../Layout.ts";
 import type { Overlay } from "../../Overlay.ts";
 import type { Page } from "../../Page.ts";
@@ -43,6 +52,16 @@ export interface Functions {
   readonly drawn: Effect.Effect<Option.Option<ReadonlyArray<Box>>>;
   readonly poses: Effect.Effect<Poses, BrowserError, Scope.Scope>;
   readonly hold: Effect.Effect<Held, BrowserError, Scope.Scope>;
+  readonly frame: (options?: FrameOptions) => Effect.Effect<Frame, BrowserError>;
+  readonly zoom: (
+    region: Region,
+    options?: Pick<FrameOptions, "quality" | "format" | "scale">,
+  ) => Effect.Effect<Zoom, BrowserError>;
+  readonly capture: (
+    options?: ScreencastOptions,
+  ) => Effect.Effect<Capture, BrowserError, Scope.Scope>;
+  readonly recentFrames: Effect.Effect<ReadonlyArray<Frame>>;
+  readonly paint: (options: Paint) => Effect.Effect<void, BrowserError, Scope.Scope>;
 }
 
 /** What a page carries under `key`: its functions, out of reach of any type outside this class. */

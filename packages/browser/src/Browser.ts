@@ -103,7 +103,7 @@ export interface Options {
   /** Bound on each navigation; finite and positive. Defaults to 30 seconds. */
   readonly navigationTimeout?: Duration.Input | undefined;
   /**
-   * How long each page keeps screencast frames for `recentFrames`, measured back from the newest;
+   * How long each page keeps screencast frames for `Frame.recent`, measured back from the newest;
    * finite and positive. Defaults to 5 seconds, a moment's default window.
    */
   readonly frameHistory?: Duration.Input | undefined;

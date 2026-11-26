@@ -24,7 +24,7 @@ A browser opened with `pageTime` installs a clock in each page before its own sc
 
 `Film.frames(page, options)` is a stream of shots. At each film time it asks the caller for the scroll, poses and overlay of that frame, sends the inputs due on it, and takes a screenshot. A click, a key, a drag or a hover lands on its frame, and the page answers on that frame. A link that loads a new document is a passage: the film holds its time while the page loads, reads the new page's layout, and goes on. Each shot carries the host time its picture was taken. What an input changed comes from `Change.read`, each change with the box to frame it by, on the same clock, so the first shot at or after a change is the first that shows it.
 
-The frames are pictures, and encoding them is the caller's. `page.paint` sets an attached browser's device pixels per CSS pixel for sharper frames, and hides scrollbars.
+The frames are pictures, and encoding them is the caller's. `Frame.paint` sets an attached browser's device pixels per CSS pixel for sharper frames, and hides scrollbars.
 
 ## Moving the page's own elements
 
