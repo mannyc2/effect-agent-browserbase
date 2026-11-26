@@ -1,5 +1,7 @@
 # Reviewed timing assertions
 
+> Archived. It describes the code as it was on 21 October 2026, at `1d6d7c7`, not as it is now.
+
 The timing inventory in `testing/ours.md:288–294` names eighteen locations at
 reviewed commit `473222529715f67709493def4c30d2419e1f4742`. Seventeen are real
 elapsed-time bounds. `ContextLease.test.ts:64` already limits a loop advanced by
