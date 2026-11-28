@@ -14,9 +14,9 @@
     "upload": "node --conditions=@effect-browser/source upload.ts"
   },
   "dependencies": {
-    "@effect/platform-browser": "4.1.2",
+    "@effect/platform-browser": "4.1.5",
     "@foldkit/markdown": "0.15.0",
-    "effect": "4.1.2",
+    "effect": "4.1.5",
     "foldkit": "0.170.0"
   },
   "devDependencies": {
@@ -24,9 +24,9 @@
     "@alchemy.run/frontend-frameworks": "2.0.0-beta.85",
     "@effect-browser/chromium": "workspace:*",
     "@effect-browser/yielded": "workspace:*",
-    "@effect/ai-openrouter": "4.1.2",
-    "@effect/platform-node": "4.1.2",
-    "@effect/vitest": "4.1.2",
+    "@effect/ai-openrouter": "4.1.5",
+    "@effect/platform-node": "4.1.5",
+    "@effect/vitest": "4.1.5",
     "@foldkit/devtools": "0.170.0",
     "@foldkit/ui": "0.170.0",
     "@foldkit/vite-plugin": "0.29.0",
